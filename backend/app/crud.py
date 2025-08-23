@@ -31,6 +31,24 @@ async def create_book(db: AsyncSession, book: schemas.BookCreate) -> models.Book
     await db.refresh(db_book)
     return db_book
 
+async def get_book(db: AsyncSession, book_id: int) -> Optional[models.Book]:
+    """
+    Retrieve a single book from the database by its ID.
+    """
+    result = await db.execute(select(models.Book).filter(models.Book.id == book_id))
+    return result.scalars().first()
+
+async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.BookUpdate) -> models.Book:
+    """
+    Update a book record in the database.
+    """
+    update_data_dict = update_data.model_dump(exclude_unset=True)
+    for key, value in update_data_dict.items():
+        setattr(book, key, value)
+    await db.commit()
+    await db.refresh(book)
+    return book
+
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """
     Retrieve books from the database by author.
