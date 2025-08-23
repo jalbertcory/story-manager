@@ -12,6 +12,12 @@ class BookCreate(BaseModel):
     cover_path: Optional[str] = None
     series: Optional[str] = None
 
+# Pydantic model for updating a book.
+class BookUpdate(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    series: Optional[str] = None
+
 # Pydantic model for reading a book.
 # This defines the shape of the data sent back to the client.
 # It includes fields from the database that are generated automatically (id, created_at, updated_at).

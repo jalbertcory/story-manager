@@ -204,6 +204,63 @@ async def test_search_books_by_author(db_session):
     assert data[0]['title'] == "Book 2"
 
 @pytest.mark.asyncio
+async def test_update_book_details(db_session):
+    """
+    Test updating a book's details.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(title="Original Title", author="Original Author", epub_path="p1"))
+
+    update_payload = {"title": "Updated Title", "series": "New Series"}
+    response = client.put(f"/api/books/{book.id}", json=update_payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Updated Title"
+    assert data["author"] == "Original Author" # Should not change
+    assert data["series"] == "New Series"
+
+@pytest.mark.asyncio
+async def test_refresh_book(db_session, mocker):
+    """
+    Test refreshing a book from its source URL.
+    """
+    # Mock the helper function to simulate a successful download and metadata parsing
+    mocker.patch(
+        "backend.app.main._download_and_parse_web_novel",
+        return_value=(Path("new.epub"), {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"})
+    )
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(
+            title="Original Title",
+            author="Original Author",
+            source_url="http://example.com/story/refresh",
+            epub_path="p1"
+        ))
+
+    response = client.post(f"/api/books/{book.id}/refresh")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Refreshed Title"
+    assert data["author"] == "Refreshed Author"
+    assert data["series"] == "Refreshed Series"
+
+@pytest.mark.asyncio
+async def test_refresh_book_no_source_url(db_session):
+    """
+    Test that refreshing a book with no source URL returns an error.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1"))
+
+    response = client.post(f"/api/books/{book.id}/refresh")
+
+    assert response.status_code == 400
+    assert "does not have a source URL" in response.json()["detail"]
+
+@pytest.mark.asyncio
 async def test_search_books_by_series(db_session):
     """
     Test searching for books by series.
