@@ -21,7 +21,7 @@ engine = create_async_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-AsyncTestingSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
+AsyncTestingSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 # Override the `get_db` dependency to use the async test database
 async def override_get_db():
@@ -29,6 +29,9 @@ async def override_get_db():
         yield session
 
 app.dependency_overrides[get_db] = override_get_db
+
+# The TestClient for making requests to the app
+client = TestClient(app)
 
 # Async pytest fixture to set up and tear down the database for each test function
 @pytest_asyncio.fixture(scope="function")
@@ -38,9 +41,6 @@ async def db_session():
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-
-# The TestClient for making requests to the app
-client = TestClient(app)
 
 @pytest.mark.asyncio
 async def test_get_all_books_empty(db_session):
@@ -118,7 +118,8 @@ async def test_add_existing_web_novel(db_session):
             title="Existing Story",
             author="Existing Author",
             source_url="http://example.com/story/exists",
-            epub_path="library/Existing Story-Existing Author.epub"
+            epub_path="library/Existing Story-Existing Author.epub",
+            source_type=models.SourceType.web,
         )
         await crud.create_book(session, book=book_create)
 
@@ -187,9 +188,9 @@ async def test_search_books_by_author(db_session):
     Test searching for books by author.
     """
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1"))
-        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2"))
-        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3", source_type=models.SourceType.epub))
 
     response = client.get("/api/books/search/author/Author A")
     assert response.status_code == 200
@@ -209,7 +210,7 @@ async def test_update_book_details(db_session):
     Test updating a book's details.
     """
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(session, schemas.BookCreate(title="Original Title", author="Original Author", epub_path="p1"))
+        book = await crud.create_book(session, schemas.BookCreate(title="Original Title", author="Original Author", epub_path="p1", source_type=models.SourceType.epub))
 
     update_payload = {"title": "Updated Title", "series": "New Series"}
     response = client.put(f"/api/books/{book.id}", json=update_payload)
@@ -236,7 +237,8 @@ async def test_refresh_book(db_session, mocker):
             title="Original Title",
             author="Original Author",
             source_url="http://example.com/story/refresh",
-            epub_path="p1"
+            epub_path="p1",
+            source_type=models.SourceType.web
         ))
 
     response = client.post(f"/api/books/{book.id}/refresh")
@@ -253,7 +255,7 @@ async def test_refresh_book_no_source_url(db_session):
     Test that refreshing a book with no source URL returns an error.
     """
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(session, schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1"))
+        book = await crud.create_book(session, schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1", source_type=models.SourceType.epub))
 
     response = client.post(f"/api/books/{book.id}/refresh")
 
@@ -266,9 +268,9 @@ async def test_search_books_by_series(db_session):
     Test searching for books by series.
     """
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", series="Series X", epub_path="p1"))
-        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", series="Series Y", epub_path="p2"))
-        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", series="Series X", epub_path="p3"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", series="Series X", epub_path="p1", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", series="Series Y", epub_path="p2", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", series="Series X", epub_path="p3", source_type=models.SourceType.epub))
 
     response = client.get("/api/books/search/series/Series X")
     assert response.status_code == 200

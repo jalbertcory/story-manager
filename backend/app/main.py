@@ -8,18 +8,36 @@ from typing import List, Dict, Any
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
-
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from pydantic import BaseModel, HttpUrl
 
 from . import crud, models, schemas
-from .database import engine, get_db
+from .database import engine, get_db, SessionLocal
 from fanficfare.cli import main as fff_main
 
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:
+    """
+    Calculates the word and chapter count of an EPUB file.
+    """
+    try:
+        book = epub.read_epub(epub_path)
+        chapters = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+        word_count = 0
+        for chapter in chapters:
+            soup = BeautifulSoup(chapter.get_content(), 'html.parser')
+            text = soup.get_text()
+            word_count += len(text.split())
+        return word_count, len(chapters)
+    except Exception as e:
+        logger.error(f"Error reading epub file {epub_path}: {e}")
+        return 0, 0
 
 
 async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str, Any]]:
@@ -87,10 +105,57 @@ async def create_tables() -> None:
 
 app = FastAPI(title="Story Manager")
 
+scheduler = AsyncIOScheduler()
+
+async def update_web_novels():
+    """
+    Job to update all web novels.
+    """
+    logger.info("Starting web novel update job.")
+    db: AsyncSession = SessionLocal()
+    try:
+        books = await crud.get_web_books(db)
+        logger.info(f"Found {len(books)} web novels to check for updates.")
+        for book in books:
+            logger.info(f"Checking {book.title} for updates.")
+            try:
+                library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+                epub_path = library_path.parent / book.epub_path
+
+                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+
+                _, _ = await _download_and_parse_web_novel(book.source_url)
+
+                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+
+                if new_chapter_count > old_chapter_count:
+                    logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}.")
+                    log_entry = schemas.BookLogCreate(
+                        book_id=book.id,
+                        entry_type="updated",
+                        previous_chapter_count=old_chapter_count,
+                        new_chapter_count=new_chapter_count,
+                        words_added=new_word_count - old_word_count,
+                    )
+                    await crud.create_book_log(db, log_entry)
+                else:
+                    logger.info(f"No new chapters for {book.title}.")
+            except Exception as e:
+                logger.error(f"Failed to update {book.title}: {e}")
+    finally:
+        await db.close()
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
+    scheduler.add_job(update_web_novels, "interval", days=7)
+    scheduler.start()
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    scheduler.shutdown()
 
 class WebNovelRequest(BaseModel):
     url: schemas.HttpUrl
@@ -131,9 +196,21 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         author=author,
         epub_path=str(file_location.relative_to(library_path.parent)),
         series=series,
+        source_type=models.SourceType.epub
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
+
+    # Create a log entry for the new book
+    word_count, chapter_count = _get_epub_word_and_chapter_count(file_location)
+    log_entry = schemas.BookLogCreate(
+        book_id=db_book.id,
+        entry_type="added",
+        new_chapter_count=chapter_count,
+        words_added=word_count
+    )
+    await crud.create_book_log(db, log_entry)
+
     return db_book
 
 
@@ -164,9 +241,21 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
         source_url=request.url,
         epub_path=str(new_epub_path.relative_to(library_path.parent)),
         series=metadata["series"],
+        source_type=models.SourceType.web
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
+
+    # Create a log entry for the new book
+    word_count, chapter_count = _get_epub_word_and_chapter_count(new_epub_path)
+    log_entry = schemas.BookLogCreate(
+        book_id=db_book.id,
+        entry_type="added",
+        new_chapter_count=chapter_count,
+        words_added=word_count
+    )
+    await crud.create_book_log(db, log_entry)
+
     return db_book
 
 
@@ -203,7 +292,25 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     if not db_book.source_url:
         raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
 
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    epub_path = library_path.parent / db_book.epub_path
+
+    old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+
     _, metadata = await _download_and_parse_web_novel(db_book.source_url)
+
+    new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+
+    if new_chapter_count > old_chapter_count:
+        logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}.")
+        log_entry = schemas.BookLogCreate(
+            book_id=db_book.id,
+            entry_type="updated",
+            previous_chapter_count=old_chapter_count,
+            new_chapter_count=new_chapter_count,
+            words_added=new_word_count - old_word_count,
+        )
+        await crud.create_book_log(db, log_entry)
 
     update_data = schemas.BookUpdate(**metadata)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
