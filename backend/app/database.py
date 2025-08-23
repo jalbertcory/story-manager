@@ -16,6 +16,7 @@ SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine
 # Create a base class for our declarative models.
 Base = declarative_base()
 
+
 # Dependency to get a DB session.
 # This will be used in API endpoints to get a database session.
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
