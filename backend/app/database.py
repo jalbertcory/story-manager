@@ -11,7 +11,7 @@ engine = create_async_engine(DATABASE_URL, connect_args={"check_same_thread": Fa
 
 # Create a configured "Session" class.
 # This is the factory for our database sessions.
-AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Create a base class for our declarative models.
 Base = declarative_base()
@@ -19,5 +19,5 @@ Base = declarative_base()
 # Dependency to get a DB session.
 # This will be used in API endpoints to get a database session.
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
+    async with SessionLocal() as session:
         yield session

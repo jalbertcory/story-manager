@@ -10,6 +10,13 @@ async def get_book_by_source_url(db: AsyncSession, source_url: str) -> Optional[
     result = await db.execute(select(models.Book).filter(models.Book.source_url == source_url))
     return result.scalars().first()
 
+async def get_web_books(db: AsyncSession) -> List[models.Book]:
+    """
+    Retrieve all web books from the database.
+    """
+    result = await db.execute(select(models.Book).filter(models.Book.source_type == models.SourceType.web))
+    return result.scalars().all()
+
 async def get_books(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """
     Retrieve a list of books from the database.
@@ -60,6 +67,16 @@ async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limi
         .limit(limit)
     )
     return result.scalars().all()
+
+async def create_book_log(db: AsyncSession, log: schemas.BookLogCreate) -> models.BookLog:
+    """
+    Create a new book log entry in the database.
+    """
+    db_log = models.BookLog(**log.model_dump())
+    db.add(db_log)
+    await db.commit()
+    await db.refresh(db_log)
+    return db_log
 
 async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """
