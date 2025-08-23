@@ -7,9 +7,10 @@ from typing import Optional
 class BookCreate(BaseModel):
     title: str
     author: str
-    source_url: HttpUrl
+    source_url: Optional[HttpUrl] = None
     epub_path: str
     cover_path: Optional[str] = None
+    series: Optional[str] = None
 
 # Pydantic model for reading a book.
 # This defines the shape of the data sent back to the client.
