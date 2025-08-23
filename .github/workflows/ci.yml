@@ -43,5 +43,4 @@ jobs:
     - name: Test with pytest
       run: |
         export PYTHONPATH=.
-        cd backend
-        pytest
+        pytest backend/tests/
