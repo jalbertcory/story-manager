@@ -33,8 +33,8 @@ Story Manager is a self-hosted digital library and reader for your personal coll
 
 ### Prerequisites
 
-* Python 3.9+
-* Node.js 18+
+* Python 3.13+
+* Node.js 20+
 * Docker (Recommended)
 
 ### Installation
