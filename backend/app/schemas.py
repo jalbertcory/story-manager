@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from .models import SourceType
 
+
 # Pydantic model for creating a new book.
 # This is the expected shape of data when creating a book record.
 class BookCreate(BaseModel):
@@ -14,11 +15,13 @@ class BookCreate(BaseModel):
     cover_path: Optional[str] = None
     series: Optional[str] = None
 
+
 # Pydantic model for updating a book.
 class BookUpdate(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     series: Optional[str] = None
+
 
 # Pydantic model for reading a book.
 # This defines the shape of the data sent back to the client.
@@ -32,6 +35,7 @@ class Book(BookCreate):
         # This allows the Pydantic model to be created from an ORM model (like our SQLAlchemy Book model).
         from_attributes = True
 
+
 # Pydantic model for creating a new book log.
 class BookLogCreate(BaseModel):
     book_id: int
@@ -39,6 +43,7 @@ class BookLogCreate(BaseModel):
     previous_chapter_count: Optional[int] = None
     new_chapter_count: Optional[int] = None
     words_added: Optional[int] = None
+
 
 # Pydantic model for reading a book log.
 class BookLog(BookLogCreate):

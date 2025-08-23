@@ -1,47 +1,47 @@
-import { useState, useEffect } from 'react'
-import './App.css'
-import BookList from './components/BookList'
+import { useState, useEffect } from "react";
+import "./App.css";
+import BookList from "./components/BookList";
 
 function App() {
-  const [books, setBooks] = useState([])
-  const [author, setAuthor] = useState('')
-  const [series, setSeries] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const [books, setBooks] = useState([]);
+  const [author, setAuthor] = useState("");
+  const [series, setSeries] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const fetchBooks = async (endpoint) => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(endpoint)
+      const res = await fetch(endpoint);
       if (!res.ok) {
-        throw new Error('Failed to fetch books')
+        throw new Error("Failed to fetch books");
       }
-      const data = await res.json()
-      setBooks(data)
+      const data = await res.json();
+      setBooks(data);
     } catch (err) {
-      setError(err.message)
-      setBooks([])
+      setError(err.message);
+      setBooks([]);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchBooks('/api/books')
-  }, [])
+    fetchBooks("/api/books");
+  }, []);
 
   const handleSearch = () => {
-    const authorTrim = author.trim()
-    const seriesTrim = series.trim()
+    const authorTrim = author.trim();
+    const seriesTrim = series.trim();
     if (authorTrim) {
-      fetchBooks(`/api/books/search/author/${encodeURIComponent(authorTrim)}`)
+      fetchBooks(`/api/books/search/author/${encodeURIComponent(authorTrim)}`);
     } else if (seriesTrim) {
-      fetchBooks(`/api/books/search/series/${encodeURIComponent(seriesTrim)}`)
+      fetchBooks(`/api/books/search/series/${encodeURIComponent(seriesTrim)}`);
     } else {
-      fetchBooks('/api/books')
+      fetchBooks("/api/books");
     }
-  }
+  };
 
   return (
     <div className="app-container">
@@ -65,7 +65,7 @@ function App() {
       {error && <p className="error">{error}</p>}
       <BookList books={books} />
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

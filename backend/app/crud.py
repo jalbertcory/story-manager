@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
 
-
 async def get_book_by_source_url(
     db: AsyncSession, source_url: str
 ) -> Optional[models.Book]:
@@ -25,7 +24,6 @@ async def get_web_books(db: AsyncSession) -> List[models.Book]:
         select(models.Book).filter(models.Book.source_type == models.SourceType.web)
     )
     return result.scalars().all()
-
 
 async def get_books(
     db: AsyncSession, skip: int = 0, limit: int = 100
@@ -59,7 +57,6 @@ async def get_book(db: AsyncSession, book_id: int) -> Optional[models.Book]:
     result = await db.execute(select(models.Book).filter(models.Book.id == book_id))
     return result.scalars().first()
 
-
 async def update_book(
     db: AsyncSession, book: models.Book, update_data: schemas.BookUpdate
 ) -> models.Book:
@@ -73,21 +70,14 @@ async def update_book(
     await db.refresh(book)
     return book
 
-
 async def get_books_by_author(
     db: AsyncSession, author: str, skip: int = 0, limit: int = 100
 ) -> List[models.Book]:
     """
     Retrieve books from the database by author.
     """
-    result = await db.execute(
-        select(models.Book)
-        .filter(models.Book.author.ilike(f"%{author}%"))
-        .offset(skip)
-        .limit(limit)
-    )
+    result = await db.execute(select(models.Book).filter(models.Book.author.ilike(f"%{author}%")).offset(skip).limit(limit))
     return result.scalars().all()
-
 
 async def create_book_log(
     db: AsyncSession, log: schemas.BookLogCreate
@@ -100,7 +90,6 @@ async def create_book_log(
     await db.commit()
     await db.refresh(db_log)
     return db_log
-
 
 async def get_latest_book_log(
     db: AsyncSession, book_id: int
@@ -150,10 +139,5 @@ async def get_books_by_series(
     """
     Retrieve books from the database by series.
     """
-    result = await db.execute(
-        select(models.Book)
-        .filter(models.Book.series.ilike(f"%{series}%"))
-        .offset(skip)
-        .limit(limit)
-    )
+    result = await db.execute(select(models.Book).filter(models.Book.series.ilike(f"%{series}%")).offset(skip).limit(limit))
     return result.scalars().all()
