@@ -8,6 +8,7 @@ run-backend:
 
 fmt:
 	python -m black backend
+	flake8 backend
 	cd frontend && npx prettier --write .
 
 lint:
@@ -15,5 +16,5 @@ lint:
 	cd frontend && npm run lint
 
 test:
-	pytest backend/tests
+	export PYTHONPATH=. && pytest backend/tests
 	cd frontend && npm test -- --run

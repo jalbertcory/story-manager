@@ -5,9 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from pathlib import Path
 import configparser
-import os
 
-import ebooklib
 from ebooklib import epub
 from backend.app.main import app
 from backend.app.database import Base, get_db
@@ -23,15 +21,18 @@ engine = create_async_engine(
 )
 AsyncTestingSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
+
 # Override the `get_db` dependency to use the async test database
 async def override_get_db():
     async with AsyncTestingSessionLocal() as session:
         yield session
 
+
 app.dependency_overrides[get_db] = override_get_db
 
 # The TestClient for making requests to the app
 client = TestClient(app)
+
 
 # Async pytest fixture to set up and tear down the database for each test function
 @pytest_asyncio.fixture(scope="function")
@@ -42,6 +43,7 @@ async def db_session():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
+
 @pytest.mark.asyncio
 async def test_get_all_books_empty(db_session):
     """
@@ -50,6 +52,7 @@ async def test_get_all_books_empty(db_session):
     response = client.get("/api/books")
     assert response.status_code == 200
     assert response.json() == []
+
 
 @pytest.mark.asyncio
 async def test_add_web_novel(db_session, mocker):
@@ -68,20 +71,22 @@ async def test_add_web_novel(db_session, mocker):
     metadata_path = library_path / "Test Story-Test Author.fff_metadata"
 
     # Ensure the library is empty before the test
-    if epub_path.exists(): epub_path.unlink()
-    if metadata_path.exists(): metadata_path.unlink()
+    if epub_path.exists():
+        epub_path.unlink()
+    if metadata_path.exists():
+        metadata_path.unlink()
 
     # The endpoint discovers the new file by checking the directory before and after the call.
     # We mock `iterdir` to simulate this.
-    mocker.patch("pathlib.Path.iterdir", side_effect=[
-        iter([]),  # Files before call
-        iter([epub_path, metadata_path])  # Files after call
-    ])
+    mocker.patch(
+        "pathlib.Path.iterdir",
+        side_effect=[iter([]), iter([epub_path, metadata_path])],  # Files before call  # Files after call
+    )
 
     # Write dummy metadata to the file that the endpoint will read
     config = configparser.ConfigParser()
-    config['metadata'] = {'title': 'Test Story', 'author': 'Test Author'}
-    with open(metadata_path, 'w') as f:
+    config["metadata"] = {"title": "Test Story", "author": "Test Author"}
+    with open(metadata_path, "w") as f:
         config.write(f)
 
     # The payload for the POST request
@@ -98,7 +103,7 @@ async def test_add_web_novel(db_session, mocker):
     assert data["author"] == "Test Author"
     assert data["source_url"] == "http://example.com/story/123"
     # The path stored should be relative to the project root (parent of 'library')
-    assert data["epub_path"] == str(Path('library') / epub_filename)
+    assert data["epub_path"] == str(Path("library") / epub_filename)
 
     # Verify that the book was added to the database
     response = client.get("/api/books")
@@ -106,6 +111,7 @@ async def test_add_web_novel(db_session, mocker):
     books = response.json()
     assert len(books) == 1
     assert books[0]["title"] == "Test Story"
+
 
 @pytest.mark.asyncio
 async def test_add_existing_web_novel(db_session):
@@ -130,6 +136,7 @@ async def test_add_existing_web_novel(db_session):
     assert response.status_code == 409
     assert "already exists" in response.json()["detail"]
 
+
 def create_dummy_epub(filepath: Path, title: str, author: str, series: str = None):
     """Creates a dummy EPUB file for testing."""
     book = epub.EpubBook()
@@ -138,16 +145,17 @@ def create_dummy_epub(filepath: Path, title: str, author: str, series: str = Non
     book.set_language("en")
     book.add_author(author)
     if series:
-        book.add_metadata('calibre', 'series', series)
+        book.add_metadata("calibre", "series", series)
     # Add a dummy chapter
-    c1 = epub.EpubHtml(title='Intro', file_name='chap_1.xhtml', lang='en')
-    c1.content=u'<h1>Introduction</h1><p>Introduction text.</p>'
+    c1 = epub.EpubHtml(title="Intro", file_name="chap_1.xhtml", lang="en")
+    c1.content = "<h1>Introduction</h1><p>Introduction text.</p>"
     book.add_item(c1)
-    book.toc = (epub.Link('chap_1.xhtml', 'Introduction', 'intro'),)
+    book.toc = (epub.Link("chap_1.xhtml", "Introduction", "intro"),)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ['nav', c1]
+    book.spine = ["nav", c1]
     epub.write_epub(filepath, book, {})
+
 
 @pytest.mark.asyncio
 async def test_upload_epub(db_session):
@@ -173,7 +181,7 @@ async def test_upload_epub(db_session):
     assert data["title"] == "Uploaded Book"
     assert data["author"] == "Uploader"
     assert data["series"] == "Upload Series"
-    assert data["epub_path"] == str(Path('library') / epub_filename)
+    assert data["epub_path"] == str(Path("library") / epub_filename)
 
     # Verify that the book was added to the database
     response = client.get("/api/books")
@@ -182,27 +190,35 @@ async def test_upload_epub(db_session):
     assert len(books) == 1
     assert books[0]["title"] == "Uploaded Book"
 
+
 @pytest.mark.asyncio
 async def test_search_books_by_author(db_session):
     """
     Test searching for books by author.
     """
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1", source_type=models.SourceType.epub))
-        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2", source_type=models.SourceType.epub))
-        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3", source_type=models.SourceType.epub))
+        await crud.create_book(
+            session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1", source_type=models.SourceType.epub)
+        )
+        await crud.create_book(
+            session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2", source_type=models.SourceType.epub)
+        )
+        await crud.create_book(
+            session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3", source_type=models.SourceType.epub)
+        )
 
     response = client.get("/api/books/search/author/Author A")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
-    assert {b['title'] for b in data} == {"Book 1", "Book 3"}
+    assert {b["title"] for b in data} == {"Book 1", "Book 3"}
 
-    response = client.get("/api/books/search/author/author b") # case-insensitive
+    response = client.get("/api/books/search/author/author b")  # case-insensitive
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
-    assert data[0]['title'] == "Book 2"
+    assert data[0]["title"] == "Book 2"
+
 
 @pytest.mark.asyncio
 async def test_update_book_details(db_session):
@@ -210,7 +226,12 @@ async def test_update_book_details(db_session):
     Test updating a book's details.
     """
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(session, schemas.BookCreate(title="Original Title", author="Original Author", epub_path="p1", source_type=models.SourceType.epub))
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Original Title", author="Original Author", epub_path="p1", source_type=models.SourceType.epub
+            ),
+        )
 
     update_payload = {"title": "Updated Title", "series": "New Series"}
     response = client.put(f"/api/books/{book.id}", json=update_payload)
@@ -218,8 +239,9 @@ async def test_update_book_details(db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "Updated Title"
-    assert data["author"] == "Original Author" # Should not change
+    assert data["author"] == "Original Author"  # Should not change
     assert data["series"] == "New Series"
+
 
 @pytest.mark.asyncio
 async def test_refresh_book(db_session, mocker):
@@ -229,17 +251,23 @@ async def test_refresh_book(db_session, mocker):
     # Mock the helper function to simulate a successful download and metadata parsing
     mocker.patch(
         "backend.app.main._download_and_parse_web_novel",
-        return_value=(Path("new.epub"), {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"})
+        return_value=(
+            Path("new.epub"),
+            {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"},
+        ),
     )
 
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(session, schemas.BookCreate(
-            title="Original Title",
-            author="Original Author",
-            source_url="http://example.com/story/refresh",
-            epub_path="p1",
-            source_type=models.SourceType.web
-        ))
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Original Title",
+                author="Original Author",
+                source_url="http://example.com/story/refresh",
+                epub_path="p1",
+                source_type=models.SourceType.web,
+            ),
+        )
 
     response = client.post(f"/api/books/{book.id}/refresh")
 
@@ -249,18 +277,23 @@ async def test_refresh_book(db_session, mocker):
     assert data["author"] == "Refreshed Author"
     assert data["series"] == "Refreshed Series"
 
+
 @pytest.mark.asyncio
 async def test_refresh_book_no_source_url(db_session):
     """
     Test that refreshing a book with no source URL returns an error.
     """
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(session, schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1", source_type=models.SourceType.epub))
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1", source_type=models.SourceType.epub),
+        )
 
     response = client.post(f"/api/books/{book.id}/refresh")
 
     assert response.status_code == 400
     assert "does not have a source URL" in response.json()["detail"]
+
 
 @pytest.mark.asyncio
 async def test_search_books_by_series(db_session):
@@ -268,18 +301,33 @@ async def test_search_books_by_series(db_session):
     Test searching for books by series.
     """
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", series="Series X", epub_path="p1", source_type=models.SourceType.epub))
-        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", series="Series Y", epub_path="p2", source_type=models.SourceType.epub))
-        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", series="Series X", epub_path="p3", source_type=models.SourceType.epub))
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book 1", author="Author A", series="Series X", epub_path="p1", source_type=models.SourceType.epub
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book 2", author="Author B", series="Series Y", epub_path="p2", source_type=models.SourceType.epub
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book 3", author="Author A", series="Series X", epub_path="p3", source_type=models.SourceType.epub
+            ),
+        )
 
     response = client.get("/api/books/search/series/Series X")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
-    assert {b['title'] for b in data} == {"Book 1", "Book 3"}
+    assert {b["title"] for b in data} == {"Book 1", "Book 3"}
 
-    response = client.get("/api/books/search/series/series y") # case-insensitive
+    response = client.get("/api/books/search/series/series y")  # case-insensitive
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
-    assert data[0]['title'] == "Book 2"
+    assert data[0]["title"] == "Book 2"
