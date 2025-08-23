@@ -27,6 +27,7 @@ async def get_web_books(db: AsyncSession) -> List[models.Book]:
     return result.scalars().all()
 
 
+
 async def get_books(
     db: AsyncSession, skip: int = 0, limit: int = 100
 ) -> List[models.Book]:
@@ -80,14 +81,8 @@ async def get_books_by_author(
     """
     Retrieve books from the database by author.
     """
-    result = await db.execute(
-        select(models.Book)
-        .filter(models.Book.author.ilike(f"%{author}%"))
-        .offset(skip)
-        .limit(limit)
-    )
+    result = await db.execute(select(models.Book).filter(models.Book.author.ilike(f"%{author}%")).offset(skip).limit(limit))
     return result.scalars().all()
-
 
 async def create_book_log(
     db: AsyncSession, log: schemas.BookLogCreate
@@ -150,10 +145,5 @@ async def get_books_by_series(
     """
     Retrieve books from the database by series.
     """
-    result = await db.execute(
-        select(models.Book)
-        .filter(models.Book.series.ilike(f"%{series}%"))
-        .offset(skip)
-        .limit(limit)
-    )
+    result = await db.execute(select(models.Book).filter(models.Book.series.ilike(f"%{series}%")).offset(skip).limit(limit))
     return result.scalars().all()
