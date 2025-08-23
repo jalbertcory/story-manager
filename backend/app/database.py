@@ -1,4 +1,5 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
 
 # Define the database URL. For this project, we use an async SQLite driver.
@@ -17,6 +18,6 @@ Base = declarative_base()
 
 # Dependency to get a DB session.
 # This will be used in API endpoints to get a database session.
-async def get_db():
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session

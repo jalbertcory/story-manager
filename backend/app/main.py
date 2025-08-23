@@ -1,9 +1,14 @@
 import asyncio
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import configparser
 import logging
+from typing import List, Dict, Any
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+
 
 from pydantic import BaseModel, HttpUrl
 
@@ -16,22 +21,64 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create all database tables on startup
-async def create_tables():
+async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
 
 app = FastAPI(title="Story Manager")
 
 @app.on_event("startup")
-async def on_startup():
+async def on_startup() -> None:
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
 
 class WebNovelRequest(BaseModel):
     url: schemas.HttpUrl
 
+
+@app.post("/api/books/upload_epub", status_code=status.HTTP_201_CREATED, response_model=schemas.Book)
+async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
+    """
+    Uploads an EPUB file, extracts metadata, and adds it to the database.
+    """
+    app_dir = Path(__file__).parent.resolve()
+    library_path = (app_dir / ".." / ".." / "library").resolve()
+    library_path.mkdir(exist_ok=True)
+
+    # Sanitize filename and save the file
+    file_location = library_path / file.filename
+    with open(file_location, "wb+") as file_object:
+        file_object.write(file.file.read())
+
+    # Extract metadata from the EPUB file
+    try:
+        book = epub.read_epub(file_location)
+        title = book.get_metadata('DC', 'title')[0][0]
+        author = book.get_metadata('DC', 'creator')[0][0]
+
+        series_metadata = book.get_metadata('calibre', 'series')
+        series = series_metadata[0][0] if series_metadata else None
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to parse EPUB file: {e}",
+        )
+
+    # Create the book record in the database
+    book_to_create = schemas.BookCreate(
+        title=title,
+        author=author,
+        epub_path=str(file_location.relative_to(library_path.parent)),
+        series=series,
+    )
+
+    db_book = await crud.create_book(db=db, book=book_to_create)
+    return db_book
+
+
 @app.post("/api/books/add_web_novel", status_code=status.HTTP_201_CREATED, response_model=schemas.Book)
-async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get_db)):
+async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get_db)) -> models.Book:
     """
     Downloads a web novel, saves it as an EPUB, and adds its metadata to the database.
     """
@@ -103,25 +150,46 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
         )
 
     # 4. Create the book record in the database
+    series_info = config.get('metadata', 'series', fallback=None)
     book_to_create = schemas.BookCreate(
         title=title,
         author=author,
-        source_url=source_url_str,
+        source_url=request.url,
         epub_path=str(new_epub_path.relative_to(library_path.parent)), # Store relative path
+        series=series_info,
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
     return db_book
 
 
-@app.get("/api/books", response_model=list[schemas.Book])
-async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+@app.get("/api/books", response_model=List[schemas.Book])
+async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
     """
     Retrieve a list of all books in the library.
     """
     books = await crud.get_books(db, skip=skip, limit=limit)
     return books
 
+
+@app.get("/api/books/search/author/{author}", response_model=List[schemas.Book])
+async def search_books_by_author(author: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
+    """
+    Search for books by author.
+    """
+    books = await crud.get_books_by_author(db, author=author, skip=skip, limit=limit)
+    return books
+
+
+@app.get("/api/books/search/series/{series}", response_model=List[schemas.Book])
+async def search_books_by_series(series: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
+    """
+    Search for books by series.
+    """
+    books = await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
+    return books
+
+
 @app.get("/")
-def read_root():
+def read_root() -> Dict[str, str]:
     return {"message": "Welcome to the Story Manager API"}

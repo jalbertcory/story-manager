@@ -7,6 +7,8 @@ from pathlib import Path
 import configparser
 import os
 
+import ebooklib
+from ebooklib import epub
 from backend.app.main import app
 from backend.app.database import Base, get_db
 from backend.app import models, schemas, crud
@@ -126,3 +128,99 @@ async def test_add_existing_web_novel(db_session):
 
     assert response.status_code == 409
     assert "already exists" in response.json()["detail"]
+
+def create_dummy_epub(filepath: Path, title: str, author: str, series: str = None):
+    """Creates a dummy EPUB file for testing."""
+    book = epub.EpubBook()
+    book.set_identifier("test-id")
+    book.set_title(title)
+    book.set_language("en")
+    book.add_author(author)
+    if series:
+        book.add_metadata('calibre', 'series', series)
+    # Add a dummy chapter
+    c1 = epub.EpubHtml(title='Intro', file_name='chap_1.xhtml', lang='en')
+    c1.content=u'<h1>Introduction</h1><p>Introduction text.</p>'
+    book.add_item(c1)
+    book.toc = (epub.Link('chap_1.xhtml', 'Introduction', 'intro'),)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ['nav', c1]
+    epub.write_epub(filepath, book, {})
+
+@pytest.mark.asyncio
+async def test_upload_epub(db_session):
+    """
+    Test uploading an EPUB file.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    epub_filename = "Uploaded Book.epub"
+    epub_filepath = library_path / epub_filename
+
+    # Create a dummy epub file
+    create_dummy_epub(epub_filepath, "Uploaded Book", "Uploader", "Upload Series")
+
+    with open(epub_filepath, "rb") as f:
+        response = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+
+    # Clean up the dummy file
+    epub_filepath.unlink()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["title"] == "Uploaded Book"
+    assert data["author"] == "Uploader"
+    assert data["series"] == "Upload Series"
+    assert data["epub_path"] == str(Path('library') / epub_filename)
+
+    # Verify that the book was added to the database
+    response = client.get("/api/books")
+    assert response.status_code == 200
+    books = response.json()
+    assert len(books) == 1
+    assert books[0]["title"] == "Uploaded Book"
+
+@pytest.mark.asyncio
+async def test_search_books_by_author(db_session):
+    """
+    Test searching for books by author.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3"))
+
+    response = client.get("/api/books/search/author/Author A")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert {b['title'] for b in data} == {"Book 1", "Book 3"}
+
+    response = client.get("/api/books/search/author/author b") # case-insensitive
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]['title'] == "Book 2"
+
+@pytest.mark.asyncio
+async def test_search_books_by_series(db_session):
+    """
+    Test searching for books by series.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Book 1", author="Author A", series="Series X", epub_path="p1"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 2", author="Author B", series="Series Y", epub_path="p2"))
+        await crud.create_book(session, schemas.BookCreate(title="Book 3", author="Author A", series="Series X", epub_path="p3"))
+
+    response = client.get("/api/books/search/series/Series X")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert {b['title'] for b in data} == {"Book 1", "Book 3"}
+
+    response = client.get("/api/books/search/series/series y") # case-insensitive
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]['title'] == "Book 2"
