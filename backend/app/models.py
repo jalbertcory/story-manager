@@ -37,3 +37,14 @@ class BookLog(Base):
     new_chapter_count = Column(Integer, nullable=True)
     words_added = Column(Integer, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class UpdateTask(Base):
+    __tablename__ = "update_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    total_books = Column(Integer, nullable=False)
+    completed_books = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="running")
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)

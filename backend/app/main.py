@@ -52,12 +52,19 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
 
     if not ini_path.is_file():
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server configuration error: personal.ini not found."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: personal.ini not found.",
         )
 
     async with asyncio.Lock():
         files_before = set(library_path.iterdir())
-        args = ["--personal-ini", str(ini_path), "--output-dir", str(library_path), source_url]
+        args = [
+            "--personal-ini",
+            str(ini_path),
+            "--output-dir",
+            str(library_path),
+            source_url,
+        ]
         result = fff_main(args)
         if result != 0:
             raise HTTPException(
@@ -116,21 +123,38 @@ async def update_web_novels():
     db: AsyncSession = SessionLocal()
     try:
         books = await crud.get_web_books(db)
-        logger.info(f"Found {len(books)} web novels to check for updates.")
+        task = await crud.get_active_update_task(db)
+        if not task:
+            task = await crud.create_update_task(db, total_books=len(books))
+        logger.info(
+            f"Update task {task.id} processing {task.completed_books}/{task.total_books} books."
+        )
         for book in books:
+            latest_log = await crud.get_latest_book_log(db, book.id)
+            if latest_log and latest_log.timestamp >= task.started_at:
+                logger.info(f"Skipping {book.title}, already processed in this task.")
+                continue
             logger.info(f"Checking {book.title} for updates.")
             try:
-                library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+                library_path = (
+                    Path(__file__).parent.resolve() / ".." / ".." / "library"
+                ).resolve()
                 epub_path = library_path.parent / book.epub_path
 
-                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(
+                    epub_path
+                )
 
                 _, _ = await _download_and_parse_web_novel(book.source_url)
 
-                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(
+                    epub_path
+                )
 
                 if new_chapter_count > old_chapter_count:
-                    logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}.")
+                    logger.info(
+                        f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}."
+                    )
                     log_entry = schemas.BookLogCreate(
                         book_id=book.id,
                         entry_type="updated",
@@ -138,11 +162,20 @@ async def update_web_novels():
                         new_chapter_count=new_chapter_count,
                         words_added=new_word_count - old_word_count,
                     )
-                    await crud.create_book_log(db, log_entry)
                 else:
                     logger.info(f"No new chapters for {book.title}.")
+                    log_entry = schemas.BookLogCreate(
+                        book_id=book.id,
+                        entry_type="checked",
+                        previous_chapter_count=old_chapter_count,
+                        new_chapter_count=new_chapter_count,
+                        words_added=0,
+                    )
+                await crud.create_book_log(db, log_entry)
+                await crud.increment_update_task(db, task)
             except Exception as e:
                 logger.error(f"Failed to update {book.title}: {e}")
+        await crud.complete_update_task(db, task)
     finally:
         await db.close()
 
@@ -164,8 +197,14 @@ class WebNovelRequest(BaseModel):
     url: schemas.HttpUrl
 
 
-@app.post("/api/books/upload_epub", status_code=status.HTTP_201_CREATED, response_model=schemas.Book)
-async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
+@app.post(
+    "/api/books/upload_epub",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.Book,
+)
+async def upload_epub(
+    file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+) -> models.Book:
     """
     Uploads an EPUB file, extracts metadata, and adds it to the database.
     """
@@ -207,15 +246,24 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     # Create a log entry for the new book
     word_count, chapter_count = _get_epub_word_and_chapter_count(file_location)
     log_entry = schemas.BookLogCreate(
-        book_id=db_book.id, entry_type="added", new_chapter_count=chapter_count, words_added=word_count
+        book_id=db_book.id,
+        entry_type="added",
+        new_chapter_count=chapter_count,
+        words_added=word_count,
     )
     await crud.create_book_log(db, log_entry)
 
     return db_book
 
 
-@app.post("/api/books/add_web_novel", status_code=status.HTTP_201_CREATED, response_model=schemas.Book)
-async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get_db)) -> models.Book:
+@app.post(
+    "/api/books/add_web_novel",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.Book,
+)
+async def add_web_novel(
+    request: WebNovelRequest, db: AsyncSession = Depends(get_db)
+) -> models.Book:
     """
     Downloads a web novel, saves it as an EPUB, and adds its metadata to the database.
     """
@@ -248,7 +296,10 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     # Create a log entry for the new book
     word_count, chapter_count = _get_epub_word_and_chapter_count(new_epub_path)
     log_entry = schemas.BookLogCreate(
-        book_id=db_book.id, entry_type="added", new_chapter_count=chapter_count, words_added=word_count
+        book_id=db_book.id,
+        entry_type="added",
+        new_chapter_count=chapter_count,
+        words_added=word_count,
     )
     await crud.create_book_log(db, log_entry)
 
@@ -256,7 +307,9 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
 
 
 @app.get("/api/books", response_model=List[schemas.Book])
-async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
+async def get_all_books(
+    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+) -> List[models.Book]:
     """
     Retrieve a list of all books in the library.
     """
@@ -288,7 +341,9 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         raise HTTPException(status_code=404, detail="Book not found")
 
     if not db_book.source_url:
-        raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
+        raise HTTPException(
+            status_code=400, detail="Book does not have a source URL to refresh from."
+        )
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     epub_path = library_path.parent / db_book.epub_path
@@ -300,7 +355,9 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
 
     if new_chapter_count > old_chapter_count:
-        logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}.")
+        logger.info(
+            f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}."
+        )
         log_entry = schemas.BookLogCreate(
             book_id=db_book.id,
             entry_type="updated",
