@@ -126,9 +126,7 @@ async def update_web_novels():
         task = await crud.get_active_update_task(db)
         if not task:
             task = await crud.create_update_task(db, total_books=len(books))
-        logger.info(
-            f"Update task {task.id} processing {task.completed_books}/{task.total_books} books."
-        )
+        logger.info(f"Update task {task.id} processing {task.completed_books}/{task.total_books} books.")
         for book in books:
             latest_log = await crud.get_latest_book_log(db, book.id)
             if latest_log and latest_log.timestamp >= task.started_at:
@@ -136,25 +134,17 @@ async def update_web_novels():
                 continue
             logger.info(f"Checking {book.title} for updates.")
             try:
-                library_path = (
-                    Path(__file__).parent.resolve() / ".." / ".." / "library"
-                ).resolve()
+                library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
                 epub_path = library_path.parent / book.epub_path
 
-                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(
-                    epub_path
-                )
+                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
 
                 _, _ = await _download_and_parse_web_novel(book.source_url)
 
-                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(
-                    epub_path
-                )
+                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
 
                 if new_chapter_count > old_chapter_count:
-                    logger.info(
-                        f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}."
-                    )
+                    logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}.")
                     log_entry = schemas.BookLogCreate(
                         book_id=book.id,
                         entry_type="updated",
@@ -202,9 +192,7 @@ class WebNovelRequest(BaseModel):
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.Book,
 )
-async def upload_epub(
-    file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
-) -> models.Book:
+async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
     """
     Uploads an EPUB file, extracts metadata, and adds it to the database.
     """
@@ -261,9 +249,7 @@ async def upload_epub(
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.Book,
 )
-async def add_web_novel(
-    request: WebNovelRequest, db: AsyncSession = Depends(get_db)
-) -> models.Book:
+async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get_db)) -> models.Book:
     """
     Downloads a web novel, saves it as an EPUB, and adds its metadata to the database.
     """
@@ -307,9 +293,7 @@ async def add_web_novel(
 
 
 @app.get("/api/books", response_model=List[schemas.Book])
-async def get_all_books(
-    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
-) -> List[models.Book]:
+async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
     """
     Retrieve a list of all books in the library.
     """
@@ -341,9 +325,7 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         raise HTTPException(status_code=404, detail="Book not found")
 
     if not db_book.source_url:
-        raise HTTPException(
-            status_code=400, detail="Book does not have a source URL to refresh from."
-        )
+        raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     epub_path = library_path.parent / db_book.epub_path
@@ -355,9 +337,7 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
 
     if new_chapter_count > old_chapter_count:
-        logger.info(
-            f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}."
-        )
+        logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}.")
         log_entry = schemas.BookLogCreate(
             book_id=db_book.id,
             entry_type="updated",

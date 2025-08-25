@@ -20,6 +20,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r backend/requirements.txt
         pip install -r backend/requirements-dev.txt
+    - name: Format with black
+      run: black backend
+    - name: Commit formatting changes
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: 'chore: format python code'
+        file_pattern: backend/**/*.py
     - name: Lint with flake8
       run: |
         flake8 backend --count --statistics
