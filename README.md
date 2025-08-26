@@ -67,3 +67,21 @@ Story Manager is a self-hosted digital library and reader for your personal coll
     * Start the frontend development server from the `frontend` directory.
 
 ---
+
+## 🐋 Deploy with Docker Compose
+
+A `docker-compose.yml` file is provided for running Story Manager with Docker. It exposes the web UI on port **7890** and the API on **8000**. PostgreSQL data is stored on the host in the `pgdata/` folder so it survives container restarts.
+
+```bash
+docker compose up -d
+```
+
+### Using on Unraid
+
+1. Copy the repository (or just `docker-compose.yml`) to your Unraid server.
+2. Create a directory for persistent data, e.g. `/mnt/user/appdata/story-manager/pgdata`.
+3. Edit the `pgdata` volume path in `docker-compose.yml` to point to that directory.
+4. From the directory containing `docker-compose.yml`, run `docker compose up -d` using the Docker Compose plugin or the Docker Compose Manager.
+5. Visit `http://<UNRAID_HOST>:7890` in your browser to use the Story Manager UI.
+
+---
