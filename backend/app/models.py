@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, JSON
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -48,3 +48,13 @@ class UpdateTask(Base):
     status = Column(String, nullable=False, default="running")
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class CleaningConfig(Base):
+    __tablename__ = "cleaning_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    url_pattern = Column(String, nullable=False)
+    chapter_selectors = Column(JSON, nullable=True)
+    content_selectors = Column(JSON, nullable=True)

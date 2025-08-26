@@ -221,6 +221,63 @@ async def test_search_books_by_author(db_session):
 
 
 @pytest.mark.asyncio
+async def test_create_cleaning_config(db_session):
+    payload = {
+        "name": "Example",
+        "url_pattern": "example.com",
+        "chapter_selectors": ["div.ann"],
+        "content_selectors": ["div.note"],
+    }
+    response = client.post("/api/cleaning-configs", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["name"] == "Example"
+
+    response = client.get("/api/cleaning-configs")
+    assert response.status_code == 200
+    configs = response.json()
+    assert len(configs) == 1
+    assert configs[0]["url_pattern"] == "example.com"
+
+
+@pytest.mark.asyncio
+async def test_update_and_delete_cleaning_config(db_session):
+    payload = {
+        "name": "Example",
+        "url_pattern": "example.com",
+        "chapter_selectors": ["div.ann"],
+        "content_selectors": ["div.note"],
+    }
+    response = client.post("/api/cleaning-configs", json=payload)
+    assert response.status_code == 201
+    config = response.json()
+    config_id = config["id"]
+
+    response = client.get(f"/api/cleaning-configs/{config_id}")
+    assert response.status_code == 200
+    assert response.json()["name"] == "Example"
+
+    update_payload = {
+        "name": "Updated",
+        "chapter_selectors": ["div.new"],
+    }
+    response = client.put(
+        f"/api/cleaning-configs/{config_id}", json=update_payload
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Updated"
+    assert data["chapter_selectors"] == ["div.new"]
+
+    response = client.delete(f"/api/cleaning-configs/{config_id}")
+    assert response.status_code == 204
+
+    response = client.get("/api/cleaning-configs")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
 async def test_update_book_details(db_session):
     """
     Test updating a book's details.
