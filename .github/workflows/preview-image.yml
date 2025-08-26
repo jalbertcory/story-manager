@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v3
 
@@ -39,3 +40,21 @@ jobs:
 
       - name: Push image
         run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+
+      - name: Comment image
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const image = `${process.env.REGISTRY}/${process.env.IMAGE_NAME}:${tag}`;
+            const url = `https://${process.env.REGISTRY}/${process.env.IMAGE_NAME}:${tag}`;
+            const body = `Preview image available: \`${image}\`\n\n[View image in registry](${url})`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
