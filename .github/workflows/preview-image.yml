@@ -1,0 +1,41 @@
+name: preview-image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Set image tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "tag=pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build image
+        run: docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+
+      - name: Push image
+        run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
