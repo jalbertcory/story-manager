@@ -8,7 +8,10 @@ from sqlalchemy.orm import declarative_base
 #
 # The credentials and database name align with those created in the
 # `run-container.sh` script.
-DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/story_manager"
+# Use psycopg (v3) as the async driver to avoid building the asyncpg C extension,
+# which lacks Python 3.13 wheels and fails to compile. Psycopg ships wheels for
+# newer Python versions, keeping installs fast and reliable.
+DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/story_manager"
 
 # Create an async engine for PostgreSQL. `echo=True` can be enabled for SQL
 # debugging purposes.
