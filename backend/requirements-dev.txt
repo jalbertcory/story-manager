@@ -1,3 +1,4 @@
+aiosqlite==0.21.0
 ebooklib==0.18
 httpx==0.28.1
 iniconfig==2.1.0

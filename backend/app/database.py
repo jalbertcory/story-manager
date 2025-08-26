@@ -1,13 +1,21 @@
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
-# Define the database URL. For this project, we use an async SQLite driver.
-# The database file will be created in the `backend` directory.
-DATABASE_URL = "sqlite+aiosqlite:///../story_manager.db"
+# Define the database URL for a local PostgreSQL database. The database will
+# run inside the same container and be available on the default port.
+#
+# The credentials and database name align with those created in the
+# `run-container.sh` script.
+# Use psycopg (v3) as the async driver to avoid building the asyncpg C extension,
+# which lacks Python 3.13 wheels and fails to compile. Psycopg ships wheels for
+# newer Python versions, keeping installs fast and reliable.
+DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/story_manager"
 
-# Create an async engine. `echo=True` is useful for debugging SQL queries.
-engine = create_async_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Create an async engine for PostgreSQL. `echo=True` can be enabled for SQL
+# debugging purposes.
+engine = create_async_engine(DATABASE_URL)
 
 # Create a configured "Session" class.
 # This is the factory for our database sessions.
