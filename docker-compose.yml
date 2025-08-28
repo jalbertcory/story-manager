@@ -6,5 +6,6 @@ services:
       - "7890:5173"  # UI
       - "8000:8000"  # API
     volumes:
-      - ./pgdata:/tmp/pgdata
+      - ./config/library:/app/library
+      - ./config/pgdata:/tmp/pgdata
     restart: unless-stopped
