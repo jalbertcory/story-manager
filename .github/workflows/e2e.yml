@@ -28,7 +28,7 @@ jobs:
         working-directory: frontend
 
       - name: Build and run container
-        run: docker-compose -f docker-compose.e2e.yml up -d --build
+        run: docker compose -f docker-compose.e2e.yml up -d --build
 
       - name: Wait for services to be ready
         run: |
@@ -52,4 +52,4 @@ jobs:
 
       - name: Stop container
         if: always()
-        run: docker-compose -f docker-compose.e2e.yml down
+        run: docker compose -f docker-compose.e2e.yml down

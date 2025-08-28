@@ -1,10 +1,9 @@
-// @ts-check
-const { defineConfig, devices } = require('@playwright/test');
+import { defineConfig, devices } from '@playwright/test';
 
 /**
- * @see https://playwright.dev/docs/test-configuration
+ * See https://playwright.dev/docs/test-configuration
  */
-module.exports = defineConfig({
+export default defineConfig({
   testDir: './tests-e2e',
   /* Run tests in files in parallel */
   fullyParallel: true,
@@ -32,5 +31,4 @@ module.exports = defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-
 });
