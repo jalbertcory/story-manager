@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import List
 
 import ebooklib
 from ebooklib import epub
@@ -15,7 +14,7 @@ def clean_epub(epub_path: Path, config: models.CleaningConfig) -> Path:
     """Create a cleaned copy of an EPUB based on the given configuration."""
     try:
         book = epub.read_epub(epub_path)
-        items_to_remove: List = []
+        items_to_remove: list = []
         chapter_selectors = config.chapter_selectors or []
         content_selectors = config.content_selectors or []
 
@@ -34,8 +33,8 @@ def clean_epub(epub_path: Path, config: models.CleaningConfig) -> Path:
         for item in items_to_remove:
             try:
                 book.remove_item(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to remove chapter during cleaning: %s", exc)
 
         cleaned_path = epub_path.with_name(epub_path.stem + ".clean.epub")
         epub.write_epub(cleaned_path, book)
