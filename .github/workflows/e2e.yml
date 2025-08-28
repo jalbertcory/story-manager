@@ -46,6 +46,10 @@ jobs:
           done
           echo "Frontend is up!"
 
+      - name: Show docker logs on failure
+        if: failure()
+        run: docker logs story-manager-story-manager-e2e-1
+
       - name: Run Playwright tests
         run: npm run test:e2e
         working-directory: frontend
