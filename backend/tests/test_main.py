@@ -261,9 +261,7 @@ async def test_update_and_delete_cleaning_config(db_session):
         "name": "Updated",
         "chapter_selectors": ["div.new"],
     }
-    response = client.put(
-        f"/api/cleaning-configs/{config_id}", json=update_payload
-    )
+    response = client.put(f"/api/cleaning-configs/{config_id}", json=update_payload)
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Updated"

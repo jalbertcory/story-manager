@@ -395,9 +395,7 @@ async def list_cleaning_configs(db: AsyncSession = Depends(get_db)) -> List[mode
 
 
 @app.get("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
-async def get_cleaning_config_endpoint(
-    config_id: int, db: AsyncSession = Depends(get_db)
-) -> models.CleaningConfig:
+async def get_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depends(get_db)) -> models.CleaningConfig:
     config = await crud.get_cleaning_config(db, config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
@@ -417,9 +415,7 @@ async def update_cleaning_config_endpoint(
 
 
 @app.delete("/api/cleaning-configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_cleaning_config_endpoint(
-    config_id: int, db: AsyncSession = Depends(get_db)
-) -> None:
+async def delete_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depends(get_db)) -> None:
     config = await crud.get_cleaning_config(db, config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")

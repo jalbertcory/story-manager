@@ -148,9 +148,7 @@ async def get_matching_cleaning_config(db: AsyncSession, url: str) -> Optional[m
 
 
 async def get_cleaning_config(db: AsyncSession, config_id: int) -> Optional[models.CleaningConfig]:
-    result = await db.execute(
-        select(models.CleaningConfig).filter(models.CleaningConfig.id == config_id)
-    )
+    result = await db.execute(select(models.CleaningConfig).filter(models.CleaningConfig.id == config_id))
     return result.scalars().first()
 
 
