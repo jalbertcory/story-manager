@@ -31,57 +31,102 @@ Story Manager is a self-hosted digital library and reader for your personal coll
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### Local Development Setup
 
-* Python 3.13+
-* Node.js 22+
-* Docker (Recommended)
+This project uses `pyenv` for Python version management and `nvm` for Node.js version management to ensure a consistent development environment.
 
-### Installation
+#### Prerequisites
+
+*   **pyenv** and **pyenv-virtualenv**: Follow the official installation guides for your OS.
+*   **nvm**: Follow the official `nvm` installation guide.
+*   **Docker**: Required for running the application with Docker Compose.
+
+#### Installation & Setup
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/jalbertcory/story-manager.git](https://github.com/jalbertcory/story-manager.git)
+    git clone https://github.com/jalbertcory/story-manager.git
     cd story-manager
     ```
 
-2.  **Backend Setup:**
-    ```bash
-    cd backend
-    python -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    ```
+2.  **Set up the Backend (Python):**
+    *   Install the required Python version (this will be read from the `.python-version` file):
+        ```bash
+        pyenv install
+        ```
+    *   Create and activate a virtual environment:
+        ```bash
+        # We recommend using pyenv-virtualenv for seamless integration
+        pyenv virtualenv $(cat .python-version) story-manager
+        pyenv local story-manager
+        ```
+    *   Install dependencies:
+        ```bash
+        pip install -r backend/requirements.txt
+        pip install -r backend/requirements-dev.txt
+        ```
 
-3.  **Frontend Setup:**
-    ```bash
-    cd frontend
-    npm install
-    ```
+3.  **Set up the Frontend (Node.js):**
+    *   Install and use the required Node.js version (this will be read from the `.node-version` file):
+        ```bash
+        nvm install
+        nvm use
+        ```
+    *   Install dependencies from the `frontend` directory:
+        ```bash
+        cd frontend
+        npm install
+        cd ..
+        ```
 
-4.  **Configuration:**
-    Create a `.env` file in the `backend` directory and configure the necessary variables (e.g., `LIBRARY_PATH`).
+4.  **Run the Application:**
+    *   **Backend**:
+        ```bash
+        # From the project root
+        uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+        ```
+    *   **Frontend**:
+        ```bash
+        # From the project root, in a separate terminal
+        npm --prefix frontend run dev
+        ```
 
-5.  **Run the application:**
-    * Start the backend server from the `backend` directory.
-    * Start the frontend development server from the `frontend` directory.
+Your application should now be running!
+*   Web UI: `http://localhost:5173`
+*   API: `http://localhost:8000`
 
 ---
 
 ## 🐋 Deploy with Docker Compose
 
-A `docker-compose.yml` file is provided for running Story Manager with Docker. It exposes the web UI on port **7890** and the API on **8000**. PostgreSQL data is stored on the host in the `pgdata/` folder so it survives container restarts.
+The easiest way to run Story Manager is with Docker Compose. This method sets up the application and all its dependencies in a containerized environment.
 
+The web UI is exposed on port **7890**, and the API is on port **8000**.
+
+### Data Persistence
+
+The `docker-compose.yml` is configured to store persistent data on the host machine inside a `config` directory. When you first run the `docker compose up` command, Docker will automatically create this directory in the same folder where your `docker-compose.yml` file is located.
+
+This `config` directory will contain the following subdirectories:
+*   `config/library`: Stores your uploaded EPUB files and downloaded web novels.
+*   `config/pgdata`: Stores the PostgreSQL database.
+
+This setup ensures that your library and application data are preserved even if you stop or remove the container.
+
+### Running the Application
+
+To start the application, run the following command from the root of the repository:
 ```bash
 docker compose up -d
 ```
 
 ### Using on Unraid
 
-1. Copy the repository (or just `docker-compose.yml`) to your Unraid server.
-2. Create a directory for persistent data, e.g. `/mnt/user/appdata/story-manager/pgdata`.
-3. Edit the `pgdata` volume path in `docker-compose.yml` to point to that directory.
-4. From the directory containing `docker-compose.yml`, run `docker compose up -d` using the Docker Compose plugin or the Docker Compose Manager.
-5. Visit `http://<UNRAID_HOST>:7890` in your browser to use the Story Manager UI.
+The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Manager.
+
+1.  **Copy the `docker-compose.yml` file** to a new directory on your Unraid server (e.g., `/mnt/user/appdata/story-manager`).
+2.  **Review the Volume Mappings**: The `docker-compose.yml` uses relative paths for its volumes (`./config`). When you run it on Unraid, it will create the `config` directory inside the path you chose in step 1 (e.g., `/mnt/user/appdata/story-manager/config`). You don't need to edit the `docker-compose.yml` file if this is what you want.
+3.  **Start the Container**: From the directory containing `docker-compose.yml`, run `docker compose up -d`.
+4.  **Access Story Manager**: You can now access the web interface at `http://<UNRAID_HOST>:7890`.
 
 ---
