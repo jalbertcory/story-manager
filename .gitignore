@@ -175,3 +175,8 @@ frontend/dist/
 
 # Docker Compose persistent data
 pgdata/
+<<<<<<< Updated upstream
+=======
+
+.idea
+>>>>>>> Stashed changes
