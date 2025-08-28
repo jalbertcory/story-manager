@@ -1,8 +1,8 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
-# Install PostgreSQL and Node.js 22
+# Install PostgreSQL and Node.js 223
 RUN apt-get update && apt-get install -y curl postgresql postgresql-contrib \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_23.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

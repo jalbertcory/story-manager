@@ -13,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pydantic import BaseModel
 
 from . import crud, models, schemas
+from .cleaning import clean_epub
 from .database import engine, get_db, SessionLocal
 from fanficfare.cli import main as fff_main
 
@@ -289,6 +290,10 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     )
     await crud.create_book_log(db, log_entry)
 
+    config = await crud.get_matching_cleaning_config(db, source_url_str)
+    if config:
+        clean_epub(new_epub_path, config)
+
     return db_book
 
 
@@ -349,6 +354,9 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
 
     update_data = schemas.BookUpdate(**metadata)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
+    config = await crud.get_matching_cleaning_config(db, str(db_book.source_url))
+    if config:
+        clean_epub(epub_path, config)
     return updated_book
 
 
@@ -372,6 +380,47 @@ async def search_books_by_series(
     """
     books = await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
     return books
+
+
+@app.post("/api/cleaning-configs", status_code=status.HTTP_201_CREATED, response_model=schemas.CleaningConfig)
+async def create_cleaning_config_endpoint(
+    config: schemas.CleaningConfigCreate, db: AsyncSession = Depends(get_db)
+) -> models.CleaningConfig:
+    return await crud.create_cleaning_config(db, config)
+
+
+@app.get("/api/cleaning-configs", response_model=List[schemas.CleaningConfig])
+async def list_cleaning_configs(db: AsyncSession = Depends(get_db)) -> List[models.CleaningConfig]:
+    return await crud.get_cleaning_configs(db)
+
+
+@app.get("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
+async def get_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depends(get_db)) -> models.CleaningConfig:
+    config = await crud.get_cleaning_config(db, config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Cleaning config not found")
+    return config
+
+
+@app.put("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
+async def update_cleaning_config_endpoint(
+    config_id: int,
+    update: schemas.CleaningConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> models.CleaningConfig:
+    config = await crud.get_cleaning_config(db, config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Cleaning config not found")
+    return await crud.update_cleaning_config(db, config, update)
+
+
+@app.delete("/api/cleaning-configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depends(get_db)) -> None:
+    config = await crud.get_cleaning_config(db, config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Cleaning config not found")
+    await crud.delete_cleaning_config(db, config)
+    return None
 
 
 @app.get("/")

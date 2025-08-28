@@ -175,3 +175,5 @@ frontend/dist/
 
 # Docker Compose persistent data
 pgdata/
+
+.idea

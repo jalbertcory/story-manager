@@ -1,6 +1,6 @@
 from pydantic import BaseModel, HttpUrl
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from .models import SourceType
 
 
@@ -52,3 +52,28 @@ class BookLog(BookLogCreate):
 
     class Config:
         from_attributes = True
+
+
+class CleaningConfigBase(BaseModel):
+    name: str
+    url_pattern: str
+    chapter_selectors: Optional[List[str]] = None
+    content_selectors: Optional[List[str]] = None
+
+
+class CleaningConfigCreate(CleaningConfigBase):
+    pass
+
+
+class CleaningConfig(CleaningConfigBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class CleaningConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    url_pattern: Optional[str] = None
+    chapter_selectors: Optional[List[str]] = None
+    content_selectors: Optional[List[str]] = None
