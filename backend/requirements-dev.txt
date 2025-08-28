@@ -12,3 +12,4 @@ pytest-mock==3.14.1
 flake8==7.1.0
 
 black==25.1.0
+autoflake==2.3.1
