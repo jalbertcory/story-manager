@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  story-manager-e2e:
+    build: .
+    ports:
+      - "7890:5173"  # UI
+      - "8000:8000"  # API
+    volumes:
+      - ./config/library:/app/library
+      - ./config/pgdata:/tmp/pgdata
+    restart: unless-stopped
