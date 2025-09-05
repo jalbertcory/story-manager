@@ -17,15 +17,22 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.13.5'
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-        pip install -r backend/requirements-dev.txt
+        source ~/.cargo/env
+        uv venv
+        source .venv/bin/activate
+        uv pip install -e ".[dev]"
     - name: Format with black
-      run: black backend
+      run: |
+        source .venv/bin/activate
+        black backend
     - name: Fix with autoflake
-      run: autoflake --in-place --remove-all-unused-imports --recursive backend
+      run: |
+        source .venv/bin/activate
+        autoflake --in-place --remove-all-unused-imports --recursive backend
     - name: Commit formatting changes
       uses: stefanzweifel/git-auto-commit-action@v5
       with:
@@ -33,6 +40,7 @@ jobs:
         file_pattern: backend/**/*.py
     - name: Lint with flake8
       run: |
+        source .venv/bin/activate
         flake8 backend --count --statistics
 
   test:
@@ -43,14 +51,18 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.13.5'
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-        pip install -r backend/requirements-dev.txt
+        source ~/.cargo/env
+        uv venv
+        source .venv/bin/activate
+        uv pip install -e ".[dev]"
     - name: Test with pytest
       run: |
         export PYTHONPATH=.
+        source .venv/bin/activate
         pytest backend/tests/
 
   lint-ui:
