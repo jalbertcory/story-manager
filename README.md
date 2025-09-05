@@ -33,11 +33,12 @@ Story Manager is a self-hosted digital library and reader for your personal coll
 
 ### Local Development Setup
 
-This project uses `pyenv` for Python version management and `nvm` for Node.js version management to ensure a consistent development environment.
+This project uses `uv` for python package management, `pyenv` for Python version management, and `nvm` for Node.js version management to ensure a consistent development environment.
 
 #### Prerequisites
 
-*   **pyenv** and **pyenv-virtualenv**: Follow the official installation guides for your OS.
+*   **uv**: Follow the official installation guides for your OS.
+*   **pyenv**: Follow the official installation guides for your OS.
 *   **nvm**: Follow the official `nvm` installation guide.
 *   **Docker**: Required for running the application with Docker Compose.
 
@@ -56,14 +57,14 @@ This project uses `pyenv` for Python version management and `nvm` for Node.js ve
         ```
     *   Create and activate a virtual environment:
         ```bash
-        # We recommend using pyenv-virtualenv for seamless integration
-        pyenv virtualenv $(cat .python-version) story-manager
-        pyenv local story-manager
+        # Create the virtual environment
+        uv venv
+        # Activate the virtual environment
+        source .venv/bin/activate
         ```
     *   Install dependencies:
         ```bash
-        pip install -r backend/requirements.txt
-        pip install -r backend/requirements-dev.txt
+        uv pip install -e ".[dev]"
         ```
 
 3.  **Set up the Frontend (Node.js):**
