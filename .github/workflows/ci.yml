@@ -40,6 +40,7 @@ jobs:
         file_pattern: backend/**/*.py
     - name: Lint with flake8
       run: |
+        source .venv/bin/activate
         flake8 backend --count --statistics
 
   test:

@@ -16,8 +16,7 @@ COPY run-container.sh run-container.sh
 RUN chmod +x run-container.sh
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && source ~/.cargo/env \
-    && uv pip install --system --no-cache .
+    && /root/.local/bin/uv pip install --system --no-cache .
 
 RUN npm --prefix frontend ci
 
