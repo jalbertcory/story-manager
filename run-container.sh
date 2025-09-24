@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+export PATH=/usr/lib/postgresql/15/bin:$PATH
+
 PGDATA=/tmp/pgdata
 
 # Initialise database cluster if it does not exist
