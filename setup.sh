@@ -30,15 +30,15 @@ then
     exit 1
 fi
 
-if [ ! "$(docker ps -q -f name=story-manager-db)" ]; then
-    if [ "$(docker ps -aq -f status=exited -f name=story-manager-db)" ]; then
+if [ ! "$(sudo docker ps -q -f name=story-manager-db)" ]; then
+    if [ "$(sudo docker ps -aq -f status=exited -f name=story-manager-db)" ]; then
         # container exists but is stopped
         echo "Starting existing story-manager-db container..."
-        docker start story-manager-db
+        sudo docker start story-manager-db
     else
         # container does not exist
         echo "Creating and starting new story-manager-db container..."
-        docker run -d \
+        sudo docker run -d \
           --name story-manager-db \
           -e POSTGRES_DB=story_manager \
           -e POSTGRES_USER=storyuser \
@@ -58,6 +58,9 @@ echo "✅ Database migrations complete."
 
 # Frontend setup
 echo "⚛️ Setting up the Node.js frontend..."
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+
 if ! command -v nvm &> /dev/null
 then
     echo "nvm could not be found, please install it first."
@@ -66,8 +69,6 @@ fi
 
 # In a subshell to avoid changing the current shell's node version
 (
-  export NVM_DIR="$HOME/.nvm"
-  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
   nvm install
   nvm use
   cd frontend
