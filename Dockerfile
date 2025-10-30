@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y curl postgresql postgresql-contrib \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Add PostgreSQL binaries to PATH
+ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
+
 WORKDIR /app
 
 COPY pyproject.toml .
