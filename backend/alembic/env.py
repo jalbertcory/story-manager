@@ -3,7 +3,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 from alembic import context
 
 # Load environment variables from .env file
