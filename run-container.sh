@@ -5,32 +5,42 @@ echo "--- Starting container setup ---"
 
 PGDATA=/tmp/pgdata
 
-# Initialise database cluster if it does not exist
-if [ ! -d "$PGDATA" ]; then
-  echo "--- Initializing database cluster ---"
-  install -d -o postgres -g postgres "$PGDATA"
-  su postgres -c "initdb -D $PGDATA"
-  echo "--- Database cluster initialized ---"
+# Initialise database cluster if it does not exist or is invalid
+if [ ! -f "$PGDATA/PG_VERSION" ]; then
+  rm -rf "$PGDATA"/*
+  install -d -m 0700 -o postgres -g postgres "$PGDATA"
+  chown -R postgres:postgres "$PGDATA"
+  su postgres -c "initdb -D $PGDATA" >/dev/null
 fi
 
+# Clean up any stale PID file
+rm -f "$PGDATA/postmaster.pid"
+
 # Start PostgreSQL
+su postgres -c "pg_ctl -D $PGDATA -o \"-c listen_addresses='localhost' -c unix_socket_directories='/var/run/postgresql'\" -w start" >/dev/null
+
+# Wait for PostgreSQL to be ready
 echo "--- Starting PostgreSQL ---"
-su postgres -c "pg_ctl -D $PGDATA -o \"-c listen_addresses='*'\" -w start"
+until su postgres -c "pg_isready -h localhost" >/dev/null 2>&1; do
+  echo "Waiting for PostgreSQL..."
+  sleep 1
+done
 echo "--- PostgreSQL started ---"
 
 # Ensure the application database exists
 echo "--- Ensuring database exists ---"
-su postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='story_manager'\" | grep -q 1 || psql -c \"CREATE DATABASE story_manager\""
+su postgres -c "psql -h localhost -tc \"SELECT 1 FROM pg_database WHERE datname='story_manager'\" | grep -q 1 || psql -h localhost -c \"CREATE DATABASE story_manager\"" >/dev/null
 echo "--- Database ensured ---"
 
-# Run migrations before starting the apps
+# Set DATABASE_URL and run migrations
 echo "--- Running database migrations ---"
-alembic -c backend/alembic.ini upgrade head
+export DATABASE_URL="postgresql+psycopg://postgres@localhost:5432/story_manager?client_encoding=utf8"
+PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
 echo "--- Database migrations complete ---"
 
 # Start backend and frontend processes
 echo "--- Starting backend and frontend processes ---"
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --app-dir backend &
+PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 npm --prefix frontend run dev -- --host 0.0.0.0 &

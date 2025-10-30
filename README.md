@@ -33,11 +33,12 @@ Story Manager is a self-hosted digital library and reader for your personal coll
 
 ### Local Development Setup
 
-This project uses `pyenv` for Python version management and `nvm` for Node.js version management to ensure a consistent development environment.
+This project uses `uv` for python package management, `pyenv` for Python version management, and `nvm` for Node.js version management to ensure a consistent development environment.
 
 #### Prerequisites
 
-*   **pyenv** and **pyenv-virtualenv**: Follow the official installation guides for your OS.
+*   **uv**: Follow the official installation guides for your OS.
+*   **pyenv**: Follow the official installation guides for your OS.
 *   **nvm**: Follow the official `nvm` installation guide.
 *   **Docker**: Required for running the application with Docker Compose.
 
@@ -56,18 +57,46 @@ This project uses `pyenv` for Python version management and `nvm` for Node.js ve
         ```
     *   Create and activate a virtual environment:
         ```bash
-        # We recommend using pyenv-virtualenv for seamless integration
-        pyenv virtualenv $(cat .python-version) story-manager
-        pyenv local story-manager
+        # Create the virtual environment
+        uv venv
+        # Activate the virtual environment
+        source .venv/bin/activate
         ```
     *   Install dependencies:
         ```bash
-        pip install -r backend/requirements.txt
-        pip install -r backend/requirements-dev.txt
+        uv pip install -e ".[dev]"
         ```
 
-3.  **Set up the Frontend (Node.js):**
-    *   Install and use the required Node.js version (this will be read from the `.node-version` file):
+3.  **Set up the Database (PostgreSQL):**
+    *   Start PostgreSQL in Docker:
+        ```bash
+        docker run -d \
+          --name story-manager-db \
+          -e POSTGRES_DB=story_manager \
+          -e POSTGRES_USER=storyuser \
+          -e POSTGRES_PASSWORD=storypass \
+          -p 5432:5432 \
+          postgres:15
+        ```
+    *   Create a `.env` file in the project root with the database configuration:
+        ```bash
+        DATABASE_URL=postgresql+psycopg://storyuser:storypass@localhost:5432/story_manager
+        ```
+    *   To stop the database: `docker stop story-manager-db`
+    *   To start it again: `docker start story-manager-db`
+    *   To remove it completely: `docker rm -f story-manager-db`
+
+4.  **Run Database Migrations:**
+    *   Apply the database schema migrations (make sure your virtual environment is activated):
+        ```bash
+        # Activate the virtual environment first
+        source .venv/bin/activate
+        # Run migrations
+        alembic -c backend/alembic.ini upgrade head
+        ```
+
+5.  **Set up the Frontend (Node.js):**
+    *   Install and use the required Node.js version (this will be read from the `.nvmrc` file):
         ```bash
         nvm install
         nvm use
@@ -79,7 +108,7 @@ This project uses `pyenv` for Python version management and `nvm` for Node.js ve
         cd ..
         ```
 
-4.  **Run the Application:**
+6.  **Run the Application:**
     *   **Backend**:
         ```bash
         # From the project root

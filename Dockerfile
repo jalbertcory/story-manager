@@ -6,16 +6,20 @@ RUN apt-get update && apt-get install -y curl postgresql postgresql-contrib \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Add PostgreSQL binaries to PATH
+ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
+
 WORKDIR /app
 
+COPY pyproject.toml .
 COPY backend backend
 COPY frontend frontend
 COPY run-container.sh run-container.sh
 
 RUN chmod +x run-container.sh
 
-RUN pip install --no-cache-dir -r backend/requirements.txt \
-    && pip install --no-cache-dir -r backend/requirements-dev.txt
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && /root/.local/bin/uv pip install --system --no-cache .
 
 RUN npm --prefix frontend ci
 

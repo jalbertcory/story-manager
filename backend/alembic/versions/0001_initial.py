@@ -18,7 +18,6 @@ depends_on = None
 
 def upgrade() -> None:
     source_type = sa.Enum("web", "epub", name="sourcetype")
-    source_type.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "books",
