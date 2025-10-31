@@ -1,15 +1,5 @@
-FROM python:3.13-slim
-
-# Install PostgreSQL and Node.js 223
-RUN apt-get update && apt-get install -y curl postgresql postgresql-contrib \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Add PostgreSQL binaries to PATH
-ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
-
-WORKDIR /app
+ARG BASE_IMAGE=ghcr.io/jules-dot-dev/story-manager-base:latest
+FROM ${BASE_IMAGE}
 
 COPY pyproject.toml .
 COPY backend backend
@@ -26,4 +16,3 @@ RUN npm --prefix frontend ci
 EXPOSE 8000 5173
 
 CMD ["./run-container.sh"]
-
