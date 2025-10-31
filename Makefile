@@ -16,14 +16,14 @@ start-db-container:
 	  postgres:15
 
 fmt:
-	python3.13 -m black backend
-	python3.13 -m flake8 backend
+	.venv/bin/python3 -m black backend
+	.venv/bin/python3 -m flake8 backend
 	cd frontend && npx prettier --write .
 
 lint:
-	python3.13 -m flake8 backend
+	.venv/bin/python3 -m flake8 backend
 	cd frontend && npm run lint
 
 test:
-	export PYTHONPATH=. && python3.13 -m pytest backend/tests
+	export PYTHONPATH=. && .venv/bin/python3 -m pytest backend/tests
 	cd frontend && npm test -- --run
