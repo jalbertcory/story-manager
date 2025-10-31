@@ -4,7 +4,8 @@ This document provides instructions for agents working on this project.
 
 ## Local Development Setup
 
-This project uses a local PostgreSQL installation for the database. The `setup.sh` script will automatically install and configure PostgreSQL on your local machine.
+For the Jules AI Agent this project uses a local PostgreSQL installation for the database. The `setup.sh` script was already run and automatically installed and configured PostgreSQL.
+All other agents should use `make run-db` to run a pgsql container.
 
 ### Database Credentials
 
