@@ -24,28 +24,29 @@ echo "✅ Backend setup complete."
 
 # Database setup
 echo "🐘 Setting up the PostgreSQL database..."
-if ! command -v docker &> /dev/null
+if ! command -v psql &> /dev/null
 then
-    echo "Docker could not be found, please install it first."
+    echo "PostgreSQL could not be found, please install it first."
     exit 1
 fi
 
-if [ ! "$(sudo docker ps -q -f name=story-manager-db)" ]; then
-    if [ "$(sudo docker ps -aq -f status=exited -f name=story-manager-db)" ]; then
-        # container exists but is stopped
-        echo "Starting existing story-manager-db container..."
-        sudo docker start story-manager-db
-    else
-        # container does not exist
-        echo "Creating and starting new story-manager-db container..."
-        sudo docker run -d \
-          --name story-manager-db \
-          -e POSTGRES_DB=story_manager \
-          -e POSTGRES_USER=storyuser \
-          -e POSTGRES_PASSWORD=storypass \
-          -p 5432:5432 \
-          postgres:15
-    fi
+# Start the PostgreSQL service
+sudo service postgresql start
+
+# Check if the user 'storyuser' already exists
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='storyuser'" | grep -q 1; then
+    echo "User 'storyuser' already exists."
+else
+    echo "Creating user 'storyuser'..."
+    sudo -u postgres psql -c "CREATE USER storyuser WITH PASSWORD 'storypass';"
+fi
+
+# Check if the database 'story_manager' already exists
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='story_manager'" | grep -q 1; then
+    echo "Database 'story_manager' already exists."
+else
+    echo "Creating database 'story_manager'..."
+    sudo -u postgres psql -c "CREATE DATABASE story_manager OWNER storyuser;"
 fi
 
 echo "DATABASE_URL=postgresql+psycopg://storyuser:storypass@localhost:5432/story_manager" > .env
