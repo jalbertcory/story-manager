@@ -32,14 +32,14 @@ jobs:
 
       - name: Check for existing image
         id: check
-        uses: tri-v/image-exists-action@v1
+        uses: tyriis/docker-image-tag-exists@v2.1.0
         with:
           registry: ${{ env.REGISTRY }}
           repository: ${{ env.IMAGE_NAME }}
           tag: ${{ steps.hash.outputs.sha }}
 
       - name: Build and push
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.tag == 'not found'
         uses: docker/build-push-action@v5
         with:
           context: .
