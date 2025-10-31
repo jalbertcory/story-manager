@@ -70,13 +70,7 @@ This project uses `uv` for python package management, `pyenv` for Python version
 3.  **Set up the Database (PostgreSQL):**
     *   Start PostgreSQL in Docker:
         ```bash
-        docker run -d \
-          --name story-manager-db \
-          -e POSTGRES_DB=story_manager \
-          -e POSTGRES_USER=storyuser \
-          -e POSTGRES_PASSWORD=storypass \
-          -p 5432:5432 \
-          postgres:15
+        make run-db
         ```
     *   Create a `.env` file in the project root with the database configuration:
         ```bash
@@ -112,12 +106,12 @@ This project uses `uv` for python package management, `pyenv` for Python version
     *   **Backend**:
         ```bash
         # From the project root
-        uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+        make run-backend
         ```
     *   **Frontend**:
         ```bash
         # From the project root, in a separate terminal
-        npm --prefix frontend run dev
+        make run-ui
         ```
 
 Your application should now be running!

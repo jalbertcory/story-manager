@@ -4,7 +4,16 @@ run-ui:
 	cd frontend && npm run dev
 
 run-backend:
-	uvicorn backend.app.main:app --reload --app-dir backend
+	uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+start-db-container:
+	docker run -d \
+	  --name story-manager-db \
+	  -e POSTGRES_DB=story_manager \
+	  -e POSTGRES_USER=storyuser \
+	  -e POSTGRES_PASSWORD=storypass \
+	  -p 5432:5432 \
+	  postgres:15
 
 fmt:
 	.venv/bin/python3 -m black backend
