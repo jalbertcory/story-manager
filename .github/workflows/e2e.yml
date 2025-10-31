@@ -24,7 +24,6 @@ jobs:
 
       - name: Install Playwright Browsers
         run: |
-          npm --prefix frontend ci
           npx playwright install --with-deps
         working-directory: frontend
 
