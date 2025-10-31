@@ -26,8 +26,9 @@ echo "✅ Backend setup complete."
 echo "🐘 Setting up the PostgreSQL database..."
 if ! command -v psql &> /dev/null
 then
-    echo "PostgreSQL could not be found, please install it first."
-    exit 1
+    echo "PostgreSQL not found. Installing..."
+    sudo apt-get update
+    sudo apt-get install -y postgresql
 fi
 
 # Start the PostgreSQL service
