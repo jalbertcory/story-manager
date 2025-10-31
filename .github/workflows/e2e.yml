@@ -13,19 +13,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Cache Playwright browsers
+        uses: actions/cache@v3
+        id: playwright-cache
         with:
-          node-version: 22
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm --prefix frontend ci
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
+        run: |
+          npx playwright install --with-deps
         working-directory: frontend
+
+      - name: Pull latest base image
+        run: docker pull ghcr.io/${{ github.repository }}-base:latest
 
       - name: Build and run container
         run: docker compose -f docker-compose.e2e.yml up -d --build
