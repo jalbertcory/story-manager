@@ -46,8 +46,8 @@ jobs:
         run: npx playwright install --with-deps
         working-directory: frontend
 
-      - name: Build container
-        run: docker compose -f docker-compose.e2e.yml build --no-pull --build-arg BASE_IMAGE=story-manager-base:latest
+      - name: Build e2e image
+        run: docker build --build-arg BASE_IMAGE=story-manager-base:latest -t story-manager-e2e:latest .
 
       - name: Run container
         run: docker compose -f docker-compose.e2e.yml up -d
