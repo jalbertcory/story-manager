@@ -37,7 +37,7 @@ jobs:
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base:latest
 
       - name: Build image
-        run: docker build --build-arg BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base:latest -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+        run: docker build --build-arg BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base:lastest -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
 
       - name: Push image
         run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
