@@ -2,12 +2,12 @@
 set -e
 
 REGISTRY="ghcr.io"
-IMAGE_NAME="jalbertcory/story-manager/base"
+IMAGE_NAME="jalbertcory/story-manager"
 DOCKERFILE_BASE="Dockerfile.base"
 DOCKERFILE_APP="Dockerfile"
 
 # Calculate the hash of the base Dockerfile
-TAG=$(sha256sum "$DOCKERFILE_BASE" | cut -d' ' -f1)
+TAG=base-$(sha256sum "$DOCKERFILE_BASE" | cut -d' ' -f1)
 
 # Check if the image already exists
 if docker manifest inspect "$REGISTRY/$IMAGE_NAME:$TAG" > /dev/null; then
