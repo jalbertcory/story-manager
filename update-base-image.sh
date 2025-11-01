@@ -2,7 +2,7 @@
 set -e
 
 REGISTRY="ghcr.io"
-IMAGE_NAME="jalbertcory/story-manager-base"
+IMAGE_NAME="jalbertcory/story-manager/base"
 DOCKERFILE_BASE="Dockerfile.base"
 DOCKERFILE_APP="Dockerfile"
 
