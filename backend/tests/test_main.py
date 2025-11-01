@@ -89,12 +89,17 @@ async def test_add_web_novel(db_session, mocker):
     with open(metadata_path, "w") as f:
         config.write(f)
 
+    # Create a dummy EPUB file as well, since the code will try to copy it
+    create_dummy_epub(epub_path, "Test Story", "Test Author")
+
     # The payload for the POST request
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
 
-    # Clean up the dummy file
+    # Clean up the dummy files
     metadata_path.unlink()
+    epub_path.unlink()
+    (library_path / f"immutable_{epub_filename}").unlink()
 
     # Check the response
     assert response.status_code == 201
@@ -102,8 +107,8 @@ async def test_add_web_novel(db_session, mocker):
     assert data["title"] == "Test Story"
     assert data["author"] == "Test Author"
     assert data["source_url"] == "http://example.com/story/123"
-    # The path stored should be relative to the project root (parent of 'library')
-    assert data["epub_path"] == str(Path("library") / epub_filename)
+    assert data["immutable_path"] == str(Path("library") / f"immutable_{epub_filename}")
+    assert data["current_path"] == str(Path("library") / epub_filename)
 
     # Verify that the book was added to the database
     response = client.get("/api/books")
@@ -124,7 +129,8 @@ async def test_add_existing_web_novel(db_session):
             title="Existing Story",
             author="Existing Author",
             source_url="http://example.com/story/exists",
-            epub_path="library/Existing Story-Existing Author.epub",
+            immutable_path="library/immutable_Existing Story-Existing Author.epub",
+            current_path="library/Existing Story-Existing Author.epub",
             source_type=models.SourceType.web,
         )
         await crud.create_book(session, book=book_create)
@@ -166,6 +172,7 @@ async def test_upload_epub(db_session):
     library_path.mkdir(exist_ok=True)
     epub_filename = "Uploaded Book.epub"
     epub_filepath = library_path / epub_filename
+    immutable_filepath = library_path / f"immutable_{epub_filename}"
 
     # Create a dummy epub file
     create_dummy_epub(epub_filepath, "Uploaded Book", "Uploader", "Upload Series")
@@ -173,15 +180,19 @@ async def test_upload_epub(db_session):
     with open(epub_filepath, "rb") as f:
         response = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
 
-    # Clean up the dummy file
+    # Clean up the dummy files
     epub_filepath.unlink()
+    immutable_filepath.unlink()
 
     assert response.status_code == 201
     data = response.json()
     assert data["title"] == "Uploaded Book"
     assert data["author"] == "Uploader"
     assert data["series"] == "Upload Series"
-    assert data["epub_path"] == str(Path("library") / epub_filename)
+    assert data["immutable_path"] == str(Path("library") / f"immutable_{epub_filename}")
+    assert data["current_path"] == str(Path("library") / epub_filename)
+    assert data["master_word_count"] > 0
+    assert data["current_word_count"] == data["master_word_count"]
 
     # Verify that the book was added to the database
     response = client.get("/api/books")
@@ -198,13 +209,34 @@ async def test_search_books_by_author(db_session):
     """
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
-            session, schemas.BookCreate(title="Book 1", author="Author A", epub_path="p1", source_type=models.SourceType.epub)
+            session,
+            schemas.BookCreate(
+                title="Book 1",
+                author="Author A",
+                immutable_path="p1i",
+                current_path="p1c",
+                source_type=models.SourceType.epub,
+            ),
         )
         await crud.create_book(
-            session, schemas.BookCreate(title="Book 2", author="Author B", epub_path="p2", source_type=models.SourceType.epub)
+            session,
+            schemas.BookCreate(
+                title="Book 2",
+                author="Author B",
+                immutable_path="p2i",
+                current_path="p2c",
+                source_type=models.SourceType.epub,
+            ),
         )
         await crud.create_book(
-            session, schemas.BookCreate(title="Book 3", author="Author A", epub_path="p3", source_type=models.SourceType.epub)
+            session,
+            schemas.BookCreate(
+                title="Book 3",
+                author="Author A",
+                immutable_path="p3i",
+                current_path="p3c",
+                source_type=models.SourceType.epub,
+            ),
         )
 
     response = client.get("/api/books/search/author/Author A")
@@ -218,6 +250,83 @@ async def test_search_books_by_author(db_session):
     data = response.json()
     assert len(data) == 1
     assert data[0]["title"] == "Book 2"
+
+
+@pytest.mark.asyncio
+async def test_get_book_chapters(db_session):
+    """
+    Test getting the chapters of a book.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Test Book",
+                author="Test Author",
+                immutable_path="library/immutable_test.epub",
+                current_path="library/test.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    # Create a dummy epub file
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    immutable_filepath = library_path / "immutable_test.epub"
+    create_dummy_epub(immutable_filepath, "Test Book", "Test Author")
+
+    response = client.get(f"/api/books/{book.id}/chapters")
+
+    immutable_filepath.unlink()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    assert data[0]["title"] == "chap_1.xhtml"
+
+
+@pytest.mark.asyncio
+async def test_process_book(db_session):
+    """
+    Test processing a book to remove chapters and divs.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Process Book",
+                author="Processor",
+                immutable_path="library/immutable_process.epub",
+                current_path="library/process.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    # Create dummy epub files
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    immutable_filepath = library_path / "immutable_process.epub"
+    current_filepath = library_path / "process.epub"
+    create_dummy_epub(immutable_filepath, "Process Book", "Processor")
+    create_dummy_epub(current_filepath, "Process Book", "Processor")
+
+    # Update the book with chapters to remove and divs to clean
+    update_payload = {
+        "removed_chapters": ["chap_1.xhtml"],
+        "div_selectors": ["p"],  # This will remove the paragraph
+    }
+    response = client.put(f"/api/books/{book.id}", json=update_payload)
+    assert response.status_code == 200
+
+    # Process the book
+    response = client.post(f"/api/books/{book.id}/process")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["current_word_count"] == 0  # Intro and text removed
+
+    immutable_filepath.unlink()
+    current_filepath.unlink()
 
 
 @pytest.mark.asyncio
@@ -284,7 +393,11 @@ async def test_update_book_details(db_session):
         book = await crud.create_book(
             session,
             schemas.BookCreate(
-                title="Original Title", author="Original Author", epub_path="p1", source_type=models.SourceType.epub
+                title="Original Title",
+                author="Original Author",
+                immutable_path="p1i",
+                current_path="p1c",
+                source_type=models.SourceType.epub,
             ),
         )
 
@@ -304,13 +417,19 @@ async def test_refresh_book(db_session, mocker):
     Test refreshing a book from its source URL.
     """
     # Mock the helper function to simulate a successful download and metadata parsing
+    library_path = Path("./library").resolve()
+    new_epub_path = library_path / "Refreshed Title-Refreshed Author.epub"
     mocker.patch(
         "backend.app.main._download_and_parse_web_novel",
         return_value=(
-            Path("new.epub"),
+            new_epub_path,
             {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"},
         ),
     )
+
+    # Since we are not mocking the file system, we need to create the dummy files
+    library_path.mkdir(exist_ok=True)
+    create_dummy_epub(new_epub_path, "Refreshed Title", "Refreshed Author")
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -319,7 +438,8 @@ async def test_refresh_book(db_session, mocker):
                 title="Original Title",
                 author="Original Author",
                 source_url="http://example.com/story/refresh",
-                epub_path="p1",
+                immutable_path="p1i",
+                current_path="p1c",
                 source_type=models.SourceType.web,
             ),
         )
@@ -331,6 +451,12 @@ async def test_refresh_book(db_session, mocker):
     assert data["title"] == "Refreshed Title"
     assert data["author"] == "Refreshed Author"
     assert data["series"] == "Refreshed Series"
+    assert data["master_word_count"] > 0
+    assert data["current_word_count"] == data["master_word_count"]
+
+    # Clean up dummy files
+    (library_path.parent / data["immutable_path"]).unlink()
+    (library_path.parent / data["current_path"]).unlink()
 
 
 @pytest.mark.asyncio
@@ -341,7 +467,13 @@ async def test_refresh_book_no_source_url(db_session):
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
             session,
-            schemas.BookCreate(title="Uploaded Book", author="Uploader", epub_path="p1", source_type=models.SourceType.epub),
+            schemas.BookCreate(
+                title="Uploaded Book",
+                author="Uploader",
+                immutable_path="p1i",
+                current_path="p1c",
+                source_type=models.SourceType.epub,
+            ),
         )
 
     response = client.post(f"/api/books/{book.id}/refresh")
@@ -359,19 +491,34 @@ async def test_search_books_by_series(db_session):
         await crud.create_book(
             session,
             schemas.BookCreate(
-                title="Book 1", author="Author A", series="Series X", epub_path="p1", source_type=models.SourceType.epub
+                title="Book 1",
+                author="Author A",
+                series="Series X",
+                immutable_path="p1i",
+                current_path="p1c",
+                source_type=models.SourceType.epub,
             ),
         )
         await crud.create_book(
             session,
             schemas.BookCreate(
-                title="Book 2", author="Author B", series="Series Y", epub_path="p2", source_type=models.SourceType.epub
+                title="Book 2",
+                author="Author B",
+                series="Series Y",
+                immutable_path="p2i",
+                current_path="p2c",
+                source_type=models.SourceType.epub,
             ),
         )
         await crud.create_book(
             session,
             schemas.BookCreate(
-                title="Book 3", author="Author A", series="Series X", epub_path="p3", source_type=models.SourceType.epub
+                title="Book 3",
+                author="Author A",
+                series="Series X",
+                immutable_path="p3i",
+                current_path="p3c",
+                source_type=models.SourceType.epub,
             ),
         )
 

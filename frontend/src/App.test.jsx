@@ -8,7 +8,15 @@ describe("App", () => {
   });
 
   it("fetches and displays books on mount", async () => {
-    const mockBooks = [{ id: 1, title: "Book A", author: "Author A" }];
+    const mockBooks = [
+      {
+        id: 1,
+        title: "Book A",
+        author: "Author A",
+        master_word_count: 100,
+        current_word_count: 100,
+      },
+    ];
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
@@ -21,6 +29,7 @@ describe("App", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/books");
     await waitFor(() => {
       expect(screen.getByText("Book A")).toBeInTheDocument();
+      expect(screen.getAllByText("100").length).toBe(2);
     });
   });
 

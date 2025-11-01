@@ -18,7 +18,12 @@ class Book(Base):
     series = Column(String, nullable=True, index=True)
     source_url = Column(String, unique=True, index=True, nullable=True)
     source_type = Column(Enum(SourceType), nullable=False, default=SourceType.epub)
-    epub_path = Column(String, unique=True)
+    immutable_path = Column(String, unique=True)
+    current_path = Column(String, unique=True)
+    removed_chapters = Column(JSON, nullable=True)
+    div_selectors = Column(JSON, nullable=True)
+    master_word_count = Column(Integer, nullable=True)
+    current_word_count = Column(Integer, nullable=True)
     # Storing the cover as a path to a file. The file itself can be extracted from the EPUB.
     cover_path = Column(String, nullable=True)
 

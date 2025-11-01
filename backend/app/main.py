@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from pydantic import BaseModel
 
-from . import crud, models, schemas
+from . import crud, models, schemas, epub_editor
 from .cleaning import clean_epub
 from .database import engine, get_db, SessionLocal
 from fanficfare.cli import main as fff_main
@@ -202,13 +202,18 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     library_path.mkdir(exist_ok=True)
 
     # Sanitize filename and save the file
-    file_location = library_path / file.filename
-    with open(file_location, "wb+") as file_object:
+    immutable_path = library_path / f"immutable_{file.filename}"
+    with open(immutable_path, "wb+") as file_object:
+        file_object.write(file.file.read())
+
+    current_path = library_path / file.filename
+    with open(current_path, "wb+") as file_object:
+        file.file.seek(0)
         file_object.write(file.file.read())
 
     # Extract metadata from the EPUB file
     try:
-        book = epub.read_epub(file_location)
+        book = epub.read_epub(immutable_path)
         title = book.get_metadata("DC", "title")[0][0]
         author = book.get_metadata("DC", "creator")[0][0]
 
@@ -221,24 +226,29 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
             detail=f"Failed to parse EPUB file: {e}",
         )
 
+    master_word_count = epub_editor.get_word_count(str(immutable_path))
+
     # Create the book record in the database
     book_to_create = schemas.BookCreate(
         title=title,
         author=author,
-        epub_path=str(file_location.relative_to(library_path.parent)),
+        immutable_path=str(immutable_path.relative_to(library_path.parent)),
+        current_path=str(current_path.relative_to(library_path.parent)),
         series=series,
         source_type=models.SourceType.epub,
+        master_word_count=master_word_count,
+        current_word_count=master_word_count,
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
 
     # Create a log entry for the new book
-    word_count, chapter_count = _get_epub_word_and_chapter_count(file_location)
+    _, chapter_count = _get_epub_word_and_chapter_count(current_path)
     log_entry = schemas.BookLogCreate(
         book_id=db_book.id,
         entry_type="added",
         new_chapter_count=chapter_count,
-        words_added=word_count,
+        words_added=master_word_count,
     )
     await crud.create_book_log(db, log_entry)
 
@@ -268,31 +278,43 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     new_epub_path, metadata = await _download_and_parse_web_novel(source_url_str)
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
 
+    # Create immutable and current copies
+    immutable_path = library_path / f"immutable_{new_epub_path.name}"
+    current_path = library_path / new_epub_path.name
+    new_epub_path.rename(immutable_path)
+    with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
+        f_out.write(f_in.read())
+
+    master_word_count = epub_editor.get_word_count(str(immutable_path))
+
     # Create the book record in the database
     book_to_create = schemas.BookCreate(
         title=metadata["title"],
         author=metadata["author"],
         source_url=request.url,
-        epub_path=str(new_epub_path.relative_to(library_path.parent)),
+        immutable_path=str(immutable_path.relative_to(library_path.parent)),
+        current_path=str(current_path.relative_to(library_path.parent)),
         series=metadata["series"],
         source_type=models.SourceType.web,
+        master_word_count=master_word_count,
+        current_word_count=master_word_count,
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
 
     # Create a log entry for the new book
-    word_count, chapter_count = _get_epub_word_and_chapter_count(new_epub_path)
+    _, chapter_count = _get_epub_word_and_chapter_count(current_path)
     log_entry = schemas.BookLogCreate(
         book_id=db_book.id,
         entry_type="added",
         new_chapter_count=chapter_count,
-        words_added=word_count,
+        words_added=master_word_count,
     )
     await crud.create_book_log(db, log_entry)
 
     config = await crud.get_matching_cleaning_config(db, source_url_str)
     if config:
-        clean_epub(new_epub_path, config)
+        clean_epub(current_path, config)
 
     return db_book
 
@@ -333,13 +355,19 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    epub_path = library_path.parent / db_book.epub_path
+    immutable_path = library_path.parent / db_book.immutable_path
+    current_path = library_path.parent / db_book.current_path
 
-    old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+    old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(current_path)
 
-    _, metadata = await _download_and_parse_web_novel(db_book.source_url)
+    new_epub_path, metadata = await _download_and_parse_web_novel(db_book.source_url)
 
-    new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+    # The new download becomes the new immutable, and we copy it to current
+    new_epub_path.rename(immutable_path)
+    with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
+        f_out.write(f_in.read())
+
+    new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(current_path)
 
     if new_chapter_count > old_chapter_count:
         logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}.")
@@ -354,9 +382,19 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
 
     update_data = schemas.BookUpdate(**metadata)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
+
+    # Reset processing state
+    updated_book.removed_chapters = []
+    updated_book.div_selectors = []
+    updated_book.master_word_count = new_word_count
+    updated_book.current_word_count = new_word_count
+    await db.commit()
+    await db.refresh(updated_book)
+
     config = await crud.get_matching_cleaning_config(db, str(db_book.source_url))
     if config:
-        clean_epub(epub_path, config)
+        clean_epub(current_path, config)
+
     return updated_book
 
 
@@ -421,6 +459,47 @@ async def delete_cleaning_config_endpoint(config_id: int, db: AsyncSession = Dep
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     await crud.delete_cleaning_config(db, config)
     return None
+
+
+@app.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
+async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    # Always get chapters from the original immutable epub
+    epub_path = library_path.parent / db_book.immutable_path
+
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    return epub_editor.get_chapters(str(epub_path))
+
+
+@app.post("/api/books/{book_id}/process", response_model=schemas.Book)
+async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    immutable_path = library_path.parent / db_book.immutable_path
+    current_path = library_path.parent / db_book.current_path
+
+    epub_editor.process_epub(
+        str(immutable_path),
+        str(current_path),
+        db_book.removed_chapters,
+        db_book.div_selectors,
+    )
+
+    new_word_count = epub_editor.get_word_count(str(current_path))
+    db_book.current_word_count = new_word_count
+    await db.commit()
+    await db.refresh(db_book)
+
+    return db_book
 
 
 @app.get("/")
