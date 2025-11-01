@@ -219,6 +219,37 @@ async def test_search_books_by_author(db_session):
     assert len(data) == 1
     assert data[0]["title"] == "Book 2"
 
+@pytest.mark.asyncio
+async def test_get_epub_chapters(db_session):
+    """
+    Test getting the chapters of an EPUB file.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    epub_filename = "Chaptered Book.epub"
+    epub_filepath = library_path / epub_filename
+
+    create_dummy_epub(epub_filepath, "Chaptered Book", "Author")
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Chaptered Book",
+                author="Author",
+                epub_path=str(Path("library") / epub_filename),
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get(f"/api/books/{book.id}/chapters")
+    epub_filepath.unlink()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    assert data[0]["title"] == "chap_1.xhtml"
+
 
 @pytest.mark.asyncio
 async def test_create_cleaning_config(db_session):

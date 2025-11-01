@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from . import crud, models, schemas
 from .cleaning import clean_epub
 from .database import engine, get_db, SessionLocal
+from . import epub_editor
 from fanficfare.cli import main as fff_main
 
 
@@ -422,6 +423,50 @@ async def delete_cleaning_config_endpoint(config_id: int, db: AsyncSession = Dep
     await crud.delete_cleaning_config(db, config)
     return None
 
+
+@app.get("/api/books/{book_id}/chapters")
+async def get_epub_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    epub_path = library_path.parent / book.epub_path
+
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    return epub_editor.get_epub_chapters(str(epub_path))
+
+@app.delete("/api/books/{book_id}/chapters/{filename}")
+async def delete_epub_chapter(book_id: int, filename: str, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    epub_path = library_path.parent / book.epub_path
+
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    # Placeholder for now
+    return {"message": f"Chapter {filename} will be deleted."}
+
+@app.post("/api/books/{book_id}/clean_divs")
+async def clean_epub_divs(book_id: int, selectors: List[str], db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    epub_path = library_path.parent / book.epub_path
+
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    # Placeholder for now
+    return {"message": "Divs will be cleaned."}
 
 @app.get("/")
 def read_root() -> Dict[str, str]:

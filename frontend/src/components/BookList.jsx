@@ -1,6 +1,6 @@
 import React from "react";
 
-function BookList({ books = [] }) {
+function BookList({ books = [], onEdit }) {
   if (!books.length) {
     return <p>No books found.</p>;
   }
@@ -11,6 +11,7 @@ function BookList({ books = [] }) {
         <li key={book.id}>
           <strong>{book.title}</strong> by {book.author}
           {book.series ? ` - ${book.series}` : ""}
+          <button onClick={() => onEdit(book.id)}>Edit</button>
         </li>
       ))}
     </ul>
