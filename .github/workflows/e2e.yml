@@ -27,7 +27,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
       - name: Install Playwright Browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps
         working-directory: frontend
 
