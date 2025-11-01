@@ -438,6 +438,7 @@ async def get_epub_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
 
     return epub_editor.get_epub_chapters(str(epub_path))
 
+
 @app.delete("/api/books/{book_id}/chapters/{filename}")
 async def delete_epub_chapter(book_id: int, filename: str, db: AsyncSession = Depends(get_db)):
     book = await crud.get_book(db, book_id)
@@ -453,6 +454,7 @@ async def delete_epub_chapter(book_id: int, filename: str, db: AsyncSession = De
     # Placeholder for now
     return {"message": f"Chapter {filename} will be deleted."}
 
+
 @app.post("/api/books/{book_id}/clean_divs")
 async def clean_epub_divs(book_id: int, selectors: List[str], db: AsyncSession = Depends(get_db)):
     book = await crud.get_book(db, book_id)
@@ -467,6 +469,7 @@ async def clean_epub_divs(book_id: int, selectors: List[str], db: AsyncSession =
 
     # Placeholder for now
     return {"message": "Divs will be cleaned."}
+
 
 @app.get("/")
 def read_root() -> Dict[str, str]:

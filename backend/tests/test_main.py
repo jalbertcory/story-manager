@@ -219,6 +219,7 @@ async def test_search_books_by_author(db_session):
     assert len(data) == 1
     assert data[0]["title"] == "Book 2"
 
+
 @pytest.mark.asyncio
 async def test_get_epub_chapters(db_session):
     """
