@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   story-manager-e2e:
-    build: .
+    image: story-manager-e2e:latest
     ports:
       - "7890:5173"  # UI
       - "8000:8000"  # API
