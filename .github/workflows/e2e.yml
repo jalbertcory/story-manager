@@ -15,28 +15,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build base image
+        run: docker build -t story-manager-base:latest -f Dockerfile.base .
 
       - name: Cache Playwright browsers
         uses: actions/cache@v3
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
       - name: Install Playwright Browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps
         working-directory: frontend
 
-      - name: Build and run container
-        run: docker compose -f docker-compose.e2e.yml up -d --build
+      - name: Build container
+        run: docker compose -f docker-compose.e2e.yml build --build-arg BASE_IMAGE=story-manager-base:latest
+
+      - name: Run container
+        run: docker compose -f docker-compose.e2e.yml up -d
 
       - name: Wait for services to be ready
         run: |
