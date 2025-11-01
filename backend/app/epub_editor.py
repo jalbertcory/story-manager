@@ -2,7 +2,6 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
-from pathlib import Path
 
 
 def get_chapters(epub_path: str):
@@ -57,13 +56,9 @@ def process_epub(
             new_book.add_item(item)
 
     # Rebuild spine
-    new_book.spine = [
-        item for item in book.spine if book.get_item_with_id(item[0]).get_name() not in removed_chapters
-    ]
+    new_book.spine = [item for item in book.spine if book.get_item_with_id(item[0]).get_name() not in removed_chapters]
     new_book.toc = [
-        link
-        for link in book.toc
-        if isinstance(link, epub.Link) and link.href.split("#")[0] not in removed_chapters
+        link for link in book.toc if isinstance(link, epub.Link) and link.href.split("#")[0] not in removed_chapters
     ]
 
     epub.write_epub(current_path, new_book, {})
