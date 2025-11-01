@@ -143,6 +143,10 @@ To start the application, run the following command from the root of the reposit
 docker compose up -d
 ```
 
+### Publishing an updated base image to ghcr.io
+1. make a personal access token (classic) in Github
+2. run `docker login --username <username> --password <your_personal_access_token> ghcr.io`
+
 ### Using on Unraid
 
 The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Manager.
