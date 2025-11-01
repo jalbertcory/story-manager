@@ -9,7 +9,7 @@ function App() {
   const [series, setSeries] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [editingBookId, setEditingBookId] = useState(null);
+  const [editingBook, setEditingBook] = useState(null);
 
   const fetchBooks = async (endpoint) => {
     setLoading(true);
@@ -30,8 +30,10 @@ function App() {
   };
 
   useEffect(() => {
-    fetchBooks("/api/books");
-  }, []);
+    if (!editingBook) {
+      fetchBooks("/api/books");
+    }
+  }, [editingBook]);
 
   const handleSearch = () => {
     const authorTrim = author.trim();
@@ -45,33 +47,31 @@ function App() {
     }
   };
 
+  if (editingBook) {
+    return <EpubEditor book={editingBook} onBack={() => setEditingBook(null)} />;
+  }
+
   return (
     <div className="app-container">
       <h1>Story Manager</h1>
-      {editingBookId ? (
-        <EpubEditor bookId={editingBookId} />
-      ) : (
-        <>
-          <div className="search-controls">
-            <input
-              type="text"
-              placeholder="Search by author"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Search by series"
-              value={series}
-              onChange={(e) => setSeries(e.target.value)}
-            />
-            <button onClick={handleSearch}>Search</button>
-          </div>
-          {loading && <p>Loading...</p>}
-          {error && <p className="error">{error}</p>}
-          <BookList books={books} onEdit={setEditingBookId} />
-        </>
-      )}
+      <div className="search-controls">
+        <input
+          type="text"
+          placeholder="Search by author"
+          value={author}
+          onChange={(e) => setAuthor(e.target.value)}
+        />
+        <input
+          type="text"
+          placeholder="Search by series"
+          value={series}
+          onChange={(e) => setSeries(e.target.value)}
+        />
+        <button onClick={handleSearch}>Search</button>
+      </div>
+      {loading && <p>Loading...</p>}
+      {error && <p className="error">{error}</p>}
+      <BookList books={books} onEdit={setEditingBook} />
     </div>
   );
 }

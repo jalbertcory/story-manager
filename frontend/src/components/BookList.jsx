@@ -6,15 +6,32 @@ function BookList({ books = [], onEdit }) {
   }
 
   return (
-    <ul className="book-list">
-      {books.map((book) => (
-        <li key={book.id}>
-          <strong>{book.title}</strong> by {book.author}
-          {book.series ? ` - ${book.series}` : ""}
-          <button onClick={() => onEdit(book.id)}>Edit</button>
-        </li>
-      ))}
-    </ul>
+    <table className="book-list-table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Author</th>
+          <th>Series</th>
+          <th>Master Word Count</th>
+          <th>Current Word Count</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {books.map((book) => (
+          <tr key={book.id}>
+            <td>{book.title}</td>
+            <td>{book.author}</td>
+            <td>{book.series}</td>
+            <td>{book.master_word_count}</td>
+            <td>{book.current_word_count}</td>
+            <td>
+              <button onClick={() => onEdit(book)}>Edit</button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
