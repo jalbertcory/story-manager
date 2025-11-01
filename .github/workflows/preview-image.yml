@@ -34,10 +34,10 @@ jobs:
           fi
 
       - name: Pull latest base image
-        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-d9cc9830314ba91abb46c1350b942b7dbc5317a9d288707b7b2c16323a2a3b24:latest
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base:d9cc9830314ba91abb46c1350b942b7dbc5317a9d288707b7b2c16323a2a3b24
 
       - name: Build image
-        run: docker build --build-arg BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-d9cc9830314ba91abb46c1350b942b7dbc5317a9d288707b7b2c16323a2a3b24:latest -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+        run: docker build --build-arg BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base:d9cc9830314ba91abb46c1350b942b7dbc5317a9d288707b7b2c16323a2a3b24 -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
 
       - name: Push image
         run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
