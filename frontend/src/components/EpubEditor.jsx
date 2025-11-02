@@ -53,6 +53,7 @@ function EpubEditor({ book, onBack }) {
       });
     } catch (err) {
       setError("Failed to save changes.");
+      console.error(err);
     }
   };
 
@@ -66,6 +67,7 @@ function EpubEditor({ book, onBack }) {
       alert("Book processed successfully!");
     } catch (err) {
       setError("Failed to process book.");
+      console.error(err);
     }
   };
 

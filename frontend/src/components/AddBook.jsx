@@ -36,6 +36,7 @@ function AddBook({ onBookAdded }) {
         }
       } catch (err) {
         setMessage("An error occurred during file upload.");
+        console.error(err);
       }
     } else if (url) {
       try {
@@ -56,6 +57,7 @@ function AddBook({ onBookAdded }) {
         }
       } catch (err) {
         setMessage("An error occurred while adding the web novel.");
+        console.error(err);
       }
     } else {
       setMessage("Please select a file or enter a URL.");
