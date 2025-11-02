@@ -19,6 +19,9 @@ class BookBase(BaseModel):
     removed_chapters: Optional[List[str]] = []
     div_selectors: Optional[List[str]] = []
 
+    class Config:
+        from_attributes = True
+
 
 # Pydantic model for creating a new book.
 class BookCreate(BookBase):

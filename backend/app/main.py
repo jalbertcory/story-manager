@@ -2,7 +2,6 @@ import asyncio
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
-import configparser
 import logging
 from typing import List, Dict, Any
 import ebooklib
@@ -41,6 +40,20 @@ def _get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _run_fff_main(args: List[str]) -> int:
+    """
+    Wrapper for fff_main to handle SystemExit and return a status code.
+    """
+    try:
+        fff_main(args)
+        return 0  # Assume success if no exception
+    except SystemExit as e:
+        return e.code if e.code is not None else 0
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in FanFicFare: {e}")
+        return 1
+
+
 async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str, Any]]:
     """
     Downloads a web novel using FanFicFare and parses its metadata.
@@ -60,13 +73,18 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
     async with asyncio.Lock():
         files_before = set(library_path.iterdir())
         args = [
-            "--personal-ini",
+            "-c",
             str(ini_path),
-            "--output-dir",
-            str(library_path),
+            "-o",
+            f"output_dir={str(library_path)}",
+            "--non-interactive",
+            "--debug",
             source_url,
         ]
-        result = fff_main(args)
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run_fff_main, args)
+
         if result != 0:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -83,25 +101,18 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
     new_epub_path = new_epub_files[0]
 
-    metadata_path = new_epub_path.with_suffix(".fff_metadata")
-    if not metadata_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Metadata file not found for {new_epub_path.name}",
-        )
-
-    config = configparser.ConfigParser()
-    config.read(metadata_path)
     try:
-        title = config.get("metadata", "title")
-        author = config.get("metadata", "author")
-        series = config.get("metadata", "series", fallback=None)
+        book = epub.read_epub(new_epub_path)
+        title = book.get_metadata("DC", "title")[0][0]
+        author = book.get_metadata("DC", "creator")[0][0]
+        series_metadata = book.get_metadata("calibre", "series")
+        series = series_metadata[0][0] if series_metadata else None
         metadata = {"title": title, "author": author, "series": series}
         return new_epub_path, metadata
-    except (configparser.NoSectionError, configparser.NoOptionError) as e:
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to parse metadata file: {e}",
+            detail=f"Failed to parse EPUB metadata: {e}",
         )
 
 
@@ -320,12 +331,12 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
 
 
 @app.get("/api/books", response_model=List[schemas.Book])
-async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
+async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[schemas.Book]:
     """
     Retrieve a list of all books in the library.
     """
     books = await crud.get_books(db, skip=skip, limit=limit)
-    return books
+    return [schemas.Book.from_orm(book) for book in books]
 
 
 @app.put("/api/books/{book_id}", response_model=schemas.Book)
