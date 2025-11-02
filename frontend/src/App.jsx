@@ -49,7 +49,9 @@ function App() {
   };
 
   if (editingBook) {
-    return <EpubEditor book={editingBook} onBack={() => setEditingBook(null)} />;
+    return (
+      <EpubEditor book={editingBook} onBack={() => setEditingBook(null)} />
+    );
   }
 
   return (

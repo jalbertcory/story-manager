@@ -2,8 +2,12 @@ import React, { useState, useEffect } from "react";
 
 function EpubEditor({ book, onBack }) {
   const [chapters, setChapters] = useState([]);
-  const [removedChapters, setRemovedChapters] = useState(book.removed_chapters || []);
-  const [divSelectors, setDivSelectors] = useState((book.div_selectors || []).join(", "));
+  const [removedChapters, setRemovedChapters] = useState(
+    book.removed_chapters || [],
+  );
+  const [divSelectors, setDivSelectors] = useState(
+    (book.div_selectors || []).join(", "),
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -41,7 +45,10 @@ function EpubEditor({ book, onBack }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           removed_chapters: removedChapters,
-          div_selectors: divSelectors.split(",").map(s => s.trim()).filter(Boolean),
+          div_selectors: divSelectors
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
         }),
       });
     } catch (err) {
@@ -52,7 +59,9 @@ function EpubEditor({ book, onBack }) {
   const handleProcessBook = async () => {
     await handleSaveChanges(); // Save first
     try {
-      const res = await fetch(`/api/books/${book.id}/process`, { method: "POST" });
+      const res = await fetch(`/api/books/${book.id}/process`, {
+        method: "POST",
+      });
       if (!res.ok) throw new Error("Processing failed.");
       alert("Book processed successfully!");
     } catch (err) {
@@ -72,7 +81,11 @@ function EpubEditor({ book, onBack }) {
         {chapters.map((chapter) => (
           <li
             key={chapter.filename}
-            style={{ textDecoration: removedChapters.includes(chapter.filename) ? "line-through" : "none" }}
+            style={{
+              textDecoration: removedChapters.includes(chapter.filename)
+                ? "line-through"
+                : "none",
+            }}
           >
             <input
               type="checkbox"
