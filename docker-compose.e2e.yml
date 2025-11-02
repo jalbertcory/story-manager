@@ -3,7 +3,7 @@ services:
   story-manager-e2e:
     image: story-manager-e2e:latest
     ports:
-      - "7890:5173"  # UI
+      - "5173:5173"  # UI
       - "8000:8000"  # API
     volumes:
       - ./config/library:/app/library

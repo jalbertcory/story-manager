@@ -1,9 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 
 function AddBook({ onBookAdded }) {
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState("");
   const [message, setMessage] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -11,6 +13,25 @@ function AddBook({ onBookAdded }) {
 
   const handleUrlChange = (e) => {
     setUrl(e.target.value);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      setFile(files[0]);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -68,13 +89,26 @@ function AddBook({ onBookAdded }) {
     <div className="add-book-container">
       <h2>Add a New Book</h2>
       <form onSubmit={handleSubmit}>
-        <div className="form-group">
-          <label htmlFor="file-upload">Upload EPUB:</label>
+        <div
+          id="drop-zone"
+          className={`drop-zone ${dragging ? "dragging" : ""}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current.click()}
+        >
+          {file ? (
+            <p>Selected file: {file.name}</p>
+          ) : (
+            <p>Drag & drop an EPUB file here, or click to select a file</p>
+          )}
           <input
             id="file-upload"
             type="file"
             accept=".epub"
             onChange={handleFileChange}
+            ref={fileInputRef}
+            style={{ display: "none" }}
           />
         </div>
         <div className="form-group">

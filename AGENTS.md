@@ -51,3 +51,25 @@ Before running tests for your migration, you should reset your local database to
     ```bash
     make test
     ```
+
+## End-to-End (E2E) Testing
+
+To run the Playwright end-to-end tests, you first need to ensure the backend and frontend servers are running.
+
+1.  **Start the servers:**
+    In separate terminals, run the following commands:
+    ```bash
+    make run-api
+    make run-ui
+    ```
+
+2.  **Run the E2E tests:**
+    Once the servers are running, you can execute the E2E tests with the following command:
+    ```bash
+    make e2e
+    ```
+
+    To run in debug mode, use:
+    ```bash
+    make e2e-debug
+    ```

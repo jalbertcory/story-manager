@@ -75,6 +75,8 @@ fi
   nvm use
   cd frontend
   npm install
+  npx playwright install-deps
+  npx playwright install
 )
 echo "✅ Frontend setup complete."
 
