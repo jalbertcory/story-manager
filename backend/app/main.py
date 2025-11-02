@@ -2,6 +2,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
+import configparser
 import logging
 from typing import List, Dict, Any
 import ebooklib
@@ -331,12 +332,12 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
 
 
 @app.get("/api/books", response_model=List[schemas.Book])
-async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[models.Book]:
+async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[schemas.Book]:
     """
     Retrieve a list of all books in the library.
     """
     books = await crud.get_books(db, skip=skip, limit=limit)
-    return books
+    return [schemas.Book.from_orm(book) for book in books]
 
 
 @app.put("/api/books/{book_id}", response_model=schemas.Book)

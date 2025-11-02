@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from pathlib import Path
+import configparser
 
 from ebooklib import epub
 from backend.app.main import app
