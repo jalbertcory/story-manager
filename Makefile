@@ -28,3 +28,9 @@ lint:
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest backend/tests
 	cd frontend && npm test -- --run
+
+e2e:
+	cd frontend && npm run test:e2e
+
+e2e-debug:
+	cd frontend && npm run test:e2e:debug

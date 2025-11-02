@@ -153,3 +153,10 @@ The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Man
 4.  **Access Story Manager**: You can now access the web interface at `http://<UNRAID_HOST>:7890`.
 
 ---
+
+### Running tests
+
+To run e2e tests
+- `cd frontend && npm install && npx playwright install`
+- Go back to the root of the project and run `make e2e`
+- If you need to debug the tests, run `make e2e-debug`

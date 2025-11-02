@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:e2e": "playwright test -c playwright.config.ts",
+    "test:e2e:debug": "playwright test -c playwright.config.ts --debug",
     "preview": "vite preview"
   },
   "dependencies": {
