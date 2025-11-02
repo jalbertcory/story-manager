@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from pathlib import Path
-import configparser
 
 from ebooklib import epub
 from backend.app.main import app
@@ -60,7 +59,7 @@ async def test_add_web_novel(db_session, mocker):
     Test adding a new web novel. This test mocks the fanficfare call and simulates file creation.
     """
     # Mock the fanficfare main function to simulate a successful download
-    mocker.patch("backend.app.main.fff_main", return_value=0)
+    mocker.patch("backend.app.main._run_fff_main", return_value=0)
 
     # Define absolute paths for our dummy files, as the application uses resolve()
     library_path = Path("./library").resolve()
@@ -68,38 +67,38 @@ async def test_add_web_novel(db_session, mocker):
 
     epub_filename = "Test Story-Test Author.epub"
     epub_path = library_path / epub_filename
-    metadata_path = library_path / "Test Story-Test Author.fff_metadata"
 
     # Ensure the library is empty before the test
     if epub_path.exists():
         epub_path.unlink()
-    if metadata_path.exists():
-        metadata_path.unlink()
+
+    # Create a dummy EPUB file with metadata. The endpoint will read from this.
+    create_dummy_epub(epub_path, "Test Story", "Test Author", "Test Series")
 
     # The endpoint discovers the new file by checking the directory before and after the call.
     # We mock `iterdir` to simulate this.
     mocker.patch(
         "pathlib.Path.iterdir",
-        side_effect=[iter([]), iter([epub_path, metadata_path])],  # Files before call  # Files after call
+        side_effect=[iter([]), iter([epub_path])],  # Files before call  # Files after call
     )
 
-    # Write dummy metadata to the file that the endpoint will read
-    config = configparser.ConfigParser()
-    config["metadata"] = {"title": "Test Story", "author": "Test Author"}
-    with open(metadata_path, "w") as f:
-        config.write(f)
-
-    # Create a dummy EPUB file as well, since the code will try to copy it
-    create_dummy_epub(epub_path, "Test Story", "Test Author")
+    # Mock `read_epub` to return a book with the expected metadata
+    mock_book = epub.EpubBook()
+    mock_book.set_title("Test Story")
+    mock_book.add_author("Test Author")
+    mock_book.add_metadata("calibre", "series", "Test Series")
+    mocker.patch("backend.app.main.epub.read_epub", return_value=mock_book)
 
     # The payload for the POST request
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
 
     # Clean up the dummy files
-    metadata_path.unlink()
-    epub_path.unlink()
-    (library_path / f"immutable_{epub_filename}").unlink()
+    if epub_path.exists():
+        epub_path.unlink()
+    immutable_path = library_path / f"immutable_{epub_filename}"
+    if immutable_path.exists():
+        immutable_path.unlink()
 
     # Check the response
     assert response.status_code == 201
