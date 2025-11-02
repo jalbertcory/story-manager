@@ -41,6 +41,20 @@ def _get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _run_fff_main(args: List[str]) -> int:
+    """
+    Wrapper for fff_main to handle SystemExit and return a status code.
+    """
+    try:
+        fff_main(args)
+        return 0  # Assume success if no exception
+    except SystemExit as e:
+        return e.code if e.code is not None else 0
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in FanFicFare: {e}")
+        return 1
+
+
 async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str, Any]]:
     """
     Downloads a web novel using FanFicFare and parses its metadata.
@@ -65,13 +79,13 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
             "-o",
             f"output_dir={str(library_path)}",
             "--non-interactive",
+            "--debug",
             source_url,
         ]
-        try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, fff_main, args)
-        except SystemExit as e:
-            result = e.code if e.code is not None else 0
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run_fff_main, args)
+
         if result != 0:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
