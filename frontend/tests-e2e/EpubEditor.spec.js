@@ -1,13 +1,50 @@
 import { test, expect } from "@playwright/test";
 import path from "path";
+import fs from "fs";
+
+// Helper function to simulate drag and drop
+const dragAndDropFile = async (
+  page,
+  selector,
+  filePath,
+  fileName,
+  fileType,
+) => {
+  const buffer = fs.readFileSync(filePath);
+  const dataTransfer = await page.evaluateHandle(
+    async ({ bufferData, localFileName, localFileType }) => {
+      const dt = new DataTransfer();
+      const blobData = await fetch(bufferData).then((res) => res.blob());
+      const file = new File([blobData], localFileName, { type: localFileType });
+      dt.items.add(file);
+      return dt;
+    },
+    {
+      bufferData: `data:application/octet-stream;base64,${buffer.toString(
+        "base64",
+      )}`,
+      localFileName: fileName,
+      localFileType: fileType,
+    },
+  );
+
+  await page.dispatchEvent(selector, "drop", { dataTransfer });
+};
 
 test("EpubEditor interactions", async ({ page }) => {
   await page.goto("http://localhost:5173");
 
   // Upload a book
   const filePath = path.resolve("test.epub");
-  await page.setInputFiles('input[type="file"]', filePath);
-  await page.getByRole("button", { name: /upload/i }).click();
+  await dragAndDropFile(
+    page,
+    "#drop-zone",
+    filePath,
+    "test.epub",
+    "application/epub+zip",
+  );
+
+  await page.getByRole("button", { name: /add book/i }).click();
 
   // Wait for the book to appear in the list
   await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });

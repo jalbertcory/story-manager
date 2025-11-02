@@ -4,8 +4,8 @@ run-ui:
 	cd frontend && npm run dev
 
 run-api:
-	export PYTHONPATH=. && .venv/bin/alembic upgrade head && \
-	uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+	cd backend && export PYTHONPATH=. && ../.venv/bin/alembic upgrade head && \
+	../.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 run-db:
 	docker run -d \
