@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import "./App.css";
 import BookList from "./components/BookList";
+import EpubEditor from "./components/EpubEditor";
+import AddBook from "./components/AddBook.jsx";
 
 function App() {
   const [books, setBooks] = useState([]);
@@ -8,6 +10,7 @@ function App() {
   const [series, setSeries] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [editingBook, setEditingBook] = useState(null);
 
   const fetchBooks = async (endpoint) => {
     setLoading(true);
@@ -28,8 +31,10 @@ function App() {
   };
 
   useEffect(() => {
-    fetchBooks("/api/books");
-  }, []);
+    if (!editingBook) {
+      fetchBooks("/api/books");
+    }
+  }, [editingBook]);
 
   const handleSearch = () => {
     const authorTrim = author.trim();
@@ -42,6 +47,12 @@ function App() {
       fetchBooks("/api/books");
     }
   };
+
+  if (editingBook) {
+    return (
+      <EpubEditor book={editingBook} onBack={() => setEditingBook(null)} />
+    );
+  }
 
   return (
     <div className="app-container">
@@ -61,9 +72,10 @@ function App() {
         />
         <button onClick={handleSearch}>Search</button>
       </div>
+      <AddBook onBookAdded={() => fetchBooks("/api/books")} />
       {loading && <p>Loading...</p>}
       {error && <p className="error">{error}</p>}
-      <BookList books={books} />
+      <BookList books={books} onEdit={setEditingBook} />
     </div>
   );
 }

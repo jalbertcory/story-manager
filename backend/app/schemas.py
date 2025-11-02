@@ -4,16 +4,25 @@ from typing import Optional, List
 from .models import SourceType
 
 
-# Pydantic model for creating a new book.
-# This is the expected shape of data when creating a book record.
-class BookCreate(BaseModel):
+# Base Pydantic model for a book, defining common attributes.
+class BookBase(BaseModel):
     title: str
     author: str
     source_url: Optional[HttpUrl] = None
     source_type: SourceType
-    epub_path: str
+    immutable_path: str
+    current_path: str
     cover_path: Optional[str] = None
     series: Optional[str] = None
+    master_word_count: Optional[int] = None
+    current_word_count: Optional[int] = None
+    removed_chapters: Optional[List[str]] = []
+    div_selectors: Optional[List[str]] = []
+
+
+# Pydantic model for creating a new book.
+class BookCreate(BookBase):
+    pass
 
 
 # Pydantic model for updating a book.
@@ -21,18 +30,17 @@ class BookUpdate(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     series: Optional[str] = None
+    removed_chapters: Optional[List[str]] = None
+    div_selectors: Optional[List[str]] = None
 
 
-# Pydantic model for reading a book.
-# This defines the shape of the data sent back to the client.
-# It includes fields from the database that are generated automatically (id, created_at, updated_at).
-class Book(BookCreate):
+# Pydantic model for reading a book (API response).
+class Book(BookBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     class Config:
-        # This allows the Pydantic model to be created from an ORM model (like our SQLAlchemy Book model).
         from_attributes = True
 
 

@@ -3,11 +3,11 @@
 run-ui:
 	cd frontend && npm run dev
 
-run-backend:
+run-api:
 	export PYTHONPATH=. && .venv/bin/alembic upgrade head && \
 	uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 
-start-db-container:
+run-db:
 	docker run -d \
 	  --name story-manager-db \
 	  -e POSTGRES_DB=story_manager \
@@ -28,3 +28,9 @@ lint:
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest backend/tests
 	cd frontend && npm test -- --run
+
+e2e:
+	cd frontend && npm run test:e2e
+
+e2e-debug:
+	cd frontend && npm run test:e2e:debug

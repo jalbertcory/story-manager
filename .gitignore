@@ -177,3 +177,11 @@ frontend/dist/
 pgdata/
 
 .idea
+test-results
+frontend/playwright-report
+frontend/test-results
+frontend.log
+backend.log
+
+# where the books are stored
+library
