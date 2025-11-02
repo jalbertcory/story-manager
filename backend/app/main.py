@@ -60,13 +60,18 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
     async with asyncio.Lock():
         files_before = set(library_path.iterdir())
         args = [
-            "--personal-ini",
+            "-c",
             str(ini_path),
-            "--output-dir",
-            str(library_path),
+            "-o",
+            f"output_dir={str(library_path)}",
+            "--non-interactive",
             source_url,
         ]
-        result = fff_main(args)
+        try:
+            fff_main(args)
+            result = 0  # Assume success if no exception
+        except SystemExit as e:
+            result = e.code if e.code is not None else 0
         if result != 0:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
