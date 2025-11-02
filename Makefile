@@ -3,10 +3,10 @@
 run-ui:
 	cd frontend && npm run dev
 
-run-backend:
+run-api:
 	uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 
-start-db-container:
+run-db:
 	docker run -d \
 	  --name story-manager-db \
 	  -e POSTGRES_DB=story_manager \

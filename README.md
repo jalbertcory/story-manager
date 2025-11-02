@@ -106,7 +106,7 @@ This project uses `uv` for python package management, `pyenv` for Python version
     *   **Backend**:
         ```bash
         # From the project root
-        make run-backend
+        make run-api
         ```
     *   **Frontend**:
         ```bash

@@ -1,6 +1,6 @@
 """Add immutable epub path and processing fields
 
-Revision ID: cf65e060276d
+Revision ID: 0002
 Revises: 0001_initial
 Create Date: 2025-11-01 05:14:52.292572
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "cf65e060276d"
+revision = "0002"
 down_revision = "0001_initial"
 branch_labels = None
 depends_on = None
