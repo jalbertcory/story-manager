@@ -68,8 +68,8 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
             source_url,
         ]
         try:
-            fff_main(args)
-            result = 0  # Assume success if no exception
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, fff_main, args)
         except SystemExit as e:
             result = e.code if e.code is not None else 0
         if result != 0:
