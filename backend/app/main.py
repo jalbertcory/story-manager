@@ -2,7 +2,6 @@ import asyncio
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
-import configparser
 import logging
 from typing import List, Dict, Any
 import ebooklib
