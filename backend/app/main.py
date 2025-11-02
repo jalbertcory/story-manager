@@ -228,7 +228,6 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         title = book.get_metadata("DC", "title")[0][0]
         author = book.get_metadata("DC", "creator")[0][0]
 
-
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
