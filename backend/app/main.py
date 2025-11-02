@@ -102,25 +102,18 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
     new_epub_path = new_epub_files[0]
 
-    metadata_path = new_epub_path.with_suffix(".fff_metadata")
-    if not metadata_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Metadata file not found for {new_epub_path.name}",
-        )
-
-    config = configparser.ConfigParser()
-    config.read(metadata_path)
     try:
-        title = config.get("metadata", "title")
-        author = config.get("metadata", "author")
-        series = config.get("metadata", "series", fallback=None)
+        book = epub.read_epub(new_epub_path)
+        title = book.get_metadata("DC", "title")[0][0]
+        author = book.get_metadata("DC", "creator")[0][0]
+        series_metadata = book.get_metadata("calibre", "series")
+        series = series_metadata[0][0] if series_metadata else None
         metadata = {"title": title, "author": author, "series": series}
         return new_epub_path, metadata
-    except (configparser.NoSectionError, configparser.NoOptionError) as e:
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to parse metadata file: {e}",
+            detail=f"Failed to parse EPUB metadata: {e}",
         )
 
 
