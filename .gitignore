@@ -177,7 +177,8 @@ frontend/dist/
 pgdata/
 
 .idea
-#test-results
-#frontend/playwright-report
-#frontend/test-results
-
+test-results
+frontend/playwright-report
+frontend/test-results
+frontend.log
+backend.log
