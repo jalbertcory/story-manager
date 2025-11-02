@@ -217,8 +217,6 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         title = book.get_metadata("DC", "title")[0][0]
         author = book.get_metadata("DC", "creator")[0][0]
 
-        series_metadata = book.get_metadata("calibre", "series")
-        series = series_metadata[0][0] if series_metadata else None
 
     except Exception as e:
         raise HTTPException(
@@ -234,7 +232,6 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         author=author,
         immutable_path=str(immutable_path.relative_to(library_path.parent)),
         current_path=str(current_path.relative_to(library_path.parent)),
-        series=series,
         source_type=models.SourceType.epub,
         master_word_count=master_word_count,
         current_word_count=master_word_count,
