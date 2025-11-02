@@ -14,7 +14,7 @@ run-db:
 	  -e POSTGRES_USER=storyuser \
 	  -e POSTGRES_PASSWORD=storypass \
 	  -p 5432:5432 \
-	  postgres:15
+	  postgres:17
 
 fmt:
 	.venv/bin/python3 -m black backend
