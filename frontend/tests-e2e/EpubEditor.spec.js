@@ -46,6 +46,8 @@ test("EpubEditor interactions", async ({ page }) => {
 
   await page.getByRole("button", { name: /add book/i }).click();
 
+  await page.reload();
+
   // Wait for the book to appear in the list
   await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });
 
@@ -56,13 +58,13 @@ test("EpubEditor interactions", async ({ page }) => {
     .click();
 
   // The editor should now be visible
-  await expect(page.getByText("Editing: Test Book")).toBeVisible();
+  await expect(page.getByText("EPUB Editor for Test Book")).toBeVisible();
 
   // Check if the chapter is listed
-  await expect(page.getByText("Introduction")).toBeVisible();
+  await expect(page.getByText("chap_1")).toBeVisible();
 
   // Uncheck the chapter to remove it
-  await page.getByLabel("Introduction").uncheck();
+  await page.getByLabel("chap_1.xhtml").uncheck();
 
   // Add a div selector to remove
   await page.getByPlaceholder("e.g., note, author-note").fill("p");
