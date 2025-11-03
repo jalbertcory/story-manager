@@ -1,35 +1,70 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+const fetchChapters = async ({ queryKey }) => {
+  const [_key, bookId] = queryKey;
+  const res = await fetch(`/api/books/${bookId}/chapters`);
+  if (!res.ok) {
+    throw new Error("Failed to fetch chapters");
+  }
+  return res.json();
+};
+
+const updateBook = async ({ id, removed_chapters, div_selectors }) => {
+  const res = await fetch(`/api/books/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ removed_chapters, div_selectors }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to save changes");
+  }
+  return res.json();
+};
+
+const processBook = async ({ id }) => {
+  const res = await fetch(`/api/books/${id}/process`, { method: "POST" });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Processing failed");
+  }
+  return res.json();
+};
 
 function EpubEditor({ book, onBack }) {
-  const [chapters, setChapters] = useState([]);
-  const [removedChapters, setRemovedChapters] = useState(
-    book.removed_chapters || [],
-  );
-  const [divSelectors, setDivSelectors] = useState(
-    (book.div_selectors || []).join(", "),
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const queryClient = useQueryClient();
+  const [removedChapters, setRemovedChapters] = useState([]);
+  const [divSelectors, setDivSelectors] = useState("");
 
   useEffect(() => {
-    const fetchChapters = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/books/${book.id}/chapters`);
-        if (!res.ok) {
-          throw new Error("Failed to fetch chapters");
-        }
-        const data = await res.json();
-        setChapters(data);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchChapters();
-  }, [book.id]);
+    setRemovedChapters(book.removed_chapters || []);
+    setDivSelectors((book.div_selectors || []).join(", "));
+  }, [book]);
+
+  const {
+    data: chapters = [],
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["chapters", book.id],
+    queryFn: fetchChapters,
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: updateBook,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+    },
+  });
+
+  const processMutation = useMutation({
+    mutationFn: processBook,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      onBack();
+    },
+  });
 
   const handleToggleChapter = (filename) => {
     const newRemovedChapters = removedChapters.includes(filename)
@@ -38,36 +73,26 @@ function EpubEditor({ book, onBack }) {
     setRemovedChapters(newRemovedChapters);
   };
 
-  const handleSaveChanges = async () => {
-    try {
-      await fetch(`/api/books/${book.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          removed_chapters: removedChapters,
-          div_selectors: divSelectors
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }),
-      });
-    } catch (err) {
-      setError("Failed to save changes.");
-      console.error(err);
-    }
+  const getChanges = () => ({
+    id: book.id,
+    removed_chapters: removedChapters,
+    div_selectors: divSelectors
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  });
+
+  const handleSaveChanges = () => {
+    saveMutation.mutate(getChanges());
   };
 
   const handleProcessBook = async () => {
-    await handleSaveChanges(); // Save first
     try {
-      const res = await fetch(`/api/books/${book.id}/process`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Processing failed.");
-      onBack();
+      await saveMutation.mutateAsync(getChanges());
+      await processMutation.mutateAsync({ id: book.id });
     } catch (err) {
-      setError("Failed to process book.");
-      console.error(err);
+      // Errors are handled by the mutation hooks
+      console.error("Save or process failed", err);
     }
   };
 
@@ -77,8 +102,8 @@ function EpubEditor({ book, onBack }) {
       <button onClick={onBack}>Back to List</button>
 
       <h3>Chapters</h3>
-      {loading && <p>Loading chapters...</p>}
-      {error && <p className="error">{error}</p>}
+      {isLoading && <p>Loading chapters...</p>}
+      {error && <p className="error">{error.message}</p>}
       <ul>
         {chapters.map((chapter) => (
           <li
@@ -108,8 +133,28 @@ function EpubEditor({ book, onBack }) {
         style={{ width: "100%", marginBottom: "10px" }}
       />
 
-      <button onClick={handleSaveChanges}>Save Changes</button>
-      <button onClick={handleProcessBook}>Process Book</button>
+      <button onClick={handleSaveChanges} disabled={saveMutation.isPending}>
+        {saveMutation.isPending ? "Saving..." : "Save Changes"}
+      </button>
+      <button
+        onClick={handleProcessBook}
+        disabled={saveMutation.isPending || processMutation.isPending}
+      >
+        {processMutation.isPending
+          ? "Processing..."
+          : saveMutation.isPending
+            ? "Saving..."
+            : "Process Book"}
+      </button>
+
+      {saveMutation.isError && (
+        <p className="error">Save failed: {saveMutation.error.message}</p>
+      )}
+      {processMutation.isError && (
+        <p className="error">
+          Process failed: {processMutation.error.message}
+        </p>
+      )}
     </div>
   );
 }
