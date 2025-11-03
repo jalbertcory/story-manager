@@ -166,3 +166,19 @@ async def update_cleaning_config(
 async def delete_cleaning_config(db: AsyncSession, config: models.CleaningConfig) -> None:
     await db.delete(config)
     await db.commit()
+
+
+async def get_book_by_title(db: AsyncSession, title: str) -> Optional[models.Book]:
+    """
+    Retrieve a single book from the database by its title.
+    """
+    result = await db.execute(select(models.Book).filter(models.Book.title == title))
+    return result.scalars().first()
+
+
+async def delete_book(db: AsyncSession, book: models.Book) -> None:
+    """
+    Delete a book record from the database.
+    """
+    await db.delete(book)
+    await db.commit()

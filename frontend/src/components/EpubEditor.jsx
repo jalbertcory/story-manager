@@ -64,7 +64,7 @@ function EpubEditor({ book, onBack }) {
         method: "POST",
       });
       if (!res.ok) throw new Error("Processing failed.");
-      alert("Book processed successfully!");
+      onBack();
     } catch (err) {
       setError("Failed to process book.");
       console.error(err);
@@ -102,6 +102,7 @@ function EpubEditor({ book, onBack }) {
       <h3>Div Selectors to Remove (comma-separated)</h3>
       <input
         type="text"
+        placeholder="e.g., note, author-note"
         value={divSelectors}
         onChange={(e) => setDivSelectors(e.target.value)}
         style={{ width: "100%", marginBottom: "10px" }}
