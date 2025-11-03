@@ -261,9 +261,7 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     db_book = await crud.create_book(db=db, book=book_to_create)
 
     # Extract and save the cover image
-    cover_path_or_none = _get_and_save_epub_cover(
-        epub_path=immutable_path, book_id=db_book.id
-    )
+    cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
     if cover_path_or_none:
         db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
         await db.commit()
@@ -330,13 +328,9 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     db_book = await crud.create_book(db=db, book=book_to_create)
 
     # Extract and save the cover image
-    cover_path_or_none = _get_and_save_epub_cover(
-        epub_path=immutable_path, book_id=db_book.id
-    )
+    cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
     if cover_path_or_none:
-        db_book.cover_path = str(
-            cover_path_or_none.relative_to(library_path.parent)
-        )
+        db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
         await db.commit()
         await db.refresh(db_book)
 
@@ -576,25 +570,23 @@ def _get_and_save_epub_cover(epub_path: Path, book_id: int) -> Path | None:
             t = etree.fromstring(z.read("META-INF/container.xml"))
             rootfile_path = t.xpath(
                 "/u:container/u:rootfiles/u:rootfile",
-                namespaces={
-                    "u": "urn:oasis:names:tc:opendocument:xmlns:container"
-                },
+                namespaces={"u": "urn:oasis:names:tc:opendocument:xmlns:container"},
             )[0].get("full-path")
 
             t = etree.fromstring(z.read(rootfile_path))
             cover_id = t.xpath(
                 "//opf:metadata/opf:meta[@name='cover']",
                 namespaces={"opf": "http://www.idpf.org/2007/opf"},
-            )[0].get("content")
+            )[
+                0
+            ].get("content")
 
             cover_href = t.xpath(
                 "//opf:manifest/opf:item[@id='" + cover_id + "']",
                 namespaces={"opf": "http://www.idpf.org/2007/opf"},
             )[0].get("href")
 
-            cover_path_in_epub = (
-                Path(rootfile_path).parent / cover_href
-            ).as_posix()
+            cover_path_in_epub = (Path(rootfile_path).parent / cover_href).as_posix()
             cover_data = z.read(cover_path_in_epub)
             cover_extension = Path(cover_href).suffix
             cover_filename = f"{book_id}{cover_extension}"
