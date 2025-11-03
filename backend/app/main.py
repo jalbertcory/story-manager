@@ -1,5 +1,6 @@
 import asyncio
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import logging
@@ -8,6 +9,8 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import zipfile
+from lxml import etree
 
 from pydantic import BaseModel
 
@@ -257,6 +260,13 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
     db_book = await crud.create_book(db=db, book=book_to_create)
 
+    # Extract and save the cover image
+    cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+    if cover_path_or_none:
+        db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
+        await db.commit()
+        await db.refresh(db_book)
+
     # Create a log entry for the new book
     _, chapter_count = _get_epub_word_and_chapter_count(current_path)
     log_entry = schemas.BookLogCreate(
@@ -316,6 +326,13 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     )
 
     db_book = await crud.create_book(db=db, book=book_to_create)
+
+    # Extract and save the cover image
+    cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+    if cover_path_or_none:
+        db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
+        await db.commit()
+        await db.refresh(db_book)
 
     # Create a log entry for the new book
     _, chapter_count = _get_epub_word_and_chapter_count(current_path)
@@ -520,6 +537,67 @@ async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)
 @app.get("/")
 def read_root() -> Dict[str, str]:
     return {"message": "Welcome to the Story Manager API"}
+
+
+@app.get("/api/covers/{book_id}")
+async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Serves the cover image for a given book ID.
+    """
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None or not db_book.cover_path:
+        raise HTTPException(status_code=404, detail="Cover not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / "..").resolve()
+    cover_path = library_path / db_book.cover_path
+
+    if not cover_path.is_file():
+        raise HTTPException(status_code=404, detail="Cover file not found")
+
+    return FileResponse(cover_path)
+
+
+def _get_and_save_epub_cover(epub_path: Path, book_id: int) -> Path | None:
+    """
+    Extracts the cover image from an EPUB file and saves it to the covers directory.
+    """
+    app_dir = Path(__file__).parent.resolve()
+    covers_path = (app_dir / ".." / ".." / "library" / "covers").resolve()
+    covers_path.mkdir(exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(epub_path) as z:
+            t = etree.fromstring(z.read("META-INF/container.xml"))
+            rootfile_path = t.xpath(
+                "/u:container/u:rootfiles/u:rootfile",
+                namespaces={"u": "urn:oasis:names:tc:opendocument:xmlns:container"},
+            )[0].get("full-path")
+
+            t = etree.fromstring(z.read(rootfile_path))
+            cover_id = t.xpath(
+                "//opf:metadata/opf:meta[@name='cover']",
+                namespaces={"opf": "http://www.idpf.org/2007/opf"},
+            )[
+                0
+            ].get("content")
+
+            cover_href = t.xpath(
+                "//opf:manifest/opf:item[@id='" + cover_id + "']",
+                namespaces={"opf": "http://www.idpf.org/2007/opf"},
+            )[0].get("href")
+
+            cover_path_in_epub = (Path(rootfile_path).parent / cover_href).as_posix()
+            cover_data = z.read(cover_path_in_epub)
+            cover_extension = Path(cover_href).suffix
+            cover_filename = f"{book_id}{cover_extension}"
+            save_path = covers_path / cover_filename
+
+            with open(save_path, "wb") as f:
+                f.write(cover_data)
+            return save_path
+    except Exception as e:
+        logger.error(f"Error extracting cover from {epub_path}: {e}")
+        return None
 
 
 @app.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
