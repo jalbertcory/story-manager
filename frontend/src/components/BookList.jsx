@@ -5,33 +5,31 @@ function BookList({ books = [], onEdit }) {
     return <p>No books found.</p>;
   }
 
+  const handleCoverError = (e) => {
+    e.target.onerror = null;
+    e.target.src = "https://via.placeholder.com/200x250?text=No+Cover";
+  };
+
   return (
-    <table className="book-list-table">
-      <thead>
-        <tr>
-          <th>Title</th>
-          <th>Author</th>
-          <th>Series</th>
-          <th>Master Word Count</th>
-          <th>Current Word Count</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {books.map((book) => (
-          <tr key={book.id}>
-            <td>{book.title}</td>
-            <td>{book.author}</td>
-            <td>{book.series}</td>
-            <td>{book.master_word_count}</td>
-            <td>{book.current_word_count}</td>
-            <td>
-              <button onClick={() => onEdit(book)}>Edit</button>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="book-grid">
+      {books.map((book) => (
+        <div key={book.id} className="book-card" onClick={() => onEdit(book)}>
+          <img
+            src={`/api/covers/${book.id}`}
+            alt={`${book.title} cover`}
+            className="book-cover"
+            onError={handleCoverError}
+          />
+          <div className="book-info">
+            <h3>{book.title}</h3>
+            <p>{book.author}</p>
+            {book.series && <p>Series: {book.series}</p>}
+            <p>Master: {book.master_word_count}</p>
+            <p>Current: {book.current_word_count}</p>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -29,7 +29,7 @@ describe("App", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/books");
     await waitFor(() => {
       expect(screen.getByText("Book A")).toBeInTheDocument();
-      expect(screen.getAllByText("100").length).toBe(2);
+      expect(screen.getByText("Author A")).toBeInTheDocument();
     });
   });
 
