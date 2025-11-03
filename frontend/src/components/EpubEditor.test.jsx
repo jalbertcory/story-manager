@@ -43,7 +43,6 @@ describe("EpubEditor", () => {
     let chapter1Checkbox;
     await waitFor(() => {
       // The checkbox is not directly associated with the text, so we get it by its role and name
-      const checkboxes = screen.getAllByRole("checkbox");
       const chapter1Label = screen.getByText("Chapter 1");
       const chapter1Li = chapter1Label.closest("li");
       chapter1Checkbox = chapter1Li.querySelector("input[type='checkbox']");
