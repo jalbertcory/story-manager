@@ -53,6 +53,6 @@ echo "Frontend PID: $FRONTEND_PID"
 # Ensure all processes are cleaned up, including PostgreSQL
 trap "echo '--- Shutting down processes ---'; kill $BACKEND_PID $FRONTEND_PID; su postgres -c 'pg_ctl -D $PGDATA -m fast stop'; echo '--- Processes shut down ---'" EXIT
 
-wait -n $BACKEND_PID $FRONTEND_PID
+wait
 
 echo "--- Container setup complete ---"

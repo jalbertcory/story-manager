@@ -520,3 +520,26 @@ async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)
 @app.get("/")
 def read_root() -> Dict[str, str]:
     return {"message": "Welcome to the Story Manager API"}
+
+
+@app.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
+    """
+    Deletes a book by its title.
+    """
+    book = await crud.get_book_by_title(db, title=title)
+    if book is None:
+        # Return 204 even if the book doesn't exist to make the endpoint idempotent
+        return None
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    immutable_path = library_path.parent / book.immutable_path
+    current_path = library_path.parent / book.current_path
+
+    if immutable_path.exists():
+        immutable_path.unlink()
+    if current_path.exists():
+        current_path.unlink()
+
+    await crud.delete_book(db, book=book)
+    return None

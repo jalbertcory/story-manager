@@ -34,6 +34,9 @@ const dragAndDropFile = async (
 test("EpubEditor interactions", async ({ page }) => {
   await page.goto("http://localhost:5173");
 
+  // Delete the book if it exists
+  await page.request.delete("/api/books/by-title/Test Book");
+
   // Upload a book
   const filePath = path.resolve("test.epub");
   await dragAndDropFile(
@@ -61,16 +64,20 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByText("EPUB Editor for Test Book")).toBeVisible();
 
   // Check if the chapter is listed
-  await expect(page.getByText("chap_1")).toBeVisible();
+  await expect(page.getByText("chap_1.xhtml")).toBeVisible();
 
   // Uncheck the chapter to remove it
-  await page.getByLabel("chap_1.xhtml").uncheck();
+  await page
+    .getByRole("listitem")
+    .filter({ hasText: "chap_1.xhtml" })
+    .getByRole("checkbox")
+    .uncheck();
 
   // Add a div selector to remove
   await page.getByPlaceholder("e.g., note, author-note").fill("p");
 
   // Click the save button
-  await page.getByRole("button", { name: /save/i }).click();
+  await page.getByRole("button", { name: /process book/i }).click();
 
   // We should be back on the book list
   await expect(page.getByText("Story Manager")).toBeVisible();
