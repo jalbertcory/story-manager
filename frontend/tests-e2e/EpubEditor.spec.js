@@ -54,11 +54,8 @@ test("EpubEditor interactions", async ({ page }) => {
   // Wait for the book to appear in the list
   await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });
 
-  // Click the "Edit" button for the new book
-  await page
-    .getByRole("row", { name: /Test Book/i })
-    .getByRole("button", { name: /edit/i })
-    .click();
+  // Click the book card to edit it
+  await page.locator(".book-card").filter({ hasText: /Test Book/i }).click();
 
   // The editor should now be visible
   await expect(page.getByText("EPUB Editor for Test Book")).toBeVisible();
@@ -83,9 +80,8 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByText("Story Manager")).toBeVisible();
 
   // Verify the word count has changed
-  await expect(
-    page.getByRole("row", { name: /Test Book/i }).getByText("0"),
-  ).toBeVisible();
+  const bookCard = page.locator(".book-card").filter({ hasText: /Test Book/i });
+  await expect(bookCard.getByText(/Current: 0/i)).toBeVisible();
 
   await page.screenshot({ path: "frontend_verification.png" });
 });

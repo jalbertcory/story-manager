@@ -1,11 +1,49 @@
-import React, { useState, useRef } from "react";
+import { useState, useRef } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-function AddBook({ onBookAdded }) {
+const addBook = async ({ file, url }) => {
+  if (file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/books/upload_epub", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.detail || "File upload failed");
+    }
+    return res.json();
+  } else if (url) {
+    const res = await fetch("/api/books/add_web_novel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.detail || "Failed to add web novel");
+    }
+    return res.json();
+  }
+  throw new Error("Please provide a file or a URL.");
+};
+
+function AddBook() {
+  const queryClient = useQueryClient();
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState("");
-  const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
+
+  const mutation = useMutation({
+    mutationFn: addBook,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      setFile(null);
+      setUrl("");
+    },
+  });
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -34,55 +72,9 @@ function AddBook({ onBookAdded }) {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
-    setMessage("");
-
-    if (file) {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      try {
-        const res = await fetch("/api/books/upload_epub", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (res.ok) {
-          setMessage("Book uploaded successfully!");
-          onBookAdded();
-        } else {
-          const error = await res.json();
-          setMessage(`Error: ${error.detail}`);
-        }
-      } catch (err) {
-        setMessage("An error occurred during file upload.");
-        console.error(err);
-      }
-    } else if (url) {
-      try {
-        const res = await fetch("/api/books/add_web_novel", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ url }),
-        });
-
-        if (res.ok) {
-          setMessage("Web novel added successfully!");
-          onBookAdded();
-        } else {
-          const error = await res.json();
-          setMessage(`Error: ${error.detail}`);
-        }
-      } catch (err) {
-        setMessage("An error occurred while adding the web novel.");
-        console.error(err);
-      }
-    } else {
-      setMessage("Please select a file or enter a URL.");
-    }
+    mutation.mutate({ file, url });
   };
 
   return (
@@ -121,9 +113,12 @@ function AddBook({ onBookAdded }) {
             onChange={handleUrlChange}
           />
         </div>
-        <button type="submit">Add Book</button>
+        <button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Adding..." : "Add Book"}
+        </button>
       </form>
-      {message && <p>{message}</p>}
+      {mutation.isSuccess && <p>Book added successfully!</p>}
+      {mutation.isError && <p className="error">{mutation.error.message}</p>}
     </div>
   );
 }

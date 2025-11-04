@@ -1,51 +1,51 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
 import EpubEditor from "./components/EpubEditor";
 import AddBook from "./components/AddBook.jsx";
 
+const fetchBooks = async ({ queryKey }) => {
+  const [_key, { author, series }] = queryKey;
+
+  let endpoint = "/api/books";
+  if (author) {
+    endpoint = `/api/books/search/author/${encodeURIComponent(author)}`;
+  } else if (series) {
+    endpoint = `/api/books/search/series/${encodeURIComponent(series)}`;
+  }
+
+  const res = await fetch(endpoint);
+  if (!res.ok) {
+    throw new Error("Failed to fetch books");
+  }
+  return res.json();
+};
+
 function App() {
-  const [books, setBooks] = useState([]);
   const [author, setAuthor] = useState("");
   const [series, setSeries] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [searchParams, setSearchParams] = useState({ author: "", series: "" });
   const [editingBook, setEditingBook] = useState(null);
 
-  const fetchBooks = async (endpoint) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(endpoint);
-      if (!res.ok) {
-        throw new Error("Failed to fetch books");
-      }
-      const data = await res.json();
-      setBooks(data);
-    } catch (err) {
-      setError(err.message);
-      setBooks([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!editingBook) {
-      fetchBooks("/api/books");
-    }
-  }, [editingBook]);
+  const {
+    data: books,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["books", searchParams],
+    queryFn: fetchBooks,
+    initialData: [],
+  });
 
   const handleSearch = () => {
-    const authorTrim = author.trim();
-    const seriesTrim = series.trim();
-    if (authorTrim) {
-      fetchBooks(`/api/books/search/author/${encodeURIComponent(authorTrim)}`);
-    } else if (seriesTrim) {
-      fetchBooks(`/api/books/search/series/${encodeURIComponent(seriesTrim)}`);
-    } else {
-      fetchBooks("/api/books");
-    }
+    setSearchParams({ author: author.trim(), series: series.trim() });
+  };
+
+  const handleClearSearch = () => {
+    setAuthor("");
+    setSeries("");
+    setSearchParams({ author: "", series: "" });
   };
 
   if (editingBook) {
@@ -71,10 +71,11 @@ function App() {
           onChange={(e) => setSeries(e.target.value)}
         />
         <button onClick={handleSearch}>Search</button>
+        <button onClick={handleClearSearch}>Clear</button>
       </div>
-      <AddBook onBookAdded={() => fetchBooks("/api/books")} />
-      {loading && <p>Loading...</p>}
-      {error && <p className="error">{error}</p>}
+      <AddBook />
+      {isLoading && <p>Loading...</p>}
+      {error && <p className="error">{error.message}</p>}
       <BookList books={books} onEdit={setEditingBook} />
     </div>
   );
