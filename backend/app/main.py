@@ -1,11 +1,13 @@
 import asyncio
+import re
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -74,7 +76,7 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
 
     async with asyncio.Lock():
-        files_before = set(library_path.iterdir())
+        download_start = time.time()
         args = [
             "-c",
             str(ini_path),
@@ -93,16 +95,14 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"FanFicFare failed to download story. Error code: {result}.",
             )
-        files_after = set(library_path.iterdir())
-        new_files = files_after - files_before
+        changed_epubs = [f for f in library_path.iterdir() if f.suffix == ".epub" and f.stat().st_mtime >= download_start]
 
-    new_epub_files = [f for f in new_files if f.suffix == ".epub"]
-    if not new_epub_files:
+    if not changed_epubs:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="FanFicFare ran but no new EPUB file was created.",
+            detail="FanFicFare ran but no new or updated EPUB file was found.",
         )
-    new_epub_path = new_epub_files[0]
+    new_epub_path = changed_epubs[0]
 
     try:
         book = epub.read_epub(new_epub_path)
@@ -123,6 +123,20 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
 async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
+
+
+async def seed_default_cleaning_config() -> None:
+    async with SessionLocal() as db:
+        configs = await crud.get_cleaning_configs(db)
+        if not configs:
+            default_config = schemas.CleaningConfigCreate(
+                name="FanFicFare Defaults",
+                url_pattern=".*",
+                chapter_selectors=[],
+                content_selectors=["div.author_note", "p.author_note"],
+            )
+            await crud.create_cleaning_config(db, default_config)
+            logger.info("Seeded default cleaning config.")
 
 
 scheduler = AsyncIOScheduler()
@@ -148,13 +162,19 @@ async def update_web_novels():
             logger.info(f"Checking {book.title} for updates.")
             try:
                 library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-                epub_path = library_path.parent / book.immutable_path
+                immutable_path = library_path.parent / book.immutable_path
+                current_path = library_path.parent / book.current_path
 
-                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+                old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(immutable_path)
 
-                _, _ = await _download_and_parse_web_novel(book.source_url)
+                new_epub_path, _ = await _download_and_parse_web_novel(book.source_url)
 
-                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(epub_path)
+                # Mirror refresh_book: overwrite immutable with fresh download, copy to current
+                new_epub_path.rename(immutable_path)
+                with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
+                    f_out.write(f_in.read())
+
+                new_word_count, new_chapter_count = _get_epub_word_and_chapter_count(immutable_path)
 
                 if new_chapter_count > old_chapter_count:
                     logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}.")
@@ -191,6 +211,7 @@ async def update_web_novels():
 async def lifespan(app: FastAPI):
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
+    await seed_default_cleaning_config()
     scheduler.add_job(update_web_novels, "interval", hours=24)
     scheduler.start()
     yield
@@ -414,7 +435,10 @@ async def update_book_details(
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    update_dict = book_update.model_dump(exclude_unset=True)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=book_update)
+    if "content_selectors" in update_dict or "removed_chapters" in update_dict:
+        await epub_editor.apply_book_cleaning(updated_book, db)
     return updated_book
 
 
@@ -493,23 +517,23 @@ async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    await epub_editor.apply_book_cleaning(db_book, db)
+    await epub_editor.apply_book_cleaning(db_book, db, force=True)
 
     return db_book
 
 
-@app.get("/api/books/{book_id}/matched-config", response_model=Optional[schemas.CleaningConfig])
+@app.get("/api/books/{book_id}/matched-config", response_model=List[schemas.CleaningConfig])
 async def get_book_matched_config(book_id: int, db: AsyncSession = Depends(get_db)):
     """
-    Returns the CleaningConfig that matches the book's source URL, or null if none.
+    Returns all CleaningConfigs that match the book's source URL.
     """
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     if not db_book.source_url:
-        return None
-    config = await crud.get_matching_cleaning_config(db, str(db_book.source_url))
-    return config
+        return []
+    configs = await crud.get_all_matching_cleaning_configs(db, str(db_book.source_url))
+    return configs
 
 
 @app.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
@@ -586,7 +610,12 @@ async def update_cleaning_config_endpoint(
     config = await crud.get_cleaning_config(db, config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
-    return await crud.update_cleaning_config(db, config, update)
+    config = await crud.update_cleaning_config(db, config, update)
+    books = await crud.get_web_books(db)
+    for book in books:
+        if book.source_url and re.search(config.url_pattern, str(book.source_url)):
+            await epub_editor.apply_book_cleaning(book, db)
+    return config
 
 
 @app.delete("/api/cleaning-configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)

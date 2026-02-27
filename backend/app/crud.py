@@ -183,6 +183,11 @@ async def get_matching_cleaning_config(db: AsyncSession, url: str) -> Optional[m
     return None
 
 
+async def get_all_matching_cleaning_configs(db: AsyncSession, url: str) -> List[models.CleaningConfig]:
+    result = await db.execute(select(models.CleaningConfig))
+    return [cfg for cfg in result.scalars().all() if re.search(cfg.url_pattern, url)]
+
+
 async def get_cleaning_config(db: AsyncSession, config_id: int) -> Optional[models.CleaningConfig]:
     result = await db.execute(select(models.CleaningConfig).filter(models.CleaningConfig.id == config_id))
     return result.scalars().first()

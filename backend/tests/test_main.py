@@ -75,11 +75,12 @@ async def test_add_web_novel(db_session, mocker):
     # Create a dummy EPUB file with metadata. The endpoint will read from this.
     create_dummy_epub(epub_path, "Test Story", "Test Author", "Test Series")
 
-    # The endpoint discovers the new file by checking the directory before and after the call.
-    # We mock `iterdir` to simulate this.
+    # The endpoint discovers the updated file via mtime comparison.
+    # Mock time.time to return 0 so any real file's mtime qualifies as "recent".
+    mocker.patch("backend.app.main.time.time", return_value=0)
     mocker.patch(
         "pathlib.Path.iterdir",
-        side_effect=[iter([]), iter([epub_path])],  # Files before call  # Files after call
+        side_effect=[iter([epub_path])],
     )
 
     # Mock `read_epub` to return a book with the expected metadata
