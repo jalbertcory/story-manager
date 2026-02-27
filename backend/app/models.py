@@ -26,6 +26,7 @@ class Book(Base):
     current_word_count = Column(Integer, nullable=True)
     # Storing the cover as a path to a file. The file itself can be extracted from the EPUB.
     cover_path = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
