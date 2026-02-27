@@ -57,8 +57,8 @@ test("EpubEditor interactions", async ({ page }) => {
   // Click the book card to edit it
   await page.locator(".book-card").filter({ hasText: /Test Book/i }).click();
 
-  // The editor should now be visible
-  await expect(page.getByText("EPUB Editor for Test Book")).toBeVisible();
+  // The book settings panel should now be visible
+  await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();
 
   // Check if the chapter is listed
   await expect(page.getByText("chap_1.xhtml")).toBeVisible();
@@ -70,18 +70,19 @@ test("EpubEditor interactions", async ({ page }) => {
     .getByRole("checkbox")
     .uncheck();
 
-  // Add a div selector to remove
-  await page.getByPlaceholder("e.g., note, author-note").fill("p");
+  // Add a content selector to remove
+  await page.getByPlaceholder("Add CSS selector, e.g. div.note").fill("p");
+  await page.getByRole("button", { name: "Add" }).click();
 
-  // Click the save button
-  await page.getByRole("button", { name: /process book/i }).click();
+  // Click Save & Re-process
+  await page.getByRole("button", { name: /save & re-process/i }).click();
 
   // We should be back on the book list
   await expect(page.getByText("Story Manager")).toBeVisible();
 
   // Verify the word count has changed
   const bookCard = page.locator(".book-card").filter({ hasText: /Test Book/i });
-  await expect(bookCard.getByText(/Current: 0/i)).toBeVisible();
+  await expect(bookCard.getByText(/0 words/i)).toBeVisible();
 
   await page.screenshot({ path: "frontend_verification.png" });
 });
