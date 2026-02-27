@@ -16,6 +16,7 @@ describe("App", () => {
         author: "Author A",
         master_word_count: 100,
         current_word_count: 100,
+        source_type: "epub",
       },
     ];
     globalThis.fetch = vi.fn(() =>
@@ -28,7 +29,9 @@ describe("App", () => {
     renderWithClient(<App />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books");
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books?sort_by=title&sort_order=asc",
+      );
     });
 
     await waitFor(() => {
@@ -37,8 +40,8 @@ describe("App", () => {
     });
   });
 
-  it("searches by author", async () => {
-    const mockBooks = [{ id: 2, title: "Book B", author: "Author B" }];
+  it("searches by unified query", async () => {
+    const mockBooks = [{ id: 2, title: "Book B", author: "Author B", source_type: "epub" }];
     globalThis.fetch = vi.fn((url) => {
       if (url.includes("Author%20B")) {
         return Promise.resolve({
@@ -55,17 +58,20 @@ describe("App", () => {
     renderWithClient(<App />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books");
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books?sort_by=title&sort_order=asc",
+      );
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search by author"), {
-      target: { value: "Author B" },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Search by title, author, or series"),
+      { target: { value: "Author B" } },
+    );
     fireEvent.click(screen.getByText("Search"));
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/search/author/Author%20B",
+        "/api/books/search?q=Author%20B",
       );
     });
 

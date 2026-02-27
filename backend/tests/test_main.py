@@ -309,10 +309,10 @@ async def test_process_book(db_session):
     create_dummy_epub(immutable_filepath, "Process Book", "Processor")
     create_dummy_epub(current_filepath, "Process Book", "Processor")
 
-    # Update the book with chapters to remove and divs to clean
+    # Update the book with chapters to remove and content to clean
     update_payload = {
         "removed_chapters": ["chap_1.xhtml"],
-        "div_selectors": ["p"],  # This will remove the paragraph
+        "content_selectors": ["p"],  # This will remove the paragraph
     }
     response = client.put(f"/api/books/{book.id}", json=update_payload)
     assert response.status_code == 200

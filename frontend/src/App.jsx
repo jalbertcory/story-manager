@@ -2,17 +2,18 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
-import EpubEditor from "./components/EpubEditor";
+import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
+import CleaningConfigs from "./components/CleaningConfigs.jsx";
 
 const fetchBooks = async ({ queryKey }) => {
-  const [_key, { author, series }] = queryKey;
+  const [_key, { q, sortBy, sortOrder }] = queryKey;
 
-  let endpoint = "/api/books";
-  if (author) {
-    endpoint = `/api/books/search/author/${encodeURIComponent(author)}`;
-  } else if (series) {
-    endpoint = `/api/books/search/series/${encodeURIComponent(series)}`;
+  let endpoint;
+  if (q) {
+    endpoint = `/api/books/search?q=${encodeURIComponent(q)}`;
+  } else {
+    endpoint = `/api/books?sort_by=${encodeURIComponent(sortBy)}&sort_order=${encodeURIComponent(sortOrder)}`;
   }
 
   const res = await fetch(endpoint);
@@ -23,10 +24,12 @@ const fetchBooks = async ({ queryKey }) => {
 };
 
 function App() {
-  const [author, setAuthor] = useState("");
-  const [series, setSeries] = useState("");
-  const [searchParams, setSearchParams] = useState({ author: "", series: "" });
+  const [q, setQ] = useState("");
+  const [sortBy, setSortBy] = useState("title");
+  const [sortOrder, setSortOrder] = useState("asc");
+  const [searchParams, setSearchParams] = useState({ q: "", sortBy: "title", sortOrder: "asc" });
   const [editingBook, setEditingBook] = useState(null);
+  const [showConfigs, setShowConfigs] = useState(false);
 
   const {
     data: books,
@@ -39,39 +42,63 @@ function App() {
   });
 
   const handleSearch = () => {
-    setSearchParams({ author: author.trim(), series: series.trim() });
+    setSearchParams({ q: q.trim(), sortBy, sortOrder });
   };
 
   const handleClearSearch = () => {
-    setAuthor("");
-    setSeries("");
-    setSearchParams({ author: "", series: "" });
+    setQ("");
+    setSearchParams({ q: "", sortBy, sortOrder });
+  };
+
+  const handleSortByChange = (newSortBy) => {
+    setSortBy(newSortBy);
+    setSortOrder("asc");
+    setSearchParams({ q: searchParams.q, sortBy: newSortBy, sortOrder: "asc" });
+  };
+
+  const handleToggleSortOrder = () => {
+    const newOrder = sortOrder === "asc" ? "desc" : "asc";
+    setSortOrder(newOrder);
+    setSearchParams({ q: searchParams.q, sortBy, sortOrder: newOrder });
   };
 
   if (editingBook) {
     return (
-      <EpubEditor book={editingBook} onBack={() => setEditingBook(null)} />
+      <BookSettings book={editingBook} onBack={() => setEditingBook(null)} />
+    );
+  }
+
+  if (showConfigs) {
+    return (
+      <CleaningConfigs onBack={() => setShowConfigs(false)} />
     );
   }
 
   return (
     <div className="app-container">
-      <h1>Story Manager</h1>
+      <header className="app-header">
+        <h1>Story Manager</h1>
+        <button className="btn-text" onClick={() => setShowConfigs(true)}>Cleaning Configs</button>
+      </header>
       <div className="search-controls">
         <input
           type="text"
-          placeholder="Search by author"
-          value={author}
-          onChange={(e) => setAuthor(e.target.value)}
-        />
-        <input
-          type="text"
-          placeholder="Search by series"
-          value={series}
-          onChange={(e) => setSeries(e.target.value)}
+          placeholder="Search by title, author, or series"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
         />
         <button onClick={handleSearch}>Search</button>
         <button onClick={handleClearSearch}>Clear</button>
+        <select value={sortBy} onChange={(e) => handleSortByChange(e.target.value)}>
+          <option value="title">Title</option>
+          <option value="author">Author</option>
+          <option value="word_count">Word Count</option>
+          <option value="updated_at">Last Updated</option>
+        </select>
+        <button onClick={handleToggleSortOrder}>
+          {sortOrder === "asc" ? "↑" : "↓"}
+        </button>
       </div>
       <AddBook />
       {isLoading && <p>Loading...</p>}

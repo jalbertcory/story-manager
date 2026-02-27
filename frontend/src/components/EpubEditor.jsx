@@ -10,11 +10,11 @@ const fetchChapters = async ({ queryKey }) => {
   return res.json();
 };
 
-const updateBook = async ({ id, removed_chapters, div_selectors }) => {
+const updateBook = async ({ id, removed_chapters, content_selectors }) => {
   const res = await fetch(`/api/books/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ removed_chapters, div_selectors }),
+    body: JSON.stringify({ removed_chapters, content_selectors }),
   });
   if (!res.ok) {
     const error = await res.json();
@@ -35,11 +35,11 @@ const processBook = async ({ id }) => {
 function EpubEditor({ book, onBack }) {
   const queryClient = useQueryClient();
   const [removedChapters, setRemovedChapters] = useState([]);
-  const [divSelectors, setDivSelectors] = useState("");
+  const [contentSelectors, setContentSelectors] = useState("");
 
   useEffect(() => {
     setRemovedChapters(book.removed_chapters || []);
-    setDivSelectors((book.div_selectors || []).join(", "));
+    setContentSelectors((book.content_selectors || []).join(", "));
   }, [book]);
 
   const {
@@ -76,7 +76,7 @@ function EpubEditor({ book, onBack }) {
   const getChanges = () => ({
     id: book.id,
     removed_chapters: removedChapters,
-    div_selectors: divSelectors
+    content_selectors: contentSelectors
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
@@ -124,12 +124,12 @@ function EpubEditor({ book, onBack }) {
         ))}
       </ul>
 
-      <h3>Div Selectors to Remove (comma-separated)</h3>
+      <h3>Content Selectors to Remove (comma-separated)</h3>
       <input
         type="text"
-        placeholder="e.g., note, author-note"
-        value={divSelectors}
-        onChange={(e) => setDivSelectors(e.target.value)}
+        placeholder="e.g., div.note, span.author-note"
+        value={contentSelectors}
+        onChange={(e) => setContentSelectors(e.target.value)}
         style={{ width: "100%", marginBottom: "10px" }}
       />
 
