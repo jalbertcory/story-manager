@@ -77,7 +77,7 @@ function BookSettings({ book, onBack }) {
     queryFn: fetchChapters,
   });
 
-  const { data: matchedConfig } = useQuery({
+  const { data: matchedConfigs = [] } = useQuery({
     queryKey: ["matched-config", book.id],
     queryFn: fetchMatchedConfig,
   });
@@ -210,20 +210,20 @@ function BookSettings({ book, onBack }) {
         </label>
       </section>
 
-      {matchedConfig && (
-        <section className="settings-section">
+      {matchedConfigs.map((cfg) => (
+        <section key={cfg.id} className="settings-section">
           <h3>
             Inherited Cleaning Rules{" "}
-            <span className="badge-config">{matchedConfig.name}</span>
+            <span className="badge-config">{cfg.name}</span>
           </h3>
           <p className="hint">
             These site-wide rules apply automatically and cannot be edited here.
           </p>
-          {matchedConfig.chapter_selectors?.length > 0 && (
+          {cfg.chapter_selectors?.length > 0 && (
             <div>
               <strong>Chapter selectors:</strong>
               <div className="pills readonly">
-                {matchedConfig.chapter_selectors.map((s) => (
+                {cfg.chapter_selectors.map((s) => (
                   <span key={s} className="pill">
                     {s}
                   </span>
@@ -231,11 +231,11 @@ function BookSettings({ book, onBack }) {
               </div>
             </div>
           )}
-          {matchedConfig.content_selectors?.length > 0 && (
+          {cfg.content_selectors?.length > 0 && (
             <div>
               <strong>Content selectors:</strong>
               <div className="pills readonly">
-                {matchedConfig.content_selectors.map((s) => (
+                {cfg.content_selectors.map((s) => (
                   <span key={s} className="pill">
                     {s}
                   </span>
@@ -244,7 +244,7 @@ function BookSettings({ book, onBack }) {
             </div>
           )}
         </section>
-      )}
+      ))}
 
       <section className="settings-section">
         <h3>Per-Book Content Selectors</h3>

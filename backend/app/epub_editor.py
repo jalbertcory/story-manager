@@ -76,27 +76,32 @@ def process_epub(
     epub.write_epub(current_path, new_book, {})
 
 
-async def apply_book_cleaning(book, db) -> None:
-    """Apply all cleaning rules (site-wide config + per-book settings) to a book.
+async def apply_book_cleaning(book, db, force: bool = False) -> None:
+    """Apply all cleaning rules (site-wide configs + per-book settings) to a book.
 
-    Looks up the matching CleaningConfig for the book's source URL, merges its
+    Looks up all matching CleaningConfigs for the book's source URL, merges their
     selectors with the book's own settings, then rewrites current_path from
     immutable_path and updates current_word_count in the DB.
+
+    If force=True, always rewrites even when no selectors are set (resets to immutable).
     """
     from . import crud
 
-    config = None
+    configs = []
     if book.source_url:
-        config = await crud.get_matching_cleaning_config(db, str(book.source_url))
+        configs = await crud.get_all_matching_cleaning_configs(db, str(book.source_url))
 
-    # Merge selectors from site-wide config and per-book settings
-    chapter_selectors = list(config.chapter_selectors or []) if config else []
-    content_selectors = list(config.content_selectors or []) if config else []
+    # Merge selectors from all matching configs and per-book settings
+    chapter_selectors: list[str] = []
+    content_selectors: list[str] = []
+    for cfg in configs:
+        chapter_selectors += list(cfg.chapter_selectors or [])
+        content_selectors += list(cfg.content_selectors or [])
     content_selectors += list(book.content_selectors or [])
     removed_chapters = list(book.removed_chapters or [])
 
     # Nothing to do — skip the (potentially expensive) epub rewrite
-    if not chapter_selectors and not content_selectors and not removed_chapters:
+    if not force and not chapter_selectors and not content_selectors and not removed_chapters:
         return
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
