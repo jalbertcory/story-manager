@@ -286,6 +286,9 @@ function BookSettings({ book, onBack }) {
             {refreshMutation.isPending ? "Refreshing..." : "Refresh from Source"}
           </button>
         )}
+        <a href={`/api/books/${book.id}/download`} download className="btn">
+          Download EPUB
+        </a>
         <button className="btn-danger" onClick={handleDelete} disabled={isBusy}>
           Delete Book
         </button>

@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
+import SchedulerStatus from "./components/SchedulerStatus.jsx";
 
 const fetchBooks = async ({ queryKey }) => {
   const [_key, { q, sortBy, sortOrder }] = queryKey;
@@ -24,12 +25,20 @@ const fetchBooks = async ({ queryKey }) => {
 };
 
 function App() {
+  const queryClient = useQueryClient();
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState("asc");
   const [searchParams, setSearchParams] = useState({ q: "", sortBy: "title", sortOrder: "asc" });
   const [editingBook, setEditingBook] = useState(null);
   const [showConfigs, setShowConfigs] = useState(false);
+  const [showScheduler, setShowScheduler] = useState(false);
+
+  const reprocessMutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+  });
 
   const {
     data: books,
@@ -74,11 +83,25 @@ function App() {
     );
   }
 
+  if (showScheduler) {
+    return (
+      <SchedulerStatus onBack={() => setShowScheduler(false)} />
+    );
+  }
+
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Story Manager</h1>
         <button className="btn-text" onClick={() => setShowConfigs(true)}>Cleaning Configs</button>
+        <button className="btn-text" onClick={() => setShowScheduler(true)}>Scheduler</button>
+        <button
+          className="btn-text"
+          onClick={() => reprocessMutation.mutate()}
+          disabled={reprocessMutation.isPending}
+        >
+          {reprocessMutation.isPending ? "Reprocessing..." : "Reprocess All"}
+        </button>
       </header>
       <div className="search-controls">
         <input
