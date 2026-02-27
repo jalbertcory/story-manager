@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -95,10 +95,7 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"FanFicFare failed to download story. Error code: {result}.",
             )
-        changed_epubs = [
-            f for f in library_path.iterdir()
-            if f.suffix == ".epub" and f.stat().st_mtime >= download_start
-        ]
+        changed_epubs = [f for f in library_path.iterdir() if f.suffix == ".epub" and f.stat().st_mtime >= download_start]
 
     if not changed_epubs:
         raise HTTPException(
