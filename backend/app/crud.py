@@ -1,6 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 import re
+from sqlalchemy import asc, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
@@ -22,11 +23,46 @@ async def get_web_books(db: AsyncSession) -> List[models.Book]:
     return result.scalars().all()
 
 
-async def get_books(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[models.Book]:
+async def get_books(
+    db: AsyncSession,
+    skip: int = 0,
+    limit: int = 100,
+    sort_by: str = "title",
+    sort_order: str = "asc",
+) -> List[models.Book]:
     """
     Retrieve a list of books from the database.
     """
-    result = await db.execute(select(models.Book).offset(skip).limit(limit))
+    sort_columns = {
+        "title": models.Book.title,
+        "author": models.Book.author,
+        "series": models.Book.series,
+        "word_count": models.Book.current_word_count,
+        "updated_at": models.Book.updated_at,
+    }
+    column = sort_columns.get(sort_by, models.Book.title)
+    order = asc(column) if sort_order == "asc" else desc(column)
+    result = await db.execute(select(models.Book).order_by(order).offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+async def search_books(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
+    """
+    Search books by title, author, or series (case-insensitive).
+    """
+    pattern = f"%{q}%"
+    result = await db.execute(
+        select(models.Book)
+        .filter(
+            or_(
+                models.Book.title.ilike(pattern),
+                models.Book.author.ilike(pattern),
+                models.Book.series.ilike(pattern),
+            )
+        )
+        .offset(skip)
+        .limit(limit)
+    )
     return result.scalars().all()
 
 

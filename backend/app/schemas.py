@@ -17,7 +17,7 @@ class BookBase(BaseModel):
     master_word_count: Optional[int] = None
     current_word_count: Optional[int] = None
     removed_chapters: Optional[List[str]] = []
-    div_selectors: Optional[List[str]] = []
+    content_selectors: Optional[List[str]] = []
 
     class Config:
         from_attributes = True
@@ -34,7 +34,7 @@ class BookUpdate(BaseModel):
     author: Optional[str] = None
     series: Optional[str] = None
     removed_chapters: Optional[List[str]] = None
-    div_selectors: Optional[List[str]] = None
+    content_selectors: Optional[List[str]] = None
 
 
 # Pydantic model for reading a book (API response).

@@ -1,10 +1,11 @@
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -15,7 +16,6 @@ from lxml import etree
 from pydantic import BaseModel
 
 from . import crud, models, schemas, epub_editor
-from .cleaning import clean_epub
 from .database import engine, get_db, SessionLocal
 from fanficfare.cli import main as fff_main
 
@@ -125,8 +125,6 @@ async def create_tables() -> None:
         await conn.run_sync(models.Base.metadata.create_all)
 
 
-app = FastAPI(title="Story Manager")
-
 scheduler = AsyncIOScheduler()
 
 
@@ -150,7 +148,7 @@ async def update_web_novels():
             logger.info(f"Checking {book.title} for updates.")
             try:
                 library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-                epub_path = library_path.parent / book.epub_path
+                epub_path = library_path.parent / book.immutable_path
 
                 old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(epub_path)
 
@@ -167,6 +165,9 @@ async def update_web_novels():
                         new_chapter_count=new_chapter_count,
                         words_added=new_word_count - old_word_count,
                     )
+                    book.master_word_count = new_word_count
+                    book.current_word_count = new_word_count
+                    await db.commit()
                 else:
                     logger.info(f"No new chapters for {book.title}.")
                     log_entry = schemas.BookLogCreate(
@@ -177,6 +178,7 @@ async def update_web_novels():
                         words_added=0,
                     )
                 await crud.create_book_log(db, log_entry)
+                await epub_editor.apply_book_cleaning(book, db)
                 await crud.increment_update_task(db, task)
             except Exception as e:
                 logger.error(f"Failed to update {book.title}: {e}")
@@ -185,17 +187,17 @@ async def update_web_novels():
         await db.close()
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
-    scheduler.add_job(update_web_novels, "interval", days=7)
+    scheduler.add_job(update_web_novels, "interval", hours=24)
     scheduler.start()
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
+    yield
     scheduler.shutdown()
+
+
+app = FastAPI(title="Story Manager", lifespan=lifespan)
 
 
 class WebNovelRequest(BaseModel):
@@ -277,6 +279,8 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     )
     await crud.create_book_log(db, log_entry)
 
+    await epub_editor.apply_book_cleaning(db_book, db)
+
     return db_book
 
 
@@ -344,20 +348,60 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
     )
     await crud.create_book_log(db, log_entry)
 
-    config = await crud.get_matching_cleaning_config(db, source_url_str)
-    if config:
-        clean_epub(current_path, config)
+    await epub_editor.apply_book_cleaning(db_book, db)
 
     return db_book
 
 
 @app.get("/api/books", response_model=List[schemas.Book])
-async def get_all_books(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)) -> List[schemas.Book]:
+async def get_all_books(
+    skip: int = 0,
+    limit: int = 100,
+    sort_by: str = "title",
+    sort_order: str = "asc",
+    db: AsyncSession = Depends(get_db),
+) -> List[schemas.Book]:
     """
     Retrieve a list of all books in the library.
     """
-    books = await crud.get_books(db, skip=skip, limit=limit)
+    books = await crud.get_books(db, skip=skip, limit=limit, sort_by=sort_by, sort_order=sort_order)
     return [schemas.Book.from_orm(book) for book in books]
+
+
+@app.get("/api/books/search", response_model=List[schemas.Book])
+async def search_books_unified(
+    q: str,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+) -> List[schemas.Book]:
+    """
+    Search books by title, author, or series.
+    """
+    books = await crud.search_books(db, q=q, skip=skip, limit=limit)
+    return books
+
+
+@app.get("/api/books/search/author/{author}", response_model=List[schemas.Book])
+async def search_books_by_author(
+    author: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+) -> List[models.Book]:
+    """
+    Search for books by author.
+    """
+    books = await crud.get_books_by_author(db, author=author, skip=skip, limit=limit)
+    return books
+
+
+@app.get("/api/books/search/series/{series}", response_model=List[schemas.Book])
+async def search_books_by_series(
+    series: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+) -> List[models.Book]:
+    """
+    Search for books by series.
+    """
+    books = await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
+    return books
 
 
 @app.put("/api/books/{book_id}", response_model=schemas.Book)
@@ -415,41 +459,102 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     update_data = schemas.BookUpdate(**metadata)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
 
-    # Reset processing state
+    # Reset per-source processing state; preserve per-book content_selectors
     updated_book.removed_chapters = []
-    updated_book.div_selectors = []
     updated_book.master_word_count = new_word_count
     updated_book.current_word_count = new_word_count
     await db.commit()
     await db.refresh(updated_book)
 
-    config = await crud.get_matching_cleaning_config(db, str(db_book.source_url))
-    if config:
-        clean_epub(current_path, config)
+    await epub_editor.apply_book_cleaning(updated_book, db)
 
     return updated_book
 
 
-@app.get("/api/books/search/author/{author}", response_model=List[schemas.Book])
-async def search_books_by_author(
-    author: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
-) -> List[models.Book]:
-    """
-    Search for books by author.
-    """
-    books = await crud.get_books_by_author(db, author=author, skip=skip, limit=limit)
-    return books
+@app.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
+async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    # Always get chapters from the original immutable epub
+    epub_path = library_path.parent / db_book.immutable_path
+
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    return epub_editor.get_chapters(str(epub_path))
 
 
-@app.get("/api/books/search/series/{series}", response_model=List[schemas.Book])
-async def search_books_by_series(
-    series: str, skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
-) -> List[models.Book]:
+@app.post("/api/books/{book_id}/process", response_model=schemas.Book)
+async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    await epub_editor.apply_book_cleaning(db_book, db)
+
+    return db_book
+
+
+@app.get("/api/books/{book_id}/matched-config", response_model=Optional[schemas.CleaningConfig])
+async def get_book_matched_config(book_id: int, db: AsyncSession = Depends(get_db)):
     """
-    Search for books by series.
+    Returns the CleaningConfig that matches the book's source URL, or null if none.
     """
-    books = await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
-    return books
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.source_url:
+        return None
+    config = await crud.get_matching_cleaning_config(db, str(db_book.source_url))
+    return config
+
+
+@app.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
+    """
+    Deletes a book by its title.
+    """
+    book = await crud.get_book_by_title(db, title=title)
+    if book is None:
+        # Return 204 even if the book doesn't exist to make the endpoint idempotent
+        return None
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    immutable_path = library_path.parent / book.immutable_path
+    current_path = library_path.parent / book.current_path
+
+    if immutable_path.exists():
+        immutable_path.unlink()
+    if current_path.exists():
+        current_path.unlink()
+
+    await crud.delete_book(db, book=book)
+    return None
+
+
+@app.delete("/api/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book_by_id(book_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Deletes a book by its ID.
+    """
+    book = await crud.get_book(db, book_id=book_id)
+    if book is None:
+        return None
+
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    immutable_path = library_path.parent / book.immutable_path
+    current_path = library_path.parent / book.current_path
+
+    if immutable_path.exists():
+        immutable_path.unlink()
+    if current_path.exists():
+        current_path.unlink()
+
+    await crud.delete_book(db, book=book)
+    return None
 
 
 @app.post("/api/cleaning-configs", status_code=status.HTTP_201_CREATED, response_model=schemas.CleaningConfig)
@@ -491,47 +596,6 @@ async def delete_cleaning_config_endpoint(config_id: int, db: AsyncSession = Dep
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     await crud.delete_cleaning_config(db, config)
     return None
-
-
-@app.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
-async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
-    db_book = await crud.get_book(db, book_id=book_id)
-    if db_book is None:
-        raise HTTPException(status_code=404, detail="Book not found")
-
-    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    # Always get chapters from the original immutable epub
-    epub_path = library_path.parent / db_book.immutable_path
-
-    if not epub_path.exists():
-        raise HTTPException(status_code=404, detail="EPUB file not found")
-
-    return epub_editor.get_chapters(str(epub_path))
-
-
-@app.post("/api/books/{book_id}/process", response_model=schemas.Book)
-async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)):
-    db_book = await crud.get_book(db, book_id=book_id)
-    if db_book is None:
-        raise HTTPException(status_code=404, detail="Book not found")
-
-    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    immutable_path = library_path.parent / db_book.immutable_path
-    current_path = library_path.parent / db_book.current_path
-
-    epub_editor.process_epub(
-        str(immutable_path),
-        str(current_path),
-        db_book.removed_chapters,
-        db_book.div_selectors,
-    )
-
-    new_word_count = epub_editor.get_word_count(str(current_path))
-    db_book.current_word_count = new_word_count
-    await db.commit()
-    await db.refresh(db_book)
-
-    return db_book
 
 
 @app.get("/")
@@ -598,26 +662,3 @@ def _get_and_save_epub_cover(epub_path: Path, book_id: int) -> Path | None:
     except Exception as e:
         logger.error(f"Error extracting cover from {epub_path}: {e}")
         return None
-
-
-@app.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
-    """
-    Deletes a book by its title.
-    """
-    book = await crud.get_book_by_title(db, title=title)
-    if book is None:
-        # Return 204 even if the book doesn't exist to make the endpoint idempotent
-        return None
-
-    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    immutable_path = library_path.parent / book.immutable_path
-    current_path = library_path.parent / book.current_path
-
-    if immutable_path.exists():
-        immutable_path.unlink()
-    if current_path.exists():
-        current_path.unlink()
-
-    await crud.delete_book(db, book=book)
-    return None

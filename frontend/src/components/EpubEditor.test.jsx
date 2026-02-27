@@ -8,7 +8,7 @@ describe("EpubEditor", () => {
     id: 1,
     title: "Test Book",
     removed_chapters: [],
-    div_selectors: [],
+    content_selectors: [],
   };
 
   const mockChapters = [
