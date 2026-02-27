@@ -68,13 +68,9 @@ def process_epub(
             new_book.add_item(item)
 
     # Rebuild spine and TOC
-    new_book.spine = [
-        item for item in book.spine
-        if book.get_item_with_id(item[0]).get_name() not in chapters_to_remove
-    ]
+    new_book.spine = [item for item in book.spine if book.get_item_with_id(item[0]).get_name() not in chapters_to_remove]
     new_book.toc = [
-        link for link in book.toc
-        if isinstance(link, epub.Link) and link.href.split("#")[0] not in chapters_to_remove
+        link for link in book.toc if isinstance(link, epub.Link) and link.href.split("#")[0] not in chapters_to_remove
     ]
 
     epub.write_epub(current_path, new_book, {})
