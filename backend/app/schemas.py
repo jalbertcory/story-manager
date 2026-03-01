@@ -88,3 +88,15 @@ class CleaningConfigUpdate(BaseModel):
     url_pattern: Optional[str] = None
     chapter_selectors: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
+
+
+class UpdateTask(BaseModel):
+    id: int
+    total_books: int
+    completed_books: int
+    status: str
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

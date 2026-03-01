@@ -2,12 +2,12 @@ import asyncio
 import re
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -425,6 +425,25 @@ async def search_books_by_series(
     return books
 
 
+@app.post("/api/books/reprocess-all", response_model=Dict[str, int])
+async def reprocess_all_books(db: AsyncSession = Depends(get_db)):
+    books = await crud.get_books(db, limit=10000)
+    for book in books:
+        await epub_editor.apply_book_cleaning(book, db, force=True)
+    return {"reprocessed": len(books)}
+
+
+@app.get("/api/scheduler/status", response_model=Optional[schemas.UpdateTask])
+async def get_scheduler_status(db: AsyncSession = Depends(get_db)):
+    return await crud.get_latest_update_task(db)
+
+
+@app.post("/api/scheduler/trigger", status_code=202)
+async def trigger_scheduler(background_tasks: BackgroundTasks):
+    background_tasks.add_task(update_web_novels)
+    return {"message": "Update triggered"}
+
+
 @app.put("/api/books/{book_id}", response_model=schemas.Book)
 async def update_book_details(
     book_id: int, book_update: schemas.BookUpdate, db: AsyncSession = Depends(get_db)
@@ -509,6 +528,23 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="EPUB file not found")
 
     return epub_editor.get_chapters(str(epub_path))
+
+
+@app.get("/api/books/{book_id}/download")
+async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    current_path = library_path.parent / db_book.current_path
+    if not current_path.is_file():
+        raise HTTPException(status_code=404, detail="EPUB file not found")
+    filename = Path(db_book.current_path).name
+    return FileResponse(
+        current_path,
+        media_type="application/epub+zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/books/{book_id}/process", response_model=schemas.Book)

@@ -127,6 +127,11 @@ async def get_latest_book_log(db: AsyncSession, book_id: int) -> Optional[models
     return result.scalars().first()
 
 
+async def get_latest_update_task(db: AsyncSession) -> Optional[models.UpdateTask]:
+    result = await db.execute(select(models.UpdateTask).order_by(models.UpdateTask.started_at.desc()).limit(1))
+    return result.scalars().first()
+
+
 async def get_active_update_task(db: AsyncSession) -> Optional[models.UpdateTask]:
     result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == "running"))
     return result.scalars().first()
