@@ -257,9 +257,7 @@ async def get_update_tasks(db: AsyncSession, limit: int = 20, offset: int = 0) -
     return result.scalars().all()
 
 
-async def get_book_logs_for_task(
-    db: AsyncSession, task_id: int
-) -> tuple[Optional[models.UpdateTask], Optional[list]]:
+async def get_book_logs_for_task(db: AsyncSession, task_id: int) -> tuple[Optional[models.UpdateTask], Optional[list]]:
     task_result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.id == task_id))
     task = task_result.scalars().first()
     if task is None:
