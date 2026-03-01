@@ -578,9 +578,7 @@ async def preview_cleaning(book_id: int, req: PreviewCleaningRequest, db: AsyncS
     all_content_selectors = config_content_selectors + req.content_selectors
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     immutable_path = library_path.parent / db_book.immutable_path
-    return epub_editor.preview_epub(
-        str(immutable_path), req.removed_chapters, all_content_selectors, chapter_selectors
-    )
+    return epub_editor.preview_epub(str(immutable_path), req.removed_chapters, all_content_selectors, chapter_selectors)
 
 
 @app.get("/api/books/{book_id}/matched-config", response_model=List[schemas.CleaningConfig])
