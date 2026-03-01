@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 function BookCard({ book, onEdit }) {
   const handleCoverError = (e) => {
@@ -57,7 +57,22 @@ function SeriesGroup({ series, books, onEdit }) {
   );
 }
 
-function BookList({ books = [], onEdit }) {
+function BookList({ books = [], onEdit, fetchNextPage, hasNextPage, isFetchingNextPage }) {
+  const sentinelRef = useRef(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    if (sentinelRef.current) observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   if (!books.length) {
     return <p>No books found.</p>;
   }
@@ -96,6 +111,8 @@ function BookList({ books = [], onEdit }) {
           ))}
         </div>
       )}
+      <div ref={sentinelRef} style={{ height: 1 }} />
+      {isFetchingNextPage && <p className="loading-more">Loading more…</p>}
     </div>
   );
 }
