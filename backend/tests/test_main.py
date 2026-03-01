@@ -483,6 +483,268 @@ async def test_refresh_book_no_source_url(db_session):
 
 
 @pytest.mark.asyncio
+async def test_unified_search(db_session):
+    """
+    Test the unified search endpoint (GET /api/books/search?q=).
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Dragon's Lair", author="Alice Smith", series="Dragon Saga", immutable_path="pi1", current_path="pc1", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Moonlight", author="Bob Dragon", series="Night Tales", immutable_path="pi2", current_path="pc2", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="The Summit", author="Carol Jones", series=None, immutable_path="pi3", current_path="pc3", source_type=models.SourceType.epub))
+
+    # Matches title
+    response = client.get("/api/books/search?q=summit")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "The Summit"
+
+    # Matches author
+    response = client.get("/api/books/search?q=dragon")
+    assert response.status_code == 200
+    data = response.json()
+    titles = {b["title"] for b in data}
+    assert "Dragon's Lair" in titles  # title match
+    assert "Moonlight" in titles  # author match
+
+    # Matches series
+    response = client.get("/api/books/search?q=night tales")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Moonlight"
+
+    # No match
+    response = client.get("/api/books/search?q=zzznomatch")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_sort_books(db_session):
+    """
+    Test that GET /api/books returns books sorted correctly.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Zebra", author="Author Z", immutable_path="pi1", current_path="pc1", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Apple", author="Author A", immutable_path="pi2", current_path="pc2", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Mango", author="Author M", immutable_path="pi3", current_path="pc3", source_type=models.SourceType.epub))
+
+    response = client.get("/api/books?sort_by=title&sort_order=asc")
+    assert response.status_code == 200
+    titles = [b["title"] for b in response.json()]
+    assert titles == ["Apple", "Mango", "Zebra"]
+
+    response = client.get("/api/books?sort_by=title&sort_order=desc")
+    assert response.status_code == 200
+    titles = [b["title"] for b in response.json()]
+    assert titles == ["Zebra", "Mango", "Apple"]
+
+    response = client.get("/api/books?sort_by=author&sort_order=asc")
+    assert response.status_code == 200
+    authors = [b["author"] for b in response.json()]
+    assert authors == ["Author A", "Author M", "Author Z"]
+
+
+@pytest.mark.asyncio
+async def test_delete_book_by_id(db_session):
+    """
+    Test deleting a book by ID (DELETE /api/books/{book_id}).
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(title="To Delete", author="Author", immutable_path="pi_del", current_path="pc_del", source_type=models.SourceType.epub))
+
+    response = client.delete(f"/api/books/{book.id}")
+    assert response.status_code == 204
+
+    # Verify it's gone
+    response = client.get("/api/books")
+    assert response.json() == []
+
+    # Deleting again is idempotent (returns 204)
+    response = client.delete(f"/api/books/{book.id}")
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_book_by_title(db_session):
+    """
+    Test deleting a book by title (DELETE /api/books/by-title/{title}).
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Gone With Wind", author="Author", immutable_path="pi_del2", current_path="pc_del2", source_type=models.SourceType.epub))
+
+    response = client.delete("/api/books/by-title/Gone With Wind")
+    assert response.status_code == 204
+
+    response = client.get("/api/books")
+    assert response.json() == []
+
+    # Deleting non-existent title is idempotent
+    response = client.delete("/api/books/by-title/Nonexistent")
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_matched_config(db_session):
+    """
+    Test GET /api/books/{book_id}/matched-config returns matching configs.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(
+            title="Web Novel",
+            author="Author",
+            source_url="https://royalroad.com/fiction/123",
+            immutable_path="pi_web",
+            current_path="pc_web",
+            source_type=models.SourceType.web,
+        ))
+        book_no_url = await crud.create_book(session, schemas.BookCreate(
+            title="Local Book",
+            author="Author",
+            immutable_path="pi_local",
+            current_path="pc_local",
+            source_type=models.SourceType.epub,
+        ))
+
+    # Create a cleaning config that matches the URL
+    client.post("/api/cleaning-configs", json={"name": "RoyalRoad", "url_pattern": "royalroad.com", "chapter_selectors": [], "content_selectors": ["div.note"]})
+
+    # Book with matching URL returns the config
+    response = client.get(f"/api/books/{book.id}/matched-config")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "RoyalRoad"
+
+    # Book without source URL returns empty list
+    response = client.get(f"/api/books/{book_no_url.id}/matched-config")
+    assert response.status_code == 200
+    assert response.json() == []
+
+    # Non-existent book returns 404
+    response = client.get("/api/books/9999/matched-config")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_book_notes(db_session):
+    """
+    Test updating a book's notes field via PUT /api/books/{book_id}.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(title="Noted Book", author="Author", immutable_path="pi_notes", current_path="pc_notes", source_type=models.SourceType.epub))
+
+    response = client.put(f"/api/books/{book.id}", json={"notes": "Great read, revisit chapter 5."})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["notes"] == "Great read, revisit chapter 5."
+    assert data["title"] == "Noted Book"  # unchanged
+
+    # Clear notes
+    response = client.put(f"/api/books/{book.id}", json={"notes": ""})
+    assert response.status_code == 200
+    assert response.json()["notes"] == ""
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_empty(db_session):
+    """
+    Test GET /api/scheduler/status returns null when no tasks exist.
+    """
+    response = client.get("/api/scheduler/status")
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+@pytest.mark.asyncio
+async def test_reprocess_all(db_session):
+    """
+    Test POST /api/books/reprocess-all returns count of processed books.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(session, schemas.BookCreate(title="Book A", author="Author", immutable_path="rpi1", current_path="rpc1", source_type=models.SourceType.epub))
+        await crud.create_book(session, schemas.BookCreate(title="Book B", author="Author", immutable_path="rpi2", current_path="rpc2", source_type=models.SourceType.epub))
+
+    response = client.post("/api/books/reprocess-all")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reprocessed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_download_book(db_session):
+    """
+    Test GET /api/books/{book_id}/download returns the EPUB file.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    epub_filename = "Download Test Book.epub"
+    epub_filepath = library_path / epub_filename
+    immutable_filepath = library_path / f"immutable_{epub_filename}"
+
+    create_dummy_epub(epub_filepath, "Download Test Book", "Downloader")
+    create_dummy_epub(immutable_filepath, "Download Test Book", "Downloader")
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(
+            title="Download Test Book",
+            author="Downloader",
+            immutable_path=str(Path("library") / f"immutable_{epub_filename}"),
+            current_path=str(Path("library") / epub_filename),
+            source_type=models.SourceType.epub,
+        ))
+
+    response = client.get(f"/api/books/{book.id}/download")
+
+    epub_filepath.unlink()
+    immutable_filepath.unlink()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/epub+zip"
+    assert epub_filename in response.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_preview_cleaning(db_session):
+    """
+    Test POST /api/books/{book_id}/preview-cleaning returns word count preview.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    epub_filename = "immutable_preview.epub"
+    epub_filepath = library_path / epub_filename
+    create_dummy_epub(epub_filepath, "Preview Book", "Author")
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(session, schemas.BookCreate(
+            title="Preview Book",
+            author="Author",
+            immutable_path=str(Path("library") / epub_filename),
+            current_path=str(Path("library") / epub_filename),
+            source_type=models.SourceType.epub,
+        ))
+
+    # Preview with no selectors — should return the unmodified word count
+    response = client.post(f"/api/books/{book.id}/preview-cleaning", json={"content_selectors": [], "removed_chapters": []})
+
+    epub_filepath.unlink()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "estimated_word_count" in data
+
+    # Preview with a selector that removes content
+    library_path.mkdir(exist_ok=True)
+    create_dummy_epub(epub_filepath, "Preview Book", "Author")
+    response_stripped = client.post(f"/api/books/{book.id}/preview-cleaning", json={"content_selectors": ["p"], "removed_chapters": []})
+    epub_filepath.unlink()
+
+    assert response_stripped.status_code == 200
+    assert response_stripped.json()["estimated_word_count"] < data["estimated_word_count"]
+
+
+@pytest.mark.asyncio
 async def test_search_books_by_series(db_session):
     """
     Test searching for books by series.
