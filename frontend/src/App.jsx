@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
@@ -7,22 +7,7 @@ import AddBook from "./components/AddBook.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 
-const fetchBooks = async ({ queryKey }) => {
-  const [_key, { q, sortBy, sortOrder }] = queryKey;
-
-  let endpoint;
-  if (q) {
-    endpoint = `/api/books/search?q=${encodeURIComponent(q)}`;
-  } else {
-    endpoint = `/api/books?sort_by=${encodeURIComponent(sortBy)}&sort_order=${encodeURIComponent(sortOrder)}`;
-  }
-
-  const res = await fetch(endpoint);
-  if (!res.ok) {
-    throw new Error("Failed to fetch books");
-  }
-  return res.json();
-};
+const PAGE_SIZE = 20;
 
 function App() {
   const queryClient = useQueryClient();
@@ -41,14 +26,29 @@ function App() {
   });
 
   const {
-    data: books,
+    data,
     isLoading,
     error,
-  } = useQuery({
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["books", searchParams],
-    queryFn: fetchBooks,
-    initialData: [],
+    queryFn: async ({ pageParam = 0 }) => {
+      const { q: sq, sortBy: sb, sortOrder: so } = searchParams;
+      const url = sq
+        ? `/api/books/search?q=${encodeURIComponent(sq)}&skip=${pageParam}&limit=${PAGE_SIZE}`
+        : `/api/books?sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}&skip=${pageParam}&limit=${PAGE_SIZE}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch books");
+      return res.json();
+    },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === PAGE_SIZE ? allPages.flat().length : undefined,
+    initialPageParam: 0,
   });
+
+  const books = data?.pages.flat() ?? [];
 
   const handleSearch = () => {
     setSearchParams({ q: q.trim(), sortBy, sortOrder });
@@ -126,7 +126,13 @@ function App() {
       <AddBook />
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
-      <BookList books={books} onEdit={setEditingBook} />
+      <BookList
+        books={books}
+        onEdit={setEditingBook}
+        fetchNextPage={fetchNextPage}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+      />
     </div>
   );
 }

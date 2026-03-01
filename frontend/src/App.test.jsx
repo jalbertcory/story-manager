@@ -30,7 +30,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books?sort_by=title&sort_order=asc",
+        "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20",
       );
     });
 
@@ -59,7 +59,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books?sort_by=title&sort_order=asc",
+        "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20",
       );
     });
 
@@ -71,7 +71,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/search?q=Author%20B",
+        "/api/books/search?q=Author%20B&skip=0&limit=20",
       );
     });
 

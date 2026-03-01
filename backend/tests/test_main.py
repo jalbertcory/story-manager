@@ -533,3 +533,165 @@ async def test_search_books_by_series(db_session):
     data = response.json()
     assert len(data) == 1
     assert data[0]["title"] == "Book 2"
+
+
+@pytest.mark.asyncio
+async def test_opds_root_feed(db_session):
+    """
+    Test that GET /opds returns a valid Atom navigation feed.
+    """
+    response = client.get("/opds")
+    assert response.status_code == 200
+    assert "application/atom+xml" in response.headers["content-type"]
+
+    import xml.etree.ElementTree as ET
+
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    root = ET.fromstring(response.content)
+    assert root.tag == f"{ATOM}feed"
+    assert root.findtext(f"{ATOM}title") == "Story Manager Library"
+    # Should have a subsection entry pointing to /opds/catalog
+    entries = root.findall(f"{ATOM}entry")
+    assert len(entries) == 1
+    assert entries[0].findtext(f"{ATOM}title") == "All Books"
+
+
+@pytest.mark.asyncio
+async def test_opds_catalog_feed(db_session):
+    """
+    Test that GET /opds/catalog returns an acquisition feed with book entries.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Catalog Book",
+                author="Cat Author",
+                immutable_path="ci",
+                current_path="cc",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get("/opds/catalog")
+    assert response.status_code == 200
+    assert "application/atom+xml" in response.headers["content-type"]
+
+    import xml.etree.ElementTree as ET
+
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    root = ET.fromstring(response.content)
+    entries = root.findall(f"{ATOM}entry")
+    assert len(entries) == 1
+    assert entries[0].findtext(f"{ATOM}title") == "Catalog Book"
+
+    # Acquisition link present
+    links = entries[0].findall(f"{ATOM}link")
+    acq_links = [l for l in links if l.get("rel") == "http://opds-spec.org/acquisition"]
+    assert len(acq_links) == 1
+    assert "epub+zip" in acq_links[0].get("type", "")
+
+
+@pytest.mark.asyncio
+async def test_opds_search_feed(db_session):
+    """
+    Test that GET /opds/search?q=... returns matching book entries.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Searchable Title",
+                author="Search Author",
+                immutable_path="si",
+                current_path="sc",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Other Book",
+                author="Other Author",
+                immutable_path="oi",
+                current_path="oc",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get("/opds/search?q=Searchable")
+    assert response.status_code == 200
+    assert "application/atom+xml" in response.headers["content-type"]
+
+    import xml.etree.ElementTree as ET
+
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    root = ET.fromstring(response.content)
+    entries = root.findall(f"{ATOM}entry")
+    assert len(entries) == 1
+    assert entries[0].findtext(f"{ATOM}title") == "Searchable Title"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_epub_upload(db_session):
+    """
+    Test that uploading an EPUB with the same title and author as an existing book returns 409.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    epub_filename = "Dup Book.epub"
+    epub_filepath = library_path / epub_filename
+    immutable_filepath = library_path / f"immutable_{epub_filename}"
+
+    create_dummy_epub(epub_filepath, "Dup Book", "Dup Author")
+
+    # First upload — should succeed
+    with open(epub_filepath, "rb") as f:
+        response = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+    assert response.status_code == 201
+
+    # Recreate the file for the second upload (first upload consumed the stream)
+    create_dummy_epub(epub_filepath, "Dup Book", "Dup Author")
+
+    # Second upload — same title + author → 409
+    with open(epub_filepath, "rb") as f:
+        response = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"]
+
+    # Clean up
+    for p in [epub_filepath, immutable_filepath]:
+        if p.exists():
+            p.unlink()
+
+
+@pytest.mark.asyncio
+async def test_books_count(db_session):
+    """
+    Test that GET /api/books/count returns the correct total.
+    """
+    response = client.get("/api/books/count")
+    assert response.status_code == 200
+    assert response.json() == {"total": 0}
+
+    async with AsyncTestingSessionLocal() as session:
+        for i in range(3):
+            await crud.create_book(
+                session,
+                schemas.BookCreate(
+                    title=f"Count Book {i}",
+                    author="Counter",
+                    immutable_path=f"cbi{i}",
+                    current_path=f"cbc{i}",
+                    source_type=models.SourceType.epub,
+                ),
+            )
+
+    response = client.get("/api/books/count")
+    assert response.status_code == 200
+    assert response.json() == {"total": 3}
+
+    # With search filter
+    response = client.get("/api/books/count?q=Count+Book+1")
+    assert response.status_code == 200
+    assert response.json() == {"total": 1}

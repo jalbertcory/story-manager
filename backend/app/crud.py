@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 import re
-from sqlalchemy import asc, desc, or_
+from sqlalchemy import asc, desc, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
@@ -228,3 +228,36 @@ async def delete_book(db: AsyncSession, book: models.Book) -> None:
     """
     await db.delete(book)
     await db.commit()
+
+
+async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
+    """
+    Count books, optionally filtered by a search query (title/author/series).
+    """
+    if q:
+        pattern = f"%{q}%"
+        result = await db.execute(
+            select(func.count(models.Book.id)).filter(
+                or_(
+                    models.Book.title.ilike(pattern),
+                    models.Book.author.ilike(pattern),
+                    models.Book.series.ilike(pattern),
+                )
+            )
+        )
+    else:
+        result = await db.execute(select(func.count(models.Book.id)))
+    return result.scalar() or 0
+
+
+async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str) -> Optional[models.Book]:
+    """
+    Retrieve a book by exact (case-insensitive) title and author match.
+    """
+    result = await db.execute(
+        select(models.Book).where(
+            func.lower(models.Book.title) == title.lower(),
+            func.lower(models.Book.author) == author.lower(),
+        )
+    )
+    return result.scalars().first()
