@@ -830,9 +830,7 @@ async def opds_root(request: Request):
 
 
 @app.get("/opds/catalog")
-async def opds_catalog(
-    request: Request, page: int = 0, page_size: int = 20, db: AsyncSession = Depends(get_db)
-):
+async def opds_catalog(request: Request, page: int = 0, page_size: int = 20, db: AsyncSession = Depends(get_db)):
     base_url = str(request.base_url).rstrip("/")
     books = await crud.get_books(db, skip=page * page_size, limit=page_size)
     acq_type = "application/atom+xml;profile=opds-catalog;kind=acquisition"

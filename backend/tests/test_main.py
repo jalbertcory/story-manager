@@ -545,6 +545,7 @@ async def test_opds_root_feed(db_session):
     assert "application/atom+xml" in response.headers["content-type"]
 
     import xml.etree.ElementTree as ET
+
     ATOM = "{http://www.w3.org/2005/Atom}"
     root = ET.fromstring(response.content)
     assert root.tag == f"{ATOM}feed"
@@ -577,6 +578,7 @@ async def test_opds_catalog_feed(db_session):
     assert "application/atom+xml" in response.headers["content-type"]
 
     import xml.etree.ElementTree as ET
+
     ATOM = "{http://www.w3.org/2005/Atom}"
     root = ET.fromstring(response.content)
     entries = root.findall(f"{ATOM}entry")
@@ -622,6 +624,7 @@ async def test_opds_search_feed(db_session):
     assert "application/atom+xml" in response.headers["content-type"]
 
     import xml.etree.ElementTree as ET
+
     ATOM = "{http://www.w3.org/2005/Atom}"
     root = ET.fromstring(response.content)
     entries = root.findall(f"{ATOM}entry")
