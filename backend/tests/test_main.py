@@ -1056,3 +1056,123 @@ async def test_books_count(db_session):
     response = client.get("/api/books/count?q=Count+Book+1")
     assert response.status_code == 200
     assert response.json() == {"total": 1}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_history_empty(db_session):
+    """
+    Test GET /api/scheduler/history returns empty list when no tasks exist.
+    """
+    response = client.get("/api/scheduler/history")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_history_with_tasks(db_session):
+    """
+    Test GET /api/scheduler/history returns tasks ordered newest first.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        task1 = await crud.create_update_task(session, total_books=5)
+        await crud.complete_update_task(session, task1)
+        task2 = await crud.create_update_task(session, total_books=3)
+        await crud.complete_update_task(session, task2)
+
+    response = client.get("/api/scheduler/history")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert {d["total_books"] for d in data} == {3, 5}
+    assert all(d["status"] == "completed" for d in data)
+
+    # Pagination works: limit=1 returns exactly 1 task
+    r1 = client.get("/api/scheduler/history?limit=1")
+    assert r1.status_code == 200
+    assert len(r1.json()) == 1
+
+    # offset=1 returns the other task
+    r2 = client.get("/api/scheduler/history?limit=1&offset=1")
+    assert r2.status_code == 200
+    assert len(r2.json()) == 1
+    assert r1.json()[0]["id"] != r2.json()[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_history_task_logs(db_session):
+    """
+    Test GET /api/scheduler/history/{task_id}/logs returns per-book log entries.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        book_a = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Log Book A",
+                author="Author",
+                immutable_path="lba_i",
+                current_path="lba_c",
+                source_type=models.SourceType.web,
+                source_url="http://example.com/lba",
+            ),
+        )
+        book_b = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Log Book B",
+                author="Author",
+                immutable_path="lbb_i",
+                current_path="lbb_c",
+                source_type=models.SourceType.web,
+                source_url="http://example.com/lbb",
+            ),
+        )
+        task = await crud.create_update_task(session, total_books=2)
+        await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book_a.id,
+                entry_type="updated",
+                previous_chapter_count=10,
+                new_chapter_count=15,
+                words_added=5000,
+            ),
+        )
+        await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book_b.id,
+                entry_type="checked",
+                previous_chapter_count=8,
+                new_chapter_count=8,
+                words_added=0,
+            ),
+        )
+        await crud.complete_update_task(session, task)
+
+    response = client.get(f"/api/scheduler/history/{task.id}/logs")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+
+    titles = {entry["book_title"] for entry in data}
+    assert titles == {"Log Book A", "Log Book B"}
+
+    updated = next(e for e in data if e["entry_type"] == "updated")
+    assert updated["book_title"] == "Log Book A"
+    assert updated["previous_chapter_count"] == 10
+    assert updated["new_chapter_count"] == 15
+    assert updated["words_added"] == 5000
+
+    checked = next(e for e in data if e["entry_type"] == "checked")
+    assert checked["book_title"] == "Log Book B"
+    assert checked["words_added"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_history_task_logs_not_found(db_session):
+    """
+    Test GET /api/scheduler/history/{task_id}/logs returns 404 for unknown task.
+    """
+    response = client.get("/api/scheduler/history/9999/logs")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()

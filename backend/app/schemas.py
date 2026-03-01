@@ -102,3 +102,10 @@ class UpdateTask(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BookLogWithTitle(BookLog):
+    book_title: str
+
+    class Config:
+        from_attributes = True
