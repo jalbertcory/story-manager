@@ -558,6 +558,29 @@ async def process_book_endpoint(book_id: int, db: AsyncSession = Depends(get_db)
     return db_book
 
 
+class PreviewCleaningRequest(BaseModel):
+    content_selectors: List[str] = []
+    removed_chapters: List[str] = []
+
+
+@app.post("/api/books/{book_id}/preview-cleaning")
+async def preview_cleaning(book_id: int, req: PreviewCleaningRequest, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    configs = []
+    if db_book.source_url:
+        configs = await crud.get_all_matching_cleaning_configs(db, str(db_book.source_url))
+    chapter_selectors, config_content_selectors = [], []
+    for cfg in configs:
+        chapter_selectors += list(cfg.chapter_selectors or [])
+        config_content_selectors += list(cfg.content_selectors or [])
+    all_content_selectors = config_content_selectors + req.content_selectors
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    immutable_path = library_path.parent / db_book.immutable_path
+    return epub_editor.preview_epub(str(immutable_path), req.removed_chapters, all_content_selectors, chapter_selectors)
+
+
 @app.get("/api/books/{book_id}/matched-config", response_model=List[schemas.CleaningConfig])
 async def get_book_matched_config(book_id: int, db: AsyncSession = Depends(get_db)):
     """
@@ -684,6 +707,25 @@ async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Cover file not found")
 
     return FileResponse(cover_path)
+
+
+@app.post("/api/books/{book_id}/cover", response_model=schemas.Book)
+async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    app_dir = Path(__file__).parent.resolve()
+    covers_path = (app_dir / ".." / ".." / "library" / "covers").resolve()
+    covers_path.mkdir(exist_ok=True)
+    ext = Path(file.filename).suffix or ".jpg"
+    save_path = covers_path / f"{book_id}{ext}"
+    with open(save_path, "wb") as f:
+        f.write(await file.read())
+    library_path = (app_dir / ".." / ".." / "library").resolve()
+    db_book.cover_path = str(save_path.relative_to(library_path.parent))
+    await db.commit()
+    await db.refresh(db_book)
+    return db_book
 
 
 def _get_and_save_epub_cover(epub_path: Path, book_id: int) -> Path | None:

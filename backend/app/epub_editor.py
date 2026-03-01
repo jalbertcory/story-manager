@@ -76,6 +76,33 @@ def process_epub(
     epub.write_epub(current_path, new_book, {})
 
 
+def preview_epub(
+    immutable_path: str,
+    removed_chapters: list[str],
+    content_selectors: list[str],
+    chapter_selectors: list[str] = [],
+) -> dict:
+    book = epub.read_epub(immutable_path)
+    chapters_to_remove = set(removed_chapters)
+    if chapter_selectors:
+        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+            soup = BeautifulSoup(item.get_content().decode("utf-8", "ignore"), "html.parser")
+            if any(soup.select(sel) for sel in chapter_selectors):
+                chapters_to_remove.add(item.get_name())
+    elements_removed = 0
+    estimated_word_count = 0
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        if item.get_name() in chapters_to_remove:
+            continue
+        soup = BeautifulSoup(item.get_content().decode("utf-8", "ignore"), "html.parser")
+        for selector in content_selectors:
+            for elem in soup.select(selector):
+                elements_removed += 1
+                elem.decompose()
+        estimated_word_count += len(re.findall(r"\S+", soup.get_text()))
+    return {"elements_removed": elements_removed, "estimated_word_count": estimated_word_count}
+
+
 async def apply_book_cleaning(book, db, force: bool = False) -> None:
     """Apply all cleaning rules (site-wide configs + per-book settings) to a book.
 
