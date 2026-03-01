@@ -250,6 +250,44 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
     return result.scalar() or 0
 
 
+async def get_update_tasks(db: AsyncSession, limit: int = 20, offset: int = 0) -> List[models.UpdateTask]:
+    result = await db.execute(
+        select(models.UpdateTask).order_by(models.UpdateTask.started_at.desc()).offset(offset).limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def get_book_logs_for_task(
+    db: AsyncSession, task_id: int
+) -> tuple[Optional[models.UpdateTask], Optional[list]]:
+    task_result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.id == task_id))
+    task = task_result.scalars().first()
+    if task is None:
+        return None, None
+
+    # SQLite stores server_default timestamps without fractional seconds (e.g. '2024-01-01 12:00:00'),
+    # but SQLAlchemy always formats Python datetime parameters with 6 microsecond digits
+    # (e.g. '2024-01-01 12:00:00.000000'). The string comparison '12:00:00' >= '12:00:00.000000'
+    # evaluates to False in SQLite (shorter prefix < longer string), so logs created at
+    # exactly task.started_at would be excluded. Subtracting 1 second from the lower bound
+    # ensures logs created at or after task.started_at pass the filter in both SQLite and
+    # PostgreSQL. The 1-second buffer is harmless given 24-hour scheduling intervals.
+    from datetime import timedelta
+
+    start_filter = task.started_at - timedelta(seconds=1) if task.started_at else None
+    conditions = [models.BookLog.timestamp >= start_filter] if start_filter is not None else []
+    if task.completed_at:
+        conditions.append(models.BookLog.timestamp <= task.completed_at)
+
+    result = await db.execute(
+        select(models.BookLog, models.Book.title)
+        .join(models.Book, models.BookLog.book_id == models.Book.id)
+        .filter(*conditions)
+        .order_by(models.BookLog.timestamp.asc())
+    )
+    return task, result.all()
+
+
 async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str) -> Optional[models.Book]:
     """
     Retrieve a book by exact (case-insensitive) title and author match.

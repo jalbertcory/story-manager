@@ -469,6 +469,31 @@ async def trigger_scheduler(background_tasks: BackgroundTasks):
     return {"message": "Update triggered"}
 
 
+@app.get("/api/scheduler/history", response_model=List[schemas.UpdateTask])
+async def get_scheduler_history(limit: int = 20, offset: int = 0, db: AsyncSession = Depends(get_db)):
+    return await crud.get_update_tasks(db, limit=limit, offset=offset)
+
+
+@app.get("/api/scheduler/history/{task_id}/logs", response_model=List[schemas.BookLogWithTitle])
+async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)):
+    task, rows = await crud.get_book_logs_for_task(db, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return [
+        schemas.BookLogWithTitle(
+            id=log.id,
+            book_id=log.book_id,
+            book_title=title,
+            entry_type=log.entry_type,
+            previous_chapter_count=log.previous_chapter_count,
+            new_chapter_count=log.new_chapter_count,
+            words_added=log.words_added,
+            timestamp=log.timestamp,
+        )
+        for log, title in rows
+    ]
+
+
 @app.put("/api/books/{book_id}", response_model=schemas.Book)
 async def update_book_details(
     book_id: int, book_update: schemas.BookUpdate, db: AsyncSession = Depends(get_db)
