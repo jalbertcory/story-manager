@@ -948,7 +948,7 @@ async def test_opds_catalog_feed(db_session):
 
     # Acquisition link present
     links = entries[0].findall(f"{ATOM}link")
-    acq_links = [l for l in links if l.get("rel") == "http://opds-spec.org/acquisition"]
+    acq_links = [link for link in links if link.get("rel") == "http://opds-spec.org/acquisition"]
     assert len(acq_links) == 1
     assert "epub+zip" in acq_links[0].get("type", "")
 
