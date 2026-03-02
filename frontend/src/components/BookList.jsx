@@ -49,10 +49,16 @@ function BookCard({ book, onEdit }) {
       {coverContent}
       <div className="book-info">
         <h3 title={isPending || isError ? book.source_url : book.title}>
-          {isPending ? "Downloading…" : isError ? "Download failed" : book.title}
+          {isPending
+            ? "Downloading…"
+            : isError
+              ? "Download failed"
+              : book.title}
         </h3>
         {!isPending && <p className="book-author">{book.author}</p>}
-        {!isPending && book.series && <p className="book-series">Series: {book.series}</p>}
+        {!isPending && book.series && (
+          <p className="book-series">Series: {book.series}</p>
+        )}
         {!isPending && (
           <p className="book-words">
             {book.current_word_count != null
@@ -60,11 +66,17 @@ function BookCard({ book, onEdit }) {
               : "—"}
           </p>
         )}
-        {formattedDate && !isPending && <p className="book-updated">Updated: {formattedDate}</p>}
-        {book.source_type === "web" && !isPending && <span className="badge-web">Web</span>}
+        {formattedDate && !isPending && (
+          <p className="book-updated">Updated: {formattedDate}</p>
+        )}
+        {book.source_type === "web" && !isPending && (
+          <span className="badge-web">Web</span>
+        )}
         {isError && book.source_url && (
           <p className="book-error-url" title={book.source_url}>
-            {book.source_url.length > 40 ? book.source_url.slice(0, 40) + "…" : book.source_url}
+            {book.source_url.length > 40
+              ? book.source_url.slice(0, 40) + "…"
+              : book.source_url}
           </p>
         )}
       </div>
@@ -95,7 +107,13 @@ function SeriesGroup({ series, books, onEdit }) {
   );
 }
 
-function BookList({ books = [], onEdit, fetchNextPage, hasNextPage, isFetchingNextPage }) {
+function BookList({
+  books = [],
+  onEdit,
+  fetchNextPage,
+  hasNextPage,
+  isFetchingNextPage,
+}) {
   const sentinelRef = useRef(null);
 
   useEffect(() => {
@@ -105,7 +123,7 @@ function BookList({ books = [], onEdit, fetchNextPage, hasNextPage, isFetchingNe
           fetchNextPage();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1 },
     );
     if (sentinelRef.current) observer.observe(sentinelRef.current);
     return () => observer.disconnect();

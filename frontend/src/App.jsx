@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
@@ -14,14 +18,20 @@ function App() {
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState("asc");
-  const [searchParams, setSearchParams] = useState({ q: "", sortBy: "title", sortOrder: "asc" });
+  const [searchParams, setSearchParams] = useState({
+    q: "",
+    sortBy: "title",
+    sortOrder: "asc",
+  });
   const [editingBook, setEditingBook] = useState(null);
   const [showConfigs, setShowConfigs] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
 
   const reprocessMutation = useMutation({
     mutationFn: () =>
-      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
+      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) =>
+        r.json(),
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
   });
 
@@ -82,23 +92,23 @@ function App() {
   }
 
   if (showConfigs) {
-    return (
-      <CleaningConfigs onBack={() => setShowConfigs(false)} />
-    );
+    return <CleaningConfigs onBack={() => setShowConfigs(false)} />;
   }
 
   if (showScheduler) {
-    return (
-      <SchedulerStatus onBack={() => setShowScheduler(false)} />
-    );
+    return <SchedulerStatus onBack={() => setShowScheduler(false)} />;
   }
 
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Story Manager</h1>
-        <button className="btn-text" onClick={() => setShowConfigs(true)}>Cleaning Configs</button>
-        <button className="btn-text" onClick={() => setShowScheduler(true)}>Scheduler</button>
+        <button className="btn-text" onClick={() => setShowConfigs(true)}>
+          Cleaning Configs
+        </button>
+        <button className="btn-text" onClick={() => setShowScheduler(true)}>
+          Scheduler
+        </button>
         <button
           className="btn-text"
           onClick={() => reprocessMutation.mutate()}
@@ -117,7 +127,10 @@ function App() {
         />
         <button onClick={handleSearch}>Search</button>
         <button onClick={handleClearSearch}>Clear</button>
-        <select value={sortBy} onChange={(e) => handleSortByChange(e.target.value)}>
+        <select
+          value={sortBy}
+          onChange={(e) => handleSortByChange(e.target.value)}
+        >
           <option value="title">Title</option>
           <option value="author">Author</option>
           <option value="word_count">Word Count</option>

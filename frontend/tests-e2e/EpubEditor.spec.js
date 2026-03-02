@@ -55,7 +55,10 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });
 
   // Click the book card to edit it
-  await page.locator(".book-card").filter({ hasText: /Test Book/i }).click();
+  await page
+    .locator(".book-card")
+    .filter({ hasText: /Test Book/i })
+    .click();
 
   // The book settings panel should now be visible
   await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();

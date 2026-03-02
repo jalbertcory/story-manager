@@ -64,8 +64,12 @@ function BookSettings({ book, onBack }) {
   const [author, setAuthor] = useState(book.author || "");
   const [series, setSeries] = useState(book.series || "");
   const [notes, setNotes] = useState(book.notes || "");
-  const [removedChapters, setRemovedChapters] = useState(book.removed_chapters || []);
-  const [contentSelectors, setContentSelectors] = useState(book.content_selectors || []);
+  const [removedChapters, setRemovedChapters] = useState(
+    book.removed_chapters || [],
+  );
+  const [contentSelectors, setContentSelectors] = useState(
+    book.content_selectors || [],
+  );
   const [previewResult, setPreviewResult] = useState(null);
 
   useEffect(() => {
@@ -110,7 +114,9 @@ function BookSettings({ book, onBack }) {
 
   const processMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/process`, { method: "POST" });
+      const res = await fetch(`/api/books/${book.id}/process`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || "Processing failed");
@@ -125,7 +131,9 @@ function BookSettings({ book, onBack }) {
 
   const refreshMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/refresh`, { method: "POST" });
+      const res = await fetch(`/api/books/${book.id}/refresh`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || "Refresh failed");
@@ -157,7 +165,10 @@ function BookSettings({ book, onBack }) {
       const res = await fetch(`/api/books/${book.id}/preview-cleaning`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content_selectors: contentSelectors, removed_chapters: removedChapters }),
+        body: JSON.stringify({
+          content_selectors: contentSelectors,
+          removed_chapters: removedChapters,
+        }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -172,7 +183,10 @@ function BookSettings({ book, onBack }) {
     mutationFn: async (file) => {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`/api/books/${book.id}/cover`, { method: "POST", body: form });
+      const res = await fetch(`/api/books/${book.id}/cover`, {
+        method: "POST",
+        body: form,
+      });
       if (!res.ok) throw new Error("Cover upload failed");
       return res.json();
     },
@@ -209,7 +223,9 @@ function BookSettings({ book, onBack }) {
 
   const toggleChapter = (filename) => {
     setRemovedChapters((prev) =>
-      prev.includes(filename) ? prev.filter((f) => f !== filename) : [...prev, filename]
+      prev.includes(filename)
+        ? prev.filter((f) => f !== filename)
+        : [...prev, filename],
     );
   };
 
@@ -260,19 +276,35 @@ function BookSettings({ book, onBack }) {
       <section className="settings-section">
         <h3>Cover</h3>
         {book.cover_path && (
-          <img src={`/api/covers/${book.id}`} alt="Cover" className="book-cover" style={{ height: 120 }} />
+          <img
+            src={`/api/covers/${book.id}`}
+            alt="Cover"
+            className="book-cover"
+            style={{ height: 120 }}
+          />
         )}
         <input
           ref={coverInputRef}
           type="file"
           accept=".jpg,.jpeg,.png,.webp"
           style={{ display: "none" }}
-          onChange={(e) => e.target.files[0] && coverMutation.mutate(e.target.files[0])}
+          onChange={(e) =>
+            e.target.files[0] && coverMutation.mutate(e.target.files[0])
+          }
         />
-        <button onClick={() => coverInputRef.current.click()} disabled={coverMutation.isPending}>
-          {coverMutation.isPending ? "Uploading..." : book.cover_path ? "Replace Cover" : "Upload Cover"}
+        <button
+          onClick={() => coverInputRef.current.click()}
+          disabled={coverMutation.isPending}
+        >
+          {coverMutation.isPending
+            ? "Uploading..."
+            : book.cover_path
+              ? "Replace Cover"
+              : "Upload Cover"}
         </button>
-        {coverMutation.isError && <p className="error">{coverMutation.error.message}</p>}
+        {coverMutation.isError && (
+          <p className="error">{coverMutation.error.message}</p>
+        )}
       </section>
 
       {matchedConfigs.map((cfg) => (
@@ -313,15 +345,32 @@ function BookSettings({ book, onBack }) {
 
       <section className="settings-section">
         <h3>Per-Book Content Selectors</h3>
-        <p className="hint">CSS selectors for content to remove from this book only.</p>
-        <SelectorPills selectors={contentSelectors} onChange={setContentSelectors} />
-        <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "1rem" }}>
-          <button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
+        <p className="hint">
+          CSS selectors for content to remove from this book only.
+        </p>
+        <SelectorPills
+          selectors={contentSelectors}
+          onChange={setContentSelectors}
+        />
+        <div
+          style={{
+            marginTop: "0.5rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "1rem",
+          }}
+        >
+          <button
+            onClick={() => previewMutation.mutate()}
+            disabled={previewMutation.isPending}
+          >
             {previewMutation.isPending ? "Previewing..." : "Preview"}
           </button>
           {previewResult && (
             <span className="hint">
-              Would remove {previewResult.elements_removed} elements · ~{previewResult.estimated_word_count.toLocaleString()} words remaining
+              Would remove {previewResult.elements_removed} elements · ~
+              {previewResult.estimated_word_count.toLocaleString()} words
+              remaining
             </span>
           )}
           {previewMutation.isError && (
@@ -337,7 +386,9 @@ function BookSettings({ book, onBack }) {
           {chapters.map((chapter) => (
             <li
               key={chapter.filename}
-              className={removedChapters.includes(chapter.filename) ? "removed" : ""}
+              className={
+                removedChapters.includes(chapter.filename) ? "removed" : ""
+              }
             >
               <label>
                 <input
@@ -361,7 +412,9 @@ function BookSettings({ book, onBack }) {
         </button>
         {book.source_type === "web" && (
           <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
-            {refreshMutation.isPending ? "Refreshing..." : "Refresh from Source"}
+            {refreshMutation.isPending
+              ? "Refreshing..."
+              : "Refresh from Source"}
           </button>
         )}
         <a href={`/api/books/${book.id}/download`} download className="btn">

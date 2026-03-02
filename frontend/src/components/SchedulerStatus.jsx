@@ -51,7 +51,9 @@ function SchedulerStatus({ onBack }) {
           <div>
             <p>
               <strong>Status:</strong>{" "}
-              <span className={`badge-config ${isRunning ? "badge-running" : ""}`}>
+              <span
+                className={`badge-config ${isRunning ? "badge-running" : ""}`}
+              >
                 {task.status}
               </span>
             </p>
@@ -64,7 +66,8 @@ function SchedulerStatus({ onBack }) {
               </p>
             )}
             <p>
-              <strong>Progress:</strong> {task.completed_books} / {task.total_books} books
+              <strong>Progress:</strong> {task.completed_books} /{" "}
+              {task.total_books} books
             </p>
           </div>
         )}

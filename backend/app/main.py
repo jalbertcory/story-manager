@@ -1,7 +1,6 @@
 import asyncio
 import re
 import time
-import uuid
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -137,9 +136,7 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
         try:
             new_epub_path, metadata = await _download_and_parse_web_novel(source_url)
 
-            existing = await crud.get_book_by_title_and_author(
-                db, title=metadata["title"], author=metadata["author"]
-            )
+            existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
             if existing and existing.id != book_id:
                 new_epub_path.unlink(missing_ok=True)
                 db_book.download_status = "error"

@@ -41,7 +41,9 @@ describe("App", () => {
   });
 
   it("searches by unified query", async () => {
-    const mockBooks = [{ id: 2, title: "Book B", author: "Author B", source_type: "epub" }];
+    const mockBooks = [
+      { id: 2, title: "Book B", author: "Author B", source_type: "epub" },
+    ];
     globalThis.fetch = vi.fn((url) => {
       if (url.includes("Author%20B")) {
         return Promise.resolve({
