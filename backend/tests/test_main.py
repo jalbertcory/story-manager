@@ -56,66 +56,30 @@ async def test_get_all_books_empty(db_session):
 @pytest.mark.asyncio
 async def test_add_web_novel(db_session, mocker):
     """
-    Test adding a new web novel. This test mocks the fanficfare call and simulates file creation.
+    Test adding a new web novel. The endpoint now returns immediately with a pending record
+    and schedules the actual download as a background task.
     """
-    # Mock the fanficfare main function to simulate a successful download
-    mocker.patch("backend.app.main._run_fff_main", return_value=0)
+    from unittest.mock import AsyncMock
 
-    # Define absolute paths for our dummy files, as the application uses resolve()
-    library_path = Path("./library").resolve()
-    library_path.mkdir(exist_ok=True)
+    # Prevent the background download from running (it uses the prod DB, not the test DB)
+    mocker.patch("backend.app.main._finish_web_novel_download", new_callable=AsyncMock)
 
-    epub_filename = "Test Story-Test Author.epub"
-    epub_path = library_path / epub_filename
-
-    # Ensure the library is empty before the test
-    if epub_path.exists():
-        epub_path.unlink()
-
-    # Create a dummy EPUB file with metadata. The endpoint will read from this.
-    create_dummy_epub(epub_path, "Test Story", "Test Author", "Test Series")
-
-    # The endpoint discovers the updated file via mtime comparison.
-    # Mock time.time to return 0 so any real file's mtime qualifies as "recent".
-    mocker.patch("backend.app.main.time.time", return_value=0)
-    mocker.patch(
-        "pathlib.Path.iterdir",
-        side_effect=[iter([epub_path])],
-    )
-
-    # Mock `read_epub` to return a book with the expected metadata
-    mock_book = epub.EpubBook()
-    mock_book.set_title("Test Story")
-    mock_book.add_author("Test Author")
-    mock_book.add_metadata("calibre", "series", "Test Series")
-    mocker.patch("backend.app.main.epub.read_epub", return_value=mock_book)
-
-    # The payload for the POST request
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
 
-    # Clean up the dummy files
-    if epub_path.exists():
-        epub_path.unlink()
-    immutable_path = library_path / f"immutable_{epub_filename}"
-    if immutable_path.exists():
-        immutable_path.unlink()
-
-    # Check the response
     assert response.status_code == 201
     data = response.json()
-    assert data["title"] == "Test Story"
-    assert data["author"] == "Test Author"
+    assert data["download_status"] == "pending"
     assert data["source_url"] == "http://example.com/story/123"
-    assert data["immutable_path"] == str(Path("library") / f"immutable_{epub_filename}")
-    assert data["current_path"] == str(Path("library") / epub_filename)
+    assert data["immutable_path"] is None
+    assert data["current_path"] is None
 
-    # Verify that the book was added to the database
+    # Verify that the pending book appears in the book list
     response = client.get("/api/books")
     assert response.status_code == 200
     books = response.json()
     assert len(books) == 1
-    assert books[0]["title"] == "Test Story"
+    assert books[0]["download_status"] == "pending"
 
 
 @pytest.mark.asyncio

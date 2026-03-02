@@ -121,6 +121,73 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
 
 
+async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
+    """
+    Background task: downloads the actual EPUB for a pending book, then updates the record.
+    """
+    async with SessionLocal() as db:
+        db_book = await crud.get_book(db, book_id=book_id)
+        if db_book is None:
+            logger.error(f"Background download: book {book_id} not found")
+            return
+
+        library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+
+        try:
+            new_epub_path, metadata = await _download_and_parse_web_novel(source_url)
+
+            existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
+            if existing and existing.id != book_id:
+                new_epub_path.unlink(missing_ok=True)
+                db_book.download_status = "error"
+                db_book.title = f"Conflict: '{metadata['title']}' already exists"
+                await db.commit()
+                return
+
+            immutable_path = library_path / f"immutable_{new_epub_path.name}"
+            current_path = library_path / new_epub_path.name
+            new_epub_path.rename(immutable_path)
+            with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
+                f_out.write(f_in.read())
+
+            master_word_count = epub_editor.get_word_count(str(immutable_path))
+            _, chapter_count = _get_epub_word_and_chapter_count(current_path)
+
+            db_book.title = metadata["title"]
+            db_book.author = metadata["author"]
+            db_book.series = metadata["series"]
+            db_book.immutable_path = str(immutable_path.relative_to(library_path.parent))
+            db_book.current_path = str(current_path.relative_to(library_path.parent))
+            db_book.master_word_count = master_word_count
+            db_book.current_word_count = master_word_count
+            db_book.download_status = "ready"
+            await db.commit()
+            await db.refresh(db_book)
+
+            cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+            if cover_path_or_none:
+                db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
+                await db.commit()
+
+            log_entry = schemas.BookLogCreate(
+                book_id=db_book.id,
+                entry_type="added",
+                new_chapter_count=chapter_count,
+                words_added=master_word_count,
+            )
+            await crud.create_book_log(db, log_entry)
+            await epub_editor.apply_book_cleaning(db_book, db)
+
+        except Exception as e:
+            logger.error(f"Background download failed for book {book_id}: {e}")
+            try:
+                db_book.download_status = "error"
+                db_book.title = "Download failed"
+                await db.commit()
+            except Exception:
+                pass
+
+
 # Create all database tables on startup
 async def create_tables() -> None:
     async with engine.begin() as conn:
@@ -321,9 +388,13 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.Book,
 )
-async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get_db)) -> models.Book:
+async def add_web_novel(
+    request: WebNovelRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> models.Book:
     """
-    Downloads a web novel, saves it as an EPUB, and adds its metadata to the database.
+    Immediately creates a pending book record and downloads the web novel in the background.
     """
     source_url_str = str(request.url)
 
@@ -335,60 +406,17 @@ async def add_web_novel(request: WebNovelRequest, db: AsyncSession = Depends(get
             detail=f"Book from URL {source_url_str} already exists in the library.",
         )
 
-    # Download and parse the web novel
-    new_epub_path, metadata = await _download_and_parse_web_novel(source_url_str)
-    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-
-    existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
-    if existing:
-        new_epub_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A book with title '{metadata['title']}' by '{metadata['author']}' already exists (id={existing.id})",
-        )
-
-    # Create immutable and current copies
-    immutable_path = library_path / f"immutable_{new_epub_path.name}"
-    current_path = library_path / new_epub_path.name
-    new_epub_path.rename(immutable_path)
-    with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
-        f_out.write(f_in.read())
-
-    master_word_count = epub_editor.get_word_count(str(immutable_path))
-
-    # Create the book record in the database
+    # Create a placeholder record immediately so the UI can show progress
     book_to_create = schemas.BookCreate(
-        title=metadata["title"],
-        author=metadata["author"],
+        title=source_url_str,
+        author="Pending",
         source_url=request.url,
-        immutable_path=str(immutable_path.relative_to(library_path.parent)),
-        current_path=str(current_path.relative_to(library_path.parent)),
-        series=metadata["series"],
         source_type=models.SourceType.web,
-        master_word_count=master_word_count,
-        current_word_count=master_word_count,
+        download_status="pending",
     )
-
     db_book = await crud.create_book(db=db, book=book_to_create)
 
-    # Extract and save the cover image
-    cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
-    if cover_path_or_none:
-        db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
-        await db.commit()
-        await db.refresh(db_book)
-
-    # Create a log entry for the new book
-    _, chapter_count = _get_epub_word_and_chapter_count(current_path)
-    log_entry = schemas.BookLogCreate(
-        book_id=db_book.id,
-        entry_type="added",
-        new_chapter_count=chapter_count,
-        words_added=master_word_count,
-    )
-    await crud.create_book_log(db, log_entry)
-
-    await epub_editor.apply_book_cleaning(db_book, db)
+    background_tasks.add_task(_finish_web_novel_download, db_book.id, source_url_str)
 
     return db_book
 
@@ -656,13 +684,14 @@ async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
         return None
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    immutable_path = library_path.parent / book.immutable_path
-    current_path = library_path.parent / book.current_path
-
-    if immutable_path.exists():
-        immutable_path.unlink()
-    if current_path.exists():
-        current_path.unlink()
+    if book.immutable_path:
+        immutable_path = library_path.parent / book.immutable_path
+        if immutable_path.exists():
+            immutable_path.unlink()
+    if book.current_path:
+        current_path = library_path.parent / book.current_path
+        if current_path.exists():
+            current_path.unlink()
 
     await crud.delete_book(db, book=book)
     return None
@@ -678,13 +707,14 @@ async def delete_book_by_id(book_id: int, db: AsyncSession = Depends(get_db)):
         return None
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
-    immutable_path = library_path.parent / book.immutable_path
-    current_path = library_path.parent / book.current_path
-
-    if immutable_path.exists():
-        immutable_path.unlink()
-    if current_path.exists():
-        current_path.unlink()
+    if book.immutable_path:
+        immutable_path = library_path.parent / book.immutable_path
+        if immutable_path.exists():
+            immutable_path.unlink()
+    if book.current_path:
+        current_path = library_path.parent / book.current_path
+        if current_path.exists():
+            current_path.unlink()
 
     await crud.delete_book(db, book=book)
     return None

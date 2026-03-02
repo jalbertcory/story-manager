@@ -11,10 +11,10 @@ function ConfigForm({ initial, onSave, onCancel, isSaving }) {
   const [name, setName] = useState(initial?.name || "");
   const [urlPattern, setUrlPattern] = useState(initial?.url_pattern || "");
   const [chapterSelectors, setChapterSelectors] = useState(
-    (initial?.chapter_selectors || []).join(", ")
+    (initial?.chapter_selectors || []).join(", "),
   );
   const [contentSelectors, setContentSelectors] = useState(
-    (initial?.content_selectors || []).join(", ")
+    (initial?.content_selectors || []).join(", "),
   );
 
   const handleSubmit = (e) => {
@@ -37,7 +37,11 @@ function ConfigForm({ initial, onSave, onCancel, isSaving }) {
     <form className="config-form" onSubmit={handleSubmit}>
       <label>
         Name
-        <input value={name} onChange={(e) => setName(e.target.value)} required />
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
       </label>
       <label>
         URL Pattern (regex)
@@ -81,7 +85,11 @@ function CleaningConfigs({ onBack }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
-  const { data: configs = [], isLoading, error } = useQuery({
+  const {
+    data: configs = [],
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ["cleaning-configs"],
     queryFn: fetchConfigs,
   });
@@ -126,13 +134,16 @@ function CleaningConfigs({ onBack }) {
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
-      const res = await fetch(`/api/cleaning-configs/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/cleaning-configs/${id}`, {
+        method: "DELETE",
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || "Delete failed");
       }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] }),
   });
 
   return (
@@ -169,7 +180,9 @@ function CleaningConfigs({ onBack }) {
               <div>
                 <ConfigForm
                   initial={config}
-                  onSave={(data) => updateMutation.mutate({ id: config.id, data })}
+                  onSave={(data) =>
+                    updateMutation.mutate({ id: config.id, data })
+                  }
                   onCancel={() => setEditingId(null)}
                   isSaving={updateMutation.isPending}
                 />
@@ -183,7 +196,9 @@ function CleaningConfigs({ onBack }) {
                   <strong>{config.name}</strong>
                   <code className="url-pattern">{config.url_pattern}</code>
                   <div className="config-actions">
-                    <button onClick={() => setEditingId(config.id)}>Edit</button>
+                    <button onClick={() => setEditingId(config.id)}>
+                      Edit
+                    </button>
                     <button
                       className="btn-danger"
                       onClick={() => {
@@ -199,12 +214,14 @@ function CleaningConfigs({ onBack }) {
                 <div className="config-selectors">
                   {config.chapter_selectors?.length > 0 && (
                     <p>
-                      <strong>Chapter:</strong> {config.chapter_selectors.join(", ")}
+                      <strong>Chapter:</strong>{" "}
+                      {config.chapter_selectors.join(", ")}
                     </p>
                   )}
                   {config.content_selectors?.length > 0 && (
                     <p>
-                      <strong>Content:</strong> {config.content_selectors.join(", ")}
+                      <strong>Content:</strong>{" "}
+                      {config.content_selectors.join(", ")}
                     </p>
                   )}
                 </div>

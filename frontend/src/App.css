@@ -70,7 +70,9 @@
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
   animation: fadeIn 0.5s ease-out;
 }
 
@@ -177,4 +179,60 @@
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+.book-cover--placeholder {
+  width: 100%;
+  height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  color: #666;
+  font-size: 0.9rem;
+  gap: 0.5rem;
+}
+
+.book-cover--error {
+  background: #fee8e8;
+  color: #c00;
+}
+
+.book-card--pending {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.book-card--pending:hover {
+  transform: none;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.book-card--error {
+  border: 1px solid #f5c6c6;
+}
+
+.book-error-url {
+  font-size: 0.75rem;
+  color: #999;
+  word-break: break-all;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid #ccc;
+  border-top-color: #555;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
 }

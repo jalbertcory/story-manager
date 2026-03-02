@@ -151,9 +151,7 @@ function EpubEditor({ book, onBack }) {
         <p className="error">Save failed: {saveMutation.error.message}</p>
       )}
       {processMutation.isError && (
-        <p className="error">
-          Process failed: {processMutation.error.message}
-        </p>
+        <p className="error">Process failed: {processMutation.error.message}</p>
       )}
     </div>
   );
