@@ -158,6 +158,24 @@ async def complete_update_task(db: AsyncSession, task: models.UpdateTask) -> Non
     await db.refresh(task)
 
 
+async def fail_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
+    task.status = "failed"
+    task.completed_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(task)
+
+
+async def reset_stuck_update_tasks(db: AsyncSession) -> None:
+    """Mark any tasks left in 'running' state (e.g. from a crashed run) as 'failed'."""
+    result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == "running"))
+    stuck = result.scalars().all()
+    for task in stuck:
+        task.status = "failed"
+        task.completed_at = datetime.utcnow()
+    if stuck:
+        await db.commit()
+
+
 async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """
     Retrieve books from the database by series.
