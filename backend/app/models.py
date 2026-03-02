@@ -27,6 +27,7 @@ class Book(Base):
     # Storing the cover as a path to a file. The file itself can be extracted from the EPUB.
     cover_path = Column(String, nullable=True)
     notes = Column(String, nullable=True)
+    download_status = Column(String, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

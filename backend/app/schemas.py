@@ -10,8 +10,8 @@ class BookBase(BaseModel):
     author: str
     source_url: Optional[HttpUrl] = None
     source_type: SourceType
-    immutable_path: str
-    current_path: str
+    immutable_path: Optional[str] = None
+    current_path: Optional[str] = None
     cover_path: Optional[str] = None
     series: Optional[str] = None
     master_word_count: Optional[int] = None
@@ -19,6 +19,7 @@ class BookBase(BaseModel):
     removed_chapters: Optional[List[str]] = []
     content_selectors: Optional[List[str]] = []
     notes: Optional[str] = None
+    download_status: Optional[str] = None
 
     class Config:
         from_attributes = True

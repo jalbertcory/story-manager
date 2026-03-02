@@ -46,6 +46,10 @@ function App() {
     getNextPageParam: (lastPage, allPages) =>
       lastPage.length === PAGE_SIZE ? allPages.flat().length : undefined,
     initialPageParam: 0,
+    refetchInterval: (data) => {
+      const books = data?.pages?.flat() ?? [];
+      return books.some((b) => b.download_status === "pending") ? 2000 : false;
+    },
   });
 
   const books = data?.pages.flat() ?? [];
