@@ -283,6 +283,8 @@ async def update_web_novels():
     """
     logger.info("Starting web novel update job.")
     db: AsyncSession = SessionLocal()
+    task = None
+    failed = False
     try:
         books = await crud.get_web_books(db)
         task = await crud.get_active_update_task(db)
@@ -337,8 +339,15 @@ async def update_web_novels():
                 await crud.increment_update_task(db, task)
             except Exception as e:
                 logger.error(f"Failed to update {book.title}: {e}")
-        await crud.complete_update_task(db, task)
+    except Exception as e:
+        logger.error(f"Scheduler run failed: {e}")
+        failed = True
     finally:
+        if task is not None:
+            if failed:
+                await crud.fail_update_task(db, task)
+            else:
+                await crud.complete_update_task(db, task)
         await db.close()
 
 
@@ -347,6 +356,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
     await seed_default_cleaning_config()
+    async with SessionLocal() as db:
+        await crud.reset_stuck_update_tasks(db)
     scheduler.add_job(update_web_novels, "interval", hours=24)
     scheduler.start()
     yield
