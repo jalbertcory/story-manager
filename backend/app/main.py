@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import zipfile
 from lxml import etree
+import requests as http_requests
 
 from pydantic import BaseModel
 
@@ -121,6 +122,69 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
 
 
+async def _save_cover_from_url(url: str, book_id: int, library_path: Path) -> Optional[Path]:
+    """
+    Downloads an image from a URL and saves it as the cover for the given book.
+    Returns the saved Path on success, or None on failure.
+    """
+    covers_path = (library_path / "covers").resolve()
+    covers_path.mkdir(exist_ok=True)
+
+    def fetch():
+        r = http_requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"}, stream=True)
+        r.raise_for_status()
+        data = b""
+        for chunk in r.iter_content(8192):
+            data += chunk
+            if len(data) > 10 * 1024 * 1024:
+                raise ValueError("Image exceeds 10 MB limit")
+        return r.headers.get("Content-Type", ""), data
+
+    try:
+        loop = asyncio.get_running_loop()
+        content_type, image_bytes = await loop.run_in_executor(None, fetch)
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }
+        ext = ext_map.get(content_type.split(";")[0].strip()) or Path(url.split("?")[0]).suffix or ".jpg"
+        save_path = covers_path / f"{book_id}{ext}"
+        with open(save_path, "wb") as f:
+            f.write(image_bytes)
+        return save_path
+    except Exception as e:
+        logger.error(f"Failed to download cover from {url}: {e}")
+        return None
+
+
+async def _try_scrape_cover(source_url: str, book_id: int, library_path: Path) -> Optional[Path]:
+    """
+    Attempts to scrape a cover image from a known site's book page.
+    Currently supports Royal Road.
+    """
+    if "royalroad.com" not in source_url:
+        return None
+
+    def fetch_page():
+        r = http_requests.get(source_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return r.text
+
+    try:
+        loop = asyncio.get_running_loop()
+        html = await loop.run_in_executor(None, fetch_page)
+        soup = BeautifulSoup(html, "html.parser")
+        img = soup.select_one("div.cover-art-container img.thumbnail")
+        if not img or not img.get("src"):
+            return None
+        return await _save_cover_from_url(img["src"], book_id, library_path)
+    except Exception as e:
+        logger.error(f"Failed to scrape cover from {source_url}: {e}")
+        return None
+
+
 async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
     """
     Background task: downloads the actual EPUB for a pending book, then updates the record.
@@ -165,6 +229,8 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
             await db.refresh(db_book)
 
             cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+            if cover_path_or_none is None:
+                cover_path_or_none = await _try_scrape_cover(source_url, db_book.id, library_path)
             if cover_path_or_none:
                 db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
                 await db.commit()
@@ -802,6 +868,32 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
     with open(save_path, "wb") as f:
         f.write(await file.read())
     library_path = (app_dir / ".." / ".." / "library").resolve()
+    db_book.cover_path = str(save_path.relative_to(library_path.parent))
+    await db.commit()
+    await db.refresh(db_book)
+    return db_book
+
+
+class CoverUrlRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/books/{book_id}/cover-url", response_model=schemas.Book)
+async def set_cover_from_url(book_id: int, req: CoverUrlRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Downloads an image from a URL and sets it as the book's cover.
+    """
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    app_dir = Path(__file__).parent.resolve()
+    library_path = (app_dir / ".." / ".." / "library").resolve()
+
+    save_path = await _save_cover_from_url(req.url, book_id, library_path)
+    if save_path is None:
+        raise HTTPException(status_code=400, detail="Failed to download image from the provided URL")
+
     db_book.cover_path = str(save_path.relative_to(library_path.parent))
     await db.commit()
     await db.refresh(db_book)

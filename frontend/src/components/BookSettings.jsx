@@ -179,6 +179,8 @@ function BookSettings({ book, onBack }) {
     onSuccess: (data) => setPreviewResult(data),
   });
 
+  const [coverUrl, setCoverUrl] = useState("");
+
   const coverMutation = useMutation({
     mutationFn: async (file) => {
       const form = new FormData();
@@ -191,6 +193,25 @@ function BookSettings({ book, onBack }) {
       return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+  });
+
+  const coverUrlMutation = useMutation({
+    mutationFn: async (url) => {
+      const res = await fetch(`/api/books/${book.id}/cover-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to set cover from URL");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      setCoverUrl("");
+    },
   });
 
   const getUpdatedFields = () => ({
@@ -283,27 +304,46 @@ function BookSettings({ book, onBack }) {
             style={{ height: 120 }}
           />
         )}
-        <input
-          ref={coverInputRef}
-          type="file"
-          accept=".jpg,.jpeg,.png,.webp"
-          style={{ display: "none" }}
-          onChange={(e) =>
-            e.target.files[0] && coverMutation.mutate(e.target.files[0])
-          }
-        />
-        <button
-          onClick={() => coverInputRef.current.click()}
-          disabled={coverMutation.isPending}
-        >
-          {coverMutation.isPending
-            ? "Uploading..."
-            : book.cover_path
-              ? "Replace Cover"
-              : "Upload Cover"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+          <input
+            ref={coverInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp"
+            style={{ display: "none" }}
+            onChange={(e) =>
+              e.target.files[0] && coverMutation.mutate(e.target.files[0])
+            }
+          />
+          <button
+            onClick={() => coverInputRef.current.click()}
+            disabled={coverMutation.isPending || coverUrlMutation.isPending}
+          >
+            {coverMutation.isPending ? "Uploading…" : book.cover_path ? "Replace Cover" : "Upload Cover"}
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+          <input
+            type="text"
+            placeholder="Or paste an image URL…"
+            value={coverUrl}
+            onChange={(e) => setCoverUrl(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === "Enter" && coverUrl.trim() && coverUrlMutation.mutate(coverUrl.trim())
+            }
+            style={{ flex: 1 }}
+          />
+          <button
+            onClick={() => coverUrlMutation.mutate(coverUrl.trim())}
+            disabled={!coverUrl.trim() || coverUrlMutation.isPending || coverMutation.isPending}
+          >
+            {coverUrlMutation.isPending ? "Fetching…" : "Set from URL"}
+          </button>
+        </div>
         {coverMutation.isError && (
           <p className="error">{coverMutation.error.message}</p>
+        )}
+        {coverUrlMutation.isError && (
+          <p className="error">{coverUrlMutation.error.message}</p>
         )}
       </section>
 
