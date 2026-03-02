@@ -5,23 +5,31 @@ echo "--- Starting container setup ---"
 
 PGDATA=/tmp/pgdata
 
+# Locate PostgreSQL binaries regardless of installed version
+PG_BIN=$(dirname "$(find /usr/lib/postgresql -name "initdb" 2>/dev/null | sort -V | tail -1)")
+if [ -z "$PG_BIN" ] || [ "$PG_BIN" = "." ]; then
+  echo "ERROR: PostgreSQL binaries not found under /usr/lib/postgresql" >&2
+  exit 1
+fi
+echo "--- Using PostgreSQL binaries at $PG_BIN ---"
+
 # Initialise database cluster if it does not exist or is invalid
 if [ ! -f "$PGDATA/PG_VERSION" ]; then
   rm -rf "$PGDATA"/*
   install -d -m 0700 -o postgres -g postgres "$PGDATA"
   chown -R postgres:postgres "$PGDATA"
-  su postgres -c "initdb -D $PGDATA" >/dev/null
+  su postgres -c "$PG_BIN/initdb -D $PGDATA" >/dev/null
 fi
 
 # Clean up any stale PID file
 rm -f "$PGDATA/postmaster.pid"
 
 # Start PostgreSQL
-su postgres -c "pg_ctl -D $PGDATA -o \"-c listen_addresses='localhost' -c unix_socket_directories='/var/run/postgresql'\" -w start" >/dev/null
+su postgres -c "$PG_BIN/pg_ctl -D $PGDATA -o \"-c listen_addresses='localhost' -c unix_socket_directories='/var/run/postgresql'\" -w start" >/dev/null
 
 # Wait for PostgreSQL to be ready
 echo "--- Starting PostgreSQL ---"
-until su postgres -c "pg_isready -h localhost" >/dev/null 2>&1; do
+until su postgres -c "$PG_BIN/pg_isready -h localhost" >/dev/null 2>&1; do
   echo "Waiting for PostgreSQL..."
   sleep 1
 done
@@ -29,7 +37,7 @@ echo "--- PostgreSQL started ---"
 
 # Ensure the application database exists
 echo "--- Ensuring database exists ---"
-su postgres -c "psql -h localhost -tc \"SELECT 1 FROM pg_database WHERE datname='story_manager'\" | grep -q 1 || psql -h localhost -c \"CREATE DATABASE story_manager\"" >/dev/null
+su postgres -c "$PG_BIN/psql -h localhost -tc \"SELECT 1 FROM pg_database WHERE datname='story_manager'\" | grep -q 1 || $PG_BIN/psql -h localhost -c \"CREATE DATABASE story_manager\"" >/dev/null
 echo "--- Database ensured ---"
 
 # Set DATABASE_URL and run migrations
@@ -51,7 +59,7 @@ echo "Backend PID: $BACKEND_PID"
 echo "Frontend PID: $FRONTEND_PID"
 
 # Ensure all processes are cleaned up, including PostgreSQL
-trap "echo '--- Shutting down processes ---'; kill $BACKEND_PID $FRONTEND_PID; su postgres -c 'pg_ctl -D $PGDATA -m fast stop'; echo '--- Processes shut down ---'" EXIT
+trap "echo '--- Shutting down processes ---'; kill $BACKEND_PID $FRONTEND_PID; su postgres -c \"$PG_BIN/pg_ctl -D $PGDATA -m fast stop\"; echo '--- Processes shut down ---'" EXIT
 
 wait
 
