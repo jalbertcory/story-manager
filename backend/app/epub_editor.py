@@ -11,12 +11,39 @@ logger = logging.getLogger(__name__)
 
 def get_chapters(epub_path: str):
     book = epub.read_epub(epub_path)
+
+    # Build filename -> title map from the TOC
+    title_map: dict[str, str] = {}
+
+    def _walk_toc(items):
+        for item in items:
+            if isinstance(item, epub.Link):
+                href = item.href.split("#")[0]
+                if href not in title_map and item.title:
+                    title_map[href] = item.title
+            elif isinstance(item, tuple):
+                section, children = item
+                if isinstance(section, epub.Section) and getattr(section, "href", None):
+                    href = section.href.split("#")[0]
+                    if href not in title_map and section.title:
+                        title_map[href] = section.title
+                _walk_toc(children)
+
+    _walk_toc(book.toc)
+
     chapters = []
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        filename = item.get_name()
+        title = title_map.get(filename)
+        if not title:
+            soup = BeautifulSoup(item.get_content().decode("utf-8", "ignore"), "html.parser")
+            heading = soup.find(["h1", "h2", "h3"])
+            if heading:
+                title = heading.get_text(strip=True)
         chapters.append(
             {
-                "filename": item.get_name(),
-                "title": item.get_name(),
+                "filename": filename,
+                "title": title or filename,
                 "content": item.get_content().decode("utf-8", "ignore"),
             }
         )

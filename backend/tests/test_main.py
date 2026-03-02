@@ -246,7 +246,7 @@ async def test_get_book_chapters(db_session):
     assert response.status_code == 200
     data = response.json()
     assert len(data) > 0
-    assert data[0]["title"] == "chap_1.xhtml"
+    assert data[0]["title"] == "Introduction"
 
 
 @pytest.mark.asyncio
