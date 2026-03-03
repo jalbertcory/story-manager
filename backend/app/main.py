@@ -224,16 +224,14 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
             db_book.current_path = str(current_path.relative_to(library_path.parent))
             db_book.master_word_count = master_word_count
             db_book.current_word_count = master_word_count
-            db_book.download_status = "ready"
-            await db.commit()
-            await db.refresh(db_book)
-
             cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
             if cover_path_or_none is None:
                 cover_path_or_none = await _try_scrape_cover(source_url, db_book.id, library_path)
             if cover_path_or_none:
                 db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
-                await db.commit()
+            db_book.download_status = None
+            await db.commit()
+            await db.refresh(db_book)
 
             log_entry = schemas.BookLogCreate(
                 book_id=db_book.id,
@@ -258,20 +256,6 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
 async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
-
-
-async def seed_default_cleaning_config() -> None:
-    async with SessionLocal() as db:
-        configs = await crud.get_cleaning_configs(db)
-        if not configs:
-            default_config = schemas.CleaningConfigCreate(
-                name="FanFicFare Defaults",
-                url_pattern=".*",
-                chapter_selectors=[],
-                content_selectors=["div.author_note", "p.author_note"],
-            )
-            await crud.create_cleaning_config(db, default_config)
-            logger.info("Seeded default cleaning config.")
 
 
 scheduler = AsyncIOScheduler()
@@ -355,7 +339,6 @@ async def update_web_novels():
 async def lifespan(app: FastAPI):
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
-    await seed_default_cleaning_config()
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     scheduler.add_job(update_web_novels, "interval", hours=24)
