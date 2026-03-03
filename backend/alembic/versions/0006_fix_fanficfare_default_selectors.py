@@ -8,8 +8,8 @@ Create Date: 2026-03-03 00:00:00
 
 import json
 
+import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision = "0006"
@@ -19,25 +19,32 @@ depends_on = None
 
 CORRECT_SELECTORS = ["div.author-note", "p.author-note"]
 
+cleaning_configs = sa.table(
+    "cleaning_configs",
+    sa.column("id", sa.Integer),
+    sa.column("name", sa.String),
+    sa.column("url_pattern", sa.String),
+    sa.column("chapter_selectors", sa.JSON),
+    sa.column("content_selectors", sa.JSON),
+)
+
 
 def upgrade():
     conn = op.get_bind()
     rows = conn.execute(
-        text("SELECT id, content_selectors FROM cleaning_configs WHERE name = 'FanFicFare Defaults'")
+        sa.select(cleaning_configs.c.id, cleaning_configs.c.content_selectors).where(
+            cleaning_configs.c.name == "FanFicFare Defaults"
+        )
     ).fetchall()
 
     if not rows:
         conn.execute(
-            text(
-                "INSERT INTO cleaning_configs (name, url_pattern, chapter_selectors, content_selectors)"
-                " VALUES (:name, :url_pattern, :chapter_selectors, :content_selectors)"
-            ),
-            {
-                "name": "FanFicFare Defaults",
-                "url_pattern": ".*",
-                "chapter_selectors": json.dumps([]),
-                "content_selectors": json.dumps(CORRECT_SELECTORS),
-            },
+            cleaning_configs.insert().values(
+                name="FanFicFare Defaults",
+                url_pattern=".*",
+                chapter_selectors=[],
+                content_selectors=CORRECT_SELECTORS,
+            )
         )
     else:
         for row_id, raw in rows:
@@ -45,21 +52,25 @@ def upgrade():
             fixed = [s.replace("author_note", "author-note") for s in selectors]
             if fixed != list(selectors):
                 conn.execute(
-                    text("UPDATE cleaning_configs SET content_selectors = :sel WHERE id = :id"),
-                    {"sel": json.dumps(fixed), "id": row_id},
+                    cleaning_configs.update()
+                    .where(cleaning_configs.c.id == row_id)
+                    .values(content_selectors=fixed)
                 )
 
 
 def downgrade():
     conn = op.get_bind()
     rows = conn.execute(
-        text("SELECT id, content_selectors FROM cleaning_configs WHERE name = 'FanFicFare Defaults'")
+        sa.select(cleaning_configs.c.id, cleaning_configs.c.content_selectors).where(
+            cleaning_configs.c.name == "FanFicFare Defaults"
+        )
     ).fetchall()
     for row_id, raw in rows:
         selectors = raw if isinstance(raw, list) else json.loads(raw or "[]")
         reverted = [s.replace("author-note", "author_note") for s in selectors]
         if reverted != list(selectors):
             conn.execute(
-                text("UPDATE cleaning_configs SET content_selectors = :sel WHERE id = :id"),
-                {"sel": json.dumps(reverted), "id": row_id},
+                cleaning_configs.update()
+                .where(cleaning_configs.c.id == row_id)
+                .values(content_selectors=reverted)
             )
