@@ -71,6 +71,7 @@ function BookSettings({ book, onBack }) {
     book.content_selectors || [],
   );
   const [previewResult, setPreviewResult] = useState(null);
+  const [previewedChapter, setPreviewedChapter] = useState(null);
 
   useEffect(() => {
     setTitle(book.title || "");
@@ -250,6 +251,15 @@ function BookSettings({ book, onBack }) {
     );
   };
 
+  const toggleChapterPreview = (filename) => {
+    setPreviewedChapter((prev) => (prev === filename ? null : filename));
+  };
+
+  const getBodyContent = (html) => {
+    const match = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    return match ? match[1] : html;
+  };
+
   const isBusy =
     saveMutation.isPending ||
     processMutation.isPending ||
@@ -423,23 +433,41 @@ function BookSettings({ book, onBack }) {
         <h3>Chapters</h3>
         {chaptersLoading && <p>Loading chapters...</p>}
         <ul className="chapter-list">
-          {chapters.map((chapter) => (
-            <li
-              key={chapter.filename}
-              className={
-                removedChapters.includes(chapter.filename) ? "removed" : ""
-              }
-            >
-              <label>
-                <input
-                  type="checkbox"
-                  checked={!removedChapters.includes(chapter.filename)}
-                  onChange={() => toggleChapter(chapter.filename)}
-                />
-                {chapter.title}
-              </label>
-            </li>
-          ))}
+          {chapters.map((chapter) => {
+            const isRemoved = removedChapters.includes(chapter.filename);
+            const isPreviewed = previewedChapter === chapter.filename;
+            return (
+              <li
+                key={chapter.filename}
+                className={isRemoved ? "removed" : ""}
+              >
+                <div className="chapter-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!isRemoved}
+                      onChange={() => toggleChapter(chapter.filename)}
+                    />
+                    {chapter.title}
+                  </label>
+                  <button
+                    className="btn-text chapter-preview-toggle"
+                    onClick={() => toggleChapterPreview(chapter.filename)}
+                  >
+                    {isPreviewed ? "▲ Hide" : "▼ Preview"}
+                  </button>
+                </div>
+                {isPreviewed && (
+                  <div
+                    className="chapter-preview"
+                    dangerouslySetInnerHTML={{
+                      __html: getBodyContent(chapter.content),
+                    }}
+                  />
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
 

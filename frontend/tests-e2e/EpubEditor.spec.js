@@ -52,7 +52,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.reload();
 
   // Wait for the book to appear in the list
-  await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText("Test Book").first()).toBeVisible({ timeout: 10000 });
 
   // Click the book card to edit it
   await page
@@ -64,12 +64,12 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();
 
   // Check if the chapter is listed
-  await expect(page.getByText("chap_1.xhtml")).toBeVisible();
+  await expect(page.getByText("Introduction")).toBeVisible();
 
   // Uncheck the chapter to remove it
   await page
     .getByRole("listitem")
-    .filter({ hasText: "chap_1.xhtml" })
+    .filter({ hasText: "Introduction" })
     .getByRole("checkbox")
     .uncheck();
 
