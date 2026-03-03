@@ -4,6 +4,10 @@ Revision ID: 0006
 Revises: 0005
 Create Date: 2026-03-03 00:00:00
 
+The cleaning_configs table was historically created by SQLAlchemy's create_all()
+at app startup rather than via a migration. This migration creates it if absent
+(fresh installs), then seeds / fixes the FanFicFare Defaults row.
+
 """
 
 import json
@@ -31,6 +35,17 @@ cleaning_configs = sa.table(
 
 def upgrade():
     conn = op.get_bind()
+
+    if not sa.inspect(conn).has_table("cleaning_configs"):
+        op.create_table(
+            "cleaning_configs",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("name", sa.String(), nullable=False, unique=True),
+            sa.Column("url_pattern", sa.String(), nullable=False),
+            sa.Column("chapter_selectors", sa.JSON(), nullable=True),
+            sa.Column("content_selectors", sa.JSON(), nullable=True),
+        )
+
     rows = conn.execute(
         sa.select(cleaning_configs.c.id, cleaning_configs.c.content_selectors).where(
             cleaning_configs.c.name == "FanFicFare Defaults"
