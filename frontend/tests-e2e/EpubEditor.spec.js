@@ -64,12 +64,12 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();
 
   // Check if the chapter is listed
-  await expect(page.getByText("chap_1.xhtml")).toBeVisible();
+  await expect(page.getByText("Introduction")).toBeVisible();
 
   // Uncheck the chapter to remove it
   await page
     .getByRole("listitem")
-    .filter({ hasText: "chap_1.xhtml" })
+    .filter({ hasText: "Introduction" })
     .getByRole("checkbox")
     .uncheck();
 
