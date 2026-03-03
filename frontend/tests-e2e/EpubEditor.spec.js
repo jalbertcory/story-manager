@@ -52,7 +52,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.reload();
 
   // Wait for the book to appear in the list
-  await expect(page.getByText("Test Book")).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText("Test Book").first()).toBeVisible({ timeout: 10000 });
 
   // Click the book card to edit it
   await page
