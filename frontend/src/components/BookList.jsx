@@ -30,14 +30,24 @@ function BookCard({ book, onEdit }) {
         <span>⚠ Download failed</span>
       </div>
     );
+  } else if (book.cover_path) {
+    coverContent = (
+      <div className="book-cover-container">
+        <img
+          src={`/api/covers/${book.id}`}
+          alt={`${book.title} cover`}
+          className="book-cover"
+          onError={handleCoverError}
+        />
+        <div className="book-cover-title-overlay">{book.title}</div>
+      </div>
+    );
   } else {
     coverContent = (
-      <img
-        src={`/api/covers/${book.id}`}
-        alt={`${book.title} cover`}
-        className="book-cover"
-        onError={handleCoverError}
-      />
+      <div className="book-cover book-cover--placeholder book-cover--no-cover">
+        <span className="book-no-cover-title">{book.title}</span>
+        {book.author && <span className="book-no-cover-author">{book.author}</span>}
+      </div>
     );
   }
 
