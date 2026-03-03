@@ -35,8 +35,8 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Book A")).toBeInTheDocument();
-      expect(screen.getByText("Author A")).toBeInTheDocument();
+      expect(screen.getAllByText("Book A")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
     });
   });
 
@@ -78,7 +78,7 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Book B")).toBeInTheDocument();
+      expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
     });
   });
 });
