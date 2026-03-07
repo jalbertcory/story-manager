@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import re
 import traceback
 import xml.etree.ElementTree as ET
@@ -28,6 +29,27 @@ from fanficfare.cli import main as fff_main
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# In-memory log buffer (most-recent 1000 records)
+_LOG_BUFFER: collections.deque = collections.deque(maxlen=1000)
+
+
+class _MemoryLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        _LOG_BUFFER.append(
+            {
+                "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": self.format(record),
+            }
+        )
+
+
+_mem_handler = _MemoryLogHandler()
+_mem_handler.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger().addHandler(_mem_handler)
 
 
 def _get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:
@@ -553,6 +575,15 @@ async def reprocess_all_books(db: AsyncSession = Depends(get_db)):
 async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     total = await crud.count_books(db, q=q)
     return {"total": total}
+
+
+@app.get("/api/logs")
+async def get_logs(limit: int = 200, level: Optional[str] = None):
+    entries = list(_LOG_BUFFER)
+    if level:
+        upper = level.upper()
+        entries = [e for e in entries if e["level"] == upper]
+    return entries[-limit:]
 
 
 @app.get("/api/scheduler/status", response_model=Optional[schemas.UpdateTask])

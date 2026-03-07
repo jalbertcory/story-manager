@@ -10,6 +10,7 @@ import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
+import Logs from "./components/Logs.jsx";
 
 const PAGE_SIZE = 20;
 
@@ -26,6 +27,7 @@ function App() {
   const [editingBook, setEditingBook] = useState(null);
   const [showConfigs, setShowConfigs] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
 
   const reprocessMutation = useMutation({
     mutationFn: () =>
@@ -99,6 +101,10 @@ function App() {
     return <SchedulerStatus onBack={() => setShowScheduler(false)} />;
   }
 
+  if (showLogs) {
+    return <Logs onBack={() => setShowLogs(false)} />;
+  }
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -108,6 +114,9 @@ function App() {
         </button>
         <button className="btn-text" onClick={() => setShowScheduler(true)}>
           Scheduler
+        </button>
+        <button className="btn-text" onClick={() => setShowLogs(true)}>
+          Logs
         </button>
         <button
           className="btn-text"
