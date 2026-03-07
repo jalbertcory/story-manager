@@ -147,7 +147,7 @@ function SchedulerStatus({ onBack }) {
   return (
     <div className="book-settings">
       <div className="settings-header">
-        <button onClick={onBack}>← Back</button>
+        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
         <h2>Scheduler</h2>
       </div>
 

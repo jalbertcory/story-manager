@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 const fetchChapters = async ({ queryKey }) => {
@@ -72,6 +72,8 @@ function BookSettings({ book, onBack }) {
   );
   const [previewResult, setPreviewResult] = useState(null);
   const [previewedChapter, setPreviewedChapter] = useState(null);
+  const [chapterSearch, setChapterSearch] = useState("");
+  const [chaptersExpanded, setChaptersExpanded] = useState(false);
 
   useEffect(() => {
     setTitle(book.title || "");
@@ -81,6 +83,8 @@ function BookSettings({ book, onBack }) {
     setRemovedChapters(book.removed_chapters || []);
     setContentSelectors(book.content_selectors || []);
     setPreviewResult(null);
+    setChapterSearch("");
+    setChaptersExpanded(false);
   }, [book]);
 
   useEffect(() => {
@@ -266,10 +270,16 @@ function BookSettings({ book, onBack }) {
     refreshMutation.isPending ||
     deleteMutation.isPending;
 
+  const filteredChapters = useMemo(() => {
+    if (!chapterSearch.trim()) return chapters;
+    const q = chapterSearch.toLowerCase();
+    return chapters.filter((ch) => ch.title.toLowerCase().includes(q));
+  }, [chapters, chapterSearch]);
+
   return (
     <div className="book-settings">
       <div className="settings-header">
-        <button onClick={onBack} disabled={isBusy}>
+        <button className="btn-text" onClick={onBack} disabled={isBusy} style={{ flexShrink: 0 }}>
           ← Back
         </button>
         <h2>{book.title}</h2>
@@ -430,45 +440,80 @@ function BookSettings({ book, onBack }) {
       </section>
 
       <section className="settings-section">
-        <h3>Chapters</h3>
-        {chaptersLoading && <p>Loading chapters...</p>}
-        <ul className="chapter-list">
-          {chapters.map((chapter) => {
-            const isRemoved = removedChapters.includes(chapter.filename);
-            const isPreviewed = previewedChapter === chapter.filename;
-            return (
-              <li
-                key={chapter.filename}
-                className={isRemoved ? "removed" : ""}
-              >
-                <div className="chapter-row">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={!isRemoved}
-                      onChange={() => toggleChapter(chapter.filename)}
-                    />
-                    {chapter.title}
-                  </label>
-                  <button
-                    className="btn-text chapter-preview-toggle"
-                    onClick={() => toggleChapterPreview(chapter.filename)}
-                  >
-                    {isPreviewed ? "▲ Hide" : "▼ Preview"}
-                  </button>
-                </div>
-                {isPreviewed && (
-                  <div
-                    className="chapter-preview"
-                    dangerouslySetInnerHTML={{
-                      __html: getBodyContent(chapter.content),
-                    }}
-                  />
+        <div className="chapter-section-header">
+          <h3>
+            Chapters
+            {chapters.length > 0 && (
+              <span className="chapter-count"> ({chapters.length})</span>
+            )}
+          </h3>
+          <button
+            className="btn-text"
+            onClick={() => setChaptersExpanded((e) => !e)}
+            disabled={chaptersLoading}
+          >
+            {chaptersExpanded ? "▲ Collapse" : "▼ Expand"}
+          </button>
+        </div>
+
+        {chaptersLoading && <p className="hint" style={{ marginTop: "0.5rem" }}>Loading chapters…</p>}
+
+        {chaptersExpanded && !chaptersLoading && (
+          <>
+            {chapters.length > 10 && (
+              <input
+                className="chapter-search"
+                type="text"
+                placeholder="Filter chapters…"
+                value={chapterSearch}
+                onChange={(e) => setChapterSearch(e.target.value)}
+              />
+            )}
+            <div className="chapter-list-scroll">
+              <ul className="chapter-list">
+                {filteredChapters.length === 0 ? (
+                  <li className="chapter-no-results">No chapters match your search.</li>
+                ) : (
+                  filteredChapters.map((chapter) => {
+                    const isRemoved = removedChapters.includes(chapter.filename);
+                    const isPreviewed = previewedChapter === chapter.filename;
+                    return (
+                      <li
+                        key={chapter.filename}
+                        className={isRemoved ? "removed" : ""}
+                      >
+                        <div className="chapter-row">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={!isRemoved}
+                              onChange={() => toggleChapter(chapter.filename)}
+                            />
+                            {chapter.title}
+                          </label>
+                          <button
+                            className="btn-text chapter-preview-toggle"
+                            onClick={() => toggleChapterPreview(chapter.filename)}
+                          >
+                            {isPreviewed ? "▲ Hide" : "▼ Preview"}
+                          </button>
+                        </div>
+                        {isPreviewed && (
+                          <div
+                            className="chapter-preview"
+                            dangerouslySetInnerHTML={{
+                              __html: getBodyContent(chapter.content),
+                            }}
+                          />
+                        )}
+                      </li>
+                    );
+                  })
                 )}
-              </li>
-            );
-          })}
-        </ul>
+              </ul>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="settings-section settings-actions">
