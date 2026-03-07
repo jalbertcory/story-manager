@@ -201,6 +201,8 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
 
         library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
 
+        chapter_count = 0
+        master_word_count = 0
         try:
             new_epub_path, metadata = await _download_and_parse_web_novel(source_url)
 
@@ -237,15 +239,6 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
             await db.commit()
             await db.refresh(db_book)
 
-            log_entry = schemas.BookLogCreate(
-                book_id=db_book.id,
-                entry_type="added",
-                new_chapter_count=chapter_count,
-                words_added=master_word_count,
-            )
-            await crud.create_book_log(db, log_entry)
-            await epub_editor.apply_book_cleaning(db_book, db)
-
         except Exception as e:
             logger.error(f"Background download failed for book {book_id}: {e}\n{traceback.format_exc()}")
             try:
@@ -254,6 +247,18 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
                 await db.commit()
             except Exception:
                 pass
+            return
+
+        # Post-commit steps: run only after a successful commit so that a
+        # failure here cannot overwrite the already-persisted success state.
+        log_entry = schemas.BookLogCreate(
+            book_id=db_book.id,
+            entry_type="added",
+            new_chapter_count=chapter_count,
+            words_added=master_word_count,
+        )
+        await crud.create_book_log(db, log_entry)
+        await epub_editor.apply_book_cleaning(db_book, db)
 
 
 # Create all database tables on startup
