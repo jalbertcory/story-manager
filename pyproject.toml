@@ -66,6 +66,11 @@ dev = [
     "autoflake==2.3.1",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests that require network access (deselect with '-m not integration')",
+]
+
 [tool.setuptools]
 packages = ["backend"]
 
