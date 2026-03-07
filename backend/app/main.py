@@ -1,6 +1,6 @@
 import asyncio
 import re
-import time
+import traceback
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -79,7 +79,7 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
         )
 
     async with asyncio.Lock():
-        download_start = time.time()
+        before_epubs = {f: f.stat().st_mtime for f in library_path.iterdir() if f.suffix == ".epub"}
         args = [
             "-c",
             str(ini_path),
@@ -98,7 +98,11 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"FanFicFare failed to download story. Error code: {result}.",
             )
-        changed_epubs = [f for f in library_path.iterdir() if f.suffix == ".epub" and f.stat().st_mtime >= download_start]
+        changed_epubs = [
+            f
+            for f in library_path.iterdir()
+            if f.suffix == ".epub" and (f not in before_epubs or f.stat().st_mtime > before_epubs[f])
+        ]
 
     if not changed_epubs:
         raise HTTPException(
@@ -243,7 +247,7 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
             await epub_editor.apply_book_cleaning(db_book, db)
 
         except Exception as e:
-            logger.error(f"Background download failed for book {book_id}: {e}")
+            logger.error(f"Background download failed for book {book_id}: {e}\n{traceback.format_exc()}")
             try:
                 db_book.download_status = "error"
                 db_book.title = "Download failed"

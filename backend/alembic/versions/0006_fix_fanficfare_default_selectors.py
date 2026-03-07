@@ -66,11 +66,7 @@ def upgrade():
             selectors = raw if isinstance(raw, list) else json.loads(raw or "[]")
             fixed = [s.replace("author_note", "author-note") for s in selectors]
             if fixed != list(selectors):
-                conn.execute(
-                    cleaning_configs.update()
-                    .where(cleaning_configs.c.id == row_id)
-                    .values(content_selectors=fixed)
-                )
+                conn.execute(cleaning_configs.update().where(cleaning_configs.c.id == row_id).values(content_selectors=fixed))
 
 
 def downgrade():
@@ -84,8 +80,4 @@ def downgrade():
         selectors = raw if isinstance(raw, list) else json.loads(raw or "[]")
         reverted = [s.replace("author-note", "author_note") for s in selectors]
         if reverted != list(selectors):
-            conn.execute(
-                cleaning_configs.update()
-                .where(cleaning_configs.c.id == row_id)
-                .values(content_selectors=reverted)
-            )
+            conn.execute(cleaning_configs.update().where(cleaning_configs.c.id == row_id).values(content_selectors=reverted))

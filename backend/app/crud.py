@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 import re
-from sqlalchemy import asc, desc, or_, func
+from sqlalchemy import asc, desc, or_, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
@@ -244,6 +244,7 @@ async def delete_book(db: AsyncSession, book: models.Book) -> None:
     """
     Delete a book record from the database.
     """
+    await db.execute(delete(models.BookLog).where(models.BookLog.book_id == book.id))
     await db.delete(book)
     await db.commit()
 
