@@ -9,7 +9,6 @@ Requires:
 """
 
 import pytest
-from pathlib import Path
 
 from ebooklib import epub as ebooklib_epub
 
@@ -37,21 +36,18 @@ async def test_royalroad_download_and_validate():
         # ── Metadata ──────────────────────────────────────────────────────────
         assert metadata["title"], "title should be non-empty"
         assert metadata["author"], "author should be non-empty"
-        assert "blackflame" in metadata["title"].lower(), (
-            f"Expected 'blackflame' in title, got: {metadata['title']!r}"
-        )
+        assert "blackflame" in metadata["title"].lower(), f"Expected 'blackflame' in title, got: {metadata['title']!r}"
 
         # ── File on disk ──────────────────────────────────────────────────────
         assert epub_path.exists(), f"EPUB not found at {epub_path}"
-        assert epub_path.stat().st_size > 100_000, (
-            f"EPUB is suspiciously small ({epub_path.stat().st_size} bytes); download may have failed"
-        )
+        assert (
+            epub_path.stat().st_size > 100_000
+        ), f"EPUB is suspiciously small ({epub_path.stat().st_size} bytes); download may have failed"
 
         # ── Word count ────────────────────────────────────────────────────────
         word_count = epub_editor.get_word_count(str(epub_path))
         assert word_count > 10_000, (
-            f"Expected at least 10 000 words, got {word_count}. "
-            "The download may be incomplete or the wrong story."
+            f"Expected at least 10 000 words, got {word_count}. " "The download may be incomplete or the wrong story."
         )
 
         # ── Chapters ──────────────────────────────────────────────────────────
