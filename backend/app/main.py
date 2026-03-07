@@ -1,6 +1,5 @@
 import asyncio
 import re
-import time
 import traceback
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
@@ -100,7 +99,8 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
                 detail=f"FanFicFare failed to download story. Error code: {result}.",
             )
         changed_epubs = [
-            f for f in library_path.iterdir()
+            f
+            for f in library_path.iterdir()
             if f.suffix == ".epub" and (f not in before_epubs or f.stat().st_mtime > before_epubs[f])
         ]
 
