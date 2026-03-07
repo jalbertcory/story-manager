@@ -38,12 +38,14 @@ _LOG_BUFFER: collections.deque = collections.deque(maxlen=1000)
 
 class _MemoryLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        _LOG_BUFFER.append({
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": self.format(record),
-        })
+        _LOG_BUFFER.append(
+            {
+                "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": self.format(record),
+            }
+        )
 
 
 _mem_handler = _MemoryLogHandler()
@@ -120,7 +122,8 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
                 detail=f"FanFicFare failed to download story. Error code: {result}.",
             )
         changed_epubs = [
-            f for f in library_path.iterdir()
+            f
+            for f in library_path.iterdir()
             if f.suffix == ".epub" and (f not in before_epubs or f.stat().st_mtime > before_epubs[f])
         ]
 
