@@ -149,7 +149,7 @@ function CleaningConfigs({ onBack }) {
   return (
     <div className="cleaning-configs">
       <div className="settings-header">
-        <button onClick={onBack}>← Back</button>
+        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
         <h2>Cleaning Configs</h2>
         <button onClick={() => setCreating(true)} disabled={creating}>
           + New Config
