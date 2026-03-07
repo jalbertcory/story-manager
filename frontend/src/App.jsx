@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -26,6 +26,23 @@ function App() {
   const [editingBook, setEditingBook] = useState(null);
   const [showConfigs, setShowConfigs] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
+
+  const applyView = ({ view, data } = { view: "home" }) => {
+    setEditingBook(view === "book" ? data : null);
+    setShowConfigs(view === "configs");
+    setShowScheduler(view === "scheduler");
+  };
+
+  const navigate = (view, data = null) => {
+    history.pushState({ view, data }, "");
+    applyView({ view, data });
+  };
+
+  useEffect(() => {
+    const onPop = (e) => applyView(e.state || { view: "home" });
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const reprocessMutation = useMutation({
     mutationFn: () =>
@@ -87,26 +104,26 @@ function App() {
 
   if (editingBook) {
     return (
-      <BookSettings book={editingBook} onBack={() => setEditingBook(null)} />
+      <BookSettings book={editingBook} onBack={() => history.back()} />
     );
   }
 
   if (showConfigs) {
-    return <CleaningConfigs onBack={() => setShowConfigs(false)} />;
+    return <CleaningConfigs onBack={() => history.back()} />;
   }
 
   if (showScheduler) {
-    return <SchedulerStatus onBack={() => setShowScheduler(false)} />;
+    return <SchedulerStatus onBack={() => history.back()} />;
   }
 
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Story Manager</h1>
-        <button className="btn-text" onClick={() => setShowConfigs(true)}>
+        <button className="btn-text" onClick={() => navigate("configs")}>
           Cleaning Configs
         </button>
-        <button className="btn-text" onClick={() => setShowScheduler(true)}>
+        <button className="btn-text" onClick={() => navigate("scheduler")}>
           Scheduler
         </button>
         <button
@@ -145,7 +162,7 @@ function App() {
       {error && <p className="error">{error.message}</p>}
       <BookList
         books={books}
-        onEdit={setEditingBook}
+        onEdit={(book) => navigate("book", book)}
         fetchNextPage={fetchNextPage}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
