@@ -63,6 +63,9 @@ test("EpubEditor interactions", async ({ page }) => {
   // The book settings panel should now be visible
   await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();
 
+  // Expand the chapter list
+  await page.getByRole("button", { name: /expand/i }).click();
+
   // Check if the chapter is listed
   await expect(page.getByText("Introduction")).toBeVisible();
 
