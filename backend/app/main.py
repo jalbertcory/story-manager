@@ -469,6 +469,7 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     )
     await crud.create_book_log(db, log_entry)
 
+    await db.refresh(db_book)
     await epub_editor.apply_book_cleaning(db_book, db)
 
     return db_book
