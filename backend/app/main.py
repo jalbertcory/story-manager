@@ -84,10 +84,12 @@ def _run_fff_main(args: List[str]) -> int:
         return 1
 
 
-async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str, Any]]:
+async def _download_and_parse_web_novel(source_url: str, overwrite: bool = False) -> tuple[Path, Dict[str, Any]]:
     """
     Downloads a web novel using FanFicFare and parses its metadata.
     Returns the path to the EPUB and the metadata dictionary.
+    Set overwrite=True (for refresh/scheduler) to force FFF to re-download
+    even when the local file is newer than the story's last update date.
     """
     app_dir = Path(__file__).parent.resolve()
     ini_path = app_dir / "personal.ini"
@@ -109,8 +111,10 @@ async def _download_and_parse_web_novel(source_url: str) -> tuple[Path, Dict[str
             f"output_dir={str(library_path)}",
             "--non-interactive",
             "--debug",
-            source_url,
         ]
+        if overwrite:
+            args += ["-o", "always_overwrite=true"]
+        args.append(source_url)
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _run_fff_main, args)
@@ -320,7 +324,7 @@ async def update_web_novels():
 
                 old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(immutable_path)
 
-                new_epub_path, _ = await _download_and_parse_web_novel(book.source_url)
+                new_epub_path, _ = await _download_and_parse_web_novel(book.source_url, overwrite=True)
 
                 # Mirror refresh_book: overwrite immutable with fresh download, copy to current
                 new_epub_path.rename(immutable_path)
@@ -354,9 +358,9 @@ async def update_web_novels():
                 await epub_editor.apply_book_cleaning(book, db)
                 await crud.increment_update_task(db, task)
             except Exception as e:
-                logger.error(f"Failed to update {book.title}: {e}")
+                logger.error(f"Failed to update {book.title}: {e}\n{traceback.format_exc()}")
     except Exception as e:
-        logger.error(f"Scheduler run failed: {e}")
+        logger.error(f"Scheduler run failed: {e}\n{traceback.format_exc()}")
         failed = True
     finally:
         if task is not None:
@@ -705,7 +709,7 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
 
     old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(current_path)
 
-    new_epub_path, metadata = await _download_and_parse_web_novel(db_book.source_url)
+    new_epub_path, metadata = await _download_and_parse_web_novel(db_book.source_url, overwrite=True)
 
     # The new download becomes the new immutable, and we copy it to current
     new_epub_path.rename(immutable_path)

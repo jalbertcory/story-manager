@@ -24,7 +24,7 @@ engine = create_async_engine(DATABASE_URL)
 
 # Create a configured "Session" class.
 # This is the factory for our database sessions.
-SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 # Create a base class for our declarative models.
 Base = declarative_base()
