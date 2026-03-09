@@ -368,6 +368,10 @@ async def update_web_novels():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Re-attach memory handler after uvicorn resets logging config on startup
+    root_logger = logging.getLogger()
+    if _mem_handler not in root_logger.handlers:
+        root_logger.addHandler(_mem_handler)
     logger.info("Starting up and creating database tables if they don't exist.")
     await create_tables()
     async with SessionLocal() as db:
@@ -587,6 +591,48 @@ async def get_logs(limit: int = 200, level: Optional[str] = None):
     return entries[-limit:]
 
 
+@app.post("/api/storage/cleanup")
+async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)):
+    """
+    Scans the library directory for files not referenced by any book record.
+    dry_run=True (default): returns what would be deleted without deleting anything.
+    dry_run=False: deletes the orphaned files and returns what was deleted.
+    """
+    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    if not library_path.exists():
+        return {"dry_run": dry_run, "files": [], "total_bytes": 0}
+
+    # Collect all paths tracked by the DB (relative to library_path.parent, same as stored)
+    books = await crud.get_books(db, limit=100000)
+    tracked: set[str] = set()
+    for book in books:
+        if book.immutable_path:
+            tracked.add(str((library_path.parent / book.immutable_path).resolve()))
+        if book.current_path:
+            tracked.add(str((library_path.parent / book.current_path).resolve()))
+        if book.cover_path:
+            tracked.add(str((library_path.parent / book.cover_path).resolve()))
+
+    orphans = []
+    for file in library_path.rglob("*"):
+        if not file.is_file():
+            continue
+        path_str = str(file.resolve())
+        if path_str not in tracked:
+            size = file.stat().st_size
+            orphans.append({"path": str(file.relative_to(library_path.parent)), "size_bytes": size})
+
+    total_bytes = sum(f["size_bytes"] for f in orphans)
+
+    if not dry_run:
+        for f in orphans:
+            full = library_path.parent / f["path"]
+            full.unlink(missing_ok=True)
+        logger.info(f"Storage cleanup: deleted {len(orphans)} orphaned files ({total_bytes} bytes)")
+
+    return {"dry_run": dry_run, "files": orphans, "total_bytes": total_bytes}
+
+
 @app.get("/api/scheduler/status", response_model=Optional[schemas.UpdateTask])
 async def get_scheduler_status(db: AsyncSession = Depends(get_db)):
     return await crud.get_latest_update_task(db)
@@ -698,6 +744,8 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.immutable_path:
+        raise HTTPException(status_code=404, detail="EPUB file not found")
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     # Always get chapters from the original immutable epub

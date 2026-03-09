@@ -11,6 +11,7 @@ import AddBook from "./components/AddBook.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
+import StorageCleanup from "./components/StorageCleanup.jsx";
 
 const PAGE_SIZE = 20;
 
@@ -28,6 +29,7 @@ function App() {
   const [showConfigs, setShowConfigs] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [showCleanup, setShowCleanup] = useState(false);
 
   const applyView = ({ view, data } = { view: "home" }) => {
     setEditingBook(view === "book" ? data : null);
@@ -122,6 +124,10 @@ function App() {
     return <Logs onBack={() => setShowLogs(false)} />;
   }
 
+  if (showCleanup) {
+    return <StorageCleanup onBack={() => setShowCleanup(false)} />;
+  }
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -134,6 +140,9 @@ function App() {
         </button>
         <button className="btn-text" onClick={() => setShowLogs(true)}>
           Logs
+        </button>
+        <button className="btn-text" onClick={() => setShowCleanup(true)}>
+          Storage
         </button>
         <button
           className="btn-text"
