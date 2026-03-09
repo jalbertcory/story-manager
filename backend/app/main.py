@@ -280,6 +280,7 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
             words_added=master_word_count,
         )
         await crud.create_book_log(db, log_entry)
+        await db.refresh(db_book)
         await epub_editor.apply_book_cleaning(db_book, db)
 
 
