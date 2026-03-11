@@ -440,10 +440,10 @@ def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
         (e.g. "12 Miles Below: A Prog Fantasy")
     """
     _ROMAN = re.compile(
-        r'^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$',
+        r"^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
         re.IGNORECASE,
     )
-    _TITLE_RE = re.compile(r'^(.+?)\s+(\d+|[IVXLCDMivxlcdm]+)(?:\s*[-:]\s*.+)?$')
+    _TITLE_RE = re.compile(r"^(.+?)\s+(\d+|[IVXLCDMivxlcdm]+)(?:\s*[-:]\s*.+)?$")
 
     # Pass 1: collect (normalized_key, original_prefix) for numbered titles
     parsed: dict[str, tuple[str, str]] = {}
@@ -483,9 +483,7 @@ def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
     return result
 
 
-async def _upload_epub_file(
-    file: UploadFile, library_path: Path, db: AsyncSession
-) -> models.Book:
+async def _upload_epub_file(file: UploadFile, library_path: Path, db: AsyncSession) -> models.Book:
     """
     Saves an EPUB file to the library, extracts metadata, creates a DB record,
     saves the cover, logs the addition, and applies cleaning. Raises HTTPException
@@ -592,9 +590,7 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
 
 @app.post("/api/books/upload_epubs", response_model=List[EpubUploadResult])
-async def upload_epubs(
-    files: List[UploadFile] = File(...), db: AsyncSession = Depends(get_db)
-) -> List[EpubUploadResult]:
+async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = Depends(get_db)) -> List[EpubUploadResult]:
     """
     Uploads multiple EPUB files. After processing all files, auto-detects series
     groupings among books that have no series metadata, using the pattern
@@ -635,8 +631,7 @@ async def upload_epubs(
             for b in updated:
                 await db.refresh(b)
             logger.info(
-                f"Auto-detected series for {len(updated)} books: "
-                + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
+                f"Auto-detected series for {len(updated)} books: " + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
             )
 
     return results
