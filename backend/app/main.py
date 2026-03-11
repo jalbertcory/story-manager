@@ -445,6 +445,18 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         logger.warning(f"Failed to parse series metadata: {e}")
         series = None
 
+    # Detect FanFicFare-downloaded epubs via dc:source and tag them for scheduler updates
+    source_url: Optional[str] = None
+    source_type = models.SourceType.epub
+    try:
+        dc_source = book.get_metadata("DC", "source")
+        if dc_source:
+            source_url = dc_source[0][0]
+            source_type = models.SourceType.web
+            logger.info(f"Detected FFF epub with source URL: {source_url}")
+    except Exception as e:
+        logger.warning(f"Failed to parse dc:source metadata: {e}")
+
     master_word_count = epub_editor.get_word_count(str(immutable_path))
 
     # Create the book record in the database
@@ -454,7 +466,8 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         series=series,
         immutable_path=str(immutable_path.relative_to(library_path.parent)),
         current_path=str(current_path.relative_to(library_path.parent)),
-        source_type=models.SourceType.epub,
+        source_url=source_url,
+        source_type=source_type,
         master_word_count=master_word_count,
         current_word_count=master_word_count,
     )
