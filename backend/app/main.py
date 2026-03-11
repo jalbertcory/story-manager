@@ -420,36 +420,93 @@ class WebNovelRequest(BaseModel):
     url: schemas.HttpUrl
 
 
-@app.post(
-    "/api/books/upload_epub",
-    status_code=status.HTTP_201_CREATED,
-    response_model=schemas.Book,
-)
-async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
-    """
-    Uploads an EPUB file, extracts metadata, and adds it to the database.
-    """
-    app_dir = Path(__file__).parent.resolve()
-    library_path = (app_dir / ".." / ".." / "library").resolve()
-    library_path.mkdir(exist_ok=True)
+class EpubUploadResult(BaseModel):
+    filename: str
+    status: str  # "success" | "skipped" | "error"
+    book: Optional[schemas.Book] = None
+    error: Optional[str] = None
 
-    # Sanitize filename and save the file
+
+def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
+    """
+    Given a list of book titles, detect which ones belong to a series.
+
+    Pass 1 — numbered anchors: looks for "<series> <number|roman> [- <subtitle>]".
+    A series prefix is confirmed only when 2+ numbered entries share it.
+
+    Pass 2 — unnumbered members: for each confirmed prefix, also matches:
+      - a title that IS exactly the prefix  (e.g. "12 Miles Below")
+      - a title that starts with the prefix + ": " or " - "
+        (e.g. "12 Miles Below: A Prog Fantasy")
+    """
+    _ROMAN = re.compile(
+        r'^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$',
+        re.IGNORECASE,
+    )
+    _TITLE_RE = re.compile(r'^(.+?)\s+(\d+|[IVXLCDMivxlcdm]+)(?:\s*[-:]\s*.+)?$')
+
+    # Pass 1: collect (normalized_key, original_prefix) for numbered titles
+    parsed: dict[str, tuple[str, str]] = {}
+    for title in titles:
+        m = _TITLE_RE.match(title.strip())
+        if not m:
+            continue
+        prefix, num = m.group(1).strip(), m.group(2)
+        if not num.isdigit() and not _ROMAN.match(num):
+            continue
+        parsed[title] = (prefix.lower(), prefix)
+
+    groups: dict[str, dict] = {}
+    for title, (key, prefix) in parsed.items():
+        if key not in groups:
+            groups[key] = {"prefix": prefix, "titles": []}
+        groups[key]["titles"].append(title)
+
+    result: dict[str, str] = {}
+    confirmed: dict[str, str] = {}  # normalized_key -> canonical prefix
+    for key, group in groups.items():
+        if len(group["titles"]) >= 2:
+            for title in group["titles"]:
+                result[title] = group["prefix"]
+            confirmed[key] = group["prefix"]
+
+    # Pass 2: pull in unnumbered titles that match a confirmed prefix
+    for title in titles:
+        if title in result:
+            continue
+        t = title.strip().lower()
+        for key, prefix in confirmed.items():
+            if t == key or t.startswith(key + ": ") or t.startswith(key + " - "):
+                result[title] = prefix
+                break
+
+    return result
+
+
+async def _upload_epub_file(
+    file: UploadFile, library_path: Path, db: AsyncSession
+) -> models.Book:
+    """
+    Saves an EPUB file to the library, extracts metadata, creates a DB record,
+    saves the cover, logs the addition, and applies cleaning. Raises HTTPException
+    on duplicate or parse errors.
+    """
     immutable_path = library_path / f"immutable_{file.filename}"
-    with open(immutable_path, "wb+") as file_object:
-        file_object.write(file.file.read())
+    with open(immutable_path, "wb+") as f:
+        f.write(file.file.read())
 
     current_path = library_path / file.filename
-    with open(current_path, "wb+") as file_object:
+    with open(current_path, "wb+") as f:
         file.file.seek(0)
-        file_object.write(file.file.read())
+        f.write(file.file.read())
 
-    # Extract metadata from the EPUB file
     try:
-        book = epub.read_epub(immutable_path)
-        title = book.get_metadata("DC", "title")[0][0]
-        author = book.get_metadata("DC", "creator")[0][0]
-
+        epub_book = epub.read_epub(immutable_path)
+        title = epub_book.get_metadata("DC", "title")[0][0]
+        author = epub_book.get_metadata("DC", "creator")[0][0]
     except Exception as e:
+        immutable_path.unlink(missing_ok=True)
+        current_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to parse EPUB file: {e}",
@@ -465,17 +522,16 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
         )
 
     try:
-        series_metadata = book.get_metadata("calibre", "series")
+        series_metadata = epub_book.get_metadata("calibre", "series")
         series = series_metadata[0][0] if series_metadata else None
     except Exception as e:
         logger.warning(f"Failed to parse series metadata: {e}")
         series = None
 
-    # Detect FanFicFare-downloaded epubs via dc:source and tag them for scheduler updates
     source_url: Optional[str] = None
     source_type = models.SourceType.epub
     try:
-        dc_source = book.get_metadata("DC", "source")
+        dc_source = epub_book.get_metadata("DC", "source")
         if dc_source:
             source_url = dc_source[0][0]
             source_type = models.SourceType.web
@@ -485,7 +541,6 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
     master_word_count = epub_editor.get_word_count(str(immutable_path))
 
-    # Create the book record in the database
     book_to_create = schemas.BookCreate(
         title=title,
         author=author,
@@ -500,14 +555,12 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
     db_book = await crud.create_book(db=db, book=book_to_create)
 
-    # Extract and save the cover image
     cover_path_or_none = _get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
     if cover_path_or_none:
         db_book.cover_path = str(cover_path_or_none.relative_to(library_path.parent))
         await db.commit()
         await db.refresh(db_book)
 
-    # Create a log entry for the new book
     _, chapter_count = _get_epub_word_and_chapter_count(current_path)
     log_entry = schemas.BookLogCreate(
         book_id=db_book.id,
@@ -521,6 +574,98 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
     await epub_editor.apply_book_cleaning(db_book, db)
 
     return db_book
+
+
+@app.post(
+    "/api/books/upload_epub",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.Book,
+)
+async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
+    """
+    Uploads a single EPUB file, extracts metadata, and adds it to the database.
+    """
+    app_dir = Path(__file__).parent.resolve()
+    library_path = (app_dir / ".." / ".." / "library").resolve()
+    library_path.mkdir(exist_ok=True)
+    return await _upload_epub_file(file, library_path, db)
+
+
+@app.post("/api/books/upload_epubs", response_model=List[EpubUploadResult])
+async def upload_epubs(
+    files: List[UploadFile] = File(...), db: AsyncSession = Depends(get_db)
+) -> List[EpubUploadResult]:
+    """
+    Uploads multiple EPUB files. After processing all files, auto-detects series
+    groupings among books that have no series metadata, using the pattern
+    "<series name> <number> [- <subtitle>]".
+    """
+    app_dir = Path(__file__).parent.resolve()
+    library_path = (app_dir / ".." / ".." / "library").resolve()
+    library_path.mkdir(exist_ok=True)
+
+    results: List[EpubUploadResult] = []
+    created_books: List[models.Book] = []
+
+    for file in files:
+        try:
+            db_book = await _upload_epub_file(file, library_path, db)
+            results.append(EpubUploadResult(filename=file.filename, status="success", book=db_book))
+            created_books.append(db_book)
+        except HTTPException as e:
+            status_str = "skipped" if e.status_code == 409 else "error"
+            results.append(EpubUploadResult(filename=file.filename, status=status_str, error=e.detail))
+        except Exception as e:
+            results.append(EpubUploadResult(filename=file.filename, status="error", error=str(e)))
+
+    # Detect series across the uploaded batch AND existing library books without a series.
+    # This handles the case where book 1 was already in the library and book 2 is being uploaded now.
+    batch_ids = {b.id for b in created_books}
+    batch_no_series = [b for b in created_books if not b.series]
+    existing_no_series = [b for b in await crud.get_books_without_series(db) if b.id not in batch_ids]
+    all_candidates = batch_no_series + existing_no_series
+
+    if len(all_candidates) >= 2:
+        series_map = detect_series_from_titles([b.title for b in all_candidates])
+        updated = [b for b in all_candidates if b.title in series_map]
+        if updated:
+            for b in updated:
+                b.series = series_map[b.title]
+            await db.commit()
+            for b in updated:
+                await db.refresh(b)
+            logger.info(
+                f"Auto-detected series for {len(updated)} books: "
+                + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
+            )
+
+    return results
+
+
+@app.post("/api/books/detect-series")
+async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict:
+    """
+    Scans all books in the library that have no series assigned and auto-detects
+    series groupings using title patterns like "<series> <number> [- <subtitle>]".
+    Only books without an existing series are considered or updated.
+    """
+    candidates = await crud.get_books_without_series(db)
+    if len(candidates) < 2:
+        return {"updated": 0, "series_detected": []}
+
+    series_map = detect_series_from_titles([b.title for b in candidates])
+    to_update = [b for b in candidates if b.title in series_map]
+
+    if not to_update:
+        return {"updated": 0, "series_detected": []}
+
+    for b in to_update:
+        b.series = series_map[b.title]
+    await db.commit()
+
+    series_detected = sorted(set(series_map.values()))
+    logger.info(f"detect-series: updated {len(to_update)} books, series: {series_detected}")
+    return {"updated": len(to_update), "series_detected": series_detected}
 
 
 @app.post(
