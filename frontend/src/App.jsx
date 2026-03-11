@@ -32,15 +32,47 @@ function App() {
     setEditingBook(view === "book" ? data : null);
     setShowConfigs(view === "configs");
     setShowScheduler(view === "scheduler");
+    setShowLogs(view === "logs");
+    setShowCleanup(view === "utilities");
+  };
+
+  const viewToUrl = (view, data) => {
+    if (view === "book" && data?.id) return `/books/${data.id}`;
+    if (view === "home") return "/";
+    return `/${view}`;
+  };
+
+  const applyPath = (pathname, stateData = null) => {
+    if (pathname === "/configs") return applyView({ view: "configs" });
+    if (pathname === "/scheduler") return applyView({ view: "scheduler" });
+    if (pathname === "/logs") return applyView({ view: "logs" });
+    if (pathname === "/utilities") return applyView({ view: "utilities" });
+    const m = pathname.match(/^\/books\/(\d+)$/);
+    if (m) {
+      const bookId = parseInt(m[1]);
+      if (stateData?.id === bookId) {
+        return applyView({ view: "book", data: stateData });
+      }
+      fetch(`/api/books/${bookId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((book) => applyView(book ? { view: "book", data: book } : { view: "home" }));
+      return;
+    }
+    applyView({ view: "home" });
   };
 
   const navigate = (view, data = null) => {
-    history.pushState({ view, data }, "");
+    const url = viewToUrl(view, data);
+    history.pushState({ view, data }, "", url);
     applyView({ view, data });
   };
 
   useEffect(() => {
-    const onPop = (e) => applyView(e.state || { view: "home" });
+    applyPath(window.location.pathname);
+  }, []);
+
+  useEffect(() => {
+    const onPop = (e) => applyPath(window.location.pathname, e.state?.data ?? null);
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -110,11 +142,11 @@ function App() {
   }
 
   if (showLogs) {
-    return <Logs onBack={() => setShowLogs(false)} />;
+    return <Logs onBack={() => history.back()} />;
   }
 
   if (showCleanup) {
-    return <Utilities onBack={() => setShowCleanup(false)} />;
+    return <Utilities onBack={() => history.back()} />;
   }
 
   return (
@@ -127,10 +159,10 @@ function App() {
         <button className="btn-text" onClick={() => navigate("scheduler")}>
           Scheduler
         </button>
-        <button className="btn-text" onClick={() => setShowLogs(true)}>
+        <button className="btn-text" onClick={() => navigate("logs")}>
           Logs
         </button>
-        <button className="btn-text" onClick={() => setShowCleanup(true)}>
+        <button className="btn-text" onClick={() => navigate("utilities")}>
           Utilities
         </button>
       </header>
