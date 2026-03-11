@@ -6,7 +6,8 @@ from sqlalchemy.pool import StaticPool
 from pathlib import Path
 
 from ebooklib import epub
-from backend.app.main import app, detect_series_from_titles
+from backend.app.main import app
+from backend.app.services.series import detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import models, schemas, crud
 
@@ -62,7 +63,7 @@ async def test_add_web_novel(db_session, mocker):
     from unittest.mock import AsyncMock
 
     # Prevent the background download from running (it uses the prod DB, not the test DB)
-    mocker.patch("backend.app.main._finish_web_novel_download", new_callable=AsyncMock)
+    mocker.patch("backend.app.routers.web_novels.finish_web_novel_download", new_callable=AsyncMock)
 
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
@@ -384,7 +385,7 @@ async def test_refresh_book(db_session, mocker):
     library_path = Path("./library").resolve()
     new_epub_path = library_path / "Refreshed Title-Refreshed Author.epub"
     mocker.patch(
-        "backend.app.main._download_and_parse_web_novel",
+        "backend.app.routers.web_novels.download_web_novel",
         return_value=(
             new_epub_path,
             {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"},
