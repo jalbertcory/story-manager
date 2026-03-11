@@ -101,6 +101,12 @@ function BookSettings({ book, onBack }) {
     queryFn: fetchMatchedConfig,
   });
 
+  const { data: allSeries = [] } = useQuery({
+    queryKey: ["series"],
+    queryFn: () => fetch("/api/series").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+
   const saveMutation = useMutation({
     mutationFn: async (data) => {
       const res = await fetch(`/api/books/${book.id}`, {
@@ -298,10 +304,16 @@ function BookSettings({ book, onBack }) {
         <label>
           Series
           <input
+            list="series-options"
             value={series}
             onChange={(e) => setSeries(e.target.value)}
             placeholder="Leave blank if none"
           />
+          <datalist id="series-options">
+            {allSeries.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
         </label>
         <label>
           Notes

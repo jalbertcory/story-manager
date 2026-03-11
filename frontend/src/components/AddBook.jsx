@@ -37,22 +37,7 @@ function AddBook() {
   const [dragging, setDragging] = useState(false);
   const [pending, setPending] = useState(false);
   const [results, setResults] = useState(null);
-  const [detectingSeriesState, setDetectingSeriesState] = useState(null); // null | "pending" | { updated, series_detected }
   const fileInputRef = useRef(null);
-
-  const handleDetectSeries = async () => {
-    setDetectingSeriesState("pending");
-    try {
-      const res = await fetch("/api/books/detect-series", { method: "POST" });
-      const data = await res.json();
-      if (data.updated > 0) {
-        queryClient.invalidateQueries({ queryKey: ["books"] });
-      }
-      setDetectingSeriesState(data);
-    } catch {
-      setDetectingSeriesState({ updated: 0, series_detected: [], error: true });
-    }
-  };
 
   const handleFileChange = (e) => {
     setFiles((prev) => [...prev, ...Array.from(e.target.files)]);
@@ -197,26 +182,6 @@ function AddBook() {
           {pending ? "Adding..." : total > 1 ? `Add ${total} Books` : "Add Book"}
         </button>
       </form>
-
-      <div className="detect-series-row">
-        <button
-          type="button"
-          className="detect-series-btn"
-          onClick={handleDetectSeries}
-          disabled={detectingSeriesState === "pending"}
-        >
-          {detectingSeriesState === "pending" ? "Detecting…" : "Detect Series in Library"}
-        </button>
-        {detectingSeriesState && detectingSeriesState !== "pending" && (
-          <span className="detect-series-result">
-            {detectingSeriesState.error
-              ? "Error running detection."
-              : detectingSeriesState.updated === 0
-              ? "No new series found."
-              : `Updated ${detectingSeriesState.updated} book${detectingSeriesState.updated > 1 ? "s" : ""}: ${detectingSeriesState.series_detected.join(", ")}`}
-          </span>
-        )}
-      </div>
 
       {results && (
         <div className="add-results">
