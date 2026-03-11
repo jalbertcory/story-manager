@@ -84,11 +84,12 @@ def _run_fff_main(args: List[str]) -> int:
         return 1
 
 
-async def _download_and_parse_web_novel(source_url: str, overwrite: bool = False) -> tuple[Path, Dict[str, Any]]:
+async def _download_and_parse_web_novel(source_url: str, overwrite: bool = False) -> Optional[tuple[Path, Dict[str, Any]]]:
     """
     Downloads a web novel using FanFicFare and parses its metadata.
-    Returns the path to the EPUB and the metadata dictionary.
-    Set overwrite=True (for refresh/scheduler) to force FFF to re-download
+    Returns the path to the EPUB and the metadata dictionary, or None if FFF
+    determined the story has not been updated (only possible when overwrite=False).
+    Set overwrite=True (for refresh/manual) to force FFF to re-download
     even when the local file is newer than the story's last update date.
     """
     app_dir = Path(__file__).parent.resolve()
@@ -131,6 +132,9 @@ async def _download_and_parse_web_novel(source_url: str, overwrite: bool = False
         ]
 
     if not changed_epubs:
+        if not overwrite:
+            # FFF skipped the download because the story hasn't been updated — normal outcome
+            return None
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="FanFicFare ran but no new or updated EPUB file was found.",
@@ -230,7 +234,13 @@ async def _finish_web_novel_download(book_id: int, source_url: str) -> None:
         chapter_count = 0
         master_word_count = 0
         try:
-            new_epub_path, metadata = await _download_and_parse_web_novel(source_url)
+            result = await _download_and_parse_web_novel(source_url)
+            if result is None:
+                db_book.download_status = "error"
+                db_book.title = "Error: FFF produced no epub for new URL"
+                await db.commit()
+                return
+            new_epub_path, metadata = result
 
             existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
             if existing and existing.id != book_id:
@@ -324,7 +334,23 @@ async def update_web_novels():
 
                 old_word_count, old_chapter_count = _get_epub_word_and_chapter_count(immutable_path)
 
-                new_epub_path, _ = await _download_and_parse_web_novel(book.source_url, overwrite=True)
+                result = await _download_and_parse_web_novel(book.source_url)
+
+                if result is None:
+                    # FFF confirmed no update since last download
+                    logger.info(f"No update available for {book.title} (FFF skipped).")
+                    log_entry = schemas.BookLogCreate(
+                        book_id=book.id,
+                        entry_type="checked",
+                        previous_chapter_count=old_chapter_count,
+                        new_chapter_count=old_chapter_count,
+                        words_added=0,
+                    )
+                    await crud.create_book_log(db, log_entry)
+                    await crud.increment_update_task(db, task)
+                    continue
+
+                new_epub_path, _ = result
 
                 # Mirror refresh_book: overwrite immutable with fresh download, copy to current
                 new_epub_path.rename(immutable_path)
