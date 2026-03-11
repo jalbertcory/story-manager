@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import {
   useInfiniteQuery,
-  useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
 import "./App.css";
@@ -11,7 +10,7 @@ import AddBook from "./components/AddBook.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
-import StorageCleanup from "./components/StorageCleanup.jsx";
+import Utilities from "./components/Utilities.jsx";
 
 const PAGE_SIZE = 20;
 
@@ -47,14 +46,6 @@ function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-
-  const reprocessMutation = useMutation({
-    mutationFn: () =>
-      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) =>
-        r.json(),
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
-  });
 
   const {
     data,
@@ -125,7 +116,7 @@ function App() {
   }
 
   if (showCleanup) {
-    return <StorageCleanup onBack={() => setShowCleanup(false)} />;
+    return <Utilities onBack={() => setShowCleanup(false)} />;
   }
 
   return (
@@ -142,14 +133,7 @@ function App() {
           Logs
         </button>
         <button className="btn-text" onClick={() => setShowCleanup(true)}>
-          Storage
-        </button>
-        <button
-          className="btn-text"
-          onClick={() => reprocessMutation.mutate()}
-          disabled={reprocessMutation.isPending}
-        >
-          {reprocessMutation.isPending ? "Reprocessing..." : "Reprocess All"}
+          Utilities
         </button>
       </header>
       <div className="search-controls">

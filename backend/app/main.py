@@ -716,6 +716,12 @@ async def get_all_books(
     return [schemas.Book.from_orm(book) for book in books]
 
 
+@app.get("/api/series", response_model=List[str])
+async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
+    """Return all distinct series names in the library, sorted alphabetically."""
+    return await crud.get_all_series(db)
+
+
 @app.get("/api/books/search", response_model=List[schemas.Book])
 async def search_books_unified(
     q: str,

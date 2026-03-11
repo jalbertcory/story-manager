@@ -305,6 +305,17 @@ async def get_book_logs_for_task(db: AsyncSession, task_id: int) -> tuple[Option
     return task, result.all()
 
 
+async def get_all_series(db: AsyncSession) -> List[str]:
+    """Return all distinct non-null series names, sorted alphabetically."""
+    result = await db.execute(
+        select(models.Book.series)
+        .filter(models.Book.series.isnot(None))
+        .distinct()
+        .order_by(models.Book.series)
+    )
+    return [row[0] for row in result.all()]
+
+
 async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
     """
     Retrieve all books that have no series assigned.

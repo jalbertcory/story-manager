@@ -1145,6 +1145,78 @@ async def test_scheduler_history_task_logs_not_found(db_session):
 # ─── detect_series_from_titles unit tests ────────────────────────────────────
 
 
+@pytest.mark.asyncio
+async def test_get_series_empty(db_session):
+    """
+    Test that GET /api/series returns an empty list when no books have a series.
+    """
+    response = client.get("/api/series")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_get_series_sorted_and_distinct(db_session):
+    """
+    Test that GET /api/series returns distinct, alphabetically sorted series names
+    and excludes books with no series.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        # Two books in the same series (should appear once)
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Zebra Saga 1",
+                author="Author A",
+                series="Zebra Saga",
+                immutable_path="zs1i",
+                current_path="zs1c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Zebra Saga 2",
+                author="Author A",
+                series="Zebra Saga",
+                immutable_path="zs2i",
+                current_path="zs2c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        # A second series
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Alpha Chronicles 1",
+                author="Author B",
+                series="Alpha Chronicles",
+                immutable_path="ac1i",
+                current_path="ac1c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        # A book with no series (should be excluded)
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Standalone Book",
+                author="Author C",
+                series=None,
+                immutable_path="sbi",
+                current_path="sbc",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get("/api/series")
+    assert response.status_code == 200
+    data = response.json()
+    # Two distinct series, alphabetically sorted, no duplicates, no None
+    assert data == ["Alpha Chronicles", "Zebra Saga"]
+
+
 def test_detect_series_numbered_arabic():
     """Two books with arabic numbers and subtitles form a series."""
     titles = ["Series A 1 - The Beginning", "Series A 2 - The Next One"]
