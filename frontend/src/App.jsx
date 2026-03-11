@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import {
   useInfiniteQuery,
-  useQueryClient,
 } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
@@ -15,7 +14,6 @@ import Utilities from "./components/Utilities.jsx";
 const PAGE_SIZE = 20;
 
 function App() {
-  const queryClient = useQueryClient();
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState("asc");
