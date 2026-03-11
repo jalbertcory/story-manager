@@ -12,7 +12,7 @@ import pytest
 
 from ebooklib import epub as ebooklib_epub
 
-from backend.app.main import _download_and_parse_web_novel
+from backend.app.services.web_novel import download_web_novel as _download_and_parse_web_novel
 from backend.app import epub_editor
 
 ROYALROAD_URL = "https://www.royalroad.com/fiction/153080/blackflame-mage-litrpg-regressor-isekai"
