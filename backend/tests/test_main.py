@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from pathlib import Path
 
 from ebooklib import epub
-from backend.app.main import app
+from backend.app.main import app, detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import models, schemas, crud
 
@@ -1140,3 +1140,95 @@ async def test_scheduler_history_task_logs_not_found(db_session):
     response = client.get("/api/scheduler/history/9999/logs")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+# ─── detect_series_from_titles unit tests ────────────────────────────────────
+
+
+def test_detect_series_numbered_arabic():
+    """Two books with arabic numbers and subtitles form a series."""
+    titles = ["Series A 1 - The Beginning", "Series A 2 - The Next One"]
+    result = detect_series_from_titles(titles)
+    assert result == {
+        "Series A 1 - The Beginning": "Series A",
+        "Series A 2 - The Next One": "Series A",
+    }
+
+
+def test_detect_series_roman_numerals():
+    """Books with roman numerals II and III are detected as a series."""
+    titles = ["12 Miles Below II", "12 Miles Below III"]
+    result = detect_series_from_titles(titles)
+    assert result["12 Miles Below II"] == "12 Miles Below"
+    assert result["12 Miles Below III"] == "12 Miles Below"
+
+
+def test_detect_series_unnumbered_exact_prefix():
+    """A title that is exactly the series prefix is pulled into the series."""
+    titles = ["12 Miles Below II", "12 Miles Below III", "12 Miles Below"]
+    result = detect_series_from_titles(titles)
+    assert result["12 Miles Below"] == "12 Miles Below"
+
+
+def test_detect_series_unnumbered_colon_subtitle():
+    """A title with the series prefix followed by ': subtitle' is pulled in."""
+    titles = [
+        "12 Miles Below II",
+        "12 Miles Below III",
+        "12 Miles Below: A Prog Fantasy",
+    ]
+    result = detect_series_from_titles(titles)
+    assert result["12 Miles Below: A Prog Fantasy"] == "12 Miles Below"
+
+
+def test_detect_series_all_four_12_miles_below():
+    """All four 12 Miles Below titles are grouped into a single series."""
+    titles = [
+        "12 Miles Below II",
+        "12 Miles Below III",
+        "12 Miles Below",
+        "12 Miles Below: A Prog Fantasy",
+    ]
+    result = detect_series_from_titles(titles)
+    assert set(result.keys()) == set(titles)
+    assert all(v == "12 Miles Below" for v in result.values())
+
+
+def test_detect_series_requires_two_numbered_anchors():
+    """A single numbered entry is not enough to confirm a series."""
+    titles = ["My Series 1 - Intro", "Unrelated Book"]
+    result = detect_series_from_titles(titles)
+    assert result == {}
+
+
+def test_detect_series_no_false_positive_standalone():
+    """Books that share no common pattern are not grouped."""
+    titles = ["The Hobbit", "Dune", "Foundation"]
+    result = detect_series_from_titles(titles)
+    assert result == {}
+
+
+def test_detect_series_multiple_independent_series():
+    """Two distinct series in the same list are both detected independently."""
+    titles = [
+        "Shadow 1 - Awakening",
+        "Shadow 2 - Reckoning",
+        "Iron 1 - Forge",
+        "Iron 2 - Flame",
+    ]
+    result = detect_series_from_titles(titles)
+    assert result["Shadow 1 - Awakening"] == "Shadow"
+    assert result["Shadow 2 - Reckoning"] == "Shadow"
+    assert result["Iron 1 - Forge"] == "Iron"
+    assert result["Iron 2 - Flame"] == "Iron"
+
+
+def test_detect_series_dash_subtitle_unnumbered():
+    """Unnumbered title with ' - subtitle' separator is pulled into the series."""
+    titles = [
+        "My Series 1 - Part One",
+        "My Series 2 - Part Two",
+        "My Series - The Prequel",
+    ]
+    result = detect_series_from_titles(titles)
+    assert result["My Series - The Prequel"] == "My Series"

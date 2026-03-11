@@ -124,6 +124,107 @@
 .drop-zone p {
   margin: 0;
 }
+.file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+}
+.file-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+  font-size: 0.85rem;
+}
+.file-list .add-more-hint {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  justify-content: center;
+  padding-top: 0.35rem;
+}
+.remove-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 0.25rem;
+  line-height: 1;
+}
+.remove-btn:hover {
+  color: var(--text);
+}
+.url-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+.url-row input {
+  flex: 1;
+}
+.add-url-btn {
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  margin-top: 0.25rem;
+}
+.add-url-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.detect-series-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.detect-series-btn {
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+}
+.detect-series-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.detect-series-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.detect-series-result {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.add-results {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+}
+.add-results .success {
+  color: var(--success, #50fa7b);
+}
+.add-results .error-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.add-results .error {
+  color: var(--error, #ff5555);
+}
+.add-results .skipped {
+  color: var(--text-muted);
+}
 
 .form-group {
   display: flex;

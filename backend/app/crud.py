@@ -305,6 +305,14 @@ async def get_book_logs_for_task(db: AsyncSession, task_id: int) -> tuple[Option
     return task, result.all()
 
 
+async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
+    """
+    Retrieve all books that have no series assigned.
+    """
+    result = await db.execute(select(models.Book).filter(models.Book.series.is_(None)))
+    return result.scalars().all()
+
+
 async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str) -> Optional[models.Book]:
     """
     Retrieve a book by exact (case-insensitive) title and author match.
