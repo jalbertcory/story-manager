@@ -859,6 +859,14 @@ async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)):
     ]
 
 
+@app.get("/api/books/{book_id}", response_model=schemas.Book)
+async def get_book(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return db_book
+
+
 @app.put("/api/books/{book_id}", response_model=schemas.Book)
 async def update_book_details(
     book_id: int, book_update: schemas.BookUpdate, db: AsyncSession = Depends(get_db)
