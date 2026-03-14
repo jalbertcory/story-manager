@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from . import crud, models
 from .database import SessionLocal, engine
 from .logging_config import setup_logging
-from .routers import api_keys, books, cleaning, covers, opds, reader, scheduler, storage, upload, web_novels
+from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
 from .services.web_novel import update_web_novels
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,6 @@ app.include_router(cleaning.router)
 app.include_router(covers.router)
 app.include_router(scheduler.router)
 app.include_router(storage.router)
-app.include_router(opds.router)
 app.include_router(api_keys.router)
 app.include_router(reader.router)
 

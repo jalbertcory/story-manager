@@ -864,9 +864,13 @@ async def test_search_books_by_series(db_session):
 @pytest.mark.asyncio
 async def test_opds_root_feed(db_session):
     """
-    Test that GET /opds returns a valid Atom navigation feed.
+    Test that GET /reader/opds returns a valid authenticated Atom navigation feed.
     """
-    response = client.get("/opds")
+    key_response = client.post("/api/reader-keys", json={"label": "Test Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
@@ -875,8 +879,8 @@ async def test_opds_root_feed(db_session):
     ATOM = "{http://www.w3.org/2005/Atom}"
     root = ET.fromstring(response.content)
     assert root.tag == f"{ATOM}feed"
-    assert root.findtext(f"{ATOM}title") == "Story Manager Library"
-    # Should have a subsection entry pointing to /opds/catalog
+    assert root.findtext(f"{ATOM}title") == "Story Manager Reader"
+    # Should have a subsection entry pointing to /reader/opds/catalog
     entries = root.findall(f"{ATOM}entry")
     assert len(entries) == 1
     assert entries[0].findtext(f"{ATOM}title") == "All Books"
@@ -885,7 +889,7 @@ async def test_opds_root_feed(db_session):
 @pytest.mark.asyncio
 async def test_opds_catalog_feed(db_session):
     """
-    Test that GET /opds/catalog returns an acquisition feed with book entries.
+    Test that GET /reader/opds/catalog returns an acquisition feed with book entries.
     """
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -899,7 +903,11 @@ async def test_opds_catalog_feed(db_session):
             ),
         )
 
-    response = client.get("/opds/catalog")
+    key_response = client.post("/api/reader-keys", json={"label": "Catalog Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds/catalog", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
@@ -921,7 +929,7 @@ async def test_opds_catalog_feed(db_session):
 @pytest.mark.asyncio
 async def test_opds_search_feed(db_session):
     """
-    Test that GET /opds/search?q=... returns matching book entries.
+    Test that GET /reader/opds/search?q=... returns matching book entries.
     """
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -945,7 +953,11 @@ async def test_opds_search_feed(db_session):
             ),
         )
 
-    response = client.get("/opds/search?q=Searchable")
+    key_response = client.post("/api/reader-keys", json={"label": "Search Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds/search?q=Searchable", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
