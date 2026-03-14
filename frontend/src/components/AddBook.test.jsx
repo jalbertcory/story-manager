@@ -5,18 +5,18 @@ import AddBook from "./AddBook.jsx";
 import { renderWithClient } from "../test-utils.jsx";
 
 describe("AddBook", () => {
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
   });
 
   it("summarizes mixed import results and shows skipped duplicates separately", async () => {
-    global.fetch.mockResolvedValueOnce({
+    globalThis.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => [
         {
