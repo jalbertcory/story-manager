@@ -1,5 +1,6 @@
 import pytest
 import pytest_asyncio
+import zipfile
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -128,6 +129,13 @@ def create_dummy_epub(filepath: Path, title: str, author: str, series: str = Non
     epub.write_epub(filepath, book, {})
 
 
+def create_zip_archive(zip_path: Path, entries: dict[str, bytes]):
+    """Creates a ZIP archive for upload testing."""
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+
+
 @pytest.mark.asyncio
 async def test_upload_epub(db_session):
     """
@@ -165,6 +173,81 @@ async def test_upload_epub(db_session):
     books = response.json()
     assert len(books) == 1
     assert books[0]["title"] == "Uploaded Book"
+
+
+@pytest.mark.asyncio
+async def test_upload_zip_with_nested_epubs(db_session):
+    """
+    Test uploading a ZIP file with EPUBs in nested folders ignores non-EPUB files.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+
+    first_epub = library_path / "Nested One.epub"
+    second_epub = library_path / "Nested Two.epub"
+    zip_path = library_path / "batch-upload.zip"
+
+    create_dummy_epub(first_epub, "Nested One", "Author One")
+    create_dummy_epub(second_epub, "Nested Two", "Author Two")
+
+    create_zip_archive(
+        zip_path,
+        {
+            "collection/one/Nested One.epub": first_epub.read_bytes(),
+            "collection/two/Nested Two.epub": second_epub.read_bytes(),
+            "collection/notes/readme.txt": b"ignore me",
+        },
+    )
+
+    with open(zip_path, "rb") as f:
+        response = client.post("/api/books/upload_epubs", files=[("files", ("batch-upload.zip", f, "application/zip"))])
+
+    first_epub.unlink(missing_ok=True)
+    second_epub.unlink(missing_ok=True)
+    zip_path.unlink(missing_ok=True)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert {item["status"] for item in data} == {"success"}
+    assert {item["book"]["title"] for item in data} == {"Nested One", "Nested Two"}
+    assert all(item["filename"].startswith("batch-upload.zip:collection/") for item in data)
+
+    # Imported books are written using a flattened version of the nested archive path.
+    for expected_path in [
+        library_path / "collection_one_Nested One.epub",
+        library_path / "immutable_collection_one_Nested One.epub",
+        library_path / "collection_two_Nested Two.epub",
+        library_path / "immutable_collection_two_Nested Two.epub",
+    ]:
+        assert expected_path.exists()
+        expected_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_upload_zip_with_no_epubs(db_session):
+    """
+    Test uploading a ZIP file with no EPUB entries reports a skipped result.
+    """
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    zip_path = library_path / "non-books.zip"
+    create_zip_archive(zip_path, {"nested/readme.txt": b"hello", "nested/image.jpg": b"jpg"})
+
+    with open(zip_path, "rb") as f:
+        response = client.post("/api/books/upload_epubs", files=[("files", ("non-books.zip", f, "application/zip"))])
+
+    zip_path.unlink(missing_ok=True)
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "filename": "non-books.zip",
+            "status": "skipped",
+            "book": None,
+            "error": "No EPUB files found in ZIP archive",
+        }
+    ]
 
 
 @pytest.mark.asyncio

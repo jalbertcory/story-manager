@@ -1,6 +1,9 @@
 """EPUB upload endpoints: single file, multi-file batch, and library-wide series detection."""
 
 import logging
+from io import BytesIO
+import zipfile
+from pathlib import PurePosixPath
 from typing import List, Optional
 
 from ebooklib import epub
@@ -26,21 +29,57 @@ class EpubUploadResult(BaseModel):
     error: Optional[str] = None
 
 
-async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
+def _is_zip_upload(file: UploadFile) -> bool:
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    return filename.endswith(".zip") or content_type in {"application/zip", "application/x-zip-compressed"}
+
+
+def _safe_batch_filename(name: str) -> str:
+    path = PurePosixPath(name)
+    parts = [part for part in path.parts if part not in {"", ".", ".."}]
+    safe_name = "_".join(parts) if parts else "book.epub"
+    return safe_name.replace("/", "_").replace("\\", "_")
+
+
+def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> List[tuple[str, bytes, str]]:
+    epub_entries: List[tuple[str, bytes, str]] = []
+
+    try:
+        with zipfile.ZipFile(file=BytesIO(payload)) as archive:
+            for entry in archive.infolist():
+                if entry.is_dir():
+                    continue
+                entry_name = entry.filename
+                if not entry_name.lower().endswith(".epub"):
+                    continue
+
+                relative_name = _safe_batch_filename(entry_name)
+                display_name = f"{zip_name}:{entry_name}"
+                epub_entries.append((display_name, archive.read(entry), relative_name))
+    except zipfile.BadZipFile as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read ZIP file '{zip_name}': {e}",
+        ) from e
+
+    return epub_entries
+
+
+async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) -> models.Book:
     """
     Saves an EPUB to the library, extracts metadata, creates a DB record,
     saves the cover, logs the addition, and applies cleaning.
     Raises HTTPException on duplicate or parse errors.
     """
     LIBRARY_PATH.mkdir(exist_ok=True)
-    immutable_path = LIBRARY_PATH / f"immutable_{file.filename}"
+    immutable_path = LIBRARY_PATH / f"immutable_{filename}"
     with open(immutable_path, "wb+") as f:
-        f.write(file.file.read())
+        f.write(payload)
 
-    current_path = LIBRARY_PATH / file.filename
+    current_path = LIBRARY_PATH / filename
     with open(current_path, "wb+") as f:
-        file.file.seek(0)
-        f.write(file.file.read())
+        f.write(payload)
 
     try:
         epub_book = epub.read_epub(immutable_path)
@@ -118,6 +157,13 @@ async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
     return db_book
 
 
+async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is missing a filename")
+    payload = await file.read()
+    return await _upload_epub_bytes(file.filename, payload, db)
+
+
 @router.post(
     "/api/books/upload_epub",
     status_code=status.HTTP_201_CREATED,
@@ -139,14 +185,39 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
 
     for file in files:
         try:
+            if _is_zip_upload(file):
+                archive_name = file.filename or "upload.zip"
+                epub_entries = _extract_epubs_from_zip(archive_name, await file.read())
+                if not epub_entries:
+                    results.append(
+                        EpubUploadResult(
+                            filename=archive_name,
+                            status="skipped",
+                            error="No EPUB files found in ZIP archive",
+                        )
+                    )
+                    continue
+
+                for display_name, payload, safe_name in epub_entries:
+                    try:
+                        db_book = await _upload_epub_bytes(safe_name, payload, db)
+                        results.append(EpubUploadResult(filename=display_name, status="success", book=db_book))
+                        created_books.append(db_book)
+                    except HTTPException as e:
+                        status_str = "skipped" if e.status_code == 409 else "error"
+                        results.append(EpubUploadResult(filename=display_name, status=status_str, error=e.detail))
+                    except Exception as e:
+                        results.append(EpubUploadResult(filename=display_name, status="error", error=str(e)))
+                continue
+
             db_book = await _upload_epub_file(file, db)
             results.append(EpubUploadResult(filename=file.filename, status="success", book=db_book))
             created_books.append(db_book)
         except HTTPException as e:
             status_str = "skipped" if e.status_code == 409 else "error"
-            results.append(EpubUploadResult(filename=file.filename, status=status_str, error=e.detail))
+            results.append(EpubUploadResult(filename=file.filename or "upload", status=status_str, error=e.detail))
         except Exception as e:
-            results.append(EpubUploadResult(filename=file.filename, status="error", error=str(e)))
+            results.append(EpubUploadResult(filename=file.filename or "upload", status="error", error=str(e)))
 
     # Detect series across the batch AND existing library books without a series.
     batch_ids = {b.id for b in created_books}

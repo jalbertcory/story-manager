@@ -30,6 +30,31 @@ const addWebNovel = async (url) => {
   return res.json();
 };
 
+const formatImportSummary = ({ totalProcessed, succeeded, skipped, failed }) => {
+  if (totalProcessed === 0) {
+    return "No books were processed.";
+  }
+
+  const parts = [`Imported ${succeeded.length} of ${totalProcessed} book${totalProcessed === 1 ? "" : "s"}.`];
+  if (skipped.length > 0) {
+    parts.push(`${skipped.length} skipped.`);
+  }
+  if (failed.length > 0) {
+    parts.push(`${failed.length} failed.`);
+  }
+  return parts.join(" ");
+};
+
+const formatSkippedMessage = (error) => {
+  const message = error || "Skipped";
+  const duplicateMatch = message.match(/A book with title '(.+)' by '(.+)' already exists/);
+  if (duplicateMatch) {
+    const [, title, author] = duplicateMatch;
+    return `"${title}" by ${author} is already in your library.`;
+  }
+  return message;
+};
+
 function AddBook() {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState([]);
@@ -66,9 +91,10 @@ function AddBook() {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
-    const dropped = Array.from(e.dataTransfer.files).filter((f) =>
-      f.name.endsWith(".epub")
-    );
+    const dropped = Array.from(e.dataTransfer.files).filter((f) => {
+      const lower = f.name.toLowerCase();
+      return lower.endsWith(".epub") || lower.endsWith(".zip");
+    });
     setFiles((prev) => [...prev, ...dropped]);
   };
 
@@ -81,6 +107,7 @@ function AddBook() {
     setResults(null);
 
     const succeeded = [];
+    const skipped = [];
     const failed = [];
 
     if (files.length > 0) {
@@ -89,8 +116,10 @@ function AddBook() {
         for (const r of epubResults) {
           if (r.status === "success") {
             succeeded.push(r.book?.title || r.filename);
+          } else if (r.status === "skipped") {
+            skipped.push({ name: r.filename, error: formatSkippedMessage(r.error) });
           } else {
-            failed.push({ name: r.filename, error: r.error, skipped: r.status === "skipped" });
+            failed.push({ name: r.filename, error: r.error || "Upload failed" });
           }
         }
       } catch (err) {
@@ -113,7 +142,7 @@ function AddBook() {
     setFiles([]);
     setUrls([""]);
     setPending(false);
-    setResults({ succeeded, failed });
+    setResults({ succeeded, skipped, failed, totalProcessed: succeeded.length + skipped.length + failed.length });
   };
 
   const total = files.length + urls.filter((u) => u.trim()).length;
@@ -140,15 +169,15 @@ function AddBook() {
                   </button>
                 </li>
               ))}
-              <li className="add-more-hint">Click or drop to add more EPUBs</li>
+              <li className="add-more-hint">Click or drop to add more EPUBs or ZIPs</li>
             </ul>
           ) : (
-            <p>Drag & drop EPUB files here, or click to select</p>
+            <p>Drag & drop EPUB or ZIP files here, or click to select</p>
           )}
           <input
             id="file-upload"
             type="file"
-            accept=".epub"
+            accept=".epub,.zip"
             multiple
             onChange={handleFileChange}
             ref={fileInputRef}
@@ -185,20 +214,39 @@ function AddBook() {
 
       {results && (
         <div className="add-results">
+          <p className="summary">{formatImportSummary(results)}</p>
           {results.succeeded.length > 0 && (
             <p className="success">
-              {results.succeeded.length} book{results.succeeded.length > 1 ? "s" : ""} added
-              successfully.
+              Added: {results.succeeded.length} book{results.succeeded.length === 1 ? "" : "s"}.
             </p>
           )}
+          {results.skipped.length > 0 && (
+            <div className="result-group">
+              <p className="skipped-summary">
+                Skipped: {results.skipped.length} book{results.skipped.length === 1 ? "" : "s"}.
+              </p>
+              <ul className="error-list">
+                {results.skipped.map((f, i) => (
+                  <li key={i} className="skipped">
+                    <strong>{f.name}</strong>: {f.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {results.failed.length > 0 && (
-            <ul className="error-list">
-              {results.failed.map((f, i) => (
-                <li key={i} className={f.skipped ? "skipped" : "error"}>
-                  <strong>{f.name}</strong>: {f.error}
-                </li>
-              ))}
-            </ul>
+            <div className="result-group">
+              <p className="error-summary">
+                Failed: {results.failed.length} book{results.failed.length === 1 ? "" : "s"}.
+              </p>
+              <ul className="error-list">
+                {results.failed.map((f, i) => (
+                  <li key={i} className="error">
+                    <strong>{f.name}</strong>: {f.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}
