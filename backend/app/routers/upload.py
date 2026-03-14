@@ -129,9 +129,7 @@ async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(g
 
 
 @router.post("/api/books/upload_epubs", response_model=List[EpubUploadResult])
-async def upload_epubs(
-    files: List[UploadFile] = File(...), db: AsyncSession = Depends(get_db)
-) -> List[EpubUploadResult]:
+async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = Depends(get_db)) -> List[EpubUploadResult]:
     """
     Uploads multiple EPUB files. After processing all files, auto-detects series groupings
     among books with no series metadata using the pattern "<series name> <number> [- <subtitle>]".
@@ -166,8 +164,7 @@ async def upload_epubs(
             for b in updated:
                 await db.refresh(b)
             logger.info(
-                f"Auto-detected series for {len(updated)} books: "
-                + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
+                f"Auto-detected series for {len(updated)} books: " + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
             )
 
     return results

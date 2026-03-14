@@ -32,6 +32,8 @@ class Book(Base):
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    content_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    content_version = Column(Integer, nullable=False, server_default="1")
 
 
 class BookLog(Base):
@@ -65,3 +67,15 @@ class CleaningConfig(Base):
     url_pattern = Column(String, nullable=False)
     chapter_selectors = Column(JSON, nullable=True)
     content_selectors = Column(JSON, nullable=True)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    label = Column(String, nullable=False)
+    token_prefix = Column(String, unique=True, nullable=False, index=True)
+    token_hash = Column(String, unique=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)

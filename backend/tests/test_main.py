@@ -864,9 +864,13 @@ async def test_search_books_by_series(db_session):
 @pytest.mark.asyncio
 async def test_opds_root_feed(db_session):
     """
-    Test that GET /opds returns a valid Atom navigation feed.
+    Test that GET /reader/opds returns a valid authenticated Atom navigation feed.
     """
-    response = client.get("/opds")
+    key_response = client.post("/api/reader-keys", json={"label": "Test Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
@@ -875,8 +879,8 @@ async def test_opds_root_feed(db_session):
     ATOM = "{http://www.w3.org/2005/Atom}"
     root = ET.fromstring(response.content)
     assert root.tag == f"{ATOM}feed"
-    assert root.findtext(f"{ATOM}title") == "Story Manager Library"
-    # Should have a subsection entry pointing to /opds/catalog
+    assert root.findtext(f"{ATOM}title") == "Story Manager Reader"
+    # Should have a subsection entry pointing to /reader/opds/catalog
     entries = root.findall(f"{ATOM}entry")
     assert len(entries) == 1
     assert entries[0].findtext(f"{ATOM}title") == "All Books"
@@ -885,7 +889,7 @@ async def test_opds_root_feed(db_session):
 @pytest.mark.asyncio
 async def test_opds_catalog_feed(db_session):
     """
-    Test that GET /opds/catalog returns an acquisition feed with book entries.
+    Test that GET /reader/opds/catalog returns an acquisition feed with book entries.
     """
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -899,7 +903,11 @@ async def test_opds_catalog_feed(db_session):
             ),
         )
 
-    response = client.get("/opds/catalog")
+    key_response = client.post("/api/reader-keys", json={"label": "Catalog Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds/catalog", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
@@ -921,7 +929,7 @@ async def test_opds_catalog_feed(db_session):
 @pytest.mark.asyncio
 async def test_opds_search_feed(db_session):
     """
-    Test that GET /opds/search?q=... returns matching book entries.
+    Test that GET /reader/opds/search?q=... returns matching book entries.
     """
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -945,7 +953,11 @@ async def test_opds_search_feed(db_session):
             ),
         )
 
-    response = client.get("/opds/search?q=Searchable")
+    key_response = client.post("/api/reader-keys", json={"label": "Search Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/opds/search?q=Searchable", auth=("reader", token))
     assert response.status_code == 200
     assert "application/atom+xml" in response.headers["content-type"]
 
@@ -1305,3 +1317,58 @@ def test_detect_series_dash_subtitle_unnumbered():
     ]
     result = detect_series_from_titles(titles)
     assert result["My Series - The Prequel"] == "My Series"
+
+
+@pytest.mark.asyncio
+async def test_create_reader_key_and_use_reader_updates(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Reader Book",
+                author="Reader Author",
+                immutable_path="library/immutable_reader.epub",
+                current_path="library/reader.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    create_response = client.post("/api/reader-keys", json={"label": "Kobo"})
+    assert create_response.status_code == 201
+    created_key = create_response.json()
+    assert created_key["token"].startswith(created_key["token_prefix"])
+
+    list_response = client.get("/api/reader-keys")
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["label"] == "Kobo"
+
+    reader_response = client.get(
+        "/reader/updates",
+        headers={"Authorization": f"Bearer {created_key['token']}"},
+    )
+    assert reader_response.status_code == 200
+    payload = reader_response.json()
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Reader Book"
+    assert payload[0]["download_url"].endswith("/reader/books/1/download")
+    assert payload[0]["content_version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reader_opds_requires_auth_and_revoked_keys_fail(db_session):
+    create_response = client.post("/api/reader-keys", json={"label": "Boox"})
+    assert create_response.status_code == 201
+    key = create_response.json()
+
+    unauthenticated = client.get("/reader/opds")
+    assert unauthenticated.status_code == 401
+
+    authenticated = client.get("/reader/opds", auth=("reader", key["token"]))
+    assert authenticated.status_code == 200
+    assert "Story Manager Reader" in authenticated.text
+
+    revoke_response = client.delete(f"/api/reader-keys/{key['id']}")
+    assert revoke_response.status_code == 204
+
+    revoked = client.get("/reader/opds", auth=("reader", key["token"]))
+    assert revoked.status_code == 401

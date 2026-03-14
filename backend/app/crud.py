@@ -1,10 +1,12 @@
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import re
+from fastapi import HTTPException
 from sqlalchemy import asc, desc, or_, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
+from .auth import hash_token
 
 
 async def get_book_by_source_url(db: AsyncSession, source_url: str) -> Optional[models.Book]:
@@ -73,6 +75,8 @@ async def create_book(db: AsyncSession, book: schemas.BookCreate) -> models.Book
     book_data = book.model_dump(exclude_unset=True)
     if "source_url" in book_data and book_data["source_url"] is not None:
         book_data["source_url"] = str(book_data["source_url"])
+    book_data.setdefault("content_updated_at", datetime.now(timezone.utc))
+    book_data.setdefault("content_version", 1)
 
     db_book = models.Book(**book_data)
     db.add(db_book)
@@ -99,6 +103,11 @@ async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.
     await db.commit()
     await db.refresh(book)
     return book
+
+
+async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
+    book.content_updated_at = datetime.now(timezone.utc)
+    book.content_version = (book.content_version or 0) + 1
 
 
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
@@ -332,3 +341,75 @@ async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str
         )
     )
     return result.scalars().first()
+
+
+async def create_api_key(db: AsyncSession, label: str, token: str, prefix: str) -> models.ApiKey:
+    api_key = models.ApiKey(label=label, token_prefix=prefix, token_hash=hash_token(token))
+    db.add(api_key)
+    await db.commit()
+    await db.refresh(api_key)
+    return api_key
+
+
+async def get_api_keys(db: AsyncSession) -> List[models.ApiKey]:
+    result = await db.execute(select(models.ApiKey).order_by(models.ApiKey.created_at.desc()))
+    return result.scalars().all()
+
+
+async def revoke_api_key(db: AsyncSession, key_id: int) -> bool:
+    api_key = await db.get(models.ApiKey, key_id)
+    if api_key is None:
+        return False
+    if api_key.revoked_at is None:
+        api_key.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(api_key)
+    return True
+
+
+def _reader_books_query():
+    return select(models.Book).where(
+        models.Book.current_path.is_not(None),
+        models.Book.download_status.is_(None),
+    )
+
+
+async def get_reader_books(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[models.Book]:
+    result = await db.execute(
+        _reader_books_query().order_by(desc(models.Book.content_updated_at), asc(models.Book.title)).offset(skip).limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def search_reader_books(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
+    pattern = f"%{q}%"
+    result = await db.execute(
+        _reader_books_query()
+        .where(
+            or_(
+                models.Book.title.ilike(pattern),
+                models.Book.author.ilike(pattern),
+                models.Book.series.ilike(pattern),
+            )
+        )
+        .order_by(asc(models.Book.title))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def get_reader_book(db: AsyncSession, book_id: int) -> models.Book:
+    result = await db.execute(_reader_books_query().where(models.Book.id == book_id))
+    book = result.scalars().first()
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return book
+
+
+async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> List[models.Book]:
+    query = _reader_books_query()
+    if since is not None:
+        query = query.where(models.Book.content_updated_at > since)
+    result = await db.execute(query.order_by(desc(models.Book.content_updated_at), asc(models.Book.title)))
+    return result.scalars().all()

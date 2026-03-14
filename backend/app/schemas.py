@@ -45,6 +45,8 @@ class Book(BookBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    content_updated_at: datetime
+    content_version: int
 
     class Config:
         from_attributes = True
@@ -110,3 +112,35 @@ class BookLogWithTitle(BookLog):
 
     class Config:
         from_attributes = True
+
+
+class ApiKeyCreate(BaseModel):
+    label: str
+
+
+class ApiKey(BaseModel):
+    id: int
+    label: str
+    token_prefix: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ApiKeyWithToken(ApiKey):
+    token: str
+
+
+class ReaderBook(BaseModel):
+    id: int
+    title: str
+    author: str
+    series: Optional[str] = None
+    source_type: SourceType
+    content_updated_at: datetime
+    content_version: int
+    download_url: str
+    cover_url: Optional[str] = None

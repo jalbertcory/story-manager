@@ -47,7 +47,9 @@ def get_and_save_epub_cover(epub_path: Path, book_id: int) -> Optional[Path]:
             cover_id = t.xpath(
                 "//opf:metadata/opf:meta[@name='cover']",
                 namespaces={"opf": "http://www.idpf.org/2007/opf"},
-            )[0].get("content")
+            )[
+                0
+            ].get("content")
 
             cover_href = t.xpath(
                 "//opf:manifest/opf:item[@id='" + cover_id + "']",

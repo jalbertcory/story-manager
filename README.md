@@ -118,6 +118,32 @@ Your application should now be running!
 *   Web UI: `http://localhost:5173`
 *   API: `http://localhost:8000`
 
+### Reader API Keys
+
+Story Manager now includes a separate read-only reader API for e-readers and OPDS clients.
+
+Generate reader keys from the web UI:
+*   Open `Utilities`
+*   Use the `Reader API Keys` section
+*   Create one key per device, such as `Kobo` or `Boox`
+*   Copy the token when it is shown. It is only displayed once.
+
+Reader endpoints:
+*   `GET /reader/opds`
+*   `GET /reader/opds/catalog`
+*   `GET /reader/opds/search?q=...`
+*   `GET /reader/updates?since=2026-03-14T12:00:00Z`
+*   `GET /reader/books/{id}`
+*   `GET /reader/books/{id}/download`
+*   `GET /reader/covers/{id}`
+
+Authentication options for reader clients:
+*   `Authorization: Bearer <token>`
+*   HTTP Basic auth with any username and the token as the password
+*   `?api_key=<token>` for clients that only support query-string credentials
+
+The `/reader/*` namespace is read-only by design. Existing `/api/*` routes remain admin-style application routes for the web UI.
+
 ---
 
 ## 🐋 Deploy with Docker Compose
@@ -160,3 +186,60 @@ To run e2e tests
 - `cd frontend && npm install && npx playwright install`
 - Go back to the root of the project and run `make e2e`
 - If you need to debug the tests, run `make e2e-debug`
+
+## Reverse Proxy Safety
+
+Story Manager does not yet have user login for the admin web UI. That means the existing `/api/*` routes are trusted admin routes, not internet-safe public routes.
+
+Safe deployment guidance:
+*   Expose `/reader/*` publicly only if needed for e-readers.
+*   Keep the admin UI and `/api/*` behind a VPN, Tailscale, local network, or an extra proxy auth layer such as Authelia, OAuth2 Proxy, or your reverse proxy's built-in access control.
+*   Terminate TLS at the proxy and redirect all HTTP traffic to HTTPS.
+*   Preserve the `Authorization` header so Bearer and Basic auth continue to work for `/reader/*`.
+*   Disable proxy caching for `/reader/*` responses that contain private library metadata.
+*   Set a reasonable request body limit on admin upload routes.
+
+Recommended layout:
+*   Public: `/reader/*`
+*   Private: `/`, `/api/*`
+
+Example Nginx sketch:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name books.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/books.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/books.example.com/privkey.pem;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+
+    location /reader/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_buffering off;
+        add_header Cache-Control "private, no-store";
+    }
+
+    location /api/ {
+        allow 192.168.0.0/16;
+        allow 10.0.0.0/8;
+        allow 127.0.0.1;
+        deny all;
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location / {
+        allow 192.168.0.0/16;
+        allow 10.0.0.0/8;
+        allow 127.0.0.1;
+        deny all;
+        proxy_pass http://127.0.0.1:7890;
+    }
+}
+```
+
+If you do want the admin UI reachable over the internet, put the UI and `/api/*` behind a real authentication layer first. Reader API keys alone are not a substitute for admin authentication.

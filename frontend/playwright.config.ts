@@ -3,6 +3,26 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * See https://playwright.dev/docs/test-configuration
  */
+const webServer = process.env.CI
+  ? undefined
+  : [
+      {
+        command:
+          "zsh -lc 'export PYTHONPATH=backend && .venv/bin/alembic -c backend/alembic.ini upgrade head && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000'",
+        url: "http://127.0.0.1:8000",
+        cwd: "..",
+        reuseExistingServer: true,
+        timeout: 120 * 1000,
+      },
+      {
+        command: "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173",
+        url: "http://127.0.0.1:5173",
+        cwd: "..",
+        reuseExistingServer: true,
+        timeout: 120 * 1000,
+      },
+    ];
+
 export default defineConfig({
   testDir: "./tests-e2e",
   /* Run tests in files in parallel */
@@ -31,4 +51,5 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
+  webServer,
 });
