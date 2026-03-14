@@ -75,6 +75,8 @@ async def create_book(db: AsyncSession, book: schemas.BookCreate) -> models.Book
     book_data = book.model_dump(exclude_unset=True)
     if "source_url" in book_data and book_data["source_url"] is not None:
         book_data["source_url"] = str(book_data["source_url"])
+    book_data.setdefault("content_updated_at", datetime.now(timezone.utc))
+    book_data.setdefault("content_version", 1)
 
     db_book = models.Book(**book_data)
     db.add(db_book)

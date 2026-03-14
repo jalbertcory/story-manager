@@ -1,7 +1,7 @@
 """add reader api keys and content tracking
 
-Revision ID: 0007_add_reader_api_keys_and_content_tracking
-Revises: 0006_fix_fanficfare_default_selectors
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-03-14 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "0007_add_reader_api_keys_and_content_tracking"
-down_revision = "0006_fix_fanficfare_default_selectors"
+revision = "0007"
+down_revision = "0006"
 branch_labels = None
 depends_on = None
 
@@ -38,7 +38,7 @@ def upgrade() -> None:
                 content_version=1,
             )
         )
-        op.alter_column("books", "content_updated_at", nullable=False)
+        op.alter_column("books", "content_updated_at", nullable=False, server_default=sa.func.now())
         op.alter_column("books", "content_version", nullable=False, server_default="1")
 
     if not inspector.has_table("api_keys"):
