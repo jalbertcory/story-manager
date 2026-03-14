@@ -202,6 +202,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             db_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
             db_book.master_word_count = master_word_count
             db_book.current_word_count = master_word_count
+            await crud.touch_book_content(db, db_book)
 
             cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
             if cover_path is None:
@@ -292,6 +293,7 @@ async def update_web_novels() -> None:
                     )
                     book.master_word_count = new_word_count
                     book.current_word_count = new_word_count
+                    await crud.touch_book_content(db, book)
                     await db.commit()
                 else:
                     logger.info(f"No new chapters for {book.title}.")

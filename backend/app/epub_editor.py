@@ -171,6 +171,7 @@ async def apply_book_cleaning(book, db, force: bool = False) -> None:
             chapter_selectors,
         )
         book.current_word_count = get_word_count(str(current_path))
+        await crud.touch_book_content(db, book)
         await db.commit()
         await db.refresh(book)
     except Exception as e:

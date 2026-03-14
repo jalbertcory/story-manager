@@ -1305,3 +1305,58 @@ def test_detect_series_dash_subtitle_unnumbered():
     ]
     result = detect_series_from_titles(titles)
     assert result["My Series - The Prequel"] == "My Series"
+
+
+@pytest.mark.asyncio
+async def test_create_reader_key_and_use_reader_updates(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Reader Book",
+                author="Reader Author",
+                immutable_path="library/immutable_reader.epub",
+                current_path="library/reader.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    create_response = client.post("/api/reader-keys", json={"label": "Kobo"})
+    assert create_response.status_code == 201
+    created_key = create_response.json()
+    assert created_key["token"].startswith(created_key["token_prefix"])
+
+    list_response = client.get("/api/reader-keys")
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["label"] == "Kobo"
+
+    reader_response = client.get(
+        "/reader/updates",
+        headers={"Authorization": f"Bearer {created_key['token']}"},
+    )
+    assert reader_response.status_code == 200
+    payload = reader_response.json()
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Reader Book"
+    assert payload[0]["download_url"].endswith("/reader/books/1/download")
+    assert payload[0]["content_version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reader_opds_requires_auth_and_revoked_keys_fail(db_session):
+    create_response = client.post("/api/reader-keys", json={"label": "Boox"})
+    assert create_response.status_code == 201
+    key = create_response.json()
+
+    unauthenticated = client.get("/reader/opds")
+    assert unauthenticated.status_code == 401
+
+    authenticated = client.get("/reader/opds", auth=("reader", key["token"]))
+    assert authenticated.status_code == 200
+    assert "Story Manager Reader" in authenticated.text
+
+    revoke_response = client.delete(f"/api/reader-keys/{key['id']}")
+    assert revoke_response.status_code == 204
+
+    revoked = client.get("/reader/opds", auth=("reader", key["token"]))
+    assert revoked.status_code == 401

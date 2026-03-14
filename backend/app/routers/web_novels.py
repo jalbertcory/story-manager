@@ -92,6 +92,7 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     updated_book.removed_chapters = []
     updated_book.master_word_count = new_word_count
     updated_book.current_word_count = new_word_count
+    await crud.touch_book_content(db, updated_book)
     await db.commit()
     await db.refresh(updated_book)
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import ReaderKeys from "./ReaderKeys.jsx";
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
@@ -204,6 +205,8 @@ function Utilities({ onBack }) {
           </div>
         )}
       </section>
+
+      <ReaderKeys />
     </div>
   );
 }
