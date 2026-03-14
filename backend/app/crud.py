@@ -374,10 +374,7 @@ def _reader_books_query():
 
 async def get_reader_books(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[models.Book]:
     result = await db.execute(
-        _reader_books_query()
-        .order_by(desc(models.Book.content_updated_at), asc(models.Book.title))
-        .offset(skip)
-        .limit(limit)
+        _reader_books_query().order_by(desc(models.Book.content_updated_at), asc(models.Book.title)).offset(skip).limit(limit)
     )
     return result.scalars().all()
 
