@@ -183,13 +183,30 @@
   margin-top: 0.75rem;
   font-size: 0.875rem;
 }
+.add-results .summary {
+  margin: 0 0 0.35rem;
+  color: var(--text);
+  font-weight: 600;
+}
 .add-results .success {
+  margin: 0 0 0.35rem;
   color: var(--success, #50fa7b);
+}
+.add-results .result-group {
+  margin-top: 0.5rem;
+}
+.add-results .skipped-summary,
+.add-results .error-summary {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
 }
 .add-results .error-list {
   list-style: none;
   padding: 0;
   margin: 0;
+}
+.add-results .error-list li + li {
+  margin-top: 0.2rem;
 }
 .add-results .error {
   color: var(--error, #ff5555);
