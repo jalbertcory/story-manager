@@ -15,6 +15,7 @@ from .. import crud, epub_editor, schemas
 from ..config import LIBRARY_PATH
 from ..database import SessionLocal
 from .epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
+from .library_paths import build_book_paths
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +187,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
                 await db.commit()
                 return
 
-            immutable_path = LIBRARY_PATH / f"immutable_{new_epub_path.name}"
-            current_path = LIBRARY_PATH / new_epub_path.name
+            immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
             new_epub_path.rename(immutable_path)
             with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
                 f_out.write(f_in.read())

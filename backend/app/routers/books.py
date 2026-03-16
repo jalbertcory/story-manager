@@ -1,6 +1,7 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,10 +11,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
+from ..services.library_paths import remove_empty_parent_dirs
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _remove_book_files(book: models.Book) -> list[str]:
+    removed_paths: list[str] = []
+
+    for relative_path in [book.immutable_path, book.current_path, book.cover_path]:
+        if not relative_path:
+            continue
+
+        full_path = LIBRARY_PATH.parent / relative_path
+        if full_path.exists():
+            full_path.unlink()
+            removed_paths.append(str(relative_path))
+            remove_empty_parent_dirs(full_path)
+
+    return removed_paths
+
+
+def _book_cleanup_preview(book: models.Book) -> dict[str, Any]:
+    files = []
+
+    for relative_path in [book.immutable_path, book.current_path, book.cover_path]:
+        if not relative_path:
+            continue
+
+        full_path = LIBRARY_PATH.parent / relative_path
+        size_bytes = full_path.stat().st_size if full_path.exists() and full_path.is_file() else 0
+        files.append({"path": relative_path, "size_bytes": size_bytes})
+
+    return {
+        "id": book.id,
+        "title": book.title,
+        "author": book.author,
+        "files": files,
+    }
 
 
 @router.get("/api/books", response_model=List[schemas.Book])
@@ -106,8 +143,6 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
-    from pathlib import Path
-
     current_path = LIBRARY_PATH.parent / db_book.current_path
     if not current_path.is_file():
         raise HTTPException(status_code=404, detail="EPUB file not found")
@@ -119,21 +154,54 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
+@router.post("/api/books/remove-all")
+async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)):
+    books = await crud.get_books(db, limit=100000)
+
+    preview_books = []
+    total_files = 0
+    total_bytes = 0
+    total_logs = 0
+    all_paths: list[str] = []
+
+    for book in books:
+        book_preview = _book_cleanup_preview(book)
+        book_log_count = await crud.count_book_logs(db, book.id)
+        preview_books.append(
+            {
+                **book_preview,
+                "log_entries": book_log_count,
+            }
+        )
+        total_logs += book_log_count
+        total_files += len(book_preview["files"])
+        total_bytes += sum(file["size_bytes"] for file in book_preview["files"])
+        all_paths.extend(file["path"] for file in book_preview["files"])
+
+    if not dry_run:
+        for book in books:
+            _remove_book_files(book)
+        deleted_books = await crud.delete_all_books(db)
+        logger.warning("Removed %s books from the library.", deleted_books)
+
+    return {
+        "dry_run": dry_run,
+        "book_count": len(books),
+        "file_count": total_files,
+        "total_bytes": total_bytes,
+        "log_count": total_logs,
+        "books": preview_books,
+        "paths": all_paths,
+    }
+
+
 @router.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
     book = await crud.get_book_by_title(db, title=title)
     if book is None:
         return None
 
-    if book.immutable_path:
-        p = LIBRARY_PATH.parent / book.immutable_path
-        if p.exists():
-            p.unlink()
-    if book.current_path:
-        p = LIBRARY_PATH.parent / book.current_path
-        if p.exists():
-            p.unlink()
-
+    _remove_book_files(book)
     await crud.delete_book(db, book=book)
     return None
 
@@ -144,14 +212,6 @@ async def delete_book_by_id(book_id: int, db: AsyncSession = Depends(get_db)):
     if book is None:
         return None
 
-    if book.immutable_path:
-        p = LIBRARY_PATH.parent / book.immutable_path
-        if p.exists():
-            p.unlink()
-    if book.current_path:
-        p = LIBRARY_PATH.parent / book.current_path
-        if p.exists():
-            p.unlink()
-
+    _remove_book_files(book)
     await crud.delete_book(db, book=book)
     return None

@@ -15,6 +15,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
+from ..services.library_paths import build_book_paths
 from ..services.series import SeriesBook, detect_series_from_books
 
 logger = logging.getLogger(__name__)
@@ -73,21 +74,21 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     Raises HTTPException on duplicate or parse errors.
     """
     LIBRARY_PATH.mkdir(exist_ok=True)
-    immutable_path = LIBRARY_PATH / f"immutable_{filename}"
-    with open(immutable_path, "wb+") as f:
+    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{filename}"
+    temp_current_path = LIBRARY_PATH / f"tmp_{filename}"
+    with open(temp_immutable_path, "wb+") as f:
         f.write(payload)
 
-    current_path = LIBRARY_PATH / filename
-    with open(current_path, "wb+") as f:
+    with open(temp_current_path, "wb+") as f:
         f.write(payload)
 
     try:
-        epub_book = epub.read_epub(immutable_path)
+        epub_book = epub.read_epub(temp_immutable_path)
         title = epub_book.get_metadata("DC", "title")[0][0]
         author = epub_book.get_metadata("DC", "creator")[0][0]
     except Exception as e:
-        immutable_path.unlink(missing_ok=True)
-        current_path.unlink(missing_ok=True)
+        temp_immutable_path.unlink(missing_ok=True)
+        temp_current_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to parse EPUB file: {e}",
@@ -95,12 +96,16 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
     existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
     if existing:
-        immutable_path.unlink(missing_ok=True)
-        current_path.unlink(missing_ok=True)
+        temp_immutable_path.unlink(missing_ok=True)
+        temp_current_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A book with title '{title}' by '{author}' already exists (id={existing.id})",
         )
+
+    immutable_path, current_path = build_book_paths(filename, author)
+    temp_immutable_path.replace(immutable_path)
+    temp_current_path.replace(current_path)
 
     try:
         series_metadata = epub_book.get_metadata("calibre", "series")

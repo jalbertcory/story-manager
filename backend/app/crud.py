@@ -264,6 +264,23 @@ async def delete_book(db: AsyncSession, book: models.Book) -> None:
     await db.commit()
 
 
+async def count_book_logs(db: AsyncSession, book_id: int) -> int:
+    result = await db.execute(select(func.count(models.BookLog.id)).where(models.BookLog.book_id == book_id))
+    return result.scalar() or 0
+
+
+async def delete_all_books(db: AsyncSession) -> int:
+    books = await get_books(db, limit=100000)
+    book_count = len(books)
+    if book_count == 0:
+        return 0
+
+    await db.execute(delete(models.BookLog).where(models.BookLog.book_id.in_([book.id for book in books])))
+    await db.execute(delete(models.Book))
+    await db.commit()
+    return book_count
+
+
 async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
     """
     Count books, optionally filtered by a search query (title/author/series).
