@@ -38,9 +38,9 @@ async def test_royalroad_download_and_validate():
         # ── Metadata ──────────────────────────────────────────────────────────
         assert metadata["title"], "title should be non-empty"
         assert metadata["author"], "author should be non-empty"
-        assert "mother of learning" in metadata["title"].lower(), (
-            f"Expected 'Mother of Learning' in title, got: {metadata['title']!r}"
-        )
+        assert (
+            "mother of learning" in metadata["title"].lower()
+        ), f"Expected 'Mother of Learning' in title, got: {metadata['title']!r}"
 
         # ── File on disk ──────────────────────────────────────────────────────
         assert epub_path.exists(), f"EPUB not found at {epub_path}"
