@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ebooklib import epub
 from backend.app.main import app
-from backend.app.services.series import detect_series_from_titles
+from backend.app.services.series import SeriesBook, detect_series_from_books, detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import models, schemas, crud
 
@@ -1400,6 +1400,102 @@ def test_detect_series_dash_subtitle_unnumbered():
     ]
     result = detect_series_from_titles(titles)
     assert result["My Series - The Prequel"] == "My Series"
+
+
+def test_detect_series_parenthetical_book_suffix_by_author():
+    """Trailing '(Series Book N)' metadata is detected when the author matches."""
+    books = [
+        SeriesBook(title="Soulsmith (Cradle Book 2)", author="Will Wight"),
+        SeriesBook(title="Blackflame (Cradle Book 3)", author="Will Wight"),
+        SeriesBook(title="Reaper (Cradle Book 10)", author="Will Wight"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("Will Wight", "Soulsmith (Cradle Book 2)")] == "Cradle"
+    assert result[("Will Wight", "Blackflame (Cradle Book 3)")] == "Cradle"
+    assert result[("Will Wight", "Reaper (Cradle Book 10)")] == "Cradle"
+
+
+def test_detect_series_mixed_formats_same_author():
+    """Equivalent series hints from the same author are merged into one canonical series."""
+    books = [
+        SeriesBook(title="Cultivating Chaos (VeilVerse: Cultivating Chaos Book 1)", author="William D. Arand"),
+        SeriesBook(title="Cultivating Chaos: Book 2 (VeilVerse: Cultivating Chaos)", author="William D. Arand"),
+        SeriesBook(title="Cultivating Chaos 3", author="William D. Arand"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("William D. Arand", "Cultivating Chaos (VeilVerse: Cultivating Chaos Book 1)")] == "Cultivating Chaos"
+    assert result[("William D. Arand", "Cultivating Chaos: Book 2 (VeilVerse: Cultivating Chaos)")] == "Cultivating Chaos"
+    assert result[("William D. Arand", "Cultivating Chaos 3")] == "Cultivating Chaos"
+
+
+def test_detect_series_same_author_multiple_independent_series():
+    """A single author can still have multiple distinct detected series."""
+    books = [
+        SeriesBook(title="Soulsmith (Cradle Book 2)", author="Will Wight"),
+        SeriesBook(title="Blackflame (Cradle Book 3)", author="Will Wight"),
+        SeriesBook(title="Of Sea and Shadow (The Elder Empire: Sea Book 1)", author="Will Wight"),
+        SeriesBook(title="Of Dawn and Darkness (The Elder Empire: Sea Book 2)", author="Will Wight"),
+        SeriesBook(title="Of Shadow and Sea (The Elder Empire: Shadow Book 1)", author="Will Wight"),
+        SeriesBook(title="Of Darkness and Dawn (The Elder Empire: Shadow Book 2)", author="Will Wight"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("Will Wight", "Soulsmith (Cradle Book 2)")] == "Cradle"
+    assert result[("Will Wight", "Blackflame (Cradle Book 3)")] == "Cradle"
+    assert result[("Will Wight", "Of Sea and Shadow (The Elder Empire: Sea Book 1)")] == "The Elder Empire: Sea"
+    assert result[("Will Wight", "Of Dawn and Darkness (The Elder Empire: Sea Book 2)")] == "The Elder Empire: Sea"
+    assert result[("Will Wight", "Of Shadow and Sea (The Elder Empire: Shadow Book 1)")] == "The Elder Empire: Shadow"
+    assert result[("Will Wight", "Of Darkness and Dawn (The Elder Empire: Shadow Book 2)")] == "The Elder Empire: Shadow"
+
+
+def test_detect_series_does_not_cross_authors():
+    """Matching title patterns from different authors should not confirm a shared series."""
+    books = [
+        SeriesBook(title="Shared Saga 1", author="Author One"),
+        SeriesBook(title="Shared Saga 2", author="Author Two"),
+    ]
+    assert detect_series_from_books(books) == {}
+
+
+@pytest.mark.asyncio
+async def test_detect_series_endpoint_uses_author_aware_patterns(db_session):
+    """The detect-series endpoint updates books for the live formats seen in the library sample."""
+    async with AsyncTestingSessionLocal() as session:
+        for title, author in [
+            ("Soulsmith (Cradle Book 2)", "Will Wight"),
+            ("Blackflame (Cradle Book 3)", "Will Wight"),
+            ("Cultivating Chaos (VeilVerse: Cultivating Chaos Book 1)", "William D. Arand"),
+            ("Cultivating Chaos: Book 2 (VeilVerse: Cultivating Chaos)", "William D. Arand"),
+            ("Cultivating Chaos 3", "William D. Arand"),
+            ("Shared Saga 1", "Author One"),
+            ("Shared Saga 2", "Author Two"),
+        ]:
+            await crud.create_book(
+                session,
+                schemas.BookCreate(
+                    title=title,
+                    author=author,
+                    immutable_path=f"library/immutable_{author}_{title}.epub",
+                    current_path=f"library/{author}_{title}.epub",
+                    source_type=models.SourceType.epub,
+                ),
+            )
+
+    response = client.post("/api/books/detect-series")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["updated"] == 5
+    assert data["series_detected"] == ["Cradle", "Cultivating Chaos"]
+
+    response = client.get("/api/books", params={"limit": 20})
+    assert response.status_code == 200
+    books = {(book["author"], book["title"]): book["series"] for book in response.json()}
+    assert books[("Will Wight", "Soulsmith (Cradle Book 2)")] == "Cradle"
+    assert books[("Will Wight", "Blackflame (Cradle Book 3)")] == "Cradle"
+    assert books[("William D. Arand", "Cultivating Chaos (VeilVerse: Cultivating Chaos Book 1)")] == "Cultivating Chaos"
+    assert books[("William D. Arand", "Cultivating Chaos: Book 2 (VeilVerse: Cultivating Chaos)")] == "Cultivating Chaos"
+    assert books[("William D. Arand", "Cultivating Chaos 3")] == "Cultivating Chaos"
+    assert books[("Author One", "Shared Saga 1")] is None
+    assert books[("Author Two", "Shared Saga 2")] is None
 
 
 @pytest.mark.asyncio
