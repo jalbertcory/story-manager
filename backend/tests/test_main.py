@@ -56,6 +56,66 @@ async def test_get_all_books_empty(db_session):
 
 
 @pytest.mark.asyncio
+async def test_get_book_catalog_returns_minimal_entries(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Catalog Book",
+                author="Catalog Author",
+                series="Catalog Saga",
+                immutable_path="catalog-immutable.epub",
+                current_path="catalog.epub",
+                source_type=models.SourceType.epub,
+                current_word_count=321,
+                notes="Should not be in catalog payload",
+            ),
+        )
+
+    response = client.get("/api/books/catalog")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Catalog Book"
+    assert data[0]["author"] == "Catalog Author"
+    assert data[0]["series"] == "Catalog Saga"
+    assert data[0]["current_word_count"] == 321
+    assert "immutable_path" not in data[0]
+    assert "current_path" not in data[0]
+    assert "notes" not in data[0]
+
+
+@pytest.mark.asyncio
+async def test_get_book_details_by_ids_preserves_request_order(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        first = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="First Book",
+                author="Author A",
+                immutable_path="first-immutable.epub",
+                current_path="first.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        second = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Second Book",
+                author="Author B",
+                immutable_path="second-immutable.epub",
+                current_path="second.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get(f"/api/books/details?ids={second.id}&ids={first.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert [book["id"] for book in data] == [second.id, first.id]
+
+
+@pytest.mark.asyncio
 async def test_add_web_novel(db_session, mocker):
     """
     Test adding a new web novel. The endpoint now returns immediately with a pending record
