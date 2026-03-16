@@ -139,7 +139,9 @@ def detect_series_from_books(books: list[SeriesBook]) -> dict[tuple[str, str], s
             if key in result:
                 continue
             for canonical, labels, _cluster_books in confirmed:
-                if _title_matches_series(book.title, canonical) or any(_title_matches_series(book.title, label) for label in labels):
+                if _title_matches_series(book.title, canonical) or any(
+                    _title_matches_series(book.title, label) for label in labels
+                ):
                     result[key] = canonical
                     break
 

@@ -78,9 +78,13 @@ async def get_book_catalog(
     sort_by: str = "title",
     sort_order: str = "asc",
 ) -> List[models.Book]:
-    query = _build_book_search_query(q=q, sort_by=sort_by, sort_order=sort_order) if q else _build_books_query(
-        sort_by=sort_by,
-        sort_order=sort_order,
+    query = (
+        _build_book_search_query(q=q, sort_by=sort_by, sort_order=sort_order)
+        if q
+        else _build_books_query(
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
     )
     result = await db.execute(query)
     return result.scalars().all()
