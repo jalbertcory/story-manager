@@ -15,7 +15,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
-from ..services.series import detect_series_from_titles
+from ..services.series import SeriesBook, detect_series_from_books
 
 logger = logging.getLogger(__name__)
 
@@ -226,11 +226,11 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
     all_candidates = batch_no_series + existing_no_series
 
     if len(all_candidates) >= 2:
-        series_map = detect_series_from_titles([b.title for b in all_candidates])
-        updated = [b for b in all_candidates if b.title in series_map]
+        series_map = detect_series_from_books([SeriesBook(title=b.title, author=b.author) for b in all_candidates])
+        updated = [b for b in all_candidates if (b.author, b.title) in series_map]
         if updated:
             for b in updated:
-                b.series = series_map[b.title]
+                b.series = series_map[(b.author, b.title)]
             await db.commit()
             for b in updated:
                 await db.refresh(b)
@@ -251,14 +251,14 @@ async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict:
     if len(candidates) < 2:
         return {"updated": 0, "series_detected": []}
 
-    series_map = detect_series_from_titles([b.title for b in candidates])
-    to_update = [b for b in candidates if b.title in series_map]
+    series_map = detect_series_from_books([SeriesBook(title=b.title, author=b.author) for b in candidates])
+    to_update = [b for b in candidates if (b.author, b.title) in series_map]
 
     if not to_update:
         return {"updated": 0, "series_detected": []}
 
     for b in to_update:
-        b.series = series_map[b.title]
+        b.series = series_map[(b.author, b.title)]
     await db.commit()
 
     series_detected = sorted(set(series_map.values()))
