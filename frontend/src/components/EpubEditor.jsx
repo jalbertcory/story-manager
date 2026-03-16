@@ -54,14 +54,14 @@ function EpubEditor({ book, onBack }) {
   const saveMutation = useMutation({
     mutationFn: updateBook,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
     },
   });
 
   const processMutation = useMutation({
     mutationFn: processBook,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
     },
   });

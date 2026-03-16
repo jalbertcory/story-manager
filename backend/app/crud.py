@@ -35,6 +35,12 @@ async def get_books(
     """
     Retrieve a list of books from the database.
     """
+    query = _build_books_query(sort_by=sort_by, sort_order=sort_order)
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
     sort_columns = {
         "title": models.Book.title,
         "author": models.Book.author,
@@ -44,27 +50,43 @@ async def get_books(
     }
     column = sort_columns.get(sort_by, models.Book.title)
     order = asc(column) if sort_order == "asc" else desc(column)
-    result = await db.execute(select(models.Book).order_by(order).offset(skip).limit(limit))
-    return result.scalars().all()
+    return select(models.Book).order_by(order, asc(models.Book.title), asc(models.Book.id))
+
+
+def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc"):
+    pattern = f"%{q}%"
+    return _build_books_query(sort_by=sort_by, sort_order=sort_order).filter(
+        or_(
+            models.Book.title.ilike(pattern),
+            models.Book.author.ilike(pattern),
+            models.Book.series.ilike(pattern),
+        )
+    )
 
 
 async def search_books(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """
     Search books by title, author, or series (case-insensitive).
     """
-    pattern = f"%{q}%"
-    result = await db.execute(
-        select(models.Book)
-        .filter(
-            or_(
-                models.Book.title.ilike(pattern),
-                models.Book.author.ilike(pattern),
-                models.Book.series.ilike(pattern),
-            )
+    result = await db.execute(_build_book_search_query(q=q).offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+async def get_book_catalog(
+    db: AsyncSession,
+    q: Optional[str] = None,
+    sort_by: str = "title",
+    sort_order: str = "asc",
+) -> List[models.Book]:
+    query = (
+        _build_book_search_query(q=q, sort_by=sort_by, sort_order=sort_order)
+        if q
+        else _build_books_query(
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
-        .offset(skip)
-        .limit(limit)
     )
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -91,6 +113,15 @@ async def get_book(db: AsyncSession, book_id: int) -> Optional[models.Book]:
     """
     result = await db.execute(select(models.Book).filter(models.Book.id == book_id))
     return result.scalars().first()
+
+
+async def get_books_by_ids(db: AsyncSession, book_ids: List[int]) -> List[models.Book]:
+    if not book_ids:
+        return []
+
+    result = await db.execute(select(models.Book).filter(models.Book.id.in_(book_ids)))
+    books = {book.id: book for book in result.scalars().all()}
+    return [books[book_id] for book_id in book_ids if book_id in books]
 
 
 async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.BookUpdate) -> models.Book:

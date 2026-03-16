@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +65,17 @@ async def get_all_books(
     return [schemas.Book.from_orm(book) for book in books]
 
 
+@router.get("/api/books/catalog", response_model=List[schemas.BookCatalogEntry])
+async def get_book_catalog(
+    q: Optional[str] = None,
+    sort_by: str = "title",
+    sort_order: str = "asc",
+    db: AsyncSession = Depends(get_db),
+) -> List[schemas.BookCatalogEntry]:
+    books = await crud.get_book_catalog(db, q=q, sort_by=sort_by, sort_order=sort_order)
+    return [schemas.BookCatalogEntry.model_validate(book) for book in books]
+
+
 @router.get("/api/series", response_model=List[str])
 async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
     """Return all distinct series names in the library, sorted alphabetically."""
@@ -99,6 +110,12 @@ async def search_books_by_series(
 async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     total = await crud.count_books(db, q=q)
     return {"total": total}
+
+
+@router.get("/api/books/details", response_model=List[schemas.Book])
+async def get_book_details(book_ids: List[int] = Query(alias="ids"), db: AsyncSession = Depends(get_db)) -> List[schemas.Book]:
+    books = await crud.get_books_by_ids(db, book_ids=book_ids)
+    return [schemas.Book.model_validate(book) for book in books]
 
 
 @router.get("/api/books/{book_id}", response_model=schemas.Book)

@@ -1,7 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from "react";
-import {
-  useInfiniteQuery,
-} from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
@@ -27,9 +25,10 @@ function App() {
   const [showScheduler, setShowScheduler] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showCleanup, setShowCleanup] = useState(false);
-  const [seriesBooks, setSeriesBooks] = useState({});
-  const requestedSeriesRef = useRef(new Set());
-  const seriesRequestVersionRef = useRef(0);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [bookDetails, setBookDetails] = useState({});
+  const requestedDetailIdsRef = useRef(new Set());
+  const detailRequestVersionRef = useRef(0);
 
   const applyView = ({ view, data } = { view: "home" }) => {
     setEditingBook(view === "book" ? data : null);
@@ -81,92 +80,103 @@ function App() {
   }, []);
 
   const {
-    data,
+    data: catalog = [],
     isLoading,
     error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
-    queryKey: ["books", searchParams],
-    queryFn: async ({ pageParam = 0 }) => {
+  } = useQuery({
+    queryKey: ["book-catalog", searchParams],
+    queryFn: async () => {
       const { q: sq, sortBy: sb, sortOrder: so } = searchParams;
       const url = sq
-        ? `/api/books/search?q=${encodeURIComponent(sq)}&skip=${pageParam}&limit=${PAGE_SIZE}`
-        : `/api/books?sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}&skip=${pageParam}&limit=${PAGE_SIZE}`;
+        ? `/api/books/catalog?q=${encodeURIComponent(sq)}&sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}`
+        : `/api/books/catalog?sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch books");
       return res.json();
     },
-    getNextPageParam: (lastPage, allPages) =>
-      lastPage.length === PAGE_SIZE ? allPages.flat().length : undefined,
-    initialPageParam: 0,
     refetchInterval: ({ state }) => {
-      const books = state.data?.pages?.flat() ?? [];
+      const books = state.data ?? [];
       return books.some((b) => b.download_status === "pending") ? 2000 : false;
     },
   });
 
-  const books = data?.pages.flat() ?? [];
-  const shouldHydrateSeries = !searchParams.q;
-  const visibleSeries = shouldHydrateSeries
-    ? [...new Set(books.map((book) => book.series).filter(Boolean))]
-    : [];
-
   useEffect(() => {
-    seriesRequestVersionRef.current += 1;
-    requestedSeriesRef.current = new Set();
-    setSeriesBooks({});
+    setVisibleCount(PAGE_SIZE);
+    detailRequestVersionRef.current += 1;
+    requestedDetailIdsRef.current = new Set();
+    setBookDetails({});
   }, [searchParams.q, searchParams.sortBy, searchParams.sortOrder]);
 
+  const baseVisibleBooks = catalog.slice(0, visibleCount);
+  const visibleBookIds = new Set(baseVisibleBooks.map((book) => book.id));
+  const visibleSeries = new Set(
+    baseVisibleBooks.map((book) => book.series).filter(Boolean),
+  );
+  const visibleCatalogBooks = catalog.filter(
+    (book) =>
+      visibleBookIds.has(book.id) || (book.series && visibleSeries.has(book.series)),
+  );
+
   useEffect(() => {
-    if (!shouldHydrateSeries) return;
+    const missingIds = visibleCatalogBooks
+      .map((book) => book.id)
+      .filter(
+        (bookId) =>
+          bookId != null &&
+          !bookDetails[bookId] &&
+          !requestedDetailIdsRef.current.has(bookId),
+      );
 
-    const currentVisibleSeries = [
-      ...new Set((data?.pages.flat() ?? []).map((book) => book.series).filter(Boolean)),
-    ];
-    if (!currentVisibleSeries.length) return;
+    if (!missingIds.length) return;
 
-    const requestVersion = seriesRequestVersionRef.current;
-    const missingSeries = currentVisibleSeries.filter(
-      (series) => !requestedSeriesRef.current.has(series),
-    );
-
-    if (!missingSeries.length) return;
+    const requestVersion = detailRequestVersionRef.current;
+    for (const id of missingIds) {
+      requestedDetailIdsRef.current.add(id);
+    }
 
     let cancelled = false;
-    for (const series of missingSeries) {
-      requestedSeriesRef.current.add(series);
-      fetch(`/api/books/search/series/${encodeURIComponent(series)}?limit=500`)
-        .then((res) => {
-          if (!res.ok) throw new Error(`Failed to hydrate series ${series}`);
-          return res.json();
-        })
-        .then((seriesResults) => {
-          if (cancelled || requestVersion !== seriesRequestVersionRef.current) return;
-          startTransition(() => {
-            setSeriesBooks((current) => ({ ...current, [series]: seriesResults }));
-          });
-        })
-        .catch(() => {
-          if (requestVersion === seriesRequestVersionRef.current) {
-            requestedSeriesRef.current.delete(series);
-          }
-        });
+    const params = new URLSearchParams();
+    for (const id of missingIds) {
+      params.append("ids", id);
     }
+    fetch(`/api/books/details?${params.toString()}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to hydrate visible book details");
+        return res.json();
+      })
+      .then((books) => {
+        if (cancelled || requestVersion !== detailRequestVersionRef.current) return;
+        startTransition(() => {
+          setBookDetails((current) => {
+            const next = { ...current };
+            for (const book of books) {
+              next[book.id] = book;
+            }
+            return next;
+          });
+        });
+      })
+      .catch(() => {
+        if (requestVersion === detailRequestVersionRef.current) {
+          for (const id of missingIds) {
+            requestedDetailIdsRef.current.delete(id);
+          }
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [data, shouldHydrateSeries]);
+  }, [visibleCatalogBooks, bookDetails]);
 
-  const booksById = new Map(books.map((book) => [book.id, book]));
-  for (const series of visibleSeries) {
-    for (const book of seriesBooks[series] ?? []) {
-      booksById.set(book.id, book);
-    }
-  }
-  const displayBooks = Array.from(booksById.values());
+  const displayBooks = visibleCatalogBooks.map((book) =>
+    bookDetails[book.id] ? { ...bookDetails[book.id], ...book } : book,
+  );
+  const hasNextPage = visibleCount < catalog.length;
+  const fetchNextPage = () => {
+    setVisibleCount((current) => Math.min(current + PAGE_SIZE, catalog.length));
+  };
+  const isFetchingNextPage = false;
 
   const handleSearch = () => {
     setSearchParams({ q: q.trim(), sortBy, sortOrder });
@@ -187,6 +197,12 @@ function App() {
     const newOrder = sortOrder === "asc" ? "desc" : "asc";
     setSortOrder(newOrder);
     setSearchParams({ q: searchParams.q, sortBy, sortOrder: newOrder });
+  };
+
+  const handleEdit = async (book) => {
+    const response = await fetch(`/api/books/${book.id}`);
+    if (!response.ok) return;
+    navigate("book", await response.json());
   };
 
   if (editingBook) {
@@ -256,7 +272,7 @@ function App() {
       {error && <p className="error">{error.message}</p>}
       <BookList
         books={displayBooks}
-        onEdit={(book) => navigate("book", book)}
+        onEdit={handleEdit}
         fetchNextPage={fetchNextPage}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}

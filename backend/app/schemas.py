@@ -52,6 +52,20 @@ class Book(BookBase):
         from_attributes = True
 
 
+class BookCatalogEntry(BaseModel):
+    id: int
+    title: str
+    author: str
+    series: Optional[str] = None
+    source_type: SourceType
+    current_word_count: Optional[int] = None
+    updated_at: Optional[datetime] = None
+    download_status: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 # Pydantic model for creating a new book log.
 class BookLogCreate(BaseModel):
     book_id: int

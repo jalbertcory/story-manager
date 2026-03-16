@@ -19,38 +19,19 @@ describe("App", () => {
         id: 1,
         title: "Book A",
         author: "Author A",
-        master_word_count: 100,
+        series: null,
         current_word_count: 100,
         source_type: "epub",
       },
     ];
-    globalThis.fetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve(mockBooks),
-      }),
-    );
-
-    renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20",
-      );
-    });
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Book A")[0]).toBeInTheDocument();
-      expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
-    });
-  });
-
-  it("searches by unified query", async () => {
-    const mockBooks = [
-      { id: 2, title: "Book B", author: "Author B", source_type: "epub" },
-    ];
     globalThis.fetch = vi.fn((url) => {
-      if (url.includes("Author%20B")) {
+      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/books/details?ids=1") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
@@ -66,59 +47,37 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20",
-      );
-    });
-
-    fireEvent.change(
-      screen.getByPlaceholderText("Search by title, author, or series"),
-      { target: { value: "Author B" } },
-    );
-    fireEvent.click(screen.getByText("Search"));
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/search?q=Author%20B&skip=0&limit=20",
+        "/api/books/catalog?sort_by=title&sort_order=asc",
       );
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("Book A")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
     });
   });
 
-  it("hydrates full series for grouped browse results", async () => {
-    const firstPage = [
-      {
-        id: 1,
-        title: "Saga Book 2",
-        author: "Author A",
-        series: "Saga",
-        source_type: "epub",
-      },
+  it("searches by unified query", async () => {
+    const mockBooks = [
+      { id: 2, title: "Book B", author: "Author B", source_type: "epub", series: null },
     ];
-    const fullSeries = [
-      {
-        id: 2,
-        title: "Saga Book 1",
-        author: "Author A",
-        series: "Saga",
-        source_type: "epub",
-      },
-      firstPage[0],
-    ];
-
     globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20") {
+      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(firstPage),
+          json: () => Promise.resolve([]),
         });
       }
-      if (url === "/api/books/search/series/Saga?limit=500") {
+      if (url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(fullSeries),
+          json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/books/details?ids=2") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBooks),
         });
       }
       return Promise.resolve({
@@ -130,7 +89,87 @@ describe("App", () => {
     renderWithClient(<App />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/search/series/Saga?limit=500");
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books/catalog?sort_by=title&sort_order=asc",
+      );
+    });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Search by title, author, or series"),
+      { target: { value: "Author B" } },
+    );
+    fireEvent.click(screen.getByText("Search"));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc",
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
+    });
+  });
+
+  it("loads the lightweight catalog first and hydrates visible book details", async () => {
+    const catalogBooks = [
+      {
+        id: 1,
+        title: "Saga Book 2",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+      },
+      {
+        id: 2,
+        title: "Saga Book 1",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+      },
+    ];
+    const hydratedBooks = [
+      {
+        id: 2,
+        title: "Saga Book 1",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+        current_word_count: 1000,
+      },
+      {
+        id: 1,
+        title: "Saga Book 2",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+        current_word_count: 1200,
+      },
+    ];
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(catalogBooks),
+        });
+      }
+      if (url === "/api/books/details?ids=1&ids=2") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(hydratedBooks),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+
+    renderWithClient(<App />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
     });
 
     await waitFor(() => {

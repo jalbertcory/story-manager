@@ -72,7 +72,7 @@ function Utilities({ onBack }) {
   const removeAllMutation = useMutation({
     mutationFn: () => runRemoveAllBooks(false),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
     },
   });
 
@@ -82,7 +82,7 @@ function Utilities({ onBack }) {
   const reprocessMutation = useMutation({
     mutationFn: () =>
       fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const handleDetectSeries = async () => {
@@ -91,7 +91,7 @@ function Utilities({ onBack }) {
       const res = await fetch("/api/books/detect-series", { method: "POST" });
       const data = await res.json();
       if (data.updated > 0) {
-        queryClient.invalidateQueries({ queryKey: ["books"] });
+        queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       }
       setDetectState(data);
     } catch {

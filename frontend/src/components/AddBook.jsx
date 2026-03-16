@@ -138,7 +138,7 @@ function AddBook() {
       }
     }
 
-    queryClient.invalidateQueries({ queryKey: ["books"] });
+    queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
     setFiles([]);
     setUrls([""]);
     setPending(false);
