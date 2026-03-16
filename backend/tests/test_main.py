@@ -145,7 +145,9 @@ async def test_upload_epub(db_session):
     library_path.mkdir(exist_ok=True)
     epub_filename = "Uploaded Book.epub"
     epub_filepath = library_path / epub_filename
-    immutable_filepath = library_path / f"immutable_{epub_filename}"
+    author_dir = library_path / "Uploader"
+    immutable_filepath = author_dir / f"immutable_{epub_filename}"
+    current_filepath = author_dir / epub_filename
 
     # Create a dummy epub file
     create_dummy_epub(epub_filepath, "Uploaded Book", "Uploader", "Upload Series")
@@ -156,14 +158,16 @@ async def test_upload_epub(db_session):
     # Clean up the dummy files
     epub_filepath.unlink()
     immutable_filepath.unlink()
+    current_filepath.unlink()
+    author_dir.rmdir()
 
     assert response.status_code == 201
     data = response.json()
     assert data["title"] == "Uploaded Book"
     assert data["author"] == "Uploader"
     assert data["series"] == "Upload Series"
-    assert data["immutable_path"] == str(Path("library") / f"immutable_{epub_filename}")
-    assert data["current_path"] == str(Path("library") / epub_filename)
+    assert data["immutable_path"] == str(Path("library") / "Uploader" / f"immutable_{epub_filename}")
+    assert data["current_path"] == str(Path("library") / "Uploader" / epub_filename)
     assert data["master_word_count"] > 0
     assert data["current_word_count"] == data["master_word_count"]
 
@@ -213,15 +217,17 @@ async def test_upload_zip_with_nested_epubs(db_session):
     assert {item["book"]["title"] for item in data} == {"Nested One", "Nested Two"}
     assert all(item["filename"].startswith("batch-upload.zip:collection/") for item in data)
 
-    # Imported books are written using a flattened version of the nested archive path.
+    # Imported books are written into author folders using a flattened version of the nested archive path.
     for expected_path in [
-        library_path / "collection_one_Nested One.epub",
-        library_path / "immutable_collection_one_Nested One.epub",
-        library_path / "collection_two_Nested Two.epub",
-        library_path / "immutable_collection_two_Nested Two.epub",
+        library_path / "Author One" / "collection_one_Nested One.epub",
+        library_path / "Author One" / "immutable_collection_one_Nested One.epub",
+        library_path / "Author Two" / "collection_two_Nested Two.epub",
+        library_path / "Author Two" / "immutable_collection_two_Nested Two.epub",
     ]:
         assert expected_path.exists()
         expected_path.unlink(missing_ok=True)
+    (library_path / "Author One").rmdir()
+    (library_path / "Author Two").rmdir()
 
 
 @pytest.mark.asyncio
@@ -666,6 +672,102 @@ async def test_delete_book_by_id(db_session):
     # Deleting again is idempotent (returns 204)
     response = client.delete(f"/api/books/{book.id}")
     assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_book_by_id_removes_author_folder_when_empty(db_session):
+    library_path = Path("./library").resolve()
+    author_dir = library_path / "Folder Author"
+    author_dir.mkdir(parents=True, exist_ok=True)
+
+    immutable_path = author_dir / "immutable_Delete Me.epub"
+    current_path = author_dir / "Delete Me.epub"
+    create_dummy_epub(immutable_path, "Delete Me", "Folder Author")
+    create_dummy_epub(current_path, "Delete Me", "Folder Author")
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Delete Me",
+                author="Folder Author",
+                immutable_path=str(immutable_path.relative_to(library_path.parent)),
+                current_path=str(current_path.relative_to(library_path.parent)),
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.delete(f"/api/books/{book.id}")
+
+    assert response.status_code == 204
+    assert not author_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_remove_all_books_preview_and_delete(db_session):
+    library_path = Path("./library").resolve()
+    author_one_dir = library_path / "Author One"
+    author_two_dir = library_path / "Author Two"
+    author_one_dir.mkdir(parents=True, exist_ok=True)
+    author_two_dir.mkdir(parents=True, exist_ok=True)
+
+    alpha_immutable = author_one_dir / "immutable_Alpha.epub"
+    alpha_current = author_one_dir / "Alpha.epub"
+    beta_immutable = author_two_dir / "immutable_Beta.epub"
+    beta_current = author_two_dir / "Beta.epub"
+    create_dummy_epub(alpha_immutable, "Alpha", "Author One")
+    create_dummy_epub(alpha_current, "Alpha", "Author One")
+    create_dummy_epub(beta_immutable, "Beta", "Author Two")
+    create_dummy_epub(beta_current, "Beta", "Author Two")
+
+    async with AsyncTestingSessionLocal() as session:
+        alpha = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Alpha",
+                author="Author One",
+                immutable_path=str(alpha_immutable.relative_to(library_path.parent)),
+                current_path=str(alpha_current.relative_to(library_path.parent)),
+                source_type=models.SourceType.epub,
+            ),
+        )
+        beta = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Beta",
+                author="Author Two",
+                immutable_path=str(beta_immutable.relative_to(library_path.parent)),
+                current_path=str(beta_current.relative_to(library_path.parent)),
+                source_type=models.SourceType.epub,
+            ),
+        )
+        cover_path = library_path / "covers" / f"{alpha.id}.jpg"
+        cover_path.parent.mkdir(parents=True, exist_ok=True)
+        cover_path.write_bytes(b"cover")
+        alpha.cover_path = str(cover_path.relative_to(library_path.parent))
+        await session.commit()
+        await crud.create_book_log(session, schemas.BookLogCreate(book_id=alpha.id, entry_type="added"))
+        await crud.create_book_log(session, schemas.BookLogCreate(book_id=alpha.id, entry_type="updated"))
+        await crud.create_book_log(session, schemas.BookLogCreate(book_id=beta.id, entry_type="added"))
+
+    preview_response = client.post("/api/books/remove-all?dry_run=true")
+
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+    assert preview["dry_run"] is True
+    assert preview["book_count"] == 2
+    assert preview["file_count"] == 5
+    assert preview["log_count"] == 3
+    assert "library/Author One/Alpha.epub" in preview["paths"]
+    assert any(book["title"] == "Alpha" and book["log_entries"] == 2 for book in preview["books"])
+
+    delete_response = client.post("/api/books/remove-all?dry_run=false")
+
+    assert delete_response.status_code == 200
+    assert client.get("/api/books").json() == []
+    assert not author_one_dir.exists()
+    assert not author_two_dir.exists()
+    assert not cover_path.exists()
 
 
 @pytest.mark.asyncio

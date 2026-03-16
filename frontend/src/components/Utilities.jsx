@@ -15,10 +15,49 @@ async function runCleanup(dryRun) {
   return res.json();
 }
 
+async function runRemoveAllBooks(dryRun) {
+  const res = await fetch(`/api/books/remove-all?dry_run=${dryRun}`, { method: "POST" });
+  if (!res.ok) throw new Error("Remove-all request failed");
+  return res.json();
+}
+
+function buildRemoveAllWarning(preview) {
+  const lines = [
+    `This will permanently remove ${preview.book_count} book${preview.book_count !== 1 ? "s" : ""} from the library.`,
+    `${preview.file_count} file${preview.file_count !== 1 ? "s" : ""} will be deleted (${formatBytes(preview.total_bytes)}).`,
+    `${preview.log_count} log entr${preview.log_count === 1 ? "y" : "ies"} will also be removed.`,
+  ];
+
+  if (preview.books.length > 0) {
+    lines.push("");
+    lines.push("Books to remove:");
+    preview.books.slice(0, 5).forEach((book) => {
+      lines.push(`- ${book.title} by ${book.author}`);
+    });
+    if (preview.books.length > 5) {
+      lines.push(`- ...and ${preview.books.length - 5} more`);
+    }
+  }
+
+  if (preview.paths.length > 0) {
+    lines.push("");
+    lines.push("Files to delete:");
+    preview.paths.slice(0, 5).forEach((path) => lines.push(`- ${path}`));
+    if (preview.paths.length > 5) {
+      lines.push(`- ...and ${preview.paths.length - 5} more`);
+    }
+  }
+
+  lines.push("");
+  lines.push("This cannot be undone.");
+  return lines.join("\n");
+}
+
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
+  const [removeAllError, setRemoveAllError] = useState("");
 
   const previewMutation = useMutation({
     mutationFn: () => runCleanup(true),
@@ -28,6 +67,13 @@ function Utilities({ onBack }) {
   const deleteMutation = useMutation({
     mutationFn: () => runCleanup(false),
     onSuccess: (data) => setPreview(data),
+  });
+
+  const removeAllMutation = useMutation({
+    mutationFn: () => runRemoveAllBooks(false),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+    },
   });
 
   const isPending = previewMutation.isPending || deleteMutation.isPending;
@@ -50,6 +96,25 @@ function Utilities({ onBack }) {
       setDetectState(data);
     } catch {
       setDetectState({ updated: 0, series_detected: [], error: true });
+    }
+  };
+
+  const handleRemoveAllBooks = async () => {
+    setRemoveAllError("");
+    try {
+      const preview = await runRemoveAllBooks(true);
+      if (preview.book_count === 0) {
+        window.alert("No books are currently stored in the library.");
+        return;
+      }
+
+      if (!window.confirm(buildRemoveAllWarning(preview))) {
+        return;
+      }
+
+      removeAllMutation.mutate();
+    } catch (error) {
+      setRemoveAllError(error.message || "Remove-all request failed");
     }
   };
 
@@ -82,6 +147,32 @@ function Utilities({ onBack }) {
         )}
         {reprocessMutation.isSuccess && (
           <p className="hint" style={{ marginTop: "0.5rem" }}>Done.</p>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <h3>Remove All Books</h3>
+        <p className="hint">
+          Permanently deletes every book record, its EPUB files, extracted covers, and update history.
+        </p>
+        <div className="settings-actions">
+          <button
+            className="btn-danger"
+            onClick={handleRemoveAllBooks}
+            disabled={removeAllMutation.isPending}
+          >
+            {removeAllMutation.isPending ? "Removing..." : "Remove All Books"}
+          </button>
+        </div>
+        {(removeAllError || removeAllMutation.isError) && (
+          <p className="error" style={{ marginTop: "0.5rem" }}>
+            {removeAllError || removeAllMutation.error?.message}
+          </p>
+        )}
+        {removeAllMutation.isSuccess && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>
+            Library cleared.
+          </p>
         )}
       </section>
 

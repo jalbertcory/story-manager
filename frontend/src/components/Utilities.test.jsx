@@ -6,9 +6,11 @@ import { renderWithClient } from "../test-utils";
 describe("Utilities", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal("alert", vi.fn());
   });
 
-  it("renders all three utility sections", () => {
+  it("renders all four utility sections", () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
     );
@@ -16,6 +18,7 @@ describe("Utilities", () => {
     renderWithClient(<Utilities onBack={() => {}} />);
 
     expect(screen.getByRole("heading", { name: "Clean All Books" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Remove All Books" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Detect Series" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Storage Cleanup" })).toBeInTheDocument();
   });
@@ -113,5 +116,120 @@ describe("Utilities", () => {
     await waitFor(() => {
       expect(screen.getByText("library/orphan.epub")).toBeInTheDocument();
     });
+  });
+
+  it("shows a detailed warning before removing all books", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/books/remove-all?dry_run=true")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              dry_run: true,
+              book_count: 2,
+              file_count: 5,
+              total_bytes: 2048,
+              log_count: 3,
+              books: [
+                {
+                  id: 1,
+                  title: "Alpha",
+                  author: "Author One",
+                  files: [{ path: "library/Author One/Alpha.epub", size_bytes: 1024 }],
+                  log_entries: 2,
+                },
+                {
+                  id: 2,
+                  title: "Beta",
+                  author: "Author Two",
+                  files: [{ path: "library/Author Two/Beta.epub", size_bytes: 1024 }],
+                  log_entries: 1,
+                },
+              ],
+              paths: [
+                "library/Author One/Alpha.epub",
+                "library/Author Two/Beta.epub",
+              ],
+            }),
+        });
+      }
+
+      if (url.includes("/api/books/remove-all?dry_run=false")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              dry_run: false,
+              book_count: 2,
+              file_count: 5,
+              total_bytes: 2048,
+              log_count: 3,
+              books: [],
+              paths: [],
+            }),
+        });
+      }
+
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove All Books" }));
+
+    await waitFor(() => {
+      expect(globalThis.confirm).toHaveBeenCalledWith(
+        expect.stringContaining("This will permanently remove 2 books from the library."),
+      );
+    });
+
+    expect(globalThis.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Alpha by Author One"),
+    );
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books/remove-all?dry_run=false",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    expect(screen.getByText("Library cleared.")).toBeInTheDocument();
+  });
+
+  it("alerts instead of deleting when the library is already empty", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/books/remove-all?dry_run=true")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              dry_run: true,
+              book_count: 0,
+              file_count: 0,
+              total_bytes: 0,
+              log_count: 0,
+              books: [],
+              paths: [],
+            }),
+        });
+      }
+
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove All Books" }));
+
+    await waitFor(() => {
+      expect(globalThis.alert).toHaveBeenCalledWith("No books are currently stored in the library.");
+    });
+
+    expect(globalThis.confirm).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      "/api/books/remove-all?dry_run=false",
+      expect.anything(),
+    );
   });
 });
