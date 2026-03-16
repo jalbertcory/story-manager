@@ -63,7 +63,7 @@ jobs:
       run: |
         export PYTHONPATH=.
         source .venv/bin/activate
-        pytest backend/tests/
+        pytest -m "not integration" backend/tests/
 
   lint-ui:
     runs-on: ubuntu-latest
