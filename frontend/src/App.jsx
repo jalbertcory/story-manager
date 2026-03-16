@@ -169,7 +169,9 @@ function App() {
     };
   }, [visibleCatalogBooks, bookDetails]);
 
-  const displayBooks = visibleCatalogBooks.map((book) => bookDetails[book.id] ?? book);
+  const displayBooks = visibleCatalogBooks.map((book) =>
+    bookDetails[book.id] ? { ...bookDetails[book.id], ...book } : book,
+  );
   const hasNextPage = visibleCount < catalog.length;
   const fetchNextPage = () => {
     setVisibleCount((current) => Math.min(current + PAGE_SIZE, catalog.length));
@@ -198,12 +200,6 @@ function App() {
   };
 
   const handleEdit = async (book) => {
-    const detailedBook = bookDetails[book.id];
-    if (detailedBook) {
-      navigate("book", detailedBook);
-      return;
-    }
-
     const response = await fetch(`/api/books/${book.id}`);
     if (!response.ok) return;
     navigate("book", await response.json());

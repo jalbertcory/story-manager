@@ -120,7 +120,7 @@ function BookSettings({ book, onBack }) {
       }
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const processMutation = useMutation({
@@ -135,7 +135,7 @@ function BookSettings({ book, onBack }) {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
     },
   });
@@ -152,7 +152,7 @@ function BookSettings({ book, onBack }) {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
     },
   });
@@ -166,7 +166,7 @@ function BookSettings({ book, onBack }) {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
     },
   });
@@ -203,7 +203,7 @@ function BookSettings({ book, onBack }) {
       if (!res.ok) throw new Error("Cover upload failed");
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["books"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const coverUrlMutation = useMutation({
@@ -220,7 +220,7 @@ function BookSettings({ book, onBack }) {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       setCoverUrl("");
     },
   });
