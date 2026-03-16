@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import {
   useInfiniteQuery,
 } from "@tanstack/react-query";
@@ -27,6 +27,9 @@ function App() {
   const [showScheduler, setShowScheduler] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showCleanup, setShowCleanup] = useState(false);
+  const [seriesBooks, setSeriesBooks] = useState({});
+  const requestedSeriesRef = useRef(new Set());
+  const seriesRequestVersionRef = useRef(0);
 
   const applyView = ({ view, data } = { view: "home" }) => {
     setEditingBook(view === "book" ? data : null);
@@ -105,6 +108,65 @@ function App() {
   });
 
   const books = data?.pages.flat() ?? [];
+  const shouldHydrateSeries = !searchParams.q;
+  const visibleSeries = shouldHydrateSeries
+    ? [...new Set(books.map((book) => book.series).filter(Boolean))]
+    : [];
+
+  useEffect(() => {
+    seriesRequestVersionRef.current += 1;
+    requestedSeriesRef.current = new Set();
+    setSeriesBooks({});
+  }, [searchParams.q, searchParams.sortBy, searchParams.sortOrder]);
+
+  useEffect(() => {
+    if (!shouldHydrateSeries) return;
+
+    const currentVisibleSeries = [
+      ...new Set((data?.pages.flat() ?? []).map((book) => book.series).filter(Boolean)),
+    ];
+    if (!currentVisibleSeries.length) return;
+
+    const requestVersion = seriesRequestVersionRef.current;
+    const missingSeries = currentVisibleSeries.filter(
+      (series) => !requestedSeriesRef.current.has(series),
+    );
+
+    if (!missingSeries.length) return;
+
+    let cancelled = false;
+    for (const series of missingSeries) {
+      requestedSeriesRef.current.add(series);
+      fetch(`/api/books/search/series/${encodeURIComponent(series)}?limit=500`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`Failed to hydrate series ${series}`);
+          return res.json();
+        })
+        .then((seriesResults) => {
+          if (cancelled || requestVersion !== seriesRequestVersionRef.current) return;
+          startTransition(() => {
+            setSeriesBooks((current) => ({ ...current, [series]: seriesResults }));
+          });
+        })
+        .catch(() => {
+          if (requestVersion === seriesRequestVersionRef.current) {
+            requestedSeriesRef.current.delete(series);
+          }
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data, shouldHydrateSeries]);
+
+  const booksById = new Map(books.map((book) => [book.id, book]));
+  for (const series of visibleSeries) {
+    for (const book of seriesBooks[series] ?? []) {
+      booksById.set(book.id, book);
+    }
+  }
+  const displayBooks = Array.from(booksById.values());
 
   const handleSearch = () => {
     setSearchParams({ q: q.trim(), sortBy, sortOrder });
@@ -193,7 +255,7 @@ function App() {
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
       <BookList
-        books={books}
+        books={displayBooks}
         onEdit={(book) => navigate("book", book)}
         fetchNextPage={fetchNextPage}
         hasNextPage={hasNextPage}

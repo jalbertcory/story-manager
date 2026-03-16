@@ -930,6 +930,17 @@ async def test_search_books_by_series(db_session):
                 source_type=models.SourceType.epub,
             ),
         )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book 4",
+                author="Author C",
+                series="Series XY",
+                immutable_path="p4i",
+                current_path="p4c",
+                source_type=models.SourceType.epub,
+            ),
+        )
 
     response = client.get("/api/books/search/series/Series X")
     assert response.status_code == 200
