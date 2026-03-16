@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
@@ -94,17 +95,60 @@ function BookCard({ book, onEdit }) {
   );
 }
 
-function SeriesGroup({ series, books, onEdit }) {
-  const [expanded, setExpanded] = useState(true);
+function SeriesSummaryRow({ series, books, onEdit }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const summary = useMemo(() => {
+    const authors = [...new Set(books.map((book) => book.author).filter(Boolean))];
+    const totalWords = books.reduce(
+      (sum, book) => sum + (book.current_word_count ?? 0),
+      0,
+    );
+    const coverBook =
+      books.find((book) => book.cover_path && !book.download_status) ??
+      books.find((book) => !book.download_status) ??
+      books[0];
+
+    return {
+      authors,
+      totalWords,
+      hasWebNovel: books.some((book) => book.source_type === "web"),
+      coverBook,
+    };
+  }, [books]);
 
   return (
     <div className="series-group">
       <div className="series-header" onClick={() => setExpanded(!expanded)}>
         <span className="series-toggle">{expanded ? "▼" : "▶"}</span>
-        <span className="series-name">{series}</span>
-        <span className="series-count">
-          {books.length} book{books.length !== 1 ? "s" : ""}
-        </span>
+        <div className="series-cover">
+          {summary.coverBook?.cover_path ? (
+            <img
+              src={`/api/covers/${summary.coverBook.id}`}
+              alt={`${series} cover`}
+              className="series-cover-image"
+            />
+          ) : (
+            <div className="series-cover-placeholder">No cover</div>
+          )}
+        </div>
+        <div className="series-summary">
+          <div className="series-summary-topline">
+            <span className="series-name">{series}</span>
+            {summary.hasWebNovel && <span className="badge-web">Web in series</span>}
+          </div>
+          <div className="series-meta">
+            <span>
+              {books.length} book{books.length !== 1 ? "s" : ""}
+            </span>
+            <span>{summary.authors.join(", ") || "Unknown author"}</span>
+            <span>
+              {summary.totalWords
+                ? `${summary.totalWords.toLocaleString()} words`
+                : "Word count unavailable"}
+            </span>
+          </div>
+        </div>
       </div>
       {expanded && (
         <div className="book-grid">
@@ -117,6 +161,130 @@ function SeriesGroup({ series, books, onEdit }) {
   );
 }
 
+function LibraryViewTabs({ view, onChange, counts }) {
+  const tabs = [
+    { id: "series", label: "Series", count: counts.series },
+    { id: "standalone", label: "Standalone", count: counts.standalone },
+    { id: "web", label: "Web", count: counts.web },
+  ];
+
+  return (
+    <div className="library-view-tabs" role="tablist" aria-label="Library views">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={view === tab.id}
+          className={`library-view-tab${view === tab.id ? " library-view-tab--active" : ""}`}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+          <span className="library-view-tab-count">{tab.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function BookRow({ book, onEdit, actions = null, subtitle = null }) {
+  const handleOpen = () => onEdit(book);
+
+  return (
+    <div className="book-row">
+      <button type="button" className="book-row-main" onClick={handleOpen}>
+        <div className="book-row-cover">
+          {book.cover_path ? (
+            <img
+              src={`/api/covers/${book.id}`}
+              alt={`${book.title} cover`}
+              className="book-row-cover-image"
+            />
+          ) : (
+            <div className="book-row-cover-placeholder">No cover</div>
+          )}
+        </div>
+        <div className="book-row-body">
+          <div className="book-row-title">{book.title}</div>
+          <div className="book-row-meta">
+            <span>{book.author || "Unknown author"}</span>
+            <span>
+              {book.current_word_count != null
+                ? `${book.current_word_count.toLocaleString()} words`
+                : "Word count unavailable"}
+            </span>
+            {book.source_type === "web" && <span className="badge-web">Web</span>}
+          </div>
+          {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
+        </div>
+      </button>
+      {actions ? <div className="book-row-actions">{actions}</div> : null}
+    </div>
+  );
+}
+
+function StandaloneTagAction({ book, seriesOptions }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(book.series || "");
+
+  useEffect(() => {
+    setValue(book.series || "");
+  }, [book.id, book.series]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (nextSeries) => {
+      const res = await fetch(`/api/books/${book.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ series: nextSeries.trim() || null }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to update series");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
+
+  const unchanged = (book.series || "") === value.trim();
+
+  return (
+    <form
+      className="standalone-tag-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!unchanged) {
+          saveMutation.mutate(value);
+        }
+      }}
+    >
+      <label className="standalone-tag-label" htmlFor={`series-tag-${book.id}`}>
+        Series
+      </label>
+      <input
+        id={`series-tag-${book.id}`}
+        list={`series-options-${book.id}`}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="Add to a series"
+      />
+      <datalist id={`series-options-${book.id}`}>
+        {seriesOptions.map((series) => (
+          <option key={series} value={series} />
+        ))}
+      </datalist>
+      <button type="submit" className="btn" disabled={unchanged || saveMutation.isPending}>
+        {saveMutation.isPending ? "Saving..." : "Save"}
+      </button>
+    </form>
+  );
+}
+
 function BookList({
   books = [],
   onEdit,
@@ -125,6 +293,17 @@ function BookList({
   isFetchingNextPage,
 }) {
   const sentinelRef = useRef(null);
+  const [libraryView, setLibraryView] = useState("series");
+
+  const { data: allSeries = [] } = useQuery({
+    queryKey: ["series"],
+    queryFn: async () => {
+      const res = await fetch("/api/series");
+      if (!res.ok) throw new Error("Failed to load series");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -143,18 +322,22 @@ function BookList({
     return <p>No books found.</p>;
   }
 
-  // Group books: series → alphabetical by series then title; standalone at bottom
   const seriesMap = {};
-  const standalone = [];
+  const standaloneBooks = [];
+  const webBooks = [];
 
   for (const book of books) {
+    if (book.source_type === "web" && !book.download_status) {
+      webBooks.push(book);
+    }
+
     if (book.series && !book.download_status) {
       if (!seriesMap[book.series]) {
         seriesMap[book.series] = [];
       }
       seriesMap[book.series].push(book);
-    } else {
-      standalone.push(book);
+    } else if (book.source_type !== "web") {
+      standaloneBooks.push(book);
     }
   }
 
@@ -163,23 +346,68 @@ function BookList({
   }
 
   const sortedSeries = Object.keys(seriesMap).sort();
+  const counts = {
+    series: sortedSeries.length,
+    standalone: standaloneBooks.length,
+    web: webBooks.length,
+  };
 
   return (
     <div className="book-list">
-      {sortedSeries.map((series) => (
-        <SeriesGroup
-          key={series}
-          series={series}
-          books={seriesMap[series]}
-          onEdit={onEdit}
-        />
-      ))}
-      {standalone.length > 0 && (
-        <div className="book-grid">
-          {standalone.map((book) => (
-            <BookCard key={book.id} book={book} onEdit={onEdit} />
-          ))}
-        </div>
+      <LibraryViewTabs view={libraryView} onChange={setLibraryView} counts={counts} />
+      {libraryView === "series" && (
+        sortedSeries.length ? (
+          sortedSeries.map((series) => (
+            <SeriesSummaryRow
+              key={series}
+              series={series}
+              books={seriesMap[series]}
+              onEdit={onEdit}
+            />
+          ))
+        ) : (
+          <p>No series found.</p>
+        )
+      )}
+      {libraryView === "standalone" && (
+        standaloneBooks.length ? (
+          <div className="book-rows">
+            {standaloneBooks.map((book) => (
+              <BookRow
+                key={book.id}
+                book={book}
+                onEdit={onEdit}
+                subtitle={book.series ? `Series: ${book.series}` : "No series assigned"}
+                actions={
+                  !book.download_status ? (
+                    <StandaloneTagAction
+                      book={book}
+                      seriesOptions={allSeries.filter((series) => series !== book.series)}
+                    />
+                  ) : null
+                }
+              />
+            ))}
+          </div>
+        ) : (
+          <p>No standalone books found.</p>
+        )
+      )}
+      {libraryView === "web" && (
+        webBooks.length ? (
+          <div className="book-rows book-rows--web">
+            {webBooks.map((book) => (
+              <BookRow
+                key={book.id}
+                book={book}
+                onEdit={onEdit}
+                subtitle={book.series ? `Series: ${book.series}` : "Web novel"}
+              />
+            ))}
+          </div>
+        ) : (
+          <p>No web novels found.</p>
+        )
       )}
       <div ref={sentinelRef} style={{ height: 1 }} />
       {isFetchingNextPage && <p className="loading-more">Loading more…</p>}

@@ -235,6 +235,42 @@
   padding: 0.5rem 0;
 }
 
+.library-view-tabs {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.library-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.55rem 0.95rem;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.library-view-tab--active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(98, 114, 234, 0.1);
+}
+
+.library-view-tab-count {
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.8rem;
+}
+
 .book-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -368,7 +404,6 @@
 /* ─── Badges ─────────────────────────────────────────────── */
 .badge-web {
   display: inline-block;
-  margin-top: 0.35rem;
   padding: 0.15em 0.5em;
   font-size: 0.68rem;
   font-weight: 600;
@@ -397,28 +432,202 @@
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.6rem 0.75rem;
+  padding: 0.85rem;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   user-select: none;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s;
   margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 .series-header:hover {
   background-color: var(--surface-2);
+  border-color: var(--border-strong);
 }
 .series-toggle {
   color: var(--text-muted);
   font-size: 0.75rem;
 }
+.series-cover {
+  width: 50px;
+  height: 70px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.series-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.series-cover-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 0.35rem;
+  font-size: 0.7rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+.series-summary {
+  min-width: 0;
+  flex: 1;
+}
+.series-summary-topline {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
 .series-name {
   font-weight: 600;
   font-size: 1rem;
 }
-.series-count {
+.series-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  margin-top: 0.35rem;
   font-size: 0.8rem;
   color: var(--text-muted);
-  margin-left: auto;
+}
+
+.book-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.3rem 0 0.8rem;
+}
+
+.book-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+}
+
+.book-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.book-row-cover {
+  width: 52px;
+  height: 74px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.book-row-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.book-row-cover-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-align: center;
+  padding: 0.3rem;
+}
+
+.book-row-body {
+  min-width: 0;
+}
+
+.book-row-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.book-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.8rem;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  align-items: center;
+}
+
+.book-row-subtitle {
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.book-row-actions {
+  flex-shrink: 0;
+}
+
+.standalone-tag-form {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.standalone-tag-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.standalone-tag-form input {
+  min-width: 180px;
+}
+
+.book-rows--web .book-row {
+  background: linear-gradient(180deg, var(--surface), rgba(98, 114, 234, 0.06));
+}
+
+@media (max-width: 720px) {
+  .book-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .book-row-actions {
+    width: 100%;
+  }
+
+  .standalone-tag-form {
+    width: 100%;
+  }
+
+  .standalone-tag-label,
+  .standalone-tag-form input,
+  .standalone-tag-form .btn {
+    width: 100%;
+  }
 }
 
 /* ─── Book Settings page ─────────────────────────────────── */

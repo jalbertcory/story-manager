@@ -51,12 +51,13 @@ test("EpubEditor interactions", async ({ page }) => {
 
   await page.reload();
 
-  // Wait for the book to appear in the list
+  // Standalone books now live behind their own tab in the library.
+  await page.getByRole("tab", { name: /standalone/i }).click();
   await expect(page.getByText("Test Book").first()).toBeVisible({ timeout: 10000 });
 
-  // Click the book card to edit it
+  // Click the standalone library row to edit it
   await page
-    .locator(".book-card")
+    .locator(".book-row")
     .filter({ hasText: /Test Book/i })
     .click();
 
@@ -85,10 +86,11 @@ test("EpubEditor interactions", async ({ page }) => {
 
   // We should be back on the book list
   await expect(page.getByText("Story Manager")).toBeVisible();
+  await page.getByRole("tab", { name: /standalone/i }).click();
 
   // Verify the word count has changed
-  const bookCard = page.locator(".book-card").filter({ hasText: /Test Book/i });
-  await expect(bookCard.getByText(/0 words/i)).toBeVisible();
+  const bookRow = page.locator(".book-row").filter({ hasText: /Test Book/i });
+  await expect(bookRow.getByText(/0 words/i)).toBeVisible();
 
   await page.screenshot({ path: "frontend_verification.png" });
 });

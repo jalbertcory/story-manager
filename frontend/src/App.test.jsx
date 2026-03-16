@@ -24,6 +24,7 @@ describe("App", () => {
         source_type: "epub",
       },
     ];
+
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
         return Promise.resolve({
@@ -35,6 +36,12 @@ describe("App", () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
         });
       }
       return Promise.resolve({
@@ -51,6 +58,8 @@ describe("App", () => {
       );
     });
 
+    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
+
     await waitFor(() => {
       expect(screen.getAllByText("Book A")[0]).toBeInTheDocument();
       expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
@@ -61,6 +70,7 @@ describe("App", () => {
     const mockBooks = [
       { id: 2, title: "Book B", author: "Author B", source_type: "epub", series: null },
     ];
+
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
         return Promise.resolve({
@@ -78,6 +88,12 @@ describe("App", () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
         });
       }
       return Promise.resolve({
@@ -105,6 +121,8 @@ describe("App", () => {
         "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc",
       );
     });
+
+    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
@@ -160,6 +178,12 @@ describe("App", () => {
           json: () => Promise.resolve(hydratedBooks),
         });
       }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(["Saga"]),
+        });
+      }
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve([]),
@@ -175,8 +199,85 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("Saga")).toBeInTheDocument();
       expect(screen.getByText("2 books")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Saga Book 1")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Saga"));
+
+    await waitFor(() => {
       expect(screen.getAllByText("Saga Book 1")[0]).toBeInTheDocument();
       expect(screen.getAllByText("Saga Book 2")[0]).toBeInTheDocument();
+    });
+  });
+
+  it("lets you tag a standalone book with a series from the library view", async () => {
+    const mockBooks = [
+      {
+        id: 4,
+        title: "Loner",
+        author: "Author Solo",
+        current_word_count: 1200,
+        source_type: "epub",
+        series: null,
+      },
+    ];
+
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/books/details?ids=4") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(["Saga", "Chronicles"]),
+        });
+      }
+      if (url === "/api/books/4" && options?.method === "PUT") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ...mockBooks[0],
+              series: "Saga",
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+
+    renderWithClient(<App />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Loner")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Add to a series")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Add to a series"), {
+      target: { value: "Saga" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/4", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ series: "Saga" }),
+      });
     });
   });
 });
