@@ -1439,6 +1439,47 @@ def test_detect_series_mixed_formats_same_author():
     assert result[("William D. Arand", "Cultivating Chaos 3")] == "Cultivating Chaos"
 
 
+def test_detect_series_hash_number_same_author():
+    """Hash-numbered entries should be grouped with plain numbered entries for the same author."""
+    books = [
+        SeriesBook(title="Throne Hunters 1", author="Phil Tucker"),
+        SeriesBook(title="Throne Hunters #2", author="Phil Tucker"),
+        SeriesBook(title="Throne Hunters #3", author="Phil Tucker"),
+        SeriesBook(title="Throne Hunters 4", author="Phil Tucker"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("Phil Tucker", "Throne Hunters 1")] == "Throne Hunters"
+    assert result[("Phil Tucker", "Throne Hunters #2")] == "Throne Hunters"
+    assert result[("Phil Tucker", "Throne Hunters #3")] == "Throne Hunters"
+    assert result[("Phil Tucker", "Throne Hunters 4")] == "Throne Hunters"
+
+
+def test_detect_series_repeated_parenthetical_hint_same_author():
+    """Repeated terminal parenthetical series labels should confirm a series for one author."""
+    books = [
+        SeriesBook(title="The Shadow of What Was Lost (The Licanius Trilogy)", author="James Islington"),
+        SeriesBook(title="An Echo of Things to Come (The Licanius Trilogy)", author="James Islington"),
+        SeriesBook(title="The Light of All That Falls (The Licanius Trilogy)", author="James Islington"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("James Islington", "The Shadow of What Was Lost (The Licanius Trilogy)")] == "The Licanius Trilogy"
+    assert result[("James Islington", "An Echo of Things to Come (The Licanius Trilogy)")] == "The Licanius Trilogy"
+    assert result[("James Islington", "The Light of All That Falls (The Licanius Trilogy)")] == "The Licanius Trilogy"
+
+
+def test_detect_series_prefix_subtitle_with_book_number():
+    """Series prefixes before a subtitle should be detected when the title still carries 'Book N'."""
+    books = [
+        SeriesBook(title="The Beginning After The End: Early Years, Book 1", author="TurtleMe"),
+        SeriesBook(title="The Beginning After The End: Reckoning, Book 9", author="TurtleMe"),
+        SeriesBook(title="The Beginning After The End: Providence, Book 11", author="TurtleMe"),
+    ]
+    result = detect_series_from_books(books)
+    assert result[("TurtleMe", "The Beginning After The End: Early Years, Book 1")] == "The Beginning After The End"
+    assert result[("TurtleMe", "The Beginning After The End: Reckoning, Book 9")] == "The Beginning After The End"
+    assert result[("TurtleMe", "The Beginning After The End: Providence, Book 11")] == "The Beginning After The End"
+
+
 def test_detect_series_same_author_multiple_independent_series():
     """A single author can still have multiple distinct detected series."""
     books = [

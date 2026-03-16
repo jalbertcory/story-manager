@@ -12,17 +12,19 @@ _ROMAN = re.compile(
     r"^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
     re.IGNORECASE,
 )
-_NUMBER_TOKEN = r"(?:\d+(?:\.\d+)?|[IVXLCDMivxlcdm]+)"
+_NUMBER_TOKEN = r"#?(?:\d+(?:\.\d+)?|[IVXLCDMivxlcdm]+)"
 _SEPARATOR_RE = re.compile(r"[\s\-:,_]+")
 _AUTHOR_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 _TRAILING_METADATA_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _SERIES_PATTERNS = (
     re.compile(rf"^.+?\((?P<series>.+?)\s+Book\s+(?P<num>{_NUMBER_TOKEN})\)\s*$", re.IGNORECASE),
     re.compile(rf"^.+?[:,-]\s*(?P<series>.+?),?\s+Book\s+(?P<num>{_NUMBER_TOKEN})\b.*$", re.IGNORECASE),
+    re.compile(rf"^(?P<series>.+?)\s*:\s*.+?\bBook\s+(?P<num>{_NUMBER_TOKEN})\b.*$", re.IGNORECASE),
     re.compile(rf"^.+?:\s*(?P<num>{_NUMBER_TOKEN})\s*\((?P<series>.+?)\)\s*$", re.IGNORECASE),
     re.compile(rf"^(?P<series>.+?)\s*:\s*Book\s+(?P<num>{_NUMBER_TOKEN})(?:\b.*)?$", re.IGNORECASE),
     re.compile(rf"^(?P<series>.+?)\s+(?P<num>{_NUMBER_TOKEN})(?:\s*[-:(].*)?$", re.IGNORECASE),
 )
+_PARENTHETICAL_SERIES_RE = re.compile(r"^.+?\((?P<series>[^)]+)\)\s*$")
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class SeriesBook:
 
 
 def _is_valid_sequence_token(token: str) -> bool:
+    token = token.lstrip("#")
     return token.replace(".", "", 1).isdigit() or bool(_ROMAN.fullmatch(token))
 
 
@@ -46,15 +49,40 @@ def _normalize_author_name(value: str) -> str:
 
 def _extract_series_hints(title: str) -> list[str]:
     stripped = title.strip()
-    for pattern in _SERIES_PATTERNS:
-        match = pattern.match(stripped)
-        if not match:
+    hints: list[str] = []
+
+    primary_parenthetical_match = _SERIES_PATTERNS[0].match(stripped)
+    if primary_parenthetical_match:
+        token = primary_parenthetical_match.group("num")
+        if _is_valid_sequence_token(token):
+            hints.append(primary_parenthetical_match.group("series").strip(" :-,()"))
+
+    if not primary_parenthetical_match:
+        for pattern in _SERIES_PATTERNS[1:]:
+            match = pattern.match(stripped)
+            if not match:
+                continue
+            token = match.group("num")
+            if not _is_valid_sequence_token(token):
+                continue
+            hints.append(match.group("series").strip(" :-,()"))
+
+    paren_match = _PARENTHETICAL_SERIES_RE.match(stripped)
+    if paren_match:
+        paren_value = paren_match.group("series").strip(" :-,()")
+        if paren_value and not re.search(rf"\bBook\s+{_NUMBER_TOKEN}\b", paren_value, re.IGNORECASE):
+            hints.append(paren_value)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for hint in hints:
+        normalized_hint = _normalize_series_name(hint)
+        if not normalized_hint or normalized_hint in seen:
             continue
-        token = match.group("num")
-        if not _is_valid_sequence_token(token):
-            continue
-        return [match.group("series").strip(" :-,()")]
-    return []
+        seen.add(normalized_hint)
+        deduped.append(hint)
+
+    return deduped
 
 
 def _labels_overlap(left: str, right: str) -> bool:
