@@ -189,7 +189,13 @@ async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limi
     """
     Retrieve books from the database by series.
     """
-    result = await db.execute(select(models.Book).filter(models.Book.series.ilike(f"%{series}%")).offset(skip).limit(limit))
+    result = await db.execute(
+        select(models.Book)
+        .filter(func.lower(models.Book.series) == series.lower())
+        .order_by(asc(models.Book.title))
+        .offset(skip)
+        .limit(limit)
+    )
     return result.scalars().all()
 
 

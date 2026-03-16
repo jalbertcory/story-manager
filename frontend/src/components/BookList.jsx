@@ -158,6 +158,10 @@ function BookList({
     }
   }
 
+  for (const seriesBooks of Object.values(seriesMap)) {
+    seriesBooks.sort((left, right) => left.title.localeCompare(right.title));
+  }
+
   const sortedSeries = Object.keys(seriesMap).sort();
 
   return (

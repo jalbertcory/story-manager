@@ -6,6 +6,11 @@ import { renderWithClient } from "./test-utils";
 describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    globalThis.IntersectionObserver = class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    };
   });
 
   it("fetches and displays books on mount", async () => {
@@ -79,6 +84,60 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
+    });
+  });
+
+  it("hydrates full series for grouped browse results", async () => {
+    const firstPage = [
+      {
+        id: 1,
+        title: "Saga Book 2",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+      },
+    ];
+    const fullSeries = [
+      {
+        id: 2,
+        title: "Saga Book 1",
+        author: "Author A",
+        series: "Saga",
+        source_type: "epub",
+      },
+      firstPage[0],
+    ];
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/books?sort_by=title&sort_order=asc&skip=0&limit=20") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(firstPage),
+        });
+      }
+      if (url === "/api/books/search/series/Saga?limit=500") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(fullSeries),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+
+    renderWithClient(<App />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/search/series/Saga?limit=500");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Saga")).toBeInTheDocument();
+      expect(screen.getByText("2 books")).toBeInTheDocument();
+      expect(screen.getAllByText("Saga Book 1")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("Saga Book 2")[0]).toBeInTheDocument();
     });
   });
 });
