@@ -48,7 +48,7 @@ lint:
 	cd frontend && npm run lint
 
 test:
-	export PYTHONPATH=. && .venv/bin/python3 -m pytest backend/tests
+	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
 	cd frontend && npm test -- --run
 
 e2e:

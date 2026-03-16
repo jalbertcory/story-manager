@@ -15,28 +15,32 @@ from ebooklib import epub as ebooklib_epub
 from backend.app.services.web_novel import download_web_novel as _download_and_parse_web_novel
 from backend.app import epub_editor
 
-ROYALROAD_URL = "https://www.royalroad.com/fiction/153080/blackflame-mage-litrpg-regressor-isekai"
+ROYALROAD_URL = "https://www.royalroad.com/fiction/21220"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_royalroad_download_and_validate():
     """
-    Downloads Blackflame Mage from Royal Road via FanFicFare and validates that:
+    Downloads Mother of Learning from Royal Road via FanFicFare and validates that:
     - Metadata is populated (title, author)
     - The EPUB file exists and is non-empty
     - The book has a substantial word count (> 10 000)
     - The book has multiple chapters, each with a title and filename
     - The EPUB can be parsed by ebooklib and has valid DC metadata
-    - The title contains "Blackflame" (smoke test against wrong story)
+    - The title contains "Mother of Learning" (smoke test against wrong story)
     """
-    epub_path, metadata = await _download_and_parse_web_novel(ROYALROAD_URL)
+    result = await _download_and_parse_web_novel(ROYALROAD_URL)
+    assert result is not None, "FanFicFare did not produce an EPUB for the Royal Road test story."
+    epub_path, metadata = result
 
     try:
         # ── Metadata ──────────────────────────────────────────────────────────
         assert metadata["title"], "title should be non-empty"
         assert metadata["author"], "author should be non-empty"
-        assert "blackflame" in metadata["title"].lower(), f"Expected 'blackflame' in title, got: {metadata['title']!r}"
+        assert "mother of learning" in metadata["title"].lower(), (
+            f"Expected 'Mother of Learning' in title, got: {metadata['title']!r}"
+        )
 
         # ── File on disk ──────────────────────────────────────────────────────
         assert epub_path.exists(), f"EPUB not found at {epub_path}"
