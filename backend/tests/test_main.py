@@ -1156,10 +1156,10 @@ async def test_opds_root_feed(db_session):
     root = ET.fromstring(response.content)
     assert root.tag == f"{ATOM}feed"
     assert root.findtext(f"{ATOM}title") == "Story Manager Reader"
-    # Should have a subsection entry pointing to /reader/opds/catalog
+    # Should have subsection entries for both the catalog and the series listing.
     entries = root.findall(f"{ATOM}entry")
-    assert len(entries) == 1
-    assert entries[0].findtext(f"{ATOM}title") == "All Books"
+    assert len(entries) == 2
+    assert [entry.findtext(f"{ATOM}title") for entry in entries] == ["All Books", "Series"]
 
 
 @pytest.mark.asyncio
@@ -1743,6 +1743,7 @@ async def test_create_reader_key_and_use_reader_updates(db_session):
                 immutable_path="library/immutable_reader.epub",
                 current_path="library/reader.epub",
                 source_type=models.SourceType.epub,
+                current_word_count=4321,
             ),
         )
 
@@ -1765,6 +1766,101 @@ async def test_create_reader_key_and_use_reader_updates(db_session):
     assert payload[0]["title"] == "Reader Book"
     assert payload[0]["download_url"].endswith("/reader/books/1/download")
     assert payload[0]["content_version"] == 1
+    assert payload[0]["current_word_count"] == 4321
+
+
+@pytest.mark.asyncio
+async def test_reader_series_api_and_opds_feeds(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Arcane Saga 1",
+                author="Author A",
+                series="Arcane Saga",
+                immutable_path="library/immutable_arcane_1.epub",
+                current_path="library/arcane_1.epub",
+                source_type=models.SourceType.epub,
+                current_word_count=1000,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Arcane Saga 2",
+                author="Author A",
+                series="arcane saga",
+                immutable_path="library/immutable_arcane_2.epub",
+                current_path="library/arcane_2.epub",
+                source_type=models.SourceType.epub,
+                current_word_count=2000,
+                cover_path="library/arcane_cover.jpg",
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Hidden Standalone",
+                author="Author B",
+                series="Arcane Saga",
+                immutable_path="library/immutable_hidden.epub",
+                current_path="library/hidden.epub",
+                source_type=models.SourceType.epub,
+                download_status="processing",
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="No Cover Chronicle",
+                author="Author C",
+                series="No Cover Chronicle",
+                immutable_path="library/immutable_no_cover.epub",
+                current_path="library/no_cover.epub",
+                source_type=models.SourceType.epub,
+                current_word_count=500,
+            ),
+        )
+
+    key_response = client.post("/api/reader-keys", json={"label": "Series Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    series_response = client.get("/reader/series", auth=("reader", token))
+    assert series_response.status_code == 200
+    series_payload = series_response.json()
+    assert [series["name"] for series in series_payload] == ["Arcane Saga", "No Cover Chronicle"]
+    assert series_payload[0]["book_count"] == 2
+    assert series_payload[0]["total_words"] == 3000
+    assert series_payload[0]["cover_url"].endswith("/reader/covers/2")
+    assert series_payload[1]["cover_url"] is None
+
+    books_response = client.get("/reader/series/arcane saga/books", auth=("reader", token))
+    assert books_response.status_code == 200
+    books_payload = books_response.json()
+    assert [book["title"] for book in books_payload] == ["Arcane Saga 1", "Arcane Saga 2"]
+    assert [book["current_word_count"] for book in books_payload] == [1000, 2000]
+
+    opds_series_response = client.get("/reader/opds/series", auth=("reader", token))
+    assert opds_series_response.status_code == 200
+
+    import xml.etree.ElementTree as ET
+
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    root = ET.fromstring(opds_series_response.content)
+    entries = root.findall(f"{ATOM}entry")
+    assert [entry.findtext(f"{ATOM}title") for entry in entries] == ["Arcane Saga", "No Cover Chronicle"]
+    series_link = entries[0].find(f"{ATOM}link")
+    assert series_link is not None
+    assert series_link.get("href", "").endswith("/reader/opds/series/Arcane%20Saga")
+
+    opds_series_books_response = client.get("/reader/opds/series/Arcane%20Saga", auth=("reader", token))
+    assert opds_series_books_response.status_code == 200
+    books_root = ET.fromstring(opds_series_books_response.content)
+    self_links = [link.get("href") for link in books_root.findall(f"{ATOM}link") if link.get("rel") == "self"]
+    assert self_links == ["http://testserver/reader/opds/series/Arcane%20Saga"]
+    book_entries = books_root.findall(f"{ATOM}entry")
+    assert [entry.findtext(f"{ATOM}title") for entry in book_entries] == ["Arcane Saga 1", "Arcane Saga 2"]
 
 
 @pytest.mark.asyncio
