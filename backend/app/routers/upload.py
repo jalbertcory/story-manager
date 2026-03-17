@@ -46,14 +46,10 @@ def _fix_nested_epub(payload: bytes) -> bytes:
                 for item in zin.infolist():
                     if item.is_dir():
                         continue
-                    old_name = item.filename
-                    if old_name.startswith(prefix):
-                        new_name = old_name[len(prefix):]
-                    else:
-                        new_name = old_name
+                    new_name = item.filename.removeprefix(prefix)
                     if not new_name:
                         continue
-                    zout.writestr(new_name, zin.read(old_name))
+                    zout.writestr(new_name, zin.read(item.filename))
             return buf.getvalue()
     except Exception:
         return payload  # If anything goes wrong, return original
