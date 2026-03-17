@@ -157,6 +157,23 @@ function BookSettings({ book, onBack }) {
     },
   });
 
+  const detachSourceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/books/${book.id}/detach-source`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to remove web marker");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      onBack();
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/books/${book.id}`, { method: "DELETE" });
@@ -253,6 +270,16 @@ function BookSettings({ book, onBack }) {
     }
   };
 
+  const handleDetachSource = () => {
+    if (
+      window.confirm(
+        `Remove the web marker from "${book.title}"? This will keep the EPUB files but stop treating it as a web novel.`,
+      )
+    ) {
+      detachSourceMutation.mutate();
+    }
+  };
+
   const toggleChapter = (filename) => {
     setRemovedChapters((prev) =>
       prev.includes(filename)
@@ -274,6 +301,7 @@ function BookSettings({ book, onBack }) {
     saveMutation.isPending ||
     processMutation.isPending ||
     refreshMutation.isPending ||
+    detachSourceMutation.isPending ||
     deleteMutation.isPending;
 
   const filteredChapters = useMemo(() => {
@@ -325,6 +353,51 @@ function BookSettings({ book, onBack }) {
           />
         </label>
       </section>
+
+      {(book.source_url || book.source_type === "web") && (
+        <section className="settings-section">
+          <h3>Source</h3>
+          <p className="hint">
+            Source type: <strong>{book.source_type}</strong>
+          </p>
+          {book.source_url ? (
+            <>
+              <label>
+                Source URL
+                <input value={book.source_url} readOnly />
+              </label>
+              <p className="hint">
+                <a href={book.source_url} target="_blank" rel="noreferrer">
+                  Open source URL
+                </a>
+              </p>
+            </>
+          ) : (
+            <p className="hint">No source URL is currently attached.</p>
+          )}
+          {book.source_type === "web" && (
+            <>
+              <button
+                type="button"
+                className="btn-danger"
+                onClick={handleDetachSource}
+                disabled={
+                  isBusy || !book.source_url || !book.immutable_path || !book.current_path
+                }
+              >
+                {detachSourceMutation.isPending
+                  ? "Removing Web Marker..."
+                  : "Remove Web Marker"}
+              </button>
+              {(!book.source_url || !book.immutable_path || !book.current_path) && (
+                <p className="hint">
+                  This marker can only be removed after the book has EPUB files and a saved source URL.
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       <section className="settings-section">
         <h3>Cover</h3>
@@ -558,6 +631,11 @@ function BookSettings({ book, onBack }) {
       )}
       {refreshMutation.isError && (
         <p className="error">Refresh failed: {refreshMutation.error.message}</p>
+      )}
+      {detachSourceMutation.isError && (
+        <p className="error">
+          Remove web marker failed: {detachSourceMutation.error.message}
+        </p>
       )}
       {deleteMutation.isError && (
         <p className="error">Delete failed: {deleteMutation.error.message}</p>

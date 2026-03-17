@@ -617,6 +617,53 @@ async def test_refresh_book_no_source_url(db_session):
 
 
 @pytest.mark.asyncio
+async def test_detach_book_source(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Imported FFF EPUB",
+                author="Uploader",
+                source_url="https://example.com/story/123",
+                immutable_path="library/imported/original.epub",
+                current_path="library/imported/current.epub",
+                source_type=models.SourceType.web,
+                download_status="complete",
+            ),
+        )
+
+    response = client.post(f"/api/books/{book.id}/detach-source")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_type"] == "epub"
+    assert data["source_url"] is None
+    assert data["download_status"] is None
+    assert data["immutable_path"] == "library/imported/original.epub"
+    assert data["current_path"] == "library/imported/current.epub"
+
+
+@pytest.mark.asyncio
+async def test_detach_book_source_requires_epub_files(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Pending Web Novel",
+                author="Pending",
+                source_url="https://example.com/story/456",
+                source_type=models.SourceType.web,
+                download_status="pending",
+            ),
+        )
+
+    response = client.post(f"/api/books/{book.id}/detach-source")
+
+    assert response.status_code == 400
+    assert "must have EPUB files" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_unified_search(db_session):
     """
     Test the unified search endpoint (GET /api/books/search?q=).

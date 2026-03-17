@@ -136,6 +136,16 @@ async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.
     return book
 
 
+async def detach_book_source(db: AsyncSession, book: models.Book) -> models.Book:
+    """Clear a book's remote source metadata and treat it as a normal EPUB."""
+    book.source_url = None
+    book.source_type = models.SourceType.epub
+    book.download_status = None
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+
 async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
     book.content_updated_at = datetime.now(timezone.utc)
     book.content_version = (book.content_version or 0) + 1
