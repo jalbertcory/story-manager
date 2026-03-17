@@ -243,9 +243,7 @@ async def get_reader_series_books(
 
 
 @router.get("/reader/books/standalone", response_model=list[schemas.ReaderBook])
-async def get_reader_standalone_books(
-    request: Request, db: AsyncSession = Depends(get_db)
-) -> list[schemas.ReaderBook]:
+async def get_reader_standalone_books(request: Request, db: AsyncSession = Depends(get_db)) -> list[schemas.ReaderBook]:
     books = await crud.get_reader_standalone_books(db)
     return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
 

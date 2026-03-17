@@ -1930,9 +1930,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
     standalone_payload = standalone_response.json()
     assert [book["title"] for book in standalone_payload] == ["Truly Standalone"]
     assert standalone_payload[0]["cover_url"] is None
-    assert standalone_payload[0]["download_url"].endswith(
-        f"/reader/books/{standalone_payload[0]['id']}/download"
-    )
+    assert standalone_payload[0]["download_url"].endswith(f"/reader/books/{standalone_payload[0]['id']}/download")
 
     opds_series_response = client.get("/reader/opds/series", auth=("reader", token))
     assert opds_series_response.status_code == 200

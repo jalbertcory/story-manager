@@ -524,11 +524,7 @@ async def get_reader_series(db: AsyncSession) -> List[dict]:
 
 async def get_reader_standalone_books(db: AsyncSession) -> List[models.Book]:
     """Get reader-eligible books that have no series assigned."""
-    result = await db.execute(
-        _reader_books_query()
-        .where(models.Book.series.is_(None))
-        .order_by(asc(models.Book.title))
-    )
+    result = await db.execute(_reader_books_query().where(models.Book.series.is_(None)).order_by(asc(models.Book.title)))
     return result.scalars().all()
 
 
