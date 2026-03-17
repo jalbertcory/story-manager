@@ -166,7 +166,7 @@ describe("App", () => {
     });
 
     expect(globalThis.fetch).not.toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
-    expect(screen.getByAltText("Saga cover")).toHaveAttribute("src", "/library/covers/2.jpg");
+    expect(screen.getByAltText("Saga cover")).toHaveAttribute("src", "/api/covers/2");
 
     expect(screen.queryByText("Saga Book 1")).not.toBeInTheDocument();
 
