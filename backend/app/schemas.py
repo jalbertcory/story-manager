@@ -166,5 +166,14 @@ class ReaderBook(BaseModel):
     source_type: SourceType
     content_updated_at: datetime
     content_version: int
+    current_word_count: Optional[int] = None
     download_url: str
+    cover_url: Optional[str] = None
+
+
+class ReaderSeriesSummary(BaseModel):
+    name: str
+    book_count: int
+    total_words: int
+    latest_update: Optional[datetime] = None
     cover_url: Optional[str] = None

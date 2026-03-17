@@ -2,7 +2,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 import re
 from fastapi import HTTPException
-from sqlalchemy import asc, desc, or_, func, delete
+from sqlalchemy import asc, case, delete, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from . import models, schemas
@@ -479,6 +479,45 @@ async def get_reader_book(db: AsyncSession, book_id: int) -> models.Book:
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return book
+
+
+async def get_reader_series(db: AsyncSession) -> List[dict]:
+    """Group reader-eligible books by series, returning summary stats."""
+    query = (
+        select(
+            func.min(models.Book.series).label("name"),
+            func.count(models.Book.id).label("book_count"),
+            func.coalesce(func.sum(models.Book.current_word_count), 0).label("total_words"),
+            func.max(models.Book.content_updated_at).label("latest_update"),
+            func.min(case((models.Book.cover_path.is_not(None), models.Book.id))).label("cover_book_id"),
+        )
+        .where(
+            models.Book.current_path.is_not(None),
+            models.Book.download_status.is_(None),
+            models.Book.series.is_not(None),
+        )
+        .group_by(func.lower(models.Book.series))
+        .order_by(func.lower(models.Book.series))
+    )
+    result = await db.execute(query)
+    return [
+        {
+            "name": row.name,
+            "book_count": row.book_count,
+            "total_words": row.total_words,
+            "latest_update": row.latest_update,
+            "cover_book_id": row.cover_book_id,
+        }
+        for row in result.all()
+    ]
+
+
+async def get_reader_books_by_series(db: AsyncSession, name: str) -> List[models.Book]:
+    """Get reader-eligible books in a series (case-insensitive), ordered by title."""
+    result = await db.execute(
+        _reader_books_query().where(func.lower(models.Book.series) == name.lower()).order_by(asc(models.Book.title))
+    )
+    return result.scalars().all()
 
 
 async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> List[models.Book]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
@@ -78,6 +79,7 @@ def _reader_book_payload(book: models.Book, request: Request) -> dict:
         "source_type": book.source_type,
         "content_updated_at": book.content_updated_at,
         "content_version": book.content_version,
+        "current_word_count": book.current_word_count,
         "download_url": f"{base_url}/reader/books/{book.id}/download",
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
     }
@@ -105,6 +107,15 @@ async def reader_opds_root(request: Request) -> Response:
     subsection.set("rel", "subsection")
     subsection.set("href", f"{base_url}/reader/opds/catalog")
     subsection.set("type", acq_type)
+
+    series_entry = ET.SubElement(feed, f"{{{_ATOM_NS}}}entry")
+    ET.SubElement(series_entry, f"{{{_ATOM_NS}}}id").text = "urn:story-manager:reader-series"
+    ET.SubElement(series_entry, f"{{{_ATOM_NS}}}title").text = "Series"
+    ET.SubElement(series_entry, f"{{{_ATOM_NS}}}updated").text = _now_utc()
+    series_link = ET.SubElement(series_entry, f"{{{_ATOM_NS}}}link")
+    series_link.set("rel", "subsection")
+    series_link.set("href", f"{base_url}/reader/opds/series")
+    series_link.set("type", nav_type)
 
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
 
@@ -157,6 +168,78 @@ async def reader_opds_search(request: Request, q: str = "", db: AsyncSession = D
         feed.append(_build_book_entry(book, base_url))
 
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
+
+
+@router.get("/reader/opds/series")
+async def reader_opds_series(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    base_url = str(request.base_url).rstrip("/")
+    nav_type = "application/atom+xml;profile=opds-catalog;kind=navigation"
+    acq_type = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+
+    feed = ET.Element(f"{{{_ATOM_NS}}}feed")
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}id").text = "urn:story-manager:reader-series"
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}title").text = "Series"
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}updated").text = _now_utc()
+    _feed_link(feed, "self", f"{base_url}/reader/opds/series", nav_type)
+    _feed_link(feed, "start", f"{base_url}/reader/opds", nav_type)
+
+    series_rows = await crud.get_reader_series(db)
+    for row in series_rows:
+        entry = ET.SubElement(feed, f"{{{_ATOM_NS}}}entry")
+        ET.SubElement(entry, f"{{{_ATOM_NS}}}id").text = f"urn:story-manager:reader-series:{row['name']}"
+        ET.SubElement(entry, f"{{{_ATOM_NS}}}title").text = row["name"]
+        ET.SubElement(entry, f"{{{_ATOM_NS}}}updated").text = _now_utc()
+        link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
+        link.set("rel", "subsection")
+        link.set("href", f"{base_url}/reader/opds/series/{quote(row['name'], safe='')}")
+        link.set("type", acq_type)
+
+    return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
+
+
+@router.get("/reader/opds/series/{series_name}")
+async def reader_opds_series_books(series_name: str, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    base_url = str(request.base_url).rstrip("/")
+    acq_type = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+    nav_type = "application/atom+xml;profile=opds-catalog;kind=navigation"
+    series_path = quote(series_name, safe="")
+
+    feed = ET.Element(f"{{{_ATOM_NS}}}feed")
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}id").text = f"urn:story-manager:reader-series:{series_name}"
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}title").text = series_name
+    ET.SubElement(feed, f"{{{_ATOM_NS}}}updated").text = _now_utc()
+    _feed_link(feed, "self", f"{base_url}/reader/opds/series/{series_path}", acq_type)
+    _feed_link(feed, "start", f"{base_url}/reader/opds", nav_type)
+
+    books = await crud.get_reader_books_by_series(db, series_name)
+    for book in books:
+        feed.append(_build_book_entry(book, base_url))
+
+    return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
+
+
+@router.get("/reader/series", response_model=list[schemas.ReaderSeriesSummary])
+async def get_reader_series(request: Request, db: AsyncSession = Depends(get_db)) -> list[schemas.ReaderSeriesSummary]:
+    base_url = str(request.base_url).rstrip("/")
+    series_rows = await crud.get_reader_series(db)
+    return [
+        schemas.ReaderSeriesSummary(
+            name=row["name"],
+            book_count=row["book_count"],
+            total_words=row["total_words"],
+            latest_update=row["latest_update"],
+            cover_url=f"{base_url}/reader/covers/{row['cover_book_id']}" if row.get("cover_book_id") else None,
+        )
+        for row in series_rows
+    ]
+
+
+@router.get("/reader/series/{series_name}/books", response_model=list[schemas.ReaderBook])
+async def get_reader_series_books(
+    series_name: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> list[schemas.ReaderBook]:
+    books = await crud.get_reader_books_by_series(db, series_name)
+    return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
 
 
 @router.get("/reader/books/{book_id}", response_model=schemas.ReaderBook)
