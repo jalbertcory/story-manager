@@ -129,7 +129,7 @@ describe("App", () => {
     });
   });
 
-  it("loads the lightweight catalog first and hydrates visible book details", async () => {
+  it("renders series covers directly from the catalog without detail hydration", async () => {
     const catalogBooks = [
       {
         id: 1,
@@ -137,16 +137,9 @@ describe("App", () => {
         author: "Author A",
         series: "Saga",
         source_type: "epub",
+        current_word_count: 1200,
+        cover_path: "library/covers/1.jpg",
       },
-      {
-        id: 2,
-        title: "Saga Book 1",
-        author: "Author A",
-        series: "Saga",
-        source_type: "epub",
-      },
-    ];
-    const hydratedBooks = [
       {
         id: 2,
         title: "Saga Book 1",
@@ -154,14 +147,7 @@ describe("App", () => {
         series: "Saga",
         source_type: "epub",
         current_word_count: 1000,
-      },
-      {
-        id: 1,
-        title: "Saga Book 2",
-        author: "Author A",
-        series: "Saga",
-        source_type: "epub",
-        current_word_count: 1200,
+        cover_path: "library/covers/2.jpg",
       },
     ];
 
@@ -170,12 +156,6 @@ describe("App", () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(catalogBooks),
-        });
-      }
-      if (url === "/api/books/details?ids=1&ids=2") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(hydratedBooks),
         });
       }
       if (url === "/api/series") {
@@ -193,13 +173,12 @@ describe("App", () => {
     renderWithClient(<App />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
-    });
-
-    await waitFor(() => {
       expect(screen.getByText("Saga")).toBeInTheDocument();
       expect(screen.getByText("2 books")).toBeInTheDocument();
     });
+
+    expect(globalThis.fetch).not.toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
+    expect(screen.getByAltText("Saga cover")).toHaveAttribute("src", "/library/covers/2.jpg");
 
     expect(screen.queryByText("Saga Book 1")).not.toBeInTheDocument();
 

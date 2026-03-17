@@ -58,7 +58,7 @@ async def test_get_all_books_empty(db_session):
 @pytest.mark.asyncio
 async def test_get_book_catalog_returns_minimal_entries(db_session):
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(
+        book = await crud.create_book(
             session,
             schemas.BookCreate(
                 title="Catalog Book",
@@ -71,6 +71,12 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
                 notes="Should not be in catalog payload",
             ),
         )
+        library_path = Path("./library").resolve()
+        cover_path = library_path / "covers" / f"{book.id}.jpg"
+        cover_path.parent.mkdir(parents=True, exist_ok=True)
+        cover_path.write_bytes(b"catalog-cover")
+        book.cover_path = str(cover_path.relative_to(library_path.parent))
+        await session.commit()
 
     response = client.get("/api/books/catalog")
     assert response.status_code == 200
@@ -80,6 +86,7 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
     assert data[0]["author"] == "Catalog Author"
     assert data[0]["series"] == "Catalog Saga"
     assert data[0]["current_word_count"] == 321
+    assert data[0]["cover_path"] == f"library/covers/{book.id}.jpg"
     assert "immutable_path" not in data[0]
     assert "current_path" not in data[0]
     assert "notes" not in data[0]
@@ -113,6 +120,19 @@ async def test_get_book_details_by_ids_preserves_request_order(db_session):
     assert response.status_code == 200
     data = response.json()
     assert [book["id"] for book in data] == [second.id, first.id]
+
+
+@pytest.mark.asyncio
+async def test_static_cover_files_are_served_without_cover_lookup(db_session):
+    library_path = Path("./library").resolve()
+    cover_path = library_path / "covers" / "static-test.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    cover_path.write_bytes(b"cover-bytes")
+
+    response = client.get("/library/covers/static-test.jpg")
+
+    assert response.status_code == 200
+    assert response.content == b"cover-bytes"
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
 
+function getCoverUrl(coverPath) {
+  if (!coverPath) {
+    return null;
+  }
+  return `/${coverPath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 function BookCard({ book, onEdit }) {
   const isPending = book.download_status === "pending";
   const isError = book.download_status === "error";
@@ -35,9 +42,11 @@ function BookCard({ book, onEdit }) {
     coverContent = (
       <div className="book-cover-container">
         <img
-          src={`/api/covers/${book.id}`}
+          src={getCoverUrl(book.cover_path)}
           alt={`${book.title} cover`}
           className="book-cover"
+          loading="lazy"
+          decoding="async"
           onError={handleCoverError}
         />
         <div className="book-cover-title-overlay">{book.title}</div>
@@ -124,9 +133,11 @@ function SeriesSummaryRow({ series, books, onEdit }) {
         <div className="series-cover">
           {summary.coverBook?.cover_path ? (
             <img
-              src={`/api/covers/${summary.coverBook.id}`}
+              src={getCoverUrl(summary.coverBook.cover_path)}
               alt={`${series} cover`}
               className="series-cover-image"
+              loading="lazy"
+              decoding="async"
             />
           ) : (
             <div className="series-cover-placeholder">No cover</div>
@@ -196,9 +207,11 @@ function BookRow({ book, onEdit, actions = null, subtitle = null }) {
         <div className="book-row-cover">
           {book.cover_path ? (
             <img
-              src={`/api/covers/${book.id}`}
+              src={getCoverUrl(book.cover_path)}
               alt={`${book.title} cover`}
               className="book-row-cover-image"
+              loading="lazy"
+              decoding="async"
             />
           ) : (
             <div className="book-row-cover-placeholder">No cover</div>

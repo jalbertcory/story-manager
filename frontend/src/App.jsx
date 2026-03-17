@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
@@ -26,9 +26,6 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [showCleanup, setShowCleanup] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [bookDetails, setBookDetails] = useState({});
-  const requestedDetailIdsRef = useRef(new Set());
-  const detailRequestVersionRef = useRef(0);
 
   const applyView = ({ view, data } = { view: "home" }) => {
     setEditingBook(view === "book" ? data : null);
@@ -102,9 +99,6 @@ function App() {
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-    detailRequestVersionRef.current += 1;
-    requestedDetailIdsRef.current = new Set();
-    setBookDetails({});
   }, [searchParams.q, searchParams.sortBy, searchParams.sortOrder]);
 
   const baseVisibleBooks = catalog.slice(0, visibleCount);
@@ -116,62 +110,7 @@ function App() {
     (book) =>
       visibleBookIds.has(book.id) || (book.series && visibleSeries.has(book.series)),
   );
-
-  useEffect(() => {
-    const missingIds = visibleCatalogBooks
-      .map((book) => book.id)
-      .filter(
-        (bookId) =>
-          bookId != null &&
-          !bookDetails[bookId] &&
-          !requestedDetailIdsRef.current.has(bookId),
-      );
-
-    if (!missingIds.length) return;
-
-    const requestVersion = detailRequestVersionRef.current;
-    for (const id of missingIds) {
-      requestedDetailIdsRef.current.add(id);
-    }
-
-    let cancelled = false;
-    const params = new URLSearchParams();
-    for (const id of missingIds) {
-      params.append("ids", id);
-    }
-    fetch(`/api/books/details?${params.toString()}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to hydrate visible book details");
-        return res.json();
-      })
-      .then((books) => {
-        if (cancelled || requestVersion !== detailRequestVersionRef.current) return;
-        startTransition(() => {
-          setBookDetails((current) => {
-            const next = { ...current };
-            for (const book of books) {
-              next[book.id] = book;
-            }
-            return next;
-          });
-        });
-      })
-      .catch(() => {
-        if (requestVersion === detailRequestVersionRef.current) {
-          for (const id of missingIds) {
-            requestedDetailIdsRef.current.delete(id);
-          }
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [visibleCatalogBooks, bookDetails]);
-
-  const displayBooks = visibleCatalogBooks.map((book) =>
-    bookDetails[book.id] ? { ...bookDetails[book.id], ...book } : book,
-  );
+  const displayBooks = visibleCatalogBooks;
   const hasNextPage = visibleCount < catalog.length;
   const fetchNextPage = () => {
     setVisibleCount((current) => Math.min(current + PAGE_SIZE, catalog.length));
