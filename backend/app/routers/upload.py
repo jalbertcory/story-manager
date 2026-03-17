@@ -23,6 +23,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _fix_nested_epub(payload: bytes) -> bytes:
+    """If an EPUB has all files nested under a single subdirectory, repack with paths at root level."""
+    try:
+        with zipfile.ZipFile(BytesIO(payload)) as zin:
+            names = zin.namelist()
+            if "META-INF/container.xml" in names:
+                return payload  # Already valid
+
+            # Find container.xml nested in a subdirectory
+            container_paths = [n for n in names if n.endswith("META-INF/container.xml")]
+            if len(container_paths) != 1:
+                return payload  # Can't determine prefix, return as-is
+
+            # e.g. "BookName/META-INF/container.xml" -> prefix = "BookName/"
+            prefix = container_paths[0].rsplit("META-INF/container.xml", 1)[0]
+            if not prefix:
+                return payload
+
+            buf = BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if item.is_dir():
+                        continue
+                    new_name = item.filename.removeprefix(prefix)
+                    if not new_name:
+                        continue
+                    zout.writestr(new_name, zin.read(item.filename))
+            return buf.getvalue()
+    except Exception:
+        return payload  # If anything goes wrong, return original
+
+
 class EpubUploadResult(BaseModel):
     filename: str
     status: str  # "success" | "skipped" | "error"
@@ -73,6 +105,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     saves the cover, logs the addition, and applies cleaning.
     Raises HTTPException on duplicate or parse errors.
     """
+    payload = _fix_nested_epub(payload)
     LIBRARY_PATH.mkdir(exist_ok=True)
     temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{filename}"
     temp_current_path = LIBRARY_PATH / f"tmp_{filename}"
@@ -119,9 +152,13 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     try:
         dc_source = epub_book.get_metadata("DC", "source")
         if dc_source:
-            source_url = dc_source[0][0]
-            source_type = models.SourceType.web
-            logger.info(f"Detected FFF epub with source URL: {source_url}")
+            raw_url = dc_source[0][0]
+            if isinstance(raw_url, str) and raw_url.lower().startswith(("http://", "https://")):
+                source_url = raw_url
+                source_type = models.SourceType.web
+                logger.info(f"Detected FFF epub with source URL: {source_url}")
+            else:
+                logger.info(f"Skipping non-HTTP dc:source metadata: {raw_url}")
     except Exception as e:
         logger.warning(f"Failed to parse dc:source metadata: {e}")
 
