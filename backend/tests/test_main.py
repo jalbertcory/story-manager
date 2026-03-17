@@ -644,6 +644,31 @@ async def test_detach_book_source(db_session):
 
 
 @pytest.mark.asyncio
+async def test_detach_book_source_allows_missing_source_url_for_web_books(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Imported Web EPUB",
+                author="Uploader",
+                source_url=None,
+                immutable_path="library/imported/original.epub",
+                current_path="library/imported/current.epub",
+                source_type=models.SourceType.web,
+                download_status="complete",
+            ),
+        )
+
+    response = client.post(f"/api/books/{book.id}/detach-source")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_type"] == "epub"
+    assert data["source_url"] is None
+    assert data["download_status"] is None
+
+
+@pytest.mark.asyncio
 async def test_detach_book_source_requires_epub_files(db_session):
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1868,6 +1893,18 @@ async def test_reader_series_api_and_opds_feeds(db_session):
                 current_word_count=500,
             ),
         )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Truly Standalone",
+                author="Author D",
+                series=None,
+                immutable_path="library/immutable_standalone.epub",
+                current_path="library/standalone.epub",
+                source_type=models.SourceType.epub,
+                current_word_count=750,
+            ),
+        )
 
     key_response = client.post("/api/reader-keys", json={"label": "Series Reader"})
     assert key_response.status_code == 201
@@ -1887,6 +1924,13 @@ async def test_reader_series_api_and_opds_feeds(db_session):
     books_payload = books_response.json()
     assert [book["title"] for book in books_payload] == ["Arcane Saga 1", "Arcane Saga 2"]
     assert [book["current_word_count"] for book in books_payload] == [1000, 2000]
+
+    standalone_response = client.get("/reader/books/standalone", auth=("reader", token))
+    assert standalone_response.status_code == 200
+    standalone_payload = standalone_response.json()
+    assert [book["title"] for book in standalone_payload] == ["Truly Standalone"]
+    assert standalone_payload[0]["cover_url"] is None
+    assert standalone_payload[0]["download_url"].endswith(f"/reader/books/{standalone_payload[0]['id']}/download")
 
     opds_series_response = client.get("/reader/opds/series", auth=("reader", token))
     assert opds_series_response.status_code == 200
