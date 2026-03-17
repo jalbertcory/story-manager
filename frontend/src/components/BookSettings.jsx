@@ -303,6 +303,8 @@ function BookSettings({ book, onBack }) {
     refreshMutation.isPending ||
     detachSourceMutation.isPending ||
     deleteMutation.isPending;
+  const canDetachWebMarker =
+    book.source_type === "web" && book.immutable_path && book.current_path;
 
   const filteredChapters = useMemo(() => {
     if (!chapterSearch.trim()) return chapters;
@@ -381,17 +383,15 @@ function BookSettings({ book, onBack }) {
                 type="button"
                 className="btn-danger"
                 onClick={handleDetachSource}
-                disabled={
-                  isBusy || !book.source_url || !book.immutable_path || !book.current_path
-                }
+                disabled={isBusy || !canDetachWebMarker}
               >
                 {detachSourceMutation.isPending
                   ? "Removing Web Marker..."
                   : "Remove Web Marker"}
               </button>
-              {(!book.source_url || !book.immutable_path || !book.current_path) && (
+              {!canDetachWebMarker && (
                 <p className="hint">
-                  This marker can only be removed after the book has EPUB files and a saved source URL.
+                  This marker can only be removed after the book has EPUB files.
                 </p>
               )}
             </>
