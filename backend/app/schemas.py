@@ -58,6 +58,7 @@ class BookCatalogEntry(BaseModel):
     author: str
     series: Optional[str] = None
     source_type: SourceType
+    cover_path: Optional[str] = None
     current_word_count: Optional[int] = None
     updated_at: Optional[datetime] = None
     download_status: Optional[str] = None

@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from . import crud, models
+from .config import LIBRARY_PATH
 from .database import SessionLocal, engine
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
@@ -40,6 +42,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Story Manager", lifespan=lifespan)
+app.mount(
+    "/library/covers",
+    StaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
+    name="cover-files",
+)
 
 app.include_router(books.router)
 app.include_router(upload.router)
