@@ -169,6 +169,12 @@ To start the application, run the following command from the root of the reposit
 docker compose up -d
 ```
 
+If you access the web UI through a reverse proxy or custom hostname, set `VITE_ALLOWED_HOSTS` before starting the container. The value is a comma-separated list of hostnames that Vite should allow:
+
+```bash
+VITE_ALLOWED_HOSTS=story-reader.example.com docker compose up -d
+```
+
 ### Using on Unraid
 
 The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Manager.
