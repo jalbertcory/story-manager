@@ -4,11 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
 
-function getCoverUrl(coverPath) {
-  if (!coverPath) {
+function getCoverUrl(book) {
+  if (!book.cover_path) {
     return null;
   }
-  return `/${coverPath.split("/").map(encodeURIComponent).join("/")}`;
+  return `/api/covers/${book.id}`;
 }
 
 function BookCard({ book, onEdit }) {
@@ -42,7 +42,7 @@ function BookCard({ book, onEdit }) {
     coverContent = (
       <div className="book-cover-container">
         <img
-          src={getCoverUrl(book.cover_path)}
+          src={getCoverUrl(book)}
           alt={`${book.title} cover`}
           className="book-cover"
           loading="lazy"
@@ -133,7 +133,7 @@ function SeriesSummaryRow({ series, books, onEdit }) {
         <div className="series-cover">
           {summary.coverBook?.cover_path ? (
             <img
-              src={getCoverUrl(summary.coverBook.cover_path)}
+              src={getCoverUrl(summary.coverBook)}
               alt={`${series} cover`}
               className="series-cover-image"
               loading="lazy"
@@ -207,7 +207,7 @@ function BookRow({ book, onEdit, actions = null, subtitle = null }) {
         <div className="book-row-cover">
           {book.cover_path ? (
             <img
-              src={getCoverUrl(book.cover_path)}
+              src={getCoverUrl(book)}
               alt={`${book.title} cover`}
               className="book-row-cover-image"
               loading="lazy"

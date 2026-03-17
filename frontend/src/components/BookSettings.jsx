@@ -333,7 +333,7 @@ function BookSettings({ book, onBack }) {
             src={`/api/covers/${book.id}`}
             alt="Cover"
             className="book-cover"
-            style={{ height: 120 }}
+            style={{ maxHeight: 300, width: "auto" }}
           />
         )}
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
