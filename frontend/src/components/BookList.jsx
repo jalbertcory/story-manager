@@ -104,8 +104,53 @@ function BookCard({ book, onEdit }) {
   );
 }
 
-function SeriesSummaryRow({ series, books, onEdit }) {
+function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
+  const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(null); // null | "rename" | "merge"
+  const [renameValue, setRenameValue] = useState(series);
+  const [mergeTarget, setMergeTarget] = useState("");
+
+  const renameMutation = useMutation({
+    mutationFn: async (newName) => {
+      const res = await fetch(`/api/series/${encodeURIComponent(series)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_name: newName }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to rename series");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
+
+  const mergeMutation = useMutation({
+    mutationFn: async (target) => {
+      const res = await fetch("/api/series/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: series, target }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to merge series");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setEditing(null);
+      setMergeTarget("");
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
 
   const summary = useMemo(() => {
     const authors = [...new Set(books.map((book) => book.author).filter(Boolean))];
@@ -125,6 +170,8 @@ function SeriesSummaryRow({ series, books, onEdit }) {
       coverBook,
     };
   }, [books]);
+
+  const otherSeries = allSeries.filter((s) => s.toLowerCase() !== series.toLowerCase());
 
   return (
     <div className="series-group">
@@ -160,7 +207,88 @@ function SeriesSummaryRow({ series, books, onEdit }) {
             </span>
           </div>
         </div>
+        <div className="series-actions" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            title="Rename series"
+            onClick={() => {
+              setEditing(editing === "rename" ? null : "rename");
+              setRenameValue(series);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            title="Merge into another series"
+            onClick={() => {
+              setEditing(editing === "merge" ? null : "merge");
+              setMergeTarget("");
+            }}
+          >
+            Merge
+          </button>
+        </div>
       </div>
+      {editing === "rename" && (
+        <form
+          className="series-edit-form"
+          onClick={(e) => e.stopPropagation()}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const trimmed = renameValue.trim();
+            if (trimmed && trimmed !== series) {
+              renameMutation.mutate(trimmed);
+            }
+          }}
+        >
+          <input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            placeholder="New series name"
+            autoFocus
+          />
+          <button type="submit" className="btn" disabled={!renameValue.trim() || renameValue.trim() === series || renameMutation.isPending}>
+            {renameMutation.isPending ? "Saving..." : "Save"}
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+          {renameMutation.isError && <span className="error-text">{renameMutation.error.message}</span>}
+        </form>
+      )}
+      {editing === "merge" && (
+        <form
+          className="series-edit-form"
+          onClick={(e) => e.stopPropagation()}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const trimmed = mergeTarget.trim();
+            if (trimmed) {
+              mergeMutation.mutate(trimmed);
+            }
+          }}
+        >
+          <label>Merge into:</label>
+          <input
+            list="merge-target-options"
+            value={mergeTarget}
+            onChange={(e) => setMergeTarget(e.target.value)}
+            placeholder="Target series name"
+            autoFocus
+          />
+          <datalist id="merge-target-options">
+            {otherSeries.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
+          <button type="submit" className="btn" disabled={!mergeTarget.trim() || mergeMutation.isPending}>
+            {mergeMutation.isPending ? "Merging..." : "Merge"}
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+          {mergeMutation.isError && <span className="error-text">{mergeMutation.error.message}</span>}
+        </form>
+      )}
       {expanded && (
         <div className="book-grid">
           {books.map((book) => (
@@ -304,6 +432,7 @@ function BookList({ books = [], onEdit }) {
   const sentinelRef = useRef(null);
   const [libraryView, setLibraryView] = useState("series");
   const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
+  const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] = useState(false);
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -320,63 +449,63 @@ function BookList({ books = [], onEdit }) {
     setTabVisibleCount(TAB_PAGE_SIZE);
   };
 
+  const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } = useMemo(() => {
+    const sMap = {};
+    const standalone = [];
+    const web = [];
+
+    for (const book of books) {
+      if (book.source_type === "web" && !book.download_status) {
+        web.push(book);
+      }
+
+      if (book.series && !book.download_status) {
+        if (!sMap[book.series]) {
+          sMap[book.series] = [];
+        }
+        sMap[book.series].push(book);
+      } else if (book.source_type !== "web") {
+        standalone.push(book);
+      }
+    }
+
+    for (const seriesBooks of Object.values(sMap)) {
+      seriesBooks.sort((left, right) => left.title.localeCompare(right.title));
+    }
+
+    const sorted = Object.keys(sMap).sort();
+    return {
+      seriesMap: sMap,
+      sortedSeries: sorted,
+      standaloneBooks: standalone,
+      webBooks: web,
+      counts: { series: sorted.length, standalone: standalone.length, web: web.length },
+    };
+  }, [books]);
+
+  const tabItems =
+    libraryView === "series" ? sortedSeries :
+    libraryView === "standalone" ? standaloneBooks :
+    webBooks;
+
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el) return;
+    if (!el || tabVisibleCount >= tabItems.length) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           setTabVisibleCount((c) => c + TAB_PAGE_SIZE);
         }
       },
-      { threshold: 0.1 },
+      { rootMargin: "200px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [libraryView]);
+  }, [libraryView, tabVisibleCount, tabItems.length]);
 
   if (!books.length) {
     return <p>No books found.</p>;
   }
-
-  const seriesMap = {};
-  const standaloneBooks = [];
-  const webBooks = [];
-
-  for (const book of books) {
-    if (book.source_type === "web" && !book.download_status) {
-      webBooks.push(book);
-    }
-
-    if (book.series && !book.download_status) {
-      if (!seriesMap[book.series]) {
-        seriesMap[book.series] = [];
-      }
-      seriesMap[book.series].push(book);
-    } else if (book.source_type !== "web") {
-      standaloneBooks.push(book);
-    }
-  }
-
-  for (const seriesBooks of Object.values(seriesMap)) {
-    seriesBooks.sort((left, right) => left.title.localeCompare(right.title));
-  }
-
-  const sortedSeries = Object.keys(seriesMap).sort();
-  const counts = {
-    series: sortedSeries.length,
-    standalone: standaloneBooks.length,
-    web: webBooks.length,
-  };
-
-  const tabItems =
-    libraryView === "series" ? sortedSeries :
-    libraryView === "standalone" ? standaloneBooks :
-    webBooks;
-  const hasMore = tabVisibleCount < tabItems.length;
-  const loadMore = () => {
-    setTabVisibleCount((c) => Math.min(c + TAB_PAGE_SIZE, tabItems.length));
-  };
 
   return (
     <div className="book-list">
@@ -389,6 +518,7 @@ function BookList({ books = [], onEdit }) {
               series={series}
               books={seriesMap[series]}
               onEdit={onEdit}
+              allSeries={allSeries}
             />
           ))
         ) : (
@@ -397,24 +527,35 @@ function BookList({ books = [], onEdit }) {
       )}
       {libraryView === "standalone" && (
         standaloneBooks.length ? (
-          <div className="book-rows">
-            {standaloneBooks.slice(0, tabVisibleCount).map((book) => (
-              <BookRow
-                key={book.id}
-                book={book}
-                onEdit={onEdit}
-                subtitle={book.series ? `Series: ${book.series}` : "No series assigned"}
-                actions={
-                  !book.download_status ? (
-                    <StandaloneTagAction
-                      book={book}
-                      seriesOptions={allSeries.filter((series) => series !== book.series)}
-                    />
-                  ) : null
-                }
-              />
-            ))}
-          </div>
+          <>
+            <div className="standalone-header">
+              <button
+                type="button"
+                className={`btn btn-sm${showStandaloneSeriesEdit ? " btn-active" : ""}`}
+                onClick={() => setShowStandaloneSeriesEdit((v) => !v)}
+              >
+                {showStandaloneSeriesEdit ? "Hide Series Edit" : "Edit Series"}
+              </button>
+            </div>
+            <div className="book-rows">
+              {standaloneBooks.slice(0, tabVisibleCount).map((book) => (
+                <BookRow
+                  key={book.id}
+                  book={book}
+                  onEdit={onEdit}
+                  subtitle={book.series ? `Series: ${book.series}` : "No series assigned"}
+                  actions={
+                    showStandaloneSeriesEdit && !book.download_status ? (
+                      <StandaloneTagAction
+                        book={book}
+                        seriesOptions={allSeries.filter((series) => series !== book.series)}
+                      />
+                    ) : null
+                  }
+                />
+              ))}
+            </div>
+          </>
         ) : (
           <p>No standalone books found.</p>
         )
@@ -434,11 +575,6 @@ function BookList({ books = [], onEdit }) {
         ) : (
           <p>No web novels found.</p>
         )
-      )}
-      {hasMore && (
-        <button className="load-more-btn" onClick={loadMore}>
-          Show more ({tabItems.length - tabVisibleCount} remaining)
-        </button>
       )}
       <div ref={sentinelRef} style={{ height: 1 }} />
     </div>

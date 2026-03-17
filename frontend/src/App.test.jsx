@@ -225,6 +225,11 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Loner")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /edit series/i }));
+
+    await waitFor(() => {
       expect(screen.getByPlaceholderText("Add to a series")).toBeInTheDocument();
     });
 

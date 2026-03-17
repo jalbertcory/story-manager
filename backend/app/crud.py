@@ -376,6 +376,30 @@ async def get_all_series(db: AsyncSession) -> List[str]:
     return [row[0] for row in result.all()]
 
 
+async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
+    """Rename a series, updating all books that belong to it. Returns count of updated books."""
+    result = await db.execute(
+        select(models.Book).filter(func.lower(models.Book.series) == old_name.lower())
+    )
+    books = result.scalars().all()
+    for book in books:
+        book.series = new_name
+    await db.commit()
+    return len(books)
+
+
+async def merge_series(db: AsyncSession, source: str, target: str) -> int:
+    """Move all books from source series into target series. Returns count of moved books."""
+    result = await db.execute(
+        select(models.Book).filter(func.lower(models.Book.series) == source.lower())
+    )
+    books = result.scalars().all()
+    for book in books:
+        book.series = target
+    await db.commit()
+    return len(books)
+
+
 async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
     """
     Retrieve all books that have no series assigned.

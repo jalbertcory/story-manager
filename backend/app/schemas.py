@@ -149,6 +149,15 @@ class ApiKeyWithToken(ApiKey):
     token: str
 
 
+class SeriesRename(BaseModel):
+    new_name: str
+
+
+class SeriesMerge(BaseModel):
+    source: str
+    target: str
+
+
 class ReaderBook(BaseModel):
     id: int
     title: str
