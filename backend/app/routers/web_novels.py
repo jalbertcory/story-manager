@@ -98,3 +98,20 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
 
     await epub_editor.apply_book_cleaning(updated_book, db)
     return updated_book
+
+
+@router.post("/api/books/{book_id}/detach-source", response_model=schemas.Book)
+async def detach_book_source(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
+    """Remove a book's web/source URL metadata and treat it as a normal EPUB."""
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.source_url and db_book.source_type != models.SourceType.web:
+        raise HTTPException(status_code=400, detail="Book does not have a web source to remove.")
+    if not db_book.immutable_path or not db_book.current_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Book must have EPUB files before its web source can be removed.",
+        )
+
+    return await crud.detach_book_source(db, db_book)
