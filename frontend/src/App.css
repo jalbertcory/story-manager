@@ -496,6 +496,70 @@
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+.series-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.series-edit-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.series-edit-form input {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.35em 0.6em;
+  font-size: 0.875rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.series-edit-form label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.btn-sm {
+  padding: 0.25em 0.6em;
+  font-size: 0.78rem;
+}
+.btn-secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.btn-active {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-active:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+.error-text {
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+.standalone-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.3rem 0 0.5rem;
+}
 
 .book-rows {
   display: flex;

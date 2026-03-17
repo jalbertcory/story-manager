@@ -82,6 +82,33 @@ async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
     return await crud.get_all_series(db)
 
 
+@router.put("/api/series/{series_name}")
+async def rename_series(series_name: str, body: schemas.SeriesRename, db: AsyncSession = Depends(get_db)):
+    """Rename a series, updating all books that belong to it."""
+    new_name = body.new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New series name cannot be empty")
+    count = await crud.rename_series(db, old_name=series_name, new_name=new_name)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No books found with that series name")
+    return {"updated": count, "old_name": series_name, "new_name": new_name}
+
+
+@router.post("/api/series/merge")
+async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)):
+    """Merge source series into target series."""
+    source = body.source.strip()
+    target = body.target.strip()
+    if not source or not target:
+        raise HTTPException(status_code=400, detail="Source and target series names are required")
+    if source.lower() == target.lower():
+        raise HTTPException(status_code=400, detail="Source and target series must be different")
+    count = await crud.merge_series(db, source=source, target=target)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No books found in source series")
+    return {"merged": count, "source": source, "target": target}
+
+
 @router.get("/api/books/search", response_model=List[schemas.Book])
 async def search_books_unified(
     q: str,
