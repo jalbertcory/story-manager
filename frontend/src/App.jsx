@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import BookList from "./components/BookList";
@@ -8,8 +8,6 @@ import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
-
-const PAGE_SIZE = 20;
 
 function App() {
   const [q, setQ] = useState("");
@@ -25,7 +23,6 @@ function App() {
   const [showScheduler, setShowScheduler] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showCleanup, setShowCleanup] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const applyView = ({ view, data } = { view: "home" }) => {
     setEditingBook(view === "book" ? data : null);
@@ -96,26 +93,6 @@ function App() {
       return books.some((b) => b.download_status === "pending") ? 2000 : false;
     },
   });
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [searchParams.q, searchParams.sortBy, searchParams.sortOrder]);
-
-  const baseVisibleBooks = catalog.slice(0, visibleCount);
-  const visibleBookIds = new Set(baseVisibleBooks.map((book) => book.id));
-  const visibleSeries = new Set(
-    baseVisibleBooks.map((book) => book.series).filter(Boolean),
-  );
-  const visibleCatalogBooks = catalog.filter(
-    (book) =>
-      visibleBookIds.has(book.id) || (book.series && visibleSeries.has(book.series)),
-  );
-  const displayBooks = visibleCatalogBooks;
-  const hasNextPage = visibleCount < catalog.length;
-  const fetchNextPage = () => {
-    setVisibleCount((current) => Math.min(current + PAGE_SIZE, catalog.length));
-  };
-  const isFetchingNextPage = false;
 
   const handleSearch = () => {
     setSearchParams({ q: q.trim(), sortBy, sortOrder });
@@ -209,13 +186,7 @@ function App() {
       <AddBook />
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
-      <BookList
-        books={displayBooks}
-        onEdit={handleEdit}
-        fetchNextPage={fetchNextPage}
-        hasNextPage={hasNextPage}
-        isFetchingNextPage={isFetchingNextPage}
-      />
+      <BookList books={catalog} onEdit={handleEdit} />
     </div>
   );
 }

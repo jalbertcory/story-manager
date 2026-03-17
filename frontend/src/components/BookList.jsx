@@ -298,15 +298,12 @@ function StandaloneTagAction({ book, seriesOptions }) {
   );
 }
 
-function BookList({
-  books = [],
-  onEdit,
-  fetchNextPage,
-  hasNextPage,
-  isFetchingNextPage,
-}) {
+const TAB_PAGE_SIZE = 30;
+
+function BookList({ books = [], onEdit }) {
   const sentinelRef = useRef(null);
   const [libraryView, setLibraryView] = useState("series");
+  const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -318,18 +315,25 @@ function BookList({
     staleTime: 60_000,
   });
 
+  const handleTabChange = (tab) => {
+    setLibraryView(tab);
+    setTabVisibleCount(TAB_PAGE_SIZE);
+  };
+
   useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
-          fetchNextPage();
+        if (entry.isIntersecting) {
+          setTabVisibleCount((c) => c + TAB_PAGE_SIZE);
         }
       },
       { threshold: 0.1 },
     );
-    if (sentinelRef.current) observer.observe(sentinelRef.current);
+    observer.observe(el);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [libraryView]);
 
   if (!books.length) {
     return <p>No books found.</p>;
@@ -365,12 +369,21 @@ function BookList({
     web: webBooks.length,
   };
 
+  const tabItems =
+    libraryView === "series" ? sortedSeries :
+    libraryView === "standalone" ? standaloneBooks :
+    webBooks;
+  const hasMore = tabVisibleCount < tabItems.length;
+  const loadMore = () => {
+    setTabVisibleCount((c) => Math.min(c + TAB_PAGE_SIZE, tabItems.length));
+  };
+
   return (
     <div className="book-list">
-      <LibraryViewTabs view={libraryView} onChange={setLibraryView} counts={counts} />
+      <LibraryViewTabs view={libraryView} onChange={handleTabChange} counts={counts} />
       {libraryView === "series" && (
         sortedSeries.length ? (
-          sortedSeries.map((series) => (
+          sortedSeries.slice(0, tabVisibleCount).map((series) => (
             <SeriesSummaryRow
               key={series}
               series={series}
@@ -385,7 +398,7 @@ function BookList({
       {libraryView === "standalone" && (
         standaloneBooks.length ? (
           <div className="book-rows">
-            {standaloneBooks.map((book) => (
+            {standaloneBooks.slice(0, tabVisibleCount).map((book) => (
               <BookRow
                 key={book.id}
                 book={book}
@@ -409,7 +422,7 @@ function BookList({
       {libraryView === "web" && (
         webBooks.length ? (
           <div className="book-rows book-rows--web">
-            {webBooks.map((book) => (
+            {webBooks.slice(0, tabVisibleCount).map((book) => (
               <BookRow
                 key={book.id}
                 book={book}
@@ -422,8 +435,12 @@ function BookList({
           <p>No web novels found.</p>
         )
       )}
+      {hasMore && (
+        <button className="load-more-btn" onClick={loadMore}>
+          Show more ({tabItems.length - tabVisibleCount} remaining)
+        </button>
+      )}
       <div ref={sentinelRef} style={{ height: 1 }} />
-      {isFetchingNextPage && <p className="loading-more">Loading more…</p>}
     </div>
   );
 }

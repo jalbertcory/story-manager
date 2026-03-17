@@ -32,12 +32,6 @@ describe("App", () => {
           json: () => Promise.resolve(mockBooks),
         });
       }
-      if (url === "/api/books/details?ids=1") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
       if (url === "/api/series") {
         return Promise.resolve({
           ok: true,
@@ -79,12 +73,6 @@ describe("App", () => {
         });
       }
       if (url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/books/details?ids=2") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
@@ -204,12 +192,6 @@ describe("App", () => {
 
     globalThis.fetch = vi.fn((url, options) => {
       if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/books/details?ids=4") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
