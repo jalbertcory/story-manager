@@ -9,6 +9,24 @@ import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
 
+const TABS = [
+  { key: "library", label: "Library", path: "/" },
+  { key: "configs", label: "Cleaning Configs", path: "/configs" },
+  { key: "scheduler", label: "Scheduler", path: "/scheduler" },
+  { key: "logs", label: "Logs", path: "/logs" },
+  { key: "utilities", label: "Utilities", path: "/utilities" },
+];
+
+const LIBRARY_VIEWS = ["series", "standalone", "web"];
+
+function parseLocation(pathname, hash) {
+  const m = pathname.match(/^\/books\/(\d+)$/);
+  if (m) return { view: "book", bookId: parseInt(m[1]) };
+  const tab = TABS.find((t) => t.path === pathname);
+  const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1)) ? hash.slice(1) : "series";
+  return { view: "tab", tab: tab?.key || "library", libraryView };
+}
+
 function App() {
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("title");
@@ -19,56 +37,54 @@ function App() {
     sortOrder: "asc",
   });
   const [editingBook, setEditingBook] = useState(null);
-  const [showConfigs, setShowConfigs] = useState(false);
-  const [showScheduler, setShowScheduler] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
-  const [showCleanup, setShowCleanup] = useState(false);
+  const [activeTab, setActiveTab] = useState("library");
+  const [libraryView, setLibraryView] = useState("series");
+  const [addBookOpen, setAddBookOpen] = useState(false);
 
-  const applyView = ({ view, data } = { view: "home" }) => {
-    setEditingBook(view === "book" ? data : null);
-    setShowConfigs(view === "configs");
-    setShowScheduler(view === "scheduler");
-    setShowLogs(view === "logs");
-    setShowCleanup(view === "utilities");
-  };
-
-  const viewToUrl = (view, data) => {
-    if (view === "book" && data?.id) return `/books/${data.id}`;
-    if (view === "home") return "/";
-    return `/${view}`;
-  };
-
-  const applyPath = (pathname, stateData = null) => {
-    if (pathname === "/configs") return applyView({ view: "configs" });
-    if (pathname === "/scheduler") return applyView({ view: "scheduler" });
-    if (pathname === "/logs") return applyView({ view: "logs" });
-    if (pathname === "/utilities") return applyView({ view: "utilities" });
-    const m = pathname.match(/^\/books\/(\d+)$/);
-    if (m) {
-      const bookId = parseInt(m[1]);
-      if (stateData?.id === bookId) {
-        return applyView({ view: "book", data: stateData });
+  const applyLocation = (pathname, hash, stateData = null) => {
+    const parsed = parseLocation(pathname, hash);
+    if (parsed.view === "book") {
+      if (stateData?.id === parsed.bookId) {
+        setEditingBook(stateData);
+      } else {
+        fetch(`/api/books/${parsed.bookId}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((book) => {
+            if (book) setEditingBook(book);
+            else { setEditingBook(null); setActiveTab("library"); }
+          });
       }
-      fetch(`/api/books/${bookId}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((book) => applyView(book ? { view: "book", data: book } : { view: "home" }));
-      return;
+    } else {
+      setEditingBook(null);
+      setActiveTab(parsed.tab);
+      setLibraryView(parsed.libraryView);
     }
-    applyView({ view: "home" });
   };
 
   const navigate = (view, data = null) => {
-    const url = viewToUrl(view, data);
-    history.pushState({ view, data }, "", url);
-    applyView({ view, data });
+    if (view === "book" && data?.id) {
+      history.pushState({ view, data }, "", `/books/${data.id}`);
+      setEditingBook(data);
+    } else {
+      const tab = TABS.find((t) => t.key === view) || TABS[0];
+      const hash = tab.key === "library" ? `#${libraryView}` : "";
+      history.pushState({ view: "tab", tab: tab.key }, "", tab.path + hash);
+      setEditingBook(null);
+      setActiveTab(tab.key);
+    }
+  };
+
+  const handleLibraryViewChange = (view) => {
+    setLibraryView(view);
+    history.pushState({ view: "tab", tab: "library" }, "", `/#${view}`);
   };
 
   useEffect(() => {
-    applyPath(window.location.pathname);
+    applyLocation(window.location.pathname, window.location.hash);
   }, []);
 
   useEffect(() => {
-    const onPop = (e) => applyPath(window.location.pathname, e.state?.data ?? null);
+    const onPop = (e) => applyLocation(window.location.pathname, window.location.hash, e.state?.data ?? null);
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -127,66 +143,79 @@ function App() {
     );
   }
 
-  if (showConfigs) {
-    return <CleaningConfigs onBack={() => history.back()} />;
-  }
-
-  if (showScheduler) {
-    return <SchedulerStatus onBack={() => history.back()} />;
-  }
-
-  if (showLogs) {
-    return <Logs onBack={() => history.back()} />;
-  }
-
-  if (showCleanup) {
-    return <Utilities onBack={() => history.back()} />;
-  }
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case "configs":
+        return <CleaningConfigs />;
+      case "scheduler":
+        return <SchedulerStatus />;
+      case "logs":
+        return <Logs />;
+      case "utilities":
+        return <Utilities />;
+      default:
+        return (
+          <>
+            <div className="search-controls">
+              <input
+                type="text"
+                placeholder="Search by title, author, or series"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              />
+              <button onClick={handleSearch}>Search</button>
+              <button onClick={handleClearSearch}>Clear</button>
+              <select
+                value={sortBy}
+                onChange={(e) => handleSortByChange(e.target.value)}
+              >
+                <option value="title">Title</option>
+                <option value="author">Author</option>
+                <option value="word_count">Word Count</option>
+                <option value="updated_at">Last Updated</option>
+              </select>
+              <button onClick={handleToggleSortOrder}>
+                {sortOrder === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
+            <details className="add-book-details" open={addBookOpen}>
+              <summary
+                className="add-book-summary"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setAddBookOpen((o) => !o);
+                }}
+              >
+                Add Books
+              </summary>
+              <AddBook />
+            </details>
+            {isLoading && <p>Loading...</p>}
+            {error && <p className="error">{error.message}</p>}
+            <BookList books={catalog} onEdit={handleEdit} libraryView={libraryView} onLibraryViewChange={handleLibraryViewChange} />
+          </>
+        );
+    }
+  };
 
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Story Manager</h1>
-        <button className="btn-text" onClick={() => navigate("configs")}>
-          Cleaning Configs
-        </button>
-        <button className="btn-text" onClick={() => navigate("scheduler")}>
-          Scheduler
-        </button>
-        <button className="btn-text" onClick={() => navigate("logs")}>
-          Logs
-        </button>
-        <button className="btn-text" onClick={() => navigate("utilities")}>
-          Utilities
-        </button>
       </header>
-      <div className="search-controls">
-        <input
-          type="text"
-          placeholder="Search by title, author, or series"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-        />
-        <button onClick={handleSearch}>Search</button>
-        <button onClick={handleClearSearch}>Clear</button>
-        <select
-          value={sortBy}
-          onChange={(e) => handleSortByChange(e.target.value)}
-        >
-          <option value="title">Title</option>
-          <option value="author">Author</option>
-          <option value="word_count">Word Count</option>
-          <option value="updated_at">Last Updated</option>
-        </select>
-        <button onClick={handleToggleSortOrder}>
-          {sortOrder === "asc" ? "↑" : "↓"}
-        </button>
-      </div>
-      <AddBook />
-      {isLoading && <p>Loading...</p>}
-      {error && <p className="error">{error.message}</p>}
-      <BookList books={catalog} onEdit={handleEdit} />
+      <nav className="main-tabs">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            className={`main-tab${activeTab === tab.key ? " main-tab--active" : ""}`}
+            onClick={() => navigate(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      {renderTabContent()}
     </div>
   );
 }

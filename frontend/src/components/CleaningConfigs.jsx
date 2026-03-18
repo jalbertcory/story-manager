@@ -147,10 +147,14 @@ function CleaningConfigs({ onBack }) {
   });
 
   return (
-    <div className="cleaning-configs">
-      <div className="settings-header">
-        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
-        <h2>Cleaning Configs</h2>
+    <div className={onBack ? "cleaning-configs" : undefined}>
+      {onBack && (
+        <div className="settings-header">
+          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
+          <h2>Cleaning Configs</h2>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.75rem" }}>
         <button onClick={() => setCreating(true)} disabled={creating}>
           + New Config
         </button>

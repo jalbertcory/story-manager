@@ -28,13 +28,15 @@ function Logs({ onBack }) {
   const reversed = [...logs].reverse();
 
   return (
-    <div className="book-settings">
-      <div className="settings-header">
-        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
-          ← Back
-        </button>
-        <h2>Application Logs</h2>
-      </div>
+    <div className={onBack ? "book-settings" : undefined}>
+      {onBack && (
+        <div className="settings-header">
+          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
+            ← Back
+          </button>
+          <h2>Application Logs</h2>
+        </div>
+      )}
 
       <section className="settings-section">
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>

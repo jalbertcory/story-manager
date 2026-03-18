@@ -17,6 +17,76 @@
   margin-right: auto;
 }
 
+/* ─── Main Tabs ──────────────────────────────────────────── */
+.main-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.main-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.55rem 0.85rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.main-tab:hover {
+  color: var(--text);
+}
+
+.main-tab--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ─── Collapsible Add Book ───────────────────────────────── */
+.add-book-details {
+  margin-bottom: 1.25rem;
+}
+
+.add-book-summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0.6rem 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  user-select: none;
+}
+
+.add-book-summary::-webkit-details-marker {
+  display: none;
+}
+
+.add-book-summary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 0.75rem;
+}
+
+.add-book-details[open] > .add-book-summary::before {
+  transform: rotate(90deg);
+}
+
+.add-book-summary:hover {
+  color: var(--text);
+}
+
 /* ─── Buttons ────────────────────────────────────────────── */
 .btn {
   display: inline-block;
