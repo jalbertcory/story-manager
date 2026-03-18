@@ -145,11 +145,13 @@ function SchedulerStatus({ onBack }) {
   const isRunning = task?.status === "running";
 
   return (
-    <div className="book-settings">
-      <div className="settings-header">
-        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
-        <h2>Scheduler</h2>
-      </div>
+    <div className={onBack ? "book-settings" : undefined}>
+      {onBack && (
+        <div className="settings-header">
+          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
+          <h2>Scheduler</h2>
+        </div>
+      )}
 
       <section className="settings-section">
         <h3>Current Run</h3>

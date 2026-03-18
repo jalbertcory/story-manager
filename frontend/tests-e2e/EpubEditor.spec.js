@@ -37,6 +37,9 @@ test("EpubEditor interactions", async ({ page }) => {
   // Delete the book if it exists
   await page.request.delete("/api/books/by-title/Test Book");
 
+  // Expand the Add Books section
+  await page.locator(".add-book-summary").click();
+
   // Upload a book
   const filePath = path.resolve("test.epub");
   await dragAndDropFile(

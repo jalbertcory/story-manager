@@ -119,13 +119,15 @@ function Utilities({ onBack }) {
   };
 
   return (
-    <div className="book-settings">
-      <div className="settings-header">
-        <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
-          ← Back
-        </button>
-        <h2>Utilities</h2>
-      </div>
+    <div className={onBack ? "book-settings" : undefined}>
+      {onBack && (
+        <div className="settings-header">
+          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
+            ← Back
+          </button>
+          <h2>Utilities</h2>
+        </div>
+      )}
 
       <section className="settings-section">
         <h3>Clean All Books</h3>

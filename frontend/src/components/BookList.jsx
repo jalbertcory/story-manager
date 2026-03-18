@@ -428,9 +428,10 @@ function StandaloneTagAction({ book, seriesOptions }) {
 
 const TAB_PAGE_SIZE = 30;
 
-function BookList({ books = [], onEdit }) {
+function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryViewChange }) {
   const sentinelRef = useRef(null);
-  const [libraryView, setLibraryView] = useState("series");
+  const [internalView, setInternalView] = useState("series");
+  const libraryView = libraryViewProp ?? internalView;
   const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
   const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] = useState(false);
 
@@ -445,7 +446,8 @@ function BookList({ books = [], onEdit }) {
   });
 
   const handleTabChange = (tab) => {
-    setLibraryView(tab);
+    if (onLibraryViewChange) onLibraryViewChange(tab);
+    else setInternalView(tab);
     setTabVisibleCount(TAB_PAGE_SIZE);
   };
 

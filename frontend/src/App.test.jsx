@@ -6,6 +6,7 @@ import { renderWithClient } from "./test-utils";
 describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    window.history.replaceState(null, "", "/");
     globalThis.IntersectionObserver = class {
       observe() {}
       disconnect() {}
