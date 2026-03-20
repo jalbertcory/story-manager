@@ -536,6 +536,12 @@ async def get_reader_books_by_series(db: AsyncSession, name: str) -> List[models
     return result.scalars().all()
 
 
+async def get_all_reader_books(db: AsyncSession) -> List[models.Book]:
+    """Return all reader-eligible books."""
+    result = await db.execute(_reader_books_query().order_by(asc(models.Book.title)))
+    return result.scalars().all()
+
+
 async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> List[models.Book]:
     query = _reader_books_query()
     if since is not None:
