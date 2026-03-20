@@ -3,6 +3,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import SchedulerStatus from "./SchedulerStatus";
 import { renderWithClient } from "../test-utils";
 
+const mockJob = {
+  job_id: "update_web_novels",
+  schedule: "Every 24 hours",
+  next_run_at: new Date(Date.now() + 7200000).toISOString(),
+  scheduler_running: true,
+  run_in_progress: false,
+  last_run_started_at: new Date(Date.now() - 3600000).toISOString(),
+  last_run_completed_at: new Date(Date.now() - 3500000).toISOString(),
+  last_run_status: "completed",
+};
+
 const mockTask = {
   id: 1,
   total_books: 5,
@@ -61,6 +72,9 @@ describe("SchedulerStatus", () => {
 
   it("shows no-runs message when status and history are empty", async () => {
     globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
       if (url.includes("/api/scheduler/status")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -80,6 +94,9 @@ describe("SchedulerStatus", () => {
 
   it("displays current run status", async () => {
     globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
       if (url.includes("/api/scheduler/status")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
       }
@@ -93,7 +110,7 @@ describe("SchedulerStatus", () => {
     renderWithClient(<SchedulerStatus onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Current Run")).toBeInTheDocument();
+      expect(screen.getByText("Latest Run")).toBeInTheDocument();
       // "Status:" label is only in the current run section
       expect(screen.getByText(/Started:/)).toBeInTheDocument();
       expect(screen.getByText(/Progress:/)).toBeInTheDocument();
@@ -102,6 +119,9 @@ describe("SchedulerStatus", () => {
 
   it("displays run history list", async () => {
     globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
       if (url.includes("/api/scheduler/status")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
       }
@@ -124,6 +144,9 @@ describe("SchedulerStatus", () => {
 
   it("expands a run to show per-book log entries", async () => {
     globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
       if (url.includes("/api/scheduler/status")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
       }
@@ -156,5 +179,63 @@ describe("SchedulerStatus", () => {
     // Updated entry shows chapter and word counts
     expect(screen.getByText(/20 → 25 ch/)).toBeInTheDocument();
     expect(screen.getByText(/\+8,000 words/)).toBeInTheDocument();
+  });
+
+  it("shows the configured schedule and next run timing", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
+      if (url.includes("/api/scheduler/status")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+      }
+      if (url.includes("/api/scheduler/history")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<SchedulerStatus onBack={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Automatic Schedule")).toBeInTheDocument();
+      expect(screen.getByText("Every 24 hours")).toBeInTheDocument();
+      expect(screen.getByText("Completed")).toBeInTheDocument();
+      expect(screen.getByText("Time Until Next Run")).toBeInTheDocument();
+      expect(screen.getByText("Run State")).toBeInTheDocument();
+    });
+  });
+
+  it("shows current run when a job is actively executing", async () => {
+    const runningJob = {
+      ...mockJob,
+      run_in_progress: true,
+      last_run_status: "running",
+    };
+    const runningTask = {
+      ...mockTask,
+      status: "running",
+      completed_at: null,
+    };
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningJob) });
+      }
+      if (url.includes("/api/scheduler/status")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningTask) });
+      }
+      if (url.includes("/api/scheduler/history")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<SchedulerStatus onBack={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Current Run")).toBeInTheDocument();
+      expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    });
   });
 });

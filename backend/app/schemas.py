@@ -122,6 +122,17 @@ class UpdateTask(BaseModel):
         from_attributes = True
 
 
+class SchedulerJobStatus(BaseModel):
+    job_id: str
+    schedule: str
+    next_run_at: Optional[datetime] = None
+    scheduler_running: bool
+    run_in_progress: bool
+    last_run_started_at: Optional[datetime] = None
+    last_run_completed_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+
+
 class BookLogWithTitle(BookLog):
     book_title: str
 

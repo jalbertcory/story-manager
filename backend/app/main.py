@@ -3,7 +3,6 @@
 import logging
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -12,12 +11,12 @@ from .config import LIBRARY_PATH
 from .database import SessionLocal, engine
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
-from .services.web_novel import update_web_novels
+from .services.update_scheduler import get_scheduler, schedule_next_web_novel_update
 
 logger = logging.getLogger(__name__)
 
 _mem_handler = setup_logging()
-_scheduler = AsyncIOScheduler()
+_scheduler = get_scheduler()
 
 
 async def _create_tables() -> None:
@@ -35,10 +34,12 @@ async def lifespan(app: FastAPI):
     await _create_tables()
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
-    _scheduler.add_job(update_web_novels, "interval", hours=24)
-    _scheduler.start()
+    if not _scheduler.running:
+        _scheduler.start()
+    await schedule_next_web_novel_update()
     yield
-    _scheduler.shutdown()
+    if _scheduler.running:
+        _scheduler.shutdown()
 
 
 app = FastAPI(title="Story Manager", lifespan=lifespan)

@@ -1,9 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 const fetchStatus = async () => {
   const res = await fetch("/api/scheduler/status");
   if (!res.ok) throw new Error("Failed to fetch scheduler status");
+  return res.json();
+};
+
+const fetchJob = async () => {
+  const res = await fetch("/api/scheduler/job");
+  if (!res.ok) throw new Error("Failed to fetch scheduler job");
   return res.json();
 };
 
@@ -33,6 +39,33 @@ function timeAgo(dateStr) {
 function formatDate(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleString();
+}
+
+function formatTimeUntil(dateStr, now) {
+  if (!dateStr) return "Not scheduled";
+
+  const diff = new Date(dateStr).getTime() - now;
+  if (diff <= 0) return "due now";
+
+  const totalSeconds = Math.floor(diff / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatRunState(job) {
+  if (!job) return "Unknown";
+  if (job.run_in_progress) return "Running";
+  if (job.last_run_status) {
+    return job.last_run_status.charAt(0).toUpperCase() + job.last_run_status.slice(1);
+  }
+  return "Idle";
 }
 
 function TaskLogsList({ taskId }) {
@@ -119,12 +152,26 @@ function TaskHistoryRow({ task }) {
 
 function SchedulerStatus({ onBack }) {
   const queryClient = useQueryClient();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const { data: task, isLoading: statusLoading } = useQuery({
     queryKey: ["scheduler-status"],
     queryFn: fetchStatus,
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 3000 : false,
+  });
+
+  const { data: job, isLoading: jobLoading } = useQuery({
+    queryKey: ["scheduler-job"],
+    queryFn: fetchJob,
+    refetchInterval: task?.status === "running" ? 5000 : 60000,
   });
 
   const { data: history, isLoading: historyLoading } = useQuery({
@@ -137,12 +184,14 @@ function SchedulerStatus({ onBack }) {
     mutationFn: () =>
       fetch("/api/scheduler/trigger", { method: "POST" }).then((r) => r.json()),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
     },
   });
 
   const isRunning = task?.status === "running";
+  const sectionTitle = job?.run_in_progress ? "Current Run" : "Latest Run";
 
   return (
     <div className={onBack ? "book-settings" : undefined}>
@@ -154,7 +203,38 @@ function SchedulerStatus({ onBack }) {
       )}
 
       <section className="settings-section">
-        <h3>Current Run</h3>
+        <h3>Automatic Schedule</h3>
+        {jobLoading && <p>Loading...</p>}
+        {job && (
+          <div className="scheduler-grid">
+            <div className="scheduler-stat">
+              <span className="hint">Schedule</span>
+              <strong className="scheduler-value">{job.schedule}</strong>
+            </div>
+            <div className="scheduler-stat">
+              <span className="hint">Next Run</span>
+              <strong className="scheduler-value">
+                {job.next_run_at ? formatDate(job.next_run_at) : "Not scheduled"}
+              </strong>
+            </div>
+            <div className="scheduler-stat">
+              <span className="hint">Time Until Next Run</span>
+              <strong className="scheduler-value">
+                {formatTimeUntil(job.next_run_at, now)}
+              </strong>
+            </div>
+            <div className="scheduler-stat">
+              <span className="hint">Run State</span>
+              <strong className="scheduler-value">
+                {formatRunState(job)}
+              </strong>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <h3>{sectionTitle}</h3>
         {statusLoading && <p>Loading...</p>}
         {!statusLoading && !task && <p>No runs recorded yet.</p>}
         {task && (
