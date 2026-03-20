@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, schemas
 from ..database import get_db
-from ..services.web_novel import update_web_novels
+from ..services import update_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,26 @@ async def get_scheduler_status(db: AsyncSession = Depends(get_db)):
     return await crud.get_latest_update_task(db)
 
 
+@router.get("/api/scheduler/job", response_model=schemas.SchedulerJobStatus)
+async def get_scheduler_job_status(db: AsyncSession = Depends(get_db)):
+    latest_task = await crud.get_latest_update_task(db)
+    job = update_scheduler.get_scheduled_job()
+    next_run_at = job.next_run_time if job is not None else None
+    return schemas.SchedulerJobStatus(
+        job_id=update_scheduler.WEB_NOVEL_UPDATE_JOB_ID,
+        schedule=update_scheduler.get_schedule_label(),
+        next_run_at=next_run_at,
+        scheduler_running=update_scheduler.is_scheduler_running(),
+        run_in_progress=update_scheduler.is_update_running(),
+        last_run_started_at=latest_task.started_at if latest_task is not None else None,
+        last_run_completed_at=latest_task.completed_at if latest_task is not None else None,
+        last_run_status=latest_task.status if latest_task is not None else None,
+    )
+
+
 @router.post("/api/scheduler/trigger", status_code=202)
 async def trigger_scheduler(background_tasks: BackgroundTasks):
-    background_tasks.add_task(update_web_novels)
+    background_tasks.add_task(update_scheduler.run_web_novel_update, "manual")
     return {"message": "Update triggered"}
 
 

@@ -245,8 +245,10 @@ async def update_web_novels() -> None:
     try:
         books = await crud.get_web_books(db)
         task = await crud.get_active_update_task(db)
-        if not task:
-            task = await crud.create_update_task(db, total_books=len(books))
+        if task is not None:
+            logger.info("Skipping web novel update because task %s is already running.", task.id)
+            return
+        task = await crud.create_update_task(db, total_books=len(books))
         logger.info(f"Update task {task.id} processing {task.completed_books}/{task.total_books} books.")
 
         for book in books:

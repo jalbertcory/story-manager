@@ -1,6 +1,7 @@
 import pytest
 import pytest_asyncio
 import zipfile
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from ebooklib import epub
 from backend.app.main import app
+from backend.app.services import update_scheduler
 from backend.app.services.series import SeriesBook, detect_series_from_books, detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import models, schemas, crud
@@ -1038,6 +1040,64 @@ async def test_scheduler_status_empty(db_session):
     response = client.get("/api/scheduler/status")
     assert response.status_code == 200
     assert response.json() is None
+
+
+def test_calculate_next_run_time_uses_last_run_plus_interval():
+    now = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+    last_run = now - timedelta(hours=6)
+
+    next_run = update_scheduler.calculate_next_run_time(last_run, now=now)
+
+    assert next_run == last_run + timedelta(hours=24)
+
+
+def test_calculate_next_run_time_runs_soon_when_overdue():
+    now = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+    last_run = now - timedelta(hours=30)
+
+    next_run = update_scheduler.calculate_next_run_time(last_run, now=now)
+
+    assert next_run == now + update_scheduler.OVERDUE_RUN_DELAY
+
+
+def test_get_last_run_anchor_prefers_start_for_failed_tasks():
+    task = models.UpdateTask(status="failed", total_books=1, completed_books=1)
+    task.started_at = datetime(2026, 3, 18, 10, 0, tzinfo=timezone.utc)
+    task.completed_at = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+
+    anchor = update_scheduler.get_last_run_anchor(task)
+
+    assert anchor == task.started_at
+
+
+@pytest.mark.asyncio
+async def test_scheduler_job_status(db_session, mocker):
+    """
+    Test GET /api/scheduler/job returns schedule metadata and latest run details.
+    """
+    async with AsyncTestingSessionLocal() as session:
+        task = await crud.create_update_task(session, total_books=2)
+        await crud.complete_update_task(session, task)
+
+    class DummyJob:
+        next_run_time = datetime(2026, 3, 20, 14, 30, tzinfo=timezone.utc)
+
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.get_scheduled_job", return_value=DummyJob())
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.is_scheduler_running", return_value=True)
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.is_update_running", return_value=False)
+
+    response = client.get("/api/scheduler/job")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == "update_web_novels"
+    assert data["schedule"] == "Every 24 hours"
+    assert data["next_run_at"] == "2026-03-20T14:30:00Z"
+    assert data["scheduler_running"] is True
+    assert data["run_in_progress"] is False
+    assert data["last_run_status"] == "completed"
+    assert data["last_run_started_at"] is not None
+    assert data["last_run_completed_at"] is not None
 
 
 @pytest.mark.asyncio
