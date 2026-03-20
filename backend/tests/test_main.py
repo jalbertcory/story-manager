@@ -1955,6 +1955,66 @@ async def test_reader_series_api_and_opds_feeds(db_session):
 
 
 @pytest.mark.asyncio
+async def test_reader_books_all_returns_only_reader_eligible_books(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        visible = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Collected Volume",
+                author="Author A",
+                immutable_path="library/immutable_collected.epub",
+                current_path="library/collected.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Background Download",
+                author="Author B",
+                immutable_path="library/immutable_background.epub",
+                current_path="library/background.epub",
+                source_type=models.SourceType.epub,
+                download_status="processing",
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Missing File Path",
+                author="Author C",
+                immutable_path="library/immutable_missing.epub",
+                current_path=None,
+                source_type=models.SourceType.epub,
+            ),
+        )
+        covered = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Zeta Volume",
+                author="Author D",
+                immutable_path="library/immutable_zeta.epub",
+                current_path="library/zeta.epub",
+                cover_path="library/zeta.jpg",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    key_response = client.post("/api/reader-keys", json={"label": "All Books Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    response = client.get("/reader/books/all", auth=("reader", token))
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert [book["title"] for book in payload] == ["Collected Volume", "Zeta Volume"]
+    assert payload[0]["download_url"].endswith(f"/reader/books/{visible.id}/download")
+    assert payload[0]["cover_url"] is None
+    assert payload[1]["cover_url"].endswith(f"/reader/covers/{covered.id}")
+
+
+@pytest.mark.asyncio
 async def test_reader_opds_requires_auth_and_revoked_keys_fail(db_session):
     create_response = client.post("/api/reader-keys", json={"label": "Boox"})
     assert create_response.status_code == 201

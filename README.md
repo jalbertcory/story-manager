@@ -132,6 +132,7 @@ Reader endpoints:
 *   `GET /reader/opds`
 *   `GET /reader/opds/catalog`
 *   `GET /reader/opds/search?q=...`
+*   `GET /reader/books/all`
 *   `GET /reader/updates?since=2026-03-14T12:00:00Z`
 *   `GET /reader/books/{id}`
 *   `GET /reader/books/{id}/download`
