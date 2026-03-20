@@ -59,6 +59,15 @@ function formatTimeUntil(dateStr, now) {
   return `${seconds}s`;
 }
 
+function formatRunState(job) {
+  if (!job) return "Unknown";
+  if (job.run_in_progress) return "Running";
+  if (job.last_run_status) {
+    return job.last_run_status.charAt(0).toUpperCase() + job.last_run_status.slice(1);
+  }
+  return "Idle";
+}
+
 function TaskLogsList({ taskId }) {
   const { data: logs, isLoading } = useQuery({
     queryKey: ["task-logs", taskId],
@@ -182,6 +191,7 @@ function SchedulerStatus({ onBack }) {
   });
 
   const isRunning = task?.status === "running";
+  const sectionTitle = job?.run_in_progress ? "Current Run" : "Latest Run";
 
   return (
     <div className={onBack ? "book-settings" : undefined}>
@@ -214,9 +224,9 @@ function SchedulerStatus({ onBack }) {
               </strong>
             </div>
             <div className="scheduler-stat">
-              <span className="hint">Scheduler</span>
+              <span className="hint">Run State</span>
               <strong className="scheduler-value">
-                {job.scheduler_running ? "Running" : "Stopped"}
+                {formatRunState(job)}
               </strong>
             </div>
           </div>
@@ -224,7 +234,7 @@ function SchedulerStatus({ onBack }) {
       </section>
 
       <section className="settings-section">
-        <h3>Current Run</h3>
+        <h3>{sectionTitle}</h3>
         {statusLoading && <p>Loading...</p>}
         {!statusLoading && !task && <p>No runs recorded yet.</p>}
         {task && (

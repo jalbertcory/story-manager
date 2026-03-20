@@ -110,7 +110,7 @@ describe("SchedulerStatus", () => {
     renderWithClient(<SchedulerStatus onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Current Run")).toBeInTheDocument();
+      expect(screen.getByText("Latest Run")).toBeInTheDocument();
       // "Status:" label is only in the current run section
       expect(screen.getByText(/Started:/)).toBeInTheDocument();
       expect(screen.getByText(/Progress:/)).toBeInTheDocument();
@@ -200,8 +200,42 @@ describe("SchedulerStatus", () => {
     await waitFor(() => {
       expect(screen.getByText("Automatic Schedule")).toBeInTheDocument();
       expect(screen.getByText("Every 24 hours")).toBeInTheDocument();
-      expect(screen.getByText("Running")).toBeInTheDocument();
+      expect(screen.getByText("Completed")).toBeInTheDocument();
       expect(screen.getByText("Time Until Next Run")).toBeInTheDocument();
+      expect(screen.getByText("Run State")).toBeInTheDocument();
+    });
+  });
+
+  it("shows current run when a job is actively executing", async () => {
+    const runningJob = {
+      ...mockJob,
+      run_in_progress: true,
+      last_run_status: "running",
+    };
+    const runningTask = {
+      ...mockTask,
+      status: "running",
+      completed_at: null,
+    };
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningJob) });
+      }
+      if (url.includes("/api/scheduler/status")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningTask) });
+      }
+      if (url.includes("/api/scheduler/history")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<SchedulerStatus onBack={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Current Run")).toBeInTheDocument();
+      expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
     });
   });
 });
