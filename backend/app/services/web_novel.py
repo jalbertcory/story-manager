@@ -19,6 +19,12 @@ from .library_paths import build_book_paths
 
 logger = logging.getLogger(__name__)
 
+# Module-level lock to serialize all FanFicFare downloads.
+# A fresh asyncio.Lock() inside download_web_novel would create a new lock per
+# call, defeating the purpose. This single lock ensures only one FFF invocation
+# runs at a time, preventing the before/after EPUB-detection race condition.
+_fff_lock = asyncio.Lock()
+
 
 def _run_fff_main(args: List[str]) -> int:
     """Wrapper for fff_main that converts SystemExit into a return code."""
@@ -52,7 +58,7 @@ async def download_web_novel(source_url: str, overwrite: bool = False) -> Option
             detail="Server configuration error: personal.ini not found.",
         )
 
-    async with asyncio.Lock():
+    async with _fff_lock:
         before_epubs = {f: f.stat().st_mtime for f in LIBRARY_PATH.iterdir() if f.suffix == ".epub"}
         args = [
             "-c",
