@@ -349,6 +349,9 @@
   cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s;
   animation: fadeIn 0.3s ease-out;
+  text-decoration: none;
+  color: inherit;
+  display: block;
 }
 .book-card:hover {
   transform: translateY(-3px);
@@ -660,6 +663,7 @@
   padding: 0;
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .book-row-cover {

@@ -1,8 +1,8 @@
-"""Web novel endpoints: add from URL and refresh from source."""
+"""Web novel endpoints: add from URL, queue imports, and refresh from source."""
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +10,8 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_epub_word_and_chapter_count
-from ..services.web_novel import download_web_novel, finish_web_novel_download
+from ..services.web_import_queue import get_web_import_queue
+from ..services.web_novel import download_web_novel
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,9 @@ class WebNovelRequest(BaseModel):
 )
 async def add_web_novel(
     request: WebNovelRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> models.Book:
-    """Creates a pending book record immediately and downloads the web novel in the background."""
+    """Creates a pending book record immediately and queues the download."""
     source_url_str = str(request.url)
 
     existing_book = await crud.get_book_by_source_url(db, source_url=source_url_str)
@@ -49,7 +49,7 @@ async def add_web_novel(
         download_status="pending",
     )
     db_book = await crud.create_book(db=db, book=book_to_create)
-    background_tasks.add_task(finish_web_novel_download, db_book.id, source_url_str)
+    await get_web_import_queue().enqueue(db_book.id, source_url_str)
     return db_book
 
 

@@ -25,6 +25,17 @@ async def get_web_books(db: AsyncSession) -> List[models.Book]:
     return result.scalars().all()
 
 
+async def get_pending_web_books(db: AsyncSession) -> List[models.Book]:
+    """Return pending web books so they can be resumed by the import queue."""
+    result = await db.execute(
+        select(models.Book).filter(
+            models.Book.source_type == models.SourceType.web,
+            models.Book.download_status == "pending",
+        )
+    )
+    return result.scalars().all()
+
+
 async def get_books(
     db: AsyncSession,
     skip: int = 0,

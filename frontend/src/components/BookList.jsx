@@ -61,10 +61,18 @@ function BookCard({ book, onEdit }) {
     );
   }
 
+  const handleClick = (e) => {
+    if (isPending) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    onEdit(book);
+  };
+
   return (
-    <div
+    <a
+      href={isPending ? undefined : `/books/${book.id}`}
       className={`book-card${isPending ? " book-card--pending" : ""}${isError ? " book-card--error" : ""}`}
-      onClick={isPending ? undefined : () => onEdit(book)}
+      onClick={handleClick}
     >
       {coverContent}
       <div className="book-info">
@@ -100,7 +108,7 @@ function BookCard({ book, onEdit }) {
           </p>
         )}
       </div>
-    </div>
+    </a>
   );
 }
 
@@ -327,11 +335,15 @@ function LibraryViewTabs({ view, onChange, counts }) {
 }
 
 function BookRow({ book, onEdit, actions = null, subtitle = null }) {
-  const handleOpen = () => onEdit(book);
+  const handleClick = (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    onEdit(book);
+  };
 
   return (
     <div className="book-row">
-      <button type="button" className="book-row-main" onClick={handleOpen}>
+      <a href={`/books/${book.id}`} className="book-row-main" onClick={handleClick}>
         <div className="book-row-cover">
           {book.cover_path ? (
             <img
@@ -358,7 +370,7 @@ function BookRow({ book, onEdit, actions = null, subtitle = null }) {
           </div>
           {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
         </div>
-      </button>
+      </a>
       {actions ? <div className="book-row-actions">{actions}</div> : null}
     </div>
   );

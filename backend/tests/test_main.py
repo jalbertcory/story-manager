@@ -140,13 +140,13 @@ async def test_static_cover_files_are_served_without_cover_lookup(db_session):
 @pytest.mark.asyncio
 async def test_add_web_novel(db_session, mocker):
     """
-    Test adding a new web novel. The endpoint now returns immediately with a pending record
-    and schedules the actual download as a background task.
+    Test adding a new web novel. The endpoint returns immediately with a pending record
+    and enqueues the actual download onto the app-scoped worker queue.
     """
-    from unittest.mock import AsyncMock
+    queue = mocker.Mock()
+    queue.enqueue = mocker.AsyncMock(return_value=True)
 
-    # Prevent the background download from running (it uses the prod DB, not the test DB)
-    mocker.patch("backend.app.routers.web_novels.finish_web_novel_download", new_callable=AsyncMock)
+    mocker.patch("backend.app.routers.web_novels.get_web_import_queue", return_value=queue)
 
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
@@ -157,6 +157,7 @@ async def test_add_web_novel(db_session, mocker):
     assert data["source_url"] == "http://example.com/story/123"
     assert data["immutable_path"] is None
     assert data["current_path"] is None
+    queue.enqueue.assert_awaited_once_with(data["id"], "http://example.com/story/123")
 
     # Verify that the pending book appears in the book list
     response = client.get("/api/books")
