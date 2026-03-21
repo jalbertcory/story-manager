@@ -1,5 +1,6 @@
 from typing import List, Optional
 from datetime import datetime, timezone
+from decimal import Decimal
 import re
 from fastapi import HTTPException
 from sqlalchemy import asc, case, delete, desc, func, or_
@@ -62,6 +63,15 @@ def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
     column = sort_columns.get(sort_by, models.Book.title)
     order = asc(column) if sort_order == "asc" else desc(column)
     return select(models.Book).order_by(order, asc(models.Book.title), asc(models.Book.id))
+
+
+def _series_order_columns():
+    return (
+        asc(case((models.Book.series_index.is_(None), 1), else_=0)),
+        asc(models.Book.series_index),
+        asc(models.Book.title),
+        asc(models.Book.id),
+    )
 
 
 def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc"):
@@ -142,6 +152,8 @@ async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.
     update_data_dict = update_data.model_dump(exclude_unset=True)
     for key, value in update_data_dict.items():
         setattr(book, key, value)
+    if "series" in update_data_dict and not update_data_dict["series"]:
+        book.series_index = None
     await db.commit()
     await db.refresh(book)
     return book
@@ -244,11 +256,31 @@ async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limi
     result = await db.execute(
         select(models.Book)
         .filter(func.lower(models.Book.series) == series.lower())
-        .order_by(asc(models.Book.title))
+        .order_by(*_series_order_columns())
         .offset(skip)
         .limit(limit)
     )
     return result.scalars().all()
+
+
+async def reorder_series_books(db: AsyncSession, series: str, ordered_book_ids: List[int]) -> int:
+    books = await get_books_by_series(db, series=series, skip=0, limit=100000)
+    if not books:
+        return 0
+
+    if len(ordered_book_ids) != len(set(ordered_book_ids)):
+        raise HTTPException(status_code=400, detail="Series reorder contains duplicate book ids")
+
+    current_ids = {book.id for book in books}
+    if current_ids != set(ordered_book_ids):
+        raise HTTPException(status_code=400, detail="Series reorder must include every book in the series exactly once")
+
+    books_by_id = {book.id: book for book in books}
+    for index, book_id in enumerate(ordered_book_ids, start=1):
+        books_by_id[book_id].series_index = Decimal(index)
+
+    await db.commit()
+    return len(ordered_book_ids)
 
 
 async def create_cleaning_config(db: AsyncSession, config: schemas.CleaningConfigCreate) -> models.CleaningConfig:
@@ -540,9 +572,9 @@ async def get_reader_standalone_books(db: AsyncSession) -> List[models.Book]:
 
 
 async def get_reader_books_by_series(db: AsyncSession, name: str) -> List[models.Book]:
-    """Get reader-eligible books in a series (case-insensitive), ordered by title."""
+    """Get reader-eligible books in a series (case-insensitive), ordered by series index then title."""
     result = await db.execute(
-        _reader_books_query().where(func.lower(models.Book.series) == name.lower()).order_by(asc(models.Book.title))
+        _reader_books_query().where(func.lower(models.Book.series) == name.lower()).order_by(*_series_order_columns())
     )
     return result.scalars().all()
 

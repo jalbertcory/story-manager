@@ -14,6 +14,7 @@ class BookBase(BaseModel):
     current_path: Optional[str] = None
     cover_path: Optional[str] = None
     series: Optional[str] = None
+    series_index: Optional[float] = None
     master_word_count: Optional[int] = None
     current_word_count: Optional[int] = None
     removed_chapters: Optional[List[str]] = []
@@ -35,6 +36,7 @@ class BookUpdate(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     series: Optional[str] = None
+    series_index: Optional[float] = None
     removed_chapters: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
     notes: Optional[str] = None
@@ -57,6 +59,7 @@ class BookCatalogEntry(BaseModel):
     title: str
     author: str
     series: Optional[str] = None
+    series_index: Optional[float] = None
     source_type: SourceType
     cover_path: Optional[str] = None
     current_word_count: Optional[int] = None
@@ -169,11 +172,16 @@ class SeriesMerge(BaseModel):
     target: str
 
 
+class SeriesReorder(BaseModel):
+    ordered_book_ids: List[int]
+
+
 class ReaderBook(BaseModel):
     id: int
     title: str
     author: str
     series: Optional[str] = None
+    series_index: Optional[float] = None
     source_type: SourceType
     content_updated_at: datetime
     content_version: int
