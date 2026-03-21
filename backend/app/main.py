@@ -11,12 +11,14 @@ from .config import LIBRARY_PATH
 from .database import SessionLocal, engine
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
+from .services.web_import_queue import get_web_import_queue
 from .services.update_scheduler import get_scheduler, schedule_next_web_novel_update
 
 logger = logging.getLogger(__name__)
 
 _mem_handler = setup_logging()
 _scheduler = get_scheduler()
+_web_import_queue = get_web_import_queue()
 
 
 async def _create_tables() -> None:
@@ -34,10 +36,15 @@ async def lifespan(app: FastAPI):
     await _create_tables()
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
+    await _web_import_queue.start()
+    requeued = await _web_import_queue.requeue_pending_books()
+    if requeued:
+        logger.info("Re-queued %s pending web novel imports.", requeued)
     if not _scheduler.running:
         _scheduler.start()
     await schedule_next_web_novel_update()
     yield
+    await _web_import_queue.stop()
     if _scheduler.running:
         _scheduler.shutdown()
 
