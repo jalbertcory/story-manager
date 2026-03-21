@@ -223,6 +223,20 @@ function BookSettings({ book, onBack }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
+  const retryCoverMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/books/${book.id}/retry-cover`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to retry cover");
+      }
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+  });
+
   const coverUrlMutation = useMutation({
     mutationFn: async (url) => {
       const res = await fetch(`/api/books/${book.id}/cover-url`, {
@@ -425,6 +439,14 @@ function BookSettings({ book, onBack }) {
           >
             {coverMutation.isPending ? "Uploading…" : book.cover_path ? "Replace Cover" : "Upload Cover"}
           </button>
+          {book.immutable_path && (
+            <button
+              onClick={() => retryCoverMutation.mutate()}
+              disabled={retryCoverMutation.isPending || coverMutation.isPending || coverUrlMutation.isPending}
+            >
+              {retryCoverMutation.isPending ? "Retrying…" : "Re-extract Cover"}
+            </button>
+          )}
         </div>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
           <input
@@ -449,6 +471,9 @@ function BookSettings({ book, onBack }) {
         )}
         {coverUrlMutation.isError && (
           <p className="error">{coverUrlMutation.error.message}</p>
+        )}
+        {retryCoverMutation.isError && (
+          <p className="error">{retryCoverMutation.error.message}</p>
         )}
       </section>
 

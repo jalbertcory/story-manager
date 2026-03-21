@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..services.web_novel import save_cover_from_url
+from ..services.epub_utils import get_and_save_epub_cover
+from ..services.web_novel import save_cover_from_url, scrape_cover
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,28 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
         f.write(await file.read())
 
     db_book.cover_path = str(save_path.relative_to(LIBRARY_PATH.parent))
+    await db.commit()
+    await db.refresh(db_book)
+    return db_book
+
+
+@router.post("/api/books/{book_id}/retry-cover", response_model=schemas.Book)
+async def retry_cover(book_id: int, db: AsyncSession = Depends(get_db)):
+    """Re-extracts the cover from the EPUB, falling back to scraping the source URL."""
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.immutable_path:
+        raise HTTPException(status_code=400, detail="Book has no EPUB file to extract cover from")
+
+    epub_path = LIBRARY_PATH.parent / db_book.immutable_path
+    cover_path = get_and_save_epub_cover(epub_path=epub_path, book_id=book_id)
+    if cover_path is None and db_book.source_url:
+        cover_path = await scrape_cover(db_book.source_url, book_id)
+    if cover_path is None:
+        raise HTTPException(status_code=400, detail="Could not extract or scrape a cover image")
+
+    db_book.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
     await db.commit()
     await db.refresh(db_book)
     return db_book
