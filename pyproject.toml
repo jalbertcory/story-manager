@@ -17,7 +17,7 @@ dependencies = [
     "click==8.2.1",
     "cloudscraper==1.2.71",
     "ebooklib==0.18",
-    "FanFicFare==4.48.0",
+    "FanFicFare==4.55.0",
     "fastapi==0.116.1",
     "greenlet==3.2.4",
     "h11==0.16.0",
