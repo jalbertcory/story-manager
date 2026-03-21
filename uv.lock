@@ -290,7 +290,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/e8/1d/90bb33317d756c25b
 
 [[package]]
 name = "fanficfare"
-version = "4.48.0"
+version = "4.55.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -304,9 +304,9 @@ dependencies = [
     { name = "requests-file" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/d8/251c7c9f0a801590619d9e0a90ff5f13924cab74249247e6bfce8e5e8ec5/fanficfare-4.48.0.tar.gz", hash = "sha256:5018e2ab62d13b663732a2b06c232a567ad75c7b5ce10782d79c9c7bb0db810c", size = 418814, upload-time = "2025-08-07T16:50:08.27Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/9a/c99dcdb3c5d1dcb813d127b5f1ca168e9d07d137b9ff719ed82c3fe63bb0/fanficfare-4.55.0.tar.gz", hash = "sha256:2d68238704cd41da02aafac045e490bf795f331b4eec6e1488890b0dea52ba26", size = 423817, upload-time = "2026-03-01T15:32:06.162Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/d9/b869a3c7f12dc32527a8364e38792b2281c575a333907c149c97adc2615b/fanficfare-4.48.0-py3-none-any.whl", hash = "sha256:b8f540410a418a61930c5fc859776d10add4ab3e7c87b98866065ca3908ea74f", size = 589636, upload-time = "2025-08-07T16:50:05.066Z" },
+    { url = "https://files.pythonhosted.org/packages/60/bf/4adfe76ad440c2890022ccd9acd7de2ab778ba33a09d3ecc85a0befff405/fanficfare-4.55.0-py3-none-any.whl", hash = "sha256:bf53d69dcdcfab052a32c77dcee0369768a12abd98fe156814a89f0584b80682", size = 591772, upload-time = "2026-03-01T15:32:02.729Z" },
 ]
 
 [[package]]
@@ -1230,7 +1230,7 @@ requires-dist = [
     { name = "click", specifier = "==8.2.1" },
     { name = "cloudscraper", specifier = "==1.2.71" },
     { name = "ebooklib", specifier = "==0.18" },
-    { name = "fanficfare", specifier = "==4.48.0" },
+    { name = "fanficfare", specifier = "==4.55.0" },
     { name = "fastapi", specifier = "==0.116.1" },
     { name = "flake8", marker = "extra == 'dev'", specifier = "==7.1.0" },
     { name = "greenlet", specifier = "==3.2.4" },
