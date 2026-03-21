@@ -109,6 +109,15 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
     return {"merged": count, "source": source, "target": target}
 
 
+@router.post("/api/series/{series_name}/reorder")
+async def reorder_series(series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)):
+    """Persist the order of every book in a series."""
+    count = await crud.reorder_series_books(db, series=series_name, ordered_book_ids=body.ordered_book_ids)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No books found with that series name")
+    return {"updated": count, "series": series_name}
+
+
 @router.get("/api/books/search", response_model=List[schemas.Book])
 async def search_books_unified(
     q: str,

@@ -63,6 +63,9 @@ function BookSettings({ book, onBack }) {
   const [title, setTitle] = useState(book.title || "");
   const [author, setAuthor] = useState(book.author || "");
   const [series, setSeries] = useState(book.series || "");
+  const [seriesIndex, setSeriesIndex] = useState(
+    book.series_index != null ? String(book.series_index) : "",
+  );
   const [notes, setNotes] = useState(book.notes || "");
   const [removedChapters, setRemovedChapters] = useState(
     book.removed_chapters || [],
@@ -79,6 +82,7 @@ function BookSettings({ book, onBack }) {
     setTitle(book.title || "");
     setAuthor(book.author || "");
     setSeries(book.series || "");
+    setSeriesIndex(book.series_index != null ? String(book.series_index) : "");
     setNotes(book.notes || "");
     setRemovedChapters(book.removed_chapters || []);
     setContentSelectors(book.content_selectors || []);
@@ -260,6 +264,7 @@ function BookSettings({ book, onBack }) {
     title,
     author,
     series: series.trim() || null,
+    series_index: seriesIndex.trim() ? Number.parseFloat(seriesIndex) : null,
     removed_chapters: removedChapters,
     content_selectors: contentSelectors,
     notes: notes || null,
@@ -358,6 +363,16 @@ function BookSettings({ book, onBack }) {
               <option key={s} value={s} />
             ))}
           </datalist>
+        </label>
+        <label>
+          Series Order
+          <input
+            type="number"
+            step="0.01"
+            value={seriesIndex}
+            onChange={(e) => setSeriesIndex(e.target.value)}
+            placeholder="e.g. 1, 2, or 2.5"
+          />
         </label>
         <label>
           Notes
