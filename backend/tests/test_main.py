@@ -1271,6 +1271,128 @@ async def test_search_books_by_series(db_session):
 
 
 @pytest.mark.asyncio
+async def test_search_books_by_series_orders_by_series_index_then_title(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Later Title",
+                author="Author A",
+                series="Series X",
+                series_index=2,
+                immutable_path="sx2i",
+                current_path="sx2c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Earlier Title",
+                author="Author A",
+                series="Series X",
+                series_index=1,
+                immutable_path="sx1i",
+                current_path="sx1c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="No Number",
+                author="Author A",
+                series="Series X",
+                immutable_path="sxni",
+                current_path="sxnc",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get("/api/books/search/series/Series X")
+    assert response.status_code == 200
+    data = response.json()
+    assert [book["title"] for book in data] == ["Earlier Title", "Later Title", "No Number"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_series_persists_series_index(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        first = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book One",
+                author="Author A",
+                series="Series X",
+                immutable_path="r1i",
+                current_path="r1c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        second = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book Two",
+                author="Author A",
+                series="Series X",
+                immutable_path="r2i",
+                current_path="r2c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        third = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book Three",
+                author="Author A",
+                series="Series X",
+                immutable_path="r3i",
+                current_path="r3c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.post(
+        "/api/series/Series%20X/reorder",
+        json={"ordered_book_ids": [third.id, first.id, second.id]},
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] == 3
+
+    response = client.get("/api/books/search/series/Series X")
+    assert response.status_code == 200
+    data = response.json()
+    assert [(book["id"], book["series_index"]) for book in data] == [
+        (third.id, 1),
+        (first.id, 2),
+        (second.id, 3),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_book_clears_series_index_when_series_removed(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book One",
+                author="Author A",
+                series="Series X",
+                series_index=2.5,
+                immutable_path="u1i",
+                current_path="u1c",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.put(f"/api/books/{book.id}", json={"series": None})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["series"] is None
+    assert data["series_index"] is None
+
+
+@pytest.mark.asyncio
 async def test_opds_root_feed(db_session):
     """
     Test that GET /reader/opds returns a valid authenticated Atom navigation feed.

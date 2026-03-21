@@ -11,6 +11,21 @@ function getCoverUrl(book) {
   return `/api/covers/${book.id}`;
 }
 
+function compareSeriesBooks(left, right) {
+  const leftIndex = left.series_index;
+  const rightIndex = right.series_index;
+
+  if (leftIndex != null && rightIndex != null && leftIndex !== rightIndex) {
+    return Number(leftIndex) - Number(rightIndex);
+  }
+  if (leftIndex != null && rightIndex == null) return -1;
+  if (leftIndex == null && rightIndex != null) return 1;
+
+  const byTitle = left.title.localeCompare(right.title);
+  if (byTitle !== 0) return byTitle;
+  return left.id - right.id;
+}
+
 function BookCard({ book, onEdit }) {
   const isPending = book.download_status === "pending";
   const isError = book.download_status === "error";
@@ -118,6 +133,13 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   const [editing, setEditing] = useState(null); // null | "rename" | "merge"
   const [renameValue, setRenameValue] = useState(series);
   const [mergeTarget, setMergeTarget] = useState("");
+  const [orderedBooks, setOrderedBooks] = useState(books);
+  const [draggedBookId, setDraggedBookId] = useState(null);
+  const [dragOverBookId, setDragOverBookId] = useState(null);
+
+  useEffect(() => {
+    setOrderedBooks(books);
+  }, [books]);
 
   const renameMutation = useMutation({
     mutationFn: async (newName) => {
@@ -160,26 +182,65 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     },
   });
 
+  const reorderMutation = useMutation({
+    mutationFn: async (orderedBookIds) => {
+      const res = await fetch(`/api/series/${encodeURIComponent(series)}/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordered_book_ids: orderedBookIds }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to reorder series");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setDraggedBookId(null);
+      setDragOverBookId(null);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+    onError: () => {
+      setOrderedBooks(books);
+      setDraggedBookId(null);
+      setDragOverBookId(null);
+    },
+  });
+
   const summary = useMemo(() => {
-    const authors = [...new Set(books.map((book) => book.author).filter(Boolean))];
-    const totalWords = books.reduce(
+    const authors = [...new Set(orderedBooks.map((book) => book.author).filter(Boolean))];
+    const totalWords = orderedBooks.reduce(
       (sum, book) => sum + (book.current_word_count ?? 0),
       0,
     );
     const coverBook =
-      books.find((book) => book.cover_path && !book.download_status) ??
-      books.find((book) => !book.download_status) ??
-      books[0];
+      orderedBooks.find((book) => book.cover_path && !book.download_status) ??
+      orderedBooks.find((book) => !book.download_status) ??
+      orderedBooks[0];
 
     return {
       authors,
       totalWords,
-      hasWebNovel: books.some((book) => book.source_type === "web"),
+      hasWebNovel: orderedBooks.some((book) => book.source_type === "web"),
       coverBook,
     };
-  }, [books]);
+  }, [orderedBooks]);
 
   const otherSeries = allSeries.filter((s) => s.toLowerCase() !== series.toLowerCase());
+
+  const moveBook = (fromId, toId) => {
+    if (fromId == null || toId == null || fromId === toId) return;
+    const currentIndex = orderedBooks.findIndex((book) => book.id === fromId);
+    const targetIndex = orderedBooks.findIndex((book) => book.id === toId);
+    if (currentIndex === -1 || targetIndex === -1) return;
+
+    const next = [...orderedBooks];
+    const [moved] = next.splice(currentIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    setOrderedBooks(next);
+    reorderMutation.mutate(next.map((book) => book.id));
+  };
 
   return (
     <div className="series-group">
@@ -299,8 +360,42 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       )}
       {expanded && (
         <div className="book-grid">
-          {books.map((book) => (
-            <BookCard key={book.id} book={book} onEdit={onEdit} />
+          {orderedBooks.map((book) => (
+            <div
+              key={book.id}
+              className={`series-book-item${
+                draggedBookId === book.id ? " series-book-item--dragging" : ""
+              }${dragOverBookId === book.id ? " series-book-item--drop-target" : ""}`}
+              draggable={!reorderMutation.isPending}
+              onDragStart={() => {
+                setDraggedBookId(book.id);
+                setDragOverBookId(null);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (draggedBookId !== book.id) {
+                  setDragOverBookId(book.id);
+                }
+              }}
+              onDragLeave={() => {
+                if (dragOverBookId === book.id) {
+                  setDragOverBookId(null);
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                moveBook(draggedBookId, book.id);
+              }}
+              onDragEnd={() => {
+                setDraggedBookId(null);
+                setDragOverBookId(null);
+              }}
+            >
+              <div className="series-book-order">
+                {book.series_index != null ? `#${book.series_index}` : "⋮⋮"}
+              </div>
+              <BookCard book={book} onEdit={onEdit} />
+            </div>
           ))}
         </div>
       )}
@@ -484,7 +579,7 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
     }
 
     for (const seriesBooks of Object.values(sMap)) {
-      seriesBooks.sort((left, right) => left.title.localeCompare(right.title));
+      seriesBooks.sort(compareSeriesBooks);
     }
 
     const sorted = Object.keys(sMap).sort();

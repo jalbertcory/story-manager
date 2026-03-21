@@ -305,6 +305,40 @@
   padding: 0.5rem 0;
 }
 
+.series-book-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.series-book-item--dragging {
+  opacity: 0.55;
+}
+
+.series-book-item--drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+}
+
+.series-book-order {
+  width: 2.5rem;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  user-select: none;
+  cursor: grab;
+}
+
+.series-book-item:active .series-book-order {
+  cursor: grabbing;
+}
+
 .library-view-tabs {
   display: flex;
   gap: 0.6rem;

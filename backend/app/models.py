@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, JSON
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, JSON, Numeric
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -16,6 +16,7 @@ class Book(Base):
     title = Column(String, index=True)
     author = Column(String, index=True)
     series = Column(String, nullable=True, index=True)
+    series_index = Column(Numeric(6, 2), nullable=True)
     source_url = Column(String, unique=True, index=True, nullable=True)
     source_type = Column(Enum(SourceType), nullable=False, default=SourceType.epub)
     immutable_path = Column(String, unique=True)
