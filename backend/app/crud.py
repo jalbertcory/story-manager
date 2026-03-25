@@ -226,14 +226,14 @@ async def increment_update_task(db: AsyncSession, task: models.UpdateTask) -> No
 
 async def complete_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
     task.status = "completed"
-    task.completed_at = datetime.utcnow()
+    task.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
 
 
 async def fail_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
     task.status = "failed"
-    task.completed_at = datetime.utcnow()
+    task.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
 
@@ -244,7 +244,7 @@ async def reset_stuck_update_tasks(db: AsyncSession) -> None:
     stuck = result.scalars().all()
     for task in stuck:
         task.status = "failed"
-        task.completed_at = datetime.utcnow()
+        task.completed_at = datetime.now(timezone.utc)
     if stuck:
         await db.commit()
 

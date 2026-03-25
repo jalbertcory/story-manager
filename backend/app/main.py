@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import crud, models
+from . import crud
 from .config import LIBRARY_PATH
-from .database import SessionLocal, engine
+from .database import SessionLocal
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
 from .services.web_import_queue import get_web_import_queue
@@ -21,19 +21,13 @@ _scheduler = get_scheduler()
 _web_import_queue = get_web_import_queue()
 
 
-async def _create_tables() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(models.Base.metadata.create_all)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Re-attach memory handler after uvicorn resets logging config on startup
     root_logger = logging.getLogger()
     if _mem_handler not in root_logger.handlers:
         root_logger.addHandler(_mem_handler)
-    logger.info("Starting up and creating database tables if they don't exist.")
-    await _create_tables()
+    logger.info("Starting up Story Manager services.")
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     await _web_import_queue.start()

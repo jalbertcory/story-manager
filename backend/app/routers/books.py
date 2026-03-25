@@ -62,7 +62,7 @@ async def get_all_books(
     db: AsyncSession = Depends(get_db),
 ) -> List[schemas.Book]:
     books = await crud.get_books(db, skip=skip, limit=limit, sort_by=sort_by, sort_order=sort_order)
-    return [schemas.Book.from_orm(book) for book in books]
+    return [schemas.Book.model_validate(book) for book in books]
 
 
 @router.get("/api/books/catalog", response_model=List[schemas.BookCatalogEntry])

@@ -1,18 +1,30 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
+import {
+  deleteBook,
+  detachBookSource,
+  getApiCoverUrl,
+  getBookChapters,
+  getMatchedConfigs,
+  previewCleaning,
+  processBook,
+  refreshBook,
+  retryBookCover,
+  setBookCoverUrl,
+  updateBook,
+  uploadBookCover,
+} from "../api/books";
+import { getSeries } from "../api/series";
+
 const fetchChapters = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
-  const res = await fetch(`/api/books/${bookId}/chapters`);
-  if (!res.ok) throw new Error("Failed to fetch chapters");
-  return res.json();
+  return getBookChapters(bookId);
 };
 
 const fetchMatchedConfig = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
-  const res = await fetch(`/api/books/${bookId}/matched-config`);
-  if (!res.ok) throw new Error("Failed to fetch matched config");
-  return res.json();
+  return getMatchedConfigs(bookId);
 };
 
 function SelectorPills({ selectors, onChange }) {
@@ -107,37 +119,20 @@ function BookSettings({ book, onBack }) {
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
-    queryFn: () => fetch("/api/series").then((r) => r.json()),
+    queryFn: getSeries,
     staleTime: 60_000,
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (data) => {
-      const res = await fetch(`/api/books/${book.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to save");
-      }
-      return res.json();
+    mutationFn: (data) => updateBook(book.id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const processMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/process`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Processing failed");
-      }
-      return res.json();
-    },
+    mutationFn: () => processBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
@@ -145,16 +140,7 @@ function BookSettings({ book, onBack }) {
   });
 
   const refreshMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/refresh`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Refresh failed");
-      }
-      return res.json();
-    },
+    mutationFn: () => refreshBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
@@ -162,16 +148,7 @@ function BookSettings({ book, onBack }) {
   });
 
   const detachSourceMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/detach-source`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to remove web marker");
-      }
-      return res.json();
-    },
+    mutationFn: () => detachBookSource(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
@@ -179,13 +156,7 @@ function BookSettings({ book, onBack }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Delete failed");
-      }
-    },
+    mutationFn: () => deleteBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
@@ -193,67 +164,27 @@ function BookSettings({ book, onBack }) {
   });
 
   const previewMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/preview-cleaning`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content_selectors: contentSelectors,
-          removed_chapters: removedChapters,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Preview failed");
-      }
-      return res.json();
-    },
+    mutationFn: () => previewCleaning(book.id, {
+      content_selectors: contentSelectors,
+      removed_chapters: removedChapters,
+    }),
     onSuccess: (data) => setPreviewResult(data),
   });
 
   const [coverUrl, setCoverUrl] = useState("");
 
   const coverMutation = useMutation({
-    mutationFn: async (file) => {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`/api/books/${book.id}/cover`, {
-        method: "POST",
-        body: form,
-      });
-      if (!res.ok) throw new Error("Cover upload failed");
-      return res.json();
-    },
+    mutationFn: (file) => uploadBookCover(book.id, file),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const retryCoverMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/books/${book.id}/retry-cover`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to retry cover");
-      }
-      return res.json();
-    },
+    mutationFn: () => retryBookCover(book.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const coverUrlMutation = useMutation({
-    mutationFn: async (url) => {
-      const res = await fetch(`/api/books/${book.id}/cover-url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to set cover from URL");
-      }
-      return res.json();
-    },
+    mutationFn: (url) => setBookCoverUrl(book.id, url),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       setCoverUrl("");
@@ -432,7 +363,7 @@ function BookSettings({ book, onBack }) {
         <h3>Cover</h3>
         {book.cover_path && (
           <img
-            src={`/api/covers/${book.id}`}
+            src={getApiCoverUrl(book.id)}
             alt="Cover"
             className="book-cover"
             style={{ maxHeight: 300, width: "auto" }}

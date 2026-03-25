@@ -1,4 +1,4 @@
-.PHONY: run-ui run-backend run-db ensure-db fmt lint test e2e e2e-debug
+.PHONY: run-ui run-backend run-db ensure-db fmt lint test test-migrations e2e e2e-debug
 
 run-ui:
 	cd frontend && npm run dev
@@ -50,6 +50,22 @@ lint:
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
 	cd frontend && npm test -- --run
+
+test-migrations:
+	docker rm -f story-manager-migration-test >/dev/null 2>&1 || true
+	docker run --name story-manager-migration-test \
+	  -e POSTGRES_PASSWORD=postgres \
+	  -e POSTGRES_DB=story_manager \
+	  -p 5433:5432 \
+	  -d postgres:17 >/dev/null
+	@trap 'docker rm -f story-manager-migration-test >/dev/null 2>&1 || true' EXIT; \
+	until docker exec story-manager-migration-test pg_isready -U postgres -d story_manager >/dev/null 2>&1; do \
+		printf "."; \
+		sleep 1; \
+	done; \
+	echo " Postgres is ready."; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
 
 e2e:
 	$(MAKE) ensure-db

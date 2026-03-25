@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from datetime import datetime
 from typing import Optional, List
 from .models import SourceType
@@ -6,6 +6,8 @@ from .models import SourceType
 
 # Base Pydantic model for a book, defining common attributes.
 class BookBase(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     title: str
     author: str
     source_url: Optional[HttpUrl] = None
@@ -17,13 +19,10 @@ class BookBase(BaseModel):
     series_index: Optional[float] = None
     master_word_count: Optional[int] = None
     current_word_count: Optional[int] = None
-    removed_chapters: Optional[List[str]] = []
-    content_selectors: Optional[List[str]] = []
+    removed_chapters: Optional[List[str]] = Field(default_factory=list)
+    content_selectors: Optional[List[str]] = Field(default_factory=list)
     notes: Optional[str] = None
     download_status: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 # Pydantic model for creating a new book.
@@ -50,11 +49,10 @@ class Book(BookBase):
     content_updated_at: datetime
     content_version: int
 
-    class Config:
-        from_attributes = True
-
 
 class BookCatalogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     title: str
     author: str
@@ -65,9 +63,6 @@ class BookCatalogEntry(BaseModel):
     current_word_count: Optional[int] = None
     updated_at: Optional[datetime] = None
     download_status: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 # Pydantic model for creating a new book log.
@@ -81,11 +76,10 @@ class BookLogCreate(BaseModel):
 
 # Pydantic model for reading a book log.
 class BookLog(BookLogCreate):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     timestamp: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class CleaningConfigBase(BaseModel):
@@ -100,10 +94,9 @@ class CleaningConfigCreate(CleaningConfigBase):
 
 
 class CleaningConfig(CleaningConfigBase):
-    id: int
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        from_attributes = True
+    id: int
 
 
 class CleaningConfigUpdate(BaseModel):
@@ -114,15 +107,14 @@ class CleaningConfigUpdate(BaseModel):
 
 
 class UpdateTask(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     total_books: int
     completed_books: int
     status: str
     started_at: datetime
     completed_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 
 class SchedulerJobStatus(BaseModel):
@@ -137,10 +129,9 @@ class SchedulerJobStatus(BaseModel):
 
 
 class BookLogWithTitle(BookLog):
-    book_title: str
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        from_attributes = True
+    book_title: str
 
 
 class ApiKeyCreate(BaseModel):
@@ -148,15 +139,14 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKey(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     label: str
     token_prefix: str
     created_at: datetime
     last_used_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 
 class ApiKeyWithToken(ApiKey):
