@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
+import { getBook } from "./api/books";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
@@ -8,67 +8,54 @@ import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
-
-const TABS = [
-  { key: "library", label: "Library", path: "/" },
-  { key: "configs", label: "Cleaning Configs", path: "/configs" },
-  { key: "scheduler", label: "Scheduler", path: "/scheduler" },
-  { key: "logs", label: "Logs", path: "/logs" },
-  { key: "utilities", label: "Utilities", path: "/utilities" },
-];
-
-const LIBRARY_VIEWS = ["series", "standalone", "web"];
-
-function parseLocation(pathname, hash) {
-  const m = pathname.match(/^\/books\/(\d+)$/);
-  if (m) return { view: "book", bookId: parseInt(m[1]) };
-  const tab = TABS.find((t) => t.path === pathname);
-  const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1)) ? hash.slice(1) : "series";
-  return { view: "tab", tab: tab?.key || "library", libraryView };
-}
+import useDebouncedValue from "./hooks/useDebouncedValue";
+import useLibraryCatalog from "./hooks/useLibraryCatalog";
+import { buildBookPath, buildTabPath, parseLocation, TABS } from "./lib/navigation";
 
 function App() {
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState("asc");
-  const [searchParams, setSearchParams] = useState({
-    q: "",
-    sortBy: "title",
-    sortOrder: "asc",
-  });
   const [editingBook, setEditingBook] = useState(null);
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
   const [addBookOpen, setAddBookOpen] = useState(false);
+  const debouncedQuery = useDebouncedValue(q.trim(), 300);
 
-  const applyLocation = (pathname, hash, stateData = null) => {
+  const applyLocation = useCallback(async (pathname, hash, stateData = null) => {
     const parsed = parseLocation(pathname, hash);
     if (parsed.view === "book") {
       if (stateData?.id === parsed.bookId) {
         setEditingBook(stateData);
-      } else {
-        fetch(`/api/books/${parsed.bookId}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((book) => {
-            if (book) setEditingBook(book);
-            else { setEditingBook(null); setActiveTab("library"); }
-          });
+        return;
       }
-    } else {
+
+      const book = await getBook(parsed.bookId);
+      if (book) {
+        setEditingBook(book);
+        return;
+      }
+
+      window.history.replaceState({ view: "tab", tab: "library" }, "", buildTabPath("library", "series"));
       setEditingBook(null);
-      setActiveTab(parsed.tab);
-      setLibraryView(parsed.libraryView);
+      setActiveTab("library");
+      setLibraryView("series");
+      return;
     }
-  };
+
+    setEditingBook(null);
+    setActiveTab(parsed.tab);
+    setLibraryView(parsed.libraryView);
+  }, []);
 
   const navigate = (view, data = null) => {
     if (view === "book" && data?.id) {
-      history.pushState({ view, data }, "", `/books/${data.id}`);
+      window.history.pushState({ view, data }, "", buildBookPath(data.id));
       setEditingBook(data);
     } else {
-      const tab = TABS.find((t) => t.key === view) || TABS[0];
-      const hash = tab.key === "library" ? `#${libraryView}` : "";
-      history.pushState({ view: "tab", tab: tab.key }, "", tab.path + hash);
+      const nextPath = buildTabPath(view, libraryView);
+      const tab = TABS.find((item) => item.key === view) || TABS[0];
+      window.history.pushState({ view: "tab", tab: tab.key }, "", nextPath);
       setEditingBook(null);
       setActiveTab(tab.key);
     }
@@ -76,70 +63,54 @@ function App() {
 
   const handleLibraryViewChange = (view) => {
     setLibraryView(view);
-    history.pushState({ view: "tab", tab: "library" }, "", `/#${view}`);
+    window.history.pushState({ view: "tab", tab: "library" }, "", buildTabPath("library", view));
   };
 
   useEffect(() => {
-    applyLocation(window.location.pathname, window.location.hash);
-  }, []);
+    void applyLocation(window.location.pathname, window.location.hash);
+  }, [applyLocation]);
 
   useEffect(() => {
-    const onPop = (e) => applyLocation(window.location.pathname, window.location.hash, e.state?.data ?? null);
+    const onPop = (e) => {
+      void applyLocation(window.location.pathname, window.location.hash, e.state?.data ?? null);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [applyLocation]);
 
   const {
     data: catalog = [],
     isLoading,
     error,
-  } = useQuery({
-    queryKey: ["book-catalog", searchParams],
-    queryFn: async () => {
-      const { q: sq, sortBy: sb, sortOrder: so } = searchParams;
-      const url = sq
-        ? `/api/books/catalog?q=${encodeURIComponent(sq)}&sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}`
-        : `/api/books/catalog?sort_by=${encodeURIComponent(sb)}&sort_order=${encodeURIComponent(so)}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch books");
-      return res.json();
-    },
-    refetchInterval: ({ state }) => {
-      const books = state.data ?? [];
-      return books.some((b) => b.download_status === "pending") ? 2000 : false;
-    },
+  } = useLibraryCatalog({
+    q: debouncedQuery,
+    sortBy,
+    sortOrder,
   });
-
-  const handleSearch = () => {
-    setSearchParams({ q: q.trim(), sortBy, sortOrder });
-  };
 
   const handleClearSearch = () => {
     setQ("");
-    setSearchParams({ q: "", sortBy, sortOrder });
   };
 
   const handleSortByChange = (newSortBy) => {
     setSortBy(newSortBy);
     setSortOrder("asc");
-    setSearchParams({ q: searchParams.q, sortBy: newSortBy, sortOrder: "asc" });
   };
 
   const handleToggleSortOrder = () => {
-    const newOrder = sortOrder === "asc" ? "desc" : "asc";
-    setSortOrder(newOrder);
-    setSearchParams({ q: searchParams.q, sortBy, sortOrder: newOrder });
+    setSortOrder((current) => (current === "asc" ? "desc" : "asc"));
   };
 
   const handleEdit = async (book) => {
-    const response = await fetch(`/api/books/${book.id}`);
-    if (!response.ok) return;
-    navigate("book", await response.json());
+    const fullBook = await getBook(book.id);
+    if (fullBook) {
+      navigate("book", fullBook);
+    }
   };
 
   if (editingBook) {
     return (
-      <BookSettings book={editingBook} onBack={() => history.back()} />
+      <BookSettings book={editingBook} onBack={() => window.history.back()} />
     );
   }
 
@@ -162,9 +133,7 @@ function App() {
                 placeholder="Search by title, author, or series"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
-              <button onClick={handleSearch}>Search</button>
               <button onClick={handleClearSearch}>Clear</button>
               <select
                 value={sortBy}

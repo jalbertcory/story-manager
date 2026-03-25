@@ -103,7 +103,7 @@ describe("App", () => {
       screen.getByPlaceholderText("Search by title, author, or series"),
       { target: { value: "Author B" } },
     );
-    fireEvent.click(screen.getByText("Search"));
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(

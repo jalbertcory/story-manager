@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { getApiCoverUrl, updateBook } from "../api/books";
+import { getSeries, mergeSeries, renameSeries, reorderSeries } from "../api/series";
+
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
 
@@ -8,7 +11,7 @@ function getCoverUrl(book) {
   if (!book.cover_path) {
     return null;
   }
-  return `/api/covers/${book.id}`;
+  return getApiCoverUrl(book.id);
 }
 
 function compareSeriesBooks(left, right) {
@@ -142,18 +145,7 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   }, [books]);
 
   const renameMutation = useMutation({
-    mutationFn: async (newName) => {
-      const res = await fetch(`/api/series/${encodeURIComponent(series)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_name: newName }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to rename series");
-      }
-      return res.json();
-    },
+    mutationFn: (newName) => renameSeries(series, newName),
     onSuccess: () => {
       setEditing(null);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
@@ -162,18 +154,7 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   });
 
   const mergeMutation = useMutation({
-    mutationFn: async (target) => {
-      const res = await fetch("/api/series/merge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: series, target }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to merge series");
-      }
-      return res.json();
-    },
+    mutationFn: (target) => mergeSeries(series, target),
     onSuccess: () => {
       setEditing(null);
       setMergeTarget("");
@@ -183,18 +164,7 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   });
 
   const reorderMutation = useMutation({
-    mutationFn: async (orderedBookIds) => {
-      const res = await fetch(`/api/series/${encodeURIComponent(series)}/reorder`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ordered_book_ids: orderedBookIds }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to reorder series");
-      }
-      return res.json();
-    },
+    mutationFn: (orderedBookIds) => reorderSeries(series, orderedBookIds),
     onSuccess: () => {
       setDraggedBookId(null);
       setDragOverBookId(null);
@@ -480,20 +450,8 @@ function StandaloneTagAction({ book, seriesOptions }) {
   }, [book.id, book.series]);
 
   const saveMutation = useMutation({
-    mutationFn: async (nextSeries) => {
-      const res = await fetch(`/api/books/${book.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ series: nextSeries.trim() || null }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to update series");
-      }
-      return res.json();
-    },
+    mutationFn: (nextSeries) => updateBook(book.id, { series: nextSeries.trim() || null }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["books"] });
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
     },
@@ -544,11 +502,7 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
-    queryFn: async () => {
-      const res = await fetch("/api/series");
-      if (!res.ok) throw new Error("Failed to load series");
-      return res.json();
-    },
+    queryFn: getSeries,
     staleTime: 60_000,
   });
 
