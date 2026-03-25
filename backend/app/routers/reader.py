@@ -76,6 +76,7 @@ def _reader_book_payload(book: models.Book, request: Request) -> dict:
         "title": book.title,
         "author": book.author,
         "series": book.series,
+        "series_index": float(book.series_index) if book.series_index is not None else None,
         "source_type": book.source_type,
         "content_updated_at": book.content_updated_at,
         "content_version": book.content_version,
