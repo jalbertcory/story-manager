@@ -1995,6 +1995,8 @@ async def test_create_reader_key_and_use_reader_updates(db_session):
             schemas.BookCreate(
                 title="Reader Book",
                 author="Reader Author",
+                series="Reader Cycle",
+                series_index=1.5,
                 immutable_path="library/immutable_reader.epub",
                 current_path="library/reader.epub",
                 source_type=models.SourceType.epub,
@@ -2022,6 +2024,8 @@ async def test_create_reader_key_and_use_reader_updates(db_session):
     assert payload[0]["download_url"].endswith("/reader/books/1/download")
     assert payload[0]["content_version"] == 1
     assert payload[0]["current_word_count"] == 4321
+    assert payload[0]["series"] == "Reader Cycle"
+    assert payload[0]["series_index"] == 1.5
 
 
 @pytest.mark.asyncio
@@ -2033,6 +2037,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
                 title="Arcane Saga 1",
                 author="Author A",
                 series="Arcane Saga",
+                series_index=1,
                 immutable_path="library/immutable_arcane_1.epub",
                 current_path="library/arcane_1.epub",
                 source_type=models.SourceType.epub,
@@ -2045,6 +2050,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
                 title="Arcane Saga 2",
                 author="Author A",
                 series="arcane saga",
+                series_index=2,
                 immutable_path="library/immutable_arcane_2.epub",
                 current_path="library/arcane_2.epub",
                 source_type=models.SourceType.epub,
@@ -2107,6 +2113,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
     books_payload = books_response.json()
     assert [book["title"] for book in books_payload] == ["Arcane Saga 1", "Arcane Saga 2"]
     assert [book["current_word_count"] for book in books_payload] == [1000, 2000]
+    assert [book["series_index"] for book in books_payload] == [1.0, 2.0]
 
     standalone_response = client.get("/reader/books/standalone", auth=("reader", token))
     assert standalone_response.status_code == 200
@@ -2145,6 +2152,8 @@ async def test_reader_books_all_returns_only_reader_eligible_books(db_session):
             schemas.BookCreate(
                 title="Collected Volume",
                 author="Author A",
+                series="Collections",
+                series_index=4,
                 immutable_path="library/immutable_collected.epub",
                 current_path="library/collected.epub",
                 source_type=models.SourceType.epub,
@@ -2194,6 +2203,8 @@ async def test_reader_books_all_returns_only_reader_eligible_books(db_session):
     assert [book["title"] for book in payload] == ["Collected Volume", "Zeta Volume"]
     assert payload[0]["download_url"].endswith(f"/reader/books/{visible.id}/download")
     assert payload[0]["cover_url"] is None
+    assert payload[0]["series_index"] == 4.0
+    assert payload[1]["series_index"] is None
     assert payload[1]["cover_url"].endswith(f"/reader/covers/{covered.id}")
 
 
