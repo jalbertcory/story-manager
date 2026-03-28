@@ -13,6 +13,7 @@ from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover
 from ..services.web_novel import save_cover_from_url, scrape_cover
+from ..upload_validation import validate_image_upload
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,15 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
 
+    payload = await file.read()
+    validate_image_upload(payload, file.filename or "cover")
+
     covers_path = (LIBRARY_PATH / "covers").resolve()
     covers_path.mkdir(exist_ok=True)
     ext = Path(file.filename).suffix or ".jpg"
     save_path = covers_path / f"{book_id}{ext}"
     with open(save_path, "wb") as f:
-        f.write(await file.read())
+        f.write(payload)
 
     db_book.cover_path = str(save_path.relative_to(LIBRARY_PATH.parent))
     await db.commit()

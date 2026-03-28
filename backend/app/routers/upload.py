@@ -17,6 +17,7 @@ from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
 from ..services.library_paths import build_book_paths
 from ..services.series import SeriesBook, detect_series_from_books
+from ..upload_validation import read_and_validate_upload, validate_upload
 
 logger = logging.getLogger(__name__)
 
@@ -200,9 +201,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
 
 async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
-    if not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is missing a filename")
-    payload = await file.read()
+    payload = await read_and_validate_upload(file)
     return await _upload_epub_bytes(file.filename, payload, db)
 
 
@@ -229,7 +228,9 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
         try:
             if _is_zip_upload(file):
                 archive_name = file.filename or "upload.zip"
-                epub_entries = _extract_epubs_from_zip(archive_name, await file.read())
+                zip_payload = await file.read()
+                validate_upload(zip_payload, archive_name)
+                epub_entries = _extract_epubs_from_zip(archive_name, zip_payload)
                 if not epub_entries:
                     results.append(
                         EpubUploadResult(

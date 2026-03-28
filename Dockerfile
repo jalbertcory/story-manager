@@ -11,8 +11,8 @@ RUN chmod +x run-container.sh
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && /root/.local/bin/uv pip install --system --no-cache .
 
-RUN npm --prefix frontend ci
+RUN npm --prefix frontend ci && npm --prefix frontend run build
 
-EXPOSE 8000 5173
+EXPOSE 8000
 
 CMD ["./run-container.sh"]
