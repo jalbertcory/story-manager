@@ -144,9 +144,7 @@ class TestLogsCrud:
     async def test_count_book_logs(self, db):
         book = await _create_book(db, "Count Book", "Author")
         assert await crud.count_book_logs(db, book.id) == 0
-        await crud.create_book_log(
-            db, schemas.BookLogCreate(book_id=book.id, entry_type="added")
-        )
+        await crud.create_book_log(db, schemas.BookLogCreate(book_id=book.id, entry_type="added"))
         assert await crud.count_book_logs(db, book.id) == 1
 
     @pytest.mark.asyncio

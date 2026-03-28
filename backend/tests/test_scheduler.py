@@ -1,6 +1,6 @@
 """Tests for scheduler logic: next run calculation, last run anchor."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from backend.app.services.update_scheduler import (
     OVERDUE_RUN_DELAY,

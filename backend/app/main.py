@@ -83,6 +83,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
             content={"status": "unhealthy", "database": str(e)},
         )
 
+
 # Serve the Vite-built frontend in production. The build output lives at
 # frontend/dist/ (created by `npm run build` in the Dockerfile). When the
 # directory does not exist (local dev), we skip mounting and fall back to a
@@ -105,6 +106,7 @@ if _FRONTEND_DIST.is_dir():
         if full_path and file_path.is_file() and ".." not in full_path:
             return FileResponse(file_path)
         return FileResponse(_FRONTEND_DIST / "index.html")
+
 else:
 
     @app.get("/")
