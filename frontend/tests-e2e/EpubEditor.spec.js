@@ -32,7 +32,7 @@ const dragAndDropFile = async (
 };
 
 test("EpubEditor interactions", async ({ page }) => {
-  await page.goto("http://localhost:5173");
+  await page.goto("/");
 
   // Delete the book if it exists
   await page.request.delete("/api/books/by-title/Test Book");
