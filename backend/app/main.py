@@ -2,13 +2,21 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
 from .config import LIBRARY_PATH
-from .database import SessionLocal
+from .errors import install_error_handlers
+from .middleware import RequestIdMiddleware
+from .database import SessionLocal, get_db
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, reader, scheduler, storage, upload, web_novels
 from .services.web_import_queue import get_web_import_queue
@@ -44,6 +52,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Story Manager", lifespan=lifespan)
+install_error_handlers(app)
+app.add_middleware(RequestIdMiddleware)
 app.mount(
     "/library/covers",
     StaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
@@ -61,6 +71,44 @@ app.include_router(api_keys.router)
 app.include_router(reader.router)
 
 
-@app.get("/")
-def read_root() -> dict:
-    return {"message": "Welcome to the Story Manager API"}
+@app.get("/health")
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Health check endpoint for container orchestration."""
+    try:
+        await db.execute(text("SELECT 1"))
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "database": str(e)},
+        )
+
+
+# Serve the Vite-built frontend in production. The build output lives at
+# frontend/dist/ (created by `npm run build` in the Dockerfile). When the
+# directory does not exist (local dev), we skip mounting and fall back to a
+# simple JSON root response so the Vite dev server can be used via proxy.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    # Serve static assets (JS, CSS, images) at /assets/
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIST / "assets"), check_dir=False),
+        name="frontend-assets",
+    )
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(request: Request, full_path: str):
+        """Serve the SPA index.html for any non-API, non-reader path."""
+        # Try to serve the exact file first (e.g. favicon.ico, robots.txt)
+        file_path = _FRONTEND_DIST / full_path
+        if full_path and file_path.is_file() and ".." not in full_path:
+            return FileResponse(file_path)
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+else:
+
+    @app.get("/")
+    def read_root() -> dict:
+        return {"message": "Welcome to the Story Manager API"}

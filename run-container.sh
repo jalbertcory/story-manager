@@ -46,20 +46,20 @@ export DATABASE_URL="postgresql+psycopg://postgres@localhost:5432/story_manager?
 PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
 echo "--- Database migrations complete ---"
 
-# Start backend and frontend processes
-echo "--- Starting backend and frontend processes ---"
-PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 &
-BACKEND_PID=$!
+# Determine worker count: use WEB_CONCURRENCY env var, or default to 2
+# Note: APScheduler and the web import queue are designed for single-process use,
+# so we use 1 worker by default. Set WEB_CONCURRENCY=1 explicitly if needed.
+WORKERS=${WEB_CONCURRENCY:-1}
 
-npm --prefix frontend run dev -- --host 0.0.0.0 &
-FRONTEND_PID=$!
+# Start uvicorn serving both the API and the pre-built frontend
+echo "--- Starting application (workers=$WORKERS) ---"
+PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers "$WORKERS" &
+APP_PID=$!
 
-echo "--- Backend and frontend started ---"
-echo "Backend PID: $BACKEND_PID"
-echo "Frontend PID: $FRONTEND_PID"
+echo "--- Application started (PID: $APP_PID) ---"
 
 # Ensure all processes are cleaned up, including PostgreSQL
-trap "echo '--- Shutting down processes ---'; kill $BACKEND_PID $FRONTEND_PID; su postgres -c \"$PG_BIN/pg_ctl -D $PGDATA -m fast stop\"; echo '--- Processes shut down ---'" EXIT
+trap "echo '--- Shutting down processes ---'; kill $APP_PID; su postgres -c \"$PG_BIN/pg_ctl -D $PGDATA -m fast stop\"; echo '--- Processes shut down ---'" EXIT
 
 wait
 
