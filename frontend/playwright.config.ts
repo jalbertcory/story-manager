@@ -14,13 +14,6 @@ const webServer = process.env.CI
         reuseExistingServer: true,
         timeout: 120 * 1000,
       },
-      {
-        command: "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173",
-        url: "http://127.0.0.1:5173",
-        cwd: "..",
-        reuseExistingServer: true,
-        timeout: 120 * 1000,
-      },
     ];
 
 export default defineConfig({
@@ -38,7 +31,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: "http://localhost:5173",
+    baseURL: "http://localhost:8000",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "on-first-retry",

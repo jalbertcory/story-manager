@@ -43,9 +43,10 @@ def validate_file_size(payload: bytes, filename: str) -> None:
     """Raise 413 if payload exceeds the maximum upload size."""
     if len(payload) > MAX_UPLOAD_BYTES:
         size_mb = len(payload) / (1024 * 1024)
+        limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Uploaded file '{filename}' is {size_mb:.1f} MB, exceeding the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+            detail=f"Uploaded file '{filename}' is {size_mb:.1f} MB, exceeding the {limit_mb} MB limit.",
         )
 
 
