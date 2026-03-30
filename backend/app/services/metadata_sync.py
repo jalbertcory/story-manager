@@ -503,14 +503,6 @@ def _fetch_search_doc(
         return None, best_score, "No confident Open Library match found."
 
     return best_doc, best_score, None
-    if not docs:
-        return None, 0.0, "No Open Library match found."
-
-    best_doc, best_score = _select_best_doc(book, docs)
-    if best_doc is None or best_score < 0.72:
-        return None, best_score, "No confident Open Library match found."
-
-    return best_doc, best_score, None
 
 
 def _fetch_work_data(doc: dict[str, Any]) -> dict[str, Any]:

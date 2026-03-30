@@ -41,7 +41,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up Story Manager services.")
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
-        await crud.reset_running_metadata_sync_jobs(db)
     await _web_import_queue.start()
     if not is_test_app:
         await _metadata_sync_queue.start()

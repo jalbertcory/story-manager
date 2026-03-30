@@ -300,7 +300,7 @@ async def reject_metadata_match(
     db: AsyncSession,
     match_id: int,
 ) -> tuple[models.BookMetadataMatch, Optional[models.MetadataProposal]]:
-    match = await crud.get_metadata_match(match_id=match_id, db=db)
+    match = await crud.get_metadata_match(db, match_id)
     if match is None:
         raise ValueError("Metadata match not found")
 
