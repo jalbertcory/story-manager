@@ -183,7 +183,7 @@ The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Man
 1.  **Copy the `docker-compose.yml` file** to a new directory on your Unraid server (e.g., `/mnt/user/appdata/story-manager`).
 2.  **Review the Volume Mappings**: The `docker-compose.yml` uses relative paths for its volumes (`./config`). When you run it on Unraid, it will create the `config` directory inside the path you chose in step 1 (e.g., `/mnt/user/appdata/story-manager/config`). You don't need to edit the `docker-compose.yml` file if this is what you want.
 3.  **Start the Container**: From the directory containing `docker-compose.yml`, run `docker compose up -d`.
-4.  **Access Story Manager**: You can now access the web interface at `http://<UNRAID_HOST>:7890`.
+4.  **Access Story Manager**: You can now access the web interface at `http://<UNRAID_HOST>:8000`.
 
 ---
 
@@ -244,7 +244,7 @@ server {
         allow 10.0.0.0/8;
         allow 127.0.0.1;
         deny all;
-        proxy_pass http://127.0.0.1:7890;
+        proxy_pass http://127.0.0.1:8000;
     }
 }
 ```
