@@ -858,6 +858,11 @@
   font-size: 0.9rem;
   color: var(--text);
 }
+.settings-section > textarea {
+  width: 100%;
+  font-size: 0.9rem;
+  color: var(--text);
+}
 
 .settings-actions {
   display: flex;
@@ -869,6 +874,196 @@
 }
 .settings-actions h3 {
   display: none;
+}
+
+/* ─── Actions bar ───────────────────────────────────────── */
+.actions-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.actions-bar h3 {
+  display: none;
+}
+.actions-primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.actions-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.actions-hint strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.actions-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Metadata row with cover aside ─────────────────────── */
+.settings-row-with-cover {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+.settings-fields {
+  flex: 1;
+  min-width: 0;
+}
+.settings-cover-aside {
+  flex-shrink: 0;
+  width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+.settings-cover-img {
+  width: 140px;
+  height: auto;
+  max-height: 210px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.settings-cover-placeholder {
+  width: 140px;
+  height: 180px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.settings-cover-aside button {
+  width: 100%;
+}
+.cover-url-row {
+  display: flex;
+  gap: 0.3rem;
+  width: 100%;
+}
+.cover-url-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  padding: 0.25em 0.5em;
+}
+.cover-url-row button {
+  width: auto !important;
+}
+
+@media (max-width: 540px) {
+  .settings-row-with-cover {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .settings-cover-aside {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .settings-cover-img {
+    width: 80px;
+    max-height: 120px;
+  }
+  .settings-cover-placeholder {
+    width: 80px;
+    height: 100px;
+  }
+  .settings-cover-aside button {
+    width: auto;
+  }
+  .cover-url-row {
+    flex: 1;
+  }
+}
+
+/* ─── Field rows (side-by-side inputs) ──────────────────── */
+.field-row {
+  display: flex;
+  gap: 0.75rem;
+}
+.field-row-grow {
+  flex: 1;
+  min-width: 0;
+}
+.field-row-shrink {
+  width: 6rem;
+  flex-shrink: 0;
+}
+.field-row-equal {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .field-row {
+    flex-direction: column;
+    gap: 0;
+  }
+  .field-row-shrink {
+    width: 100%;
+  }
+}
+
+/* ─── Collapsible sections ──────────────────────────────── */
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.collapsible-header h3 {
+  flex: 1;
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.collapsible-header:hover h3 {
+  color: var(--accent);
+}
+.collapse-toggle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.25rem;
+}
+.collapsible-body {
+  padding-top: 0.75rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.field-count {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  padding: 0.1em 0.5em;
+  border-radius: 3px;
+  margin-left: 0.35rem;
+}
+
+/* ─── Source info ────────────────────────────────────────── */
+.source-info {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.source-link {
+  font-size: 0.82rem;
+  color: var(--accent);
+  word-break: break-all;
 }
 
 /* ─── Selector Pills ─────────────────────────────────────── */
