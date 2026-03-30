@@ -122,6 +122,7 @@ function BookSettings({ book, onBack }) {
   const [previewedChapter, setPreviewedChapter] = useState(null);
   const [chapterSearch, setChapterSearch] = useState("");
   const [chaptersExpanded, setChaptersExpanded] = useState(false);
+  const [identifiersExpanded, setIdentifiersExpanded] = useState(false);
 
   useEffect(() => {
     setTitle(book.title || "");
@@ -141,6 +142,7 @@ function BookSettings({ book, onBack }) {
     setPreviewResult(null);
     setChapterSearch("");
     setChaptersExpanded(false);
+    setIdentifiersExpanded(false);
   }, [book]);
 
   useEffect(() => {
@@ -350,230 +352,250 @@ function BookSettings({ book, onBack }) {
 
       <section className="settings-section">
         <h3>Metadata</h3>
-        <label>
-          Title
-          <input value={title} onChange={(e) => setTitle(e.target.value)} />
-        </label>
-        <label>
-          Author
-          <input value={author} onChange={(e) => setAuthor(e.target.value)} />
-        </label>
-        <label>
-          Series
-          <input
-            list="series-options"
-            value={series}
-            onChange={(e) => setSeries(e.target.value)}
-            placeholder="Leave blank if none"
-          />
-          <datalist id="series-options">
-            {allSeries.map((s) => (
-              <option key={s} value={s} />
-            ))}
-          </datalist>
-        </label>
-        <label>
-          Series Order
-          <input
-            type="number"
-            step="0.01"
-            value={seriesIndex}
-            onChange={(e) => setSeriesIndex(e.target.value)}
-            placeholder="e.g. 1, 2, or 2.5"
-          />
-        </label>
-        <label>
-          Genre Tags
-          <input
-            value={(book.genre_tags || []).join(", ")}
-            readOnly
-            placeholder="No synced genre tags yet"
-          />
-        </label>
-        {book.metadata_synced_at && (
-          <p className="hint">
-            Synced from {book.metadata_sync_source || "online metadata"} on {new Date(book.metadata_synced_at).toLocaleString()}.
-          </p>
-        )}
-        <div className="settings-actions">
-          <button
-            type="button"
-            onClick={() => metadataSyncMutation.mutate()}
-            disabled={metadataSyncMutation.isPending}
-          >
-            {metadataSyncMutation.isPending ? "Queueing…" : "Recheck Online Metadata"}
-          </button>
+        <div className="settings-row-with-cover">
+          <div className="settings-fields">
+            <label>
+              Title
+              <input value={title} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <label>
+              Author
+              <input value={author} onChange={(e) => setAuthor(e.target.value)} />
+            </label>
+            <div className="field-row">
+              <label className="field-row-grow">
+                Series
+                <input
+                  list="series-options"
+                  value={series}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="Leave blank if none"
+                />
+                <datalist id="series-options">
+                  {allSeries.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="field-row-shrink">
+                Order
+                <input
+                  type="number"
+                  step="0.01"
+                  value={seriesIndex}
+                  onChange={(e) => setSeriesIndex(e.target.value)}
+                  placeholder="e.g. 2.5"
+                />
+              </label>
+            </div>
+            <label>
+              Genre Tags
+              <input
+                value={(book.genre_tags || []).join(", ")}
+                readOnly
+                placeholder="No synced genre tags yet"
+              />
+            </label>
+            {book.metadata_synced_at && (
+              <p className="hint">
+                Synced from {book.metadata_sync_source || "online metadata"} on {new Date(book.metadata_synced_at).toLocaleString()}.
+              </p>
+            )}
+            <div className="settings-actions">
+              <button
+                type="button"
+                onClick={() => metadataSyncMutation.mutate()}
+                disabled={metadataSyncMutation.isPending}
+              >
+                {metadataSyncMutation.isPending ? "Queueing…" : "Recheck Online Metadata"}
+              </button>
+            </div>
+            {metadataSyncMutation.isSuccess && (
+              <p className="hint">Metadata recheck queued.</p>
+            )}
+          </div>
+          <div className="settings-cover-aside">
+            {book.cover_path ? (
+              <img
+                src={getApiCoverUrl(book.id)}
+                alt="Cover"
+                className="settings-cover-img"
+              />
+            ) : (
+              <div className="settings-cover-placeholder">No cover</div>
+            )}
+            <input
+              ref={coverInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp"
+              style={{ display: "none" }}
+              onChange={(e) =>
+                e.target.files[0] && coverMutation.mutate(e.target.files[0])
+              }
+            />
+            <button
+              className="btn-sm"
+              onClick={() => coverInputRef.current.click()}
+              disabled={coverMutation.isPending || coverUrlMutation.isPending}
+            >
+              {coverMutation.isPending ? "Uploading…" : book.cover_path ? "Replace" : "Upload"}
+            </button>
+            {book.immutable_path && (
+              <button
+                className="btn-sm btn-secondary"
+                onClick={() => retryCoverMutation.mutate()}
+                disabled={retryCoverMutation.isPending || coverMutation.isPending || coverUrlMutation.isPending}
+              >
+                {retryCoverMutation.isPending ? "Retrying…" : "Re-extract"}
+              </button>
+            )}
+            <div className="cover-url-row">
+              <input
+                type="text"
+                placeholder="Image URL…"
+                value={coverUrl}
+                onChange={(e) => setCoverUrl(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && coverUrl.trim() && coverUrlMutation.mutate(coverUrl.trim())
+                }
+              />
+              <button
+                className="btn-sm"
+                onClick={() => coverUrlMutation.mutate(coverUrl.trim())}
+                disabled={!coverUrl.trim() || coverUrlMutation.isPending || coverMutation.isPending}
+              >
+                {coverUrlMutation.isPending ? "…" : "Set"}
+              </button>
+            </div>
+            {coverMutation.isError && (
+              <p className="error">{coverMutation.error.message}</p>
+            )}
+            {coverUrlMutation.isError && (
+              <p className="error">{coverUrlMutation.error.message}</p>
+            )}
+            {retryCoverMutation.isError && (
+              <p className="error">{retryCoverMutation.error.message}</p>
+            )}
+          </div>
         </div>
-        {metadataSyncMutation.isSuccess && (
-          <p className="hint">Metadata recheck queued.</p>
-        )}
-        <label>
-          ISBN-10
-          <input
-            value={isbn10}
-            onChange={(e) => setIsbn10(e.target.value)}
-            placeholder="Manual ISBN-10"
-          />
-        </label>
-        <label>
-          ISBN-13
-          <input
-            value={isbn13}
-            onChange={(e) => setIsbn13(e.target.value)}
-            placeholder="Manual ISBN-13"
-          />
-        </label>
-        <label>
-          Open Library Work Key
-          <input
-            value={openLibraryWorkKey}
-            onChange={(e) => setOpenLibraryWorkKey(e.target.value)}
-            placeholder="/works/OL123W"
-          />
-        </label>
-        <label>
-          Open Library Edition Key
-          <input
-            value={openLibraryEditionKey}
-            onChange={(e) => setOpenLibraryEditionKey(e.target.value)}
-            placeholder="OL123M"
-          />
-        </label>
-        <label>
-          Open Library Author Key
-          <input
-            value={openLibraryAuthorKey}
-            onChange={(e) => setOpenLibraryAuthorKey(e.target.value)}
-            placeholder="OL123A"
-          />
-        </label>
-        <label>
-          Other Identifiers (JSON)
-          <textarea
-            value={otherRemoteIdsJson}
-            onChange={(e) => setOtherRemoteIdsJson(e.target.value)}
-            placeholder={'{\n  "goodreads_id": "12345"\n}'}
-            rows={4}
-          />
-        </label>
-        {identifierError && (
-          <p className="error">{identifierError}</p>
-        )}
-        <label>
-          Notes
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Personal notes about this book"
-            rows={4}
-          />
-        </label>
+      </section>
+
+      <section className="settings-section">
+        <h3>Notes</h3>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Personal notes about this book"
+          rows={3}
+        />
       </section>
 
       {(book.source_url || book.source_type === "web") && (
         <section className="settings-section">
           <h3>Source</h3>
-          <p className="hint">
-            Source type: <strong>{book.source_type}</strong>
-          </p>
           {book.source_url ? (
-            <>
-              <label>
-                Source URL
-                <input value={book.source_url} readOnly />
-              </label>
-              <p className="hint">
-                <a href={book.source_url} target="_blank" rel="noreferrer">
-                  Open source URL
-                </a>
-              </p>
-            </>
+            <div className="source-info">
+              <span className="badge-web">{book.source_type}</span>
+              <a href={book.source_url} target="_blank" rel="noreferrer" className="source-link">
+                {book.source_url}
+              </a>
+            </div>
           ) : (
             <p className="hint">No source URL is currently attached.</p>
           )}
           {book.source_type === "web" && (
-            <>
+            <div className="settings-actions" style={{ marginTop: "0.5rem" }}>
               <button
                 type="button"
-                className="btn-danger"
+                className="btn-danger btn-sm"
                 onClick={handleDetachSource}
                 disabled={isBusy || !canDetachWebMarker}
               >
                 {detachSourceMutation.isPending
-                  ? "Removing Web Marker..."
+                  ? "Removing…"
                   : "Remove Web Marker"}
               </button>
               {!canDetachWebMarker && (
-                <p className="hint">
-                  This marker can only be removed after the book has EPUB files.
-                </p>
+                <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
+                  Requires EPUB files first
+                </span>
               )}
-            </>
+            </div>
           )}
         </section>
       )}
 
       <section className="settings-section">
-        <h3>Cover</h3>
-        {book.cover_path && (
-          <img
-            src={getApiCoverUrl(book.id)}
-            alt="Cover"
-            className="book-cover"
-            style={{ maxHeight: 300, width: "auto" }}
-          />
-        )}
-        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
-          <input
-            ref={coverInputRef}
-            type="file"
-            accept=".jpg,.jpeg,.png,.webp"
-            style={{ display: "none" }}
-            onChange={(e) =>
-              e.target.files[0] && coverMutation.mutate(e.target.files[0])
-            }
-          />
-          <button
-            onClick={() => coverInputRef.current.click()}
-            disabled={coverMutation.isPending || coverUrlMutation.isPending}
-          >
-            {coverMutation.isPending ? "Uploading…" : book.cover_path ? "Replace Cover" : "Upload Cover"}
-          </button>
-          {book.immutable_path && (
-            <button
-              onClick={() => retryCoverMutation.mutate()}
-              disabled={retryCoverMutation.isPending || coverMutation.isPending || coverUrlMutation.isPending}
-            >
-              {retryCoverMutation.isPending ? "Retrying…" : "Re-extract Cover"}
-            </button>
-          )}
+        <div className="collapsible-header" onClick={() => setIdentifiersExpanded((e) => !e)}>
+          <h3>
+            Identifiers
+            {(isbn10 || isbn13 || openLibraryWorkKey) && (
+              <span className="field-count">
+                {[isbn10, isbn13, openLibraryWorkKey, openLibraryEditionKey, openLibraryAuthorKey].filter(Boolean).length} set
+              </span>
+            )}
+          </h3>
+          <span className="collapse-toggle">{identifiersExpanded ? "▲" : "▼"}</span>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-          <input
-            type="text"
-            placeholder="Or paste an image URL…"
-            value={coverUrl}
-            onChange={(e) => setCoverUrl(e.target.value)}
-            onKeyDown={(e) =>
-              e.key === "Enter" && coverUrl.trim() && coverUrlMutation.mutate(coverUrl.trim())
-            }
-            style={{ flex: 1 }}
-          />
-          <button
-            onClick={() => coverUrlMutation.mutate(coverUrl.trim())}
-            disabled={!coverUrl.trim() || coverUrlMutation.isPending || coverMutation.isPending}
-          >
-            {coverUrlMutation.isPending ? "Fetching…" : "Set from URL"}
-          </button>
-        </div>
-        {coverMutation.isError && (
-          <p className="error">{coverMutation.error.message}</p>
-        )}
-        {coverUrlMutation.isError && (
-          <p className="error">{coverUrlMutation.error.message}</p>
-        )}
-        {retryCoverMutation.isError && (
-          <p className="error">{retryCoverMutation.error.message}</p>
+        {identifiersExpanded && (
+          <div className="collapsible-body">
+            <div className="field-row">
+              <label className="field-row-equal">
+                ISBN-10
+                <input
+                  value={isbn10}
+                  onChange={(e) => setIsbn10(e.target.value)}
+                  placeholder="Manual ISBN-10"
+                />
+              </label>
+              <label className="field-row-equal">
+                ISBN-13
+                <input
+                  value={isbn13}
+                  onChange={(e) => setIsbn13(e.target.value)}
+                  placeholder="Manual ISBN-13"
+                />
+              </label>
+            </div>
+            <label>
+              Open Library Work Key
+              <input
+                value={openLibraryWorkKey}
+                onChange={(e) => setOpenLibraryWorkKey(e.target.value)}
+                placeholder="/works/OL123W"
+              />
+            </label>
+            <div className="field-row">
+              <label className="field-row-equal">
+                OL Edition Key
+                <input
+                  value={openLibraryEditionKey}
+                  onChange={(e) => setOpenLibraryEditionKey(e.target.value)}
+                  placeholder="OL123M"
+                />
+              </label>
+              <label className="field-row-equal">
+                OL Author Key
+                <input
+                  value={openLibraryAuthorKey}
+                  onChange={(e) => setOpenLibraryAuthorKey(e.target.value)}
+                  placeholder="OL123A"
+                />
+              </label>
+            </div>
+            <label>
+              Other Identifiers (JSON)
+              <textarea
+                value={otherRemoteIdsJson}
+                onChange={(e) => setOtherRemoteIdsJson(e.target.value)}
+                placeholder={'{\n  "goodreads_id": "12345"\n}'}
+                rows={3}
+              />
+            </label>
+            {identifierError && (
+              <p className="error">{identifierError}</p>
+            )}
+          </div>
         )}
       </section>
 
@@ -726,26 +748,33 @@ function BookSettings({ book, onBack }) {
         )}
       </section>
 
-      <section className="settings-section settings-actions">
-        <button onClick={handleSave} disabled={isBusy}>
-          {saveMutation.isPending ? "Saving..." : "Save"}
-        </button>
-        <button onClick={handleProcess} disabled={isBusy}>
-          {processMutation.isPending ? "Processing..." : "Save & Re-process"}
-        </button>
-        {book.source_type === "web" && (
-          <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
-            {refreshMutation.isPending
-              ? "Refreshing..."
-              : "Refresh from Source"}
+      <section className="settings-section actions-bar">
+        <div className="actions-primary">
+          <button className="btn-primary" onClick={handleSave} disabled={isBusy}>
+            {saveMutation.isPending ? "Saving..." : "Save Metadata"}
           </button>
-        )}
-        <a href={`/api/books/${book.id}/download`} download className="btn">
-          Download EPUB
-        </a>
-        <button className="btn-danger" onClick={handleDelete} disabled={isBusy}>
-          Delete Book
-        </button>
+          <button onClick={handleProcess} disabled={isBusy} title="Save changes and rebuild the EPUB file with current cleaning rules">
+            {processMutation.isPending ? "Rebuilding..." : "Save & Rebuild EPUB"}
+          </button>
+          {book.source_type === "web" && (
+            <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
+              {refreshMutation.isPending
+                ? "Refreshing..."
+                : "Refresh from Source"}
+            </button>
+          )}
+        </div>
+        <p className="hint actions-hint">
+          <strong>Save Metadata</strong> updates the database only. <strong>Save & Rebuild EPUB</strong> also regenerates the downloadable file with your cleaning rules applied.
+        </p>
+        <div className="actions-secondary">
+          <a href={`/api/books/${book.id}/download`} download className="btn btn-secondary btn-sm">
+            Download EPUB
+          </a>
+          <button className="btn-danger btn-sm" onClick={handleDelete} disabled={isBusy}>
+            Delete Book
+          </button>
+        </div>
       </section>
 
       {saveMutation.isError && (
