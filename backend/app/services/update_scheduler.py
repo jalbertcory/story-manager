@@ -9,6 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .. import crud, models
 from ..database import SessionLocal
+from .metadata_jobs import queue_stale_metadata_sync
 from .web_novel import update_web_novels
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 WEB_NOVEL_UPDATE_JOB_ID = "update_web_novels"
 WEB_NOVEL_UPDATE_INTERVAL_HOURS = 24
 WEB_NOVEL_UPDATE_INTERVAL = timedelta(hours=WEB_NOVEL_UPDATE_INTERVAL_HOURS)
+METADATA_STALE_SCAN_JOB_ID = "enqueue_stale_metadata_sync"
+METADATA_STALE_SCAN_INTERVAL_HOURS = 24
+METADATA_STALE_SCAN_INTERVAL = timedelta(hours=METADATA_STALE_SCAN_INTERVAL_HOURS)
+METADATA_SYNC_STALE_AFTER_DAYS = 30
 OVERDUE_RUN_DELAY = timedelta(seconds=5)
 
 _run_lock = asyncio.Lock()
@@ -40,8 +45,16 @@ def get_schedule_label() -> str:
     return f"Every {WEB_NOVEL_UPDATE_INTERVAL_HOURS} hours"
 
 
+def get_metadata_schedule_label() -> str:
+    return f"Check for stale metadata every {METADATA_STALE_SCAN_INTERVAL_HOURS} hours"
+
+
 def get_scheduled_job():
     return _scheduler.get_job(WEB_NOVEL_UPDATE_JOB_ID)
+
+
+def get_metadata_scheduled_job():
+    return _scheduler.get_job(METADATA_STALE_SCAN_JOB_ID)
 
 
 def is_update_running() -> bool:
@@ -92,6 +105,19 @@ async def schedule_next_web_novel_update() -> datetime:
     return next_run_at
 
 
+async def schedule_next_metadata_recheck(now: Optional[datetime] = None) -> datetime:
+    next_run_at = (_as_utc(now) or datetime.now(timezone.utc)) + METADATA_STALE_SCAN_INTERVAL
+    _scheduler.add_job(
+        run_metadata_recheck,
+        "date",
+        id=METADATA_STALE_SCAN_JOB_ID,
+        replace_existing=True,
+        run_date=next_run_at,
+    )
+    logger.info("Next metadata stale-check scheduled for %s.", next_run_at.isoformat())
+    return next_run_at
+
+
 async def run_web_novel_update(trigger: str = "scheduled") -> bool:
     if _run_lock.locked():
         logger.info("Skipping %s web novel update because another run is already in progress.", trigger)
@@ -104,3 +130,13 @@ async def run_web_novel_update(trigger: str = "scheduled") -> bool:
             return True
         finally:
             await schedule_next_web_novel_update()
+
+
+async def run_metadata_recheck(trigger: str = "scheduled") -> bool:
+    logger.info("Starting %s metadata stale-check.", trigger)
+    try:
+        async with SessionLocal() as db:
+            job = await queue_stale_metadata_sync(db, stale_after_days=METADATA_SYNC_STALE_AFTER_DAYS)
+        return job is not None
+    finally:
+        await schedule_next_metadata_recheck()

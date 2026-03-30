@@ -100,7 +100,7 @@ describe("App", () => {
     });
 
     fireEvent.change(
-      screen.getByPlaceholderText("Search by title, author, or series"),
+      screen.getByPlaceholderText("Search by title, author, series, or tag"),
       { target: { value: "Author B" } },
     );
     await new Promise((resolve) => window.setTimeout(resolve, 350));

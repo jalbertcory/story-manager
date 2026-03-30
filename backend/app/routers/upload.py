@@ -16,6 +16,7 @@ from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
 from ..services.library_paths import build_book_paths
+from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import SeriesBook, detect_series_from_books
 from ..upload_validation import read_and_validate_upload, validate_upload
 
@@ -212,7 +213,9 @@ async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
 )
 async def upload_epub(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
     """Uploads a single EPUB file, extracts metadata, and adds it to the database."""
-    return await _upload_epub_file(file, db)
+    book = await _upload_epub_file(file, db)
+    await queue_metadata_sync_job(db, trigger="new_book", book_ids=[book.id])
+    return book
 
 
 @router.post("/api/books/upload_epubs", response_model=List[EpubUploadResult])
@@ -280,6 +283,9 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
             logger.info(
                 f"Auto-detected series for {len(updated)} books: " + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
             )
+
+    if created_books:
+        await queue_metadata_sync_job(db, trigger="new_book", book_ids=[book.id for book in created_books])
 
     return results
 

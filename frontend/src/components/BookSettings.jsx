@@ -9,6 +9,7 @@ import {
   getMatchedConfigs,
   previewCleaning,
   processBook,
+  queueMetadataSync,
   refreshBook,
   retryBookCover,
   setBookCoverUrl,
@@ -26,6 +27,31 @@ const fetchMatchedConfig = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
   return getMatchedConfigs(bookId);
 };
+
+const COMMON_REMOTE_ID_KEYS = [
+  "isbn_10",
+  "isbn_13",
+  "open_library_work_key",
+  "open_library_edition_key",
+  "open_library_author_key",
+];
+
+function splitRemoteIds(remoteIds) {
+  const source = remoteIds && typeof remoteIds === "object" ? remoteIds : {};
+  const common = {};
+  COMMON_REMOTE_ID_KEYS.forEach((key) => {
+    common[key] = source[key] || "";
+  });
+
+  const extras = Object.fromEntries(
+    Object.entries(source).filter(([key]) => !COMMON_REMOTE_ID_KEYS.includes(key)),
+  );
+
+  return {
+    common,
+    extrasJson: Object.keys(extras).length ? JSON.stringify(extras, null, 2) : "",
+  };
+}
 
 function SelectorPills({ selectors, onChange }) {
   const [inputValue, setInputValue] = useState("");
@@ -79,6 +105,13 @@ function BookSettings({ book, onBack }) {
     book.series_index != null ? String(book.series_index) : "",
   );
   const [notes, setNotes] = useState(book.notes || "");
+  const [isbn10, setIsbn10] = useState(book.metadata_remote_ids?.isbn_10 || "");
+  const [isbn13, setIsbn13] = useState(book.metadata_remote_ids?.isbn_13 || "");
+  const [openLibraryWorkKey, setOpenLibraryWorkKey] = useState(book.metadata_remote_ids?.open_library_work_key || "");
+  const [openLibraryEditionKey, setOpenLibraryEditionKey] = useState(book.metadata_remote_ids?.open_library_edition_key || "");
+  const [openLibraryAuthorKey, setOpenLibraryAuthorKey] = useState(book.metadata_remote_ids?.open_library_author_key || "");
+  const [otherRemoteIdsJson, setOtherRemoteIdsJson] = useState(splitRemoteIds(book.metadata_remote_ids).extrasJson);
+  const [identifierError, setIdentifierError] = useState("");
   const [removedChapters, setRemovedChapters] = useState(
     book.removed_chapters || [],
   );
@@ -96,6 +129,13 @@ function BookSettings({ book, onBack }) {
     setSeries(book.series || "");
     setSeriesIndex(book.series_index != null ? String(book.series_index) : "");
     setNotes(book.notes || "");
+    setIsbn10(book.metadata_remote_ids?.isbn_10 || "");
+    setIsbn13(book.metadata_remote_ids?.isbn_13 || "");
+    setOpenLibraryWorkKey(book.metadata_remote_ids?.open_library_work_key || "");
+    setOpenLibraryEditionKey(book.metadata_remote_ids?.open_library_edition_key || "");
+    setOpenLibraryAuthorKey(book.metadata_remote_ids?.open_library_author_key || "");
+    setOtherRemoteIdsJson(splitRemoteIds(book.metadata_remote_ids).extrasJson);
+    setIdentifierError("");
     setRemovedChapters(book.removed_chapters || []);
     setContentSelectors(book.content_selectors || []);
     setPreviewResult(null);
@@ -191,23 +231,60 @@ function BookSettings({ book, onBack }) {
     },
   });
 
-  const getUpdatedFields = () => ({
-    title,
-    author,
-    series: series.trim() || null,
-    series_index: seriesIndex.trim() ? Number.parseFloat(seriesIndex) : null,
-    removed_chapters: removedChapters,
-    content_selectors: contentSelectors,
-    notes: notes || null,
+  const metadataSyncMutation = useMutation({
+    mutationFn: () => queueMetadataSync([book.id], "manual"),
   });
 
+  const getUpdatedFields = () => {
+    let extraRemoteIds = {};
+    if (otherRemoteIdsJson.trim()) {
+      try {
+        const parsed = JSON.parse(otherRemoteIdsJson);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setIdentifierError("Other identifiers must be a JSON object.");
+          return null;
+        }
+        extraRemoteIds = parsed;
+      } catch {
+        setIdentifierError("Other identifiers must be valid JSON.");
+        return null;
+      }
+    }
+
+    setIdentifierError("");
+
+    const metadataRemoteIds = {
+      ...extraRemoteIds,
+      ...(isbn10.trim() ? { isbn_10: isbn10.trim() } : {}),
+      ...(isbn13.trim() ? { isbn_13: isbn13.trim() } : {}),
+      ...(openLibraryWorkKey.trim() ? { open_library_work_key: openLibraryWorkKey.trim() } : {}),
+      ...(openLibraryEditionKey.trim() ? { open_library_edition_key: openLibraryEditionKey.trim() } : {}),
+      ...(openLibraryAuthorKey.trim() ? { open_library_author_key: openLibraryAuthorKey.trim() } : {}),
+    };
+
+    return {
+      title,
+      author,
+      series: series.trim() || null,
+      series_index: seriesIndex.trim() ? Number.parseFloat(seriesIndex) : null,
+      metadata_remote_ids: Object.keys(metadataRemoteIds).length ? metadataRemoteIds : null,
+      removed_chapters: removedChapters,
+      content_selectors: contentSelectors,
+      notes: notes || null,
+    };
+  };
+
   const handleSave = () => {
-    saveMutation.mutate(getUpdatedFields());
+    const payload = getUpdatedFields();
+    if (!payload) return;
+    saveMutation.mutate(payload);
   };
 
   const handleProcess = async () => {
     try {
-      await saveMutation.mutateAsync(getUpdatedFields());
+      const payload = getUpdatedFields();
+      if (!payload) return;
+      await saveMutation.mutateAsync(payload);
       await processMutation.mutateAsync();
     } catch (err) {
       console.error("Save or process failed", err);
@@ -305,6 +382,83 @@ function BookSettings({ book, onBack }) {
             placeholder="e.g. 1, 2, or 2.5"
           />
         </label>
+        <label>
+          Genre Tags
+          <input
+            value={(book.genre_tags || []).join(", ")}
+            readOnly
+            placeholder="No synced genre tags yet"
+          />
+        </label>
+        {book.metadata_synced_at && (
+          <p className="hint">
+            Synced from {book.metadata_sync_source || "online metadata"} on {new Date(book.metadata_synced_at).toLocaleString()}.
+          </p>
+        )}
+        <div className="settings-actions">
+          <button
+            type="button"
+            onClick={() => metadataSyncMutation.mutate()}
+            disabled={metadataSyncMutation.isPending}
+          >
+            {metadataSyncMutation.isPending ? "Queueing…" : "Recheck Online Metadata"}
+          </button>
+        </div>
+        {metadataSyncMutation.isSuccess && (
+          <p className="hint">Metadata recheck queued.</p>
+        )}
+        <label>
+          ISBN-10
+          <input
+            value={isbn10}
+            onChange={(e) => setIsbn10(e.target.value)}
+            placeholder="Manual ISBN-10"
+          />
+        </label>
+        <label>
+          ISBN-13
+          <input
+            value={isbn13}
+            onChange={(e) => setIsbn13(e.target.value)}
+            placeholder="Manual ISBN-13"
+          />
+        </label>
+        <label>
+          Open Library Work Key
+          <input
+            value={openLibraryWorkKey}
+            onChange={(e) => setOpenLibraryWorkKey(e.target.value)}
+            placeholder="/works/OL123W"
+          />
+        </label>
+        <label>
+          Open Library Edition Key
+          <input
+            value={openLibraryEditionKey}
+            onChange={(e) => setOpenLibraryEditionKey(e.target.value)}
+            placeholder="OL123M"
+          />
+        </label>
+        <label>
+          Open Library Author Key
+          <input
+            value={openLibraryAuthorKey}
+            onChange={(e) => setOpenLibraryAuthorKey(e.target.value)}
+            placeholder="OL123A"
+          />
+        </label>
+        <label>
+          Other Identifiers (JSON)
+          <textarea
+            value={otherRemoteIdsJson}
+            onChange={(e) => setOtherRemoteIdsJson(e.target.value)}
+            placeholder={'{\n  "goodreads_id": "12345"\n}'}
+            rows={4}
+          />
+        </label>
+        {identifierError && (
+          <p className="error">{identifierError}</p>
+        )}
         <label>
           Notes
           <textarea

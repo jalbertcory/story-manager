@@ -66,3 +66,20 @@ from .api_keys import (  # noqa: F401
     get_api_keys,
     revoke_api_key,
 )
+from .metadata import (  # noqa: F401
+    complete_metadata_sync_job,
+    create_metadata_sync_job,
+    fail_metadata_sync_job,
+    get_latest_metadata_sync_job,
+    get_metadata_inbox_entries,
+    get_metadata_match,
+    get_metadata_match_by_book_id,
+    get_metadata_proposal,
+    get_metadata_proposal_by_book_id,
+    get_metadata_sync_job,
+    get_pending_metadata_sync_jobs,
+    get_stale_books_for_metadata_sync,
+    mark_metadata_sync_job_progress,
+    mark_metadata_sync_job_running,
+    reset_running_metadata_sync_jobs,
+)

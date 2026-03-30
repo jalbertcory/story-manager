@@ -130,7 +130,7 @@ function App() {
             <div className="search-controls">
               <input
                 type="text"
-                placeholder="Search by title, author, or series"
+                placeholder="Search by title, author, series, or tag"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />

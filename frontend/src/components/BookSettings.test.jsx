@@ -200,4 +200,157 @@ describe("BookSettings", () => {
       expect(onBack).toHaveBeenCalled();
     });
   });
+
+  it("shows synced genre tags in metadata", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/books/9/chapters" || url === "/api/books/9/matched-config" || url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+
+    renderWithClient(
+      <BookSettings
+        book={{
+          id: 9,
+          title: "Tagged Book",
+          author: "Author",
+          series: "Saga",
+          series_index: 1,
+          genre_tags: ["Fantasy", "Adventure"],
+          metadata_sync_source: "open_library",
+          metadata_synced_at: "2026-03-28T10:00:00Z",
+          source_type: "epub",
+          source_url: null,
+          immutable_path: "library/original.epub",
+          current_path: "library/current.epub",
+          removed_chapters: [],
+          content_selectors: [],
+          created_at: "2026-03-17T00:00:00Z",
+          content_updated_at: "2026-03-17T00:00:00Z",
+          content_version: 1,
+        }}
+        onBack={() => {}}
+      />,
+    );
+
+    expect(await screen.findByDisplayValue("Fantasy, Adventure")).toBeInTheDocument();
+    expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
+  });
+
+  it("saves manual metadata identifiers", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/10/chapters" || url === "/api/books/10/matched-config") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(["Saga"]),
+        });
+      }
+      if (url === "/api/books/10" && options?.method === "PUT") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              id: 10,
+              title: "Identifier Book",
+              author: "Author",
+              series: "Saga",
+              series_index: 1,
+              source_type: "epub",
+              source_url: null,
+              immutable_path: "library/original.epub",
+              current_path: "library/current.epub",
+              metadata_remote_ids: {
+                isbn_13: "9780316339158",
+                open_library_work_key: "/works/OL500W",
+                goodreads_id: "12345",
+              },
+              removed_chapters: [],
+              content_selectors: [],
+              created_at: "2026-03-17T00:00:00Z",
+              content_updated_at: "2026-03-17T00:00:00Z",
+              content_version: 1,
+              updated_at: null,
+              cover_path: null,
+              notes: null,
+              master_word_count: null,
+              current_word_count: null,
+              download_status: null,
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(
+      <BookSettings
+        book={{
+          id: 10,
+          title: "Identifier Book",
+          author: "Author",
+          series: "Saga",
+          series_index: 1,
+          source_type: "epub",
+          source_url: null,
+          immutable_path: "library/original.epub",
+          current_path: "library/current.epub",
+          metadata_remote_ids: null,
+          removed_chapters: [],
+          content_selectors: [],
+          created_at: "2026-03-17T00:00:00Z",
+          content_updated_at: "2026-03-17T00:00:00Z",
+          content_version: 1,
+        }}
+        onBack={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Manual ISBN-13"), {
+      target: { value: "9780316339158" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("/works/OL123W"), {
+      target: { value: "/works/OL500W" },
+    });
+    fireEvent.change(screen.getByLabelText("Other Identifiers (JSON)"), {
+      target: { value: '{\n  "goodreads_id": "12345"\n}' },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, options]) => url === "/api/books/10" && options?.method === "PUT");
+      expect(saveCall).toBeTruthy();
+      expect(saveCall[1].headers).toEqual({ "Content-Type": "application/json" });
+      expect(JSON.parse(saveCall[1].body)).toEqual({
+        title: "Identifier Book",
+        author: "Author",
+        series: "Saga",
+        series_index: 1,
+        metadata_remote_ids: {
+          isbn_13: "9780316339158",
+          open_library_work_key: "/works/OL500W",
+          goodreads_id: "12345",
+        },
+        removed_chapters: [],
+        content_selectors: [],
+        notes: null,
+      });
+    });
+  });
 });
