@@ -10,6 +10,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_epub_word_and_chapter_count
+from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.web_import_queue import get_web_import_queue
 from ..services.web_novel import download_web_novel
 
@@ -97,6 +98,7 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     await db.refresh(updated_book)
 
     await epub_editor.apply_book_cleaning(updated_book, db)
+    await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
     return updated_book
 
 

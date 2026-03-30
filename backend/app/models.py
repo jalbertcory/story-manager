@@ -17,6 +17,10 @@ class Book(Base):
     author = Column(String, index=True)
     series = Column(String, nullable=True, index=True)
     series_index = Column(Numeric(6, 2), nullable=True)
+    genre_tags = Column(JSON, nullable=True)
+    metadata_remote_ids = Column(JSON, nullable=True)
+    metadata_sync_source = Column(String, nullable=True)
+    metadata_synced_at = Column(DateTime(timezone=True), nullable=True)
     source_url = Column(String, unique=True, index=True, nullable=True)
     source_type = Column(Enum(SourceType), nullable=False, default=SourceType.epub)
     immutable_path = Column(String, unique=True)
@@ -58,6 +62,58 @@ class UpdateTask(Base):
     status = Column(String, nullable=False, default="running")
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class MetadataSyncJob(Base):
+    __tablename__ = "metadata_sync_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trigger = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="queued")
+    total_books = Column(Integer, nullable=False, default=0)
+    processed_books = Column(Integer, nullable=False, default=0)
+    matched_books = Column(Integer, nullable=False, default=0)
+    proposed_books = Column(Integer, nullable=False, default=0)
+    applied_books = Column(Integer, nullable=False, default=0)
+    scope = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class BookMetadataMatch(Base):
+    __tablename__ = "book_metadata_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="pending")
+    source = Column(String, nullable=True)
+    match_confidence = Column(Numeric(5, 4), nullable=True)
+    remote_title = Column(String, nullable=True)
+    remote_author = Column(String, nullable=True)
+    remote_url = Column(String, nullable=True)
+    remote_ids = Column(JSON, nullable=True)
+    last_checked_at = Column(DateTime(timezone=True), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+
+class MetadataProposal(Base):
+    __tablename__ = "metadata_proposals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    match_id = Column(Integer, ForeignKey("book_metadata_matches.id"), nullable=True)
+    status = Column(String, nullable=False, default="open")
+    proposed_genre_tags = Column(JSON, nullable=True)
+    possible_missing_series_books = Column(JSON, nullable=True)
+    note = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class CleaningConfig(Base):

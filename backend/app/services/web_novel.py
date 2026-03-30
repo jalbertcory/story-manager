@@ -16,6 +16,7 @@ from ..config import LIBRARY_PATH
 from ..database import SessionLocal
 from .epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
 from .library_paths import build_book_paths
+from .metadata_jobs import queue_metadata_sync_job
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
         await crud.create_book_log(db, log_entry)
         await db.refresh(db_book)
         await epub_editor.apply_book_cleaning(db_book, db)
+        await queue_metadata_sync_job(db, trigger="new_book", book_ids=[db_book.id])
 
 
 async def update_web_novels() -> None:

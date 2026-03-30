@@ -3,7 +3,7 @@
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from sqlalchemy import asc, case, delete, desc, func, or_
+from sqlalchemy import String, asc, case, cast, delete, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models, schemas
@@ -38,6 +38,7 @@ def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "
             models.Book.title.ilike(pattern),
             models.Book.author.ilike(pattern),
             models.Book.series.ilike(pattern),
+            cast(models.Book.genre_tags, String).ilike(pattern),
         )
     )
 
@@ -211,6 +212,7 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
                     models.Book.title.ilike(pattern),
                     models.Book.author.ilike(pattern),
                     models.Book.series.ilike(pattern),
+                    cast(models.Book.genre_tags, String).ilike(pattern),
                 )
             )
         )

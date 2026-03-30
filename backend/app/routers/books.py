@@ -12,6 +12,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.library_paths import remove_empty_parent_dirs
+from ..services.metadata_jobs import queue_metadata_sync_job
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +170,21 @@ async def update_book_details(
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    previous_title = db_book.title
+    previous_author = db_book.author
+    previous_series = db_book.series
+    previous_remote_ids = db_book.metadata_remote_ids
     update_dict = book_update.model_dump(exclude_unset=True)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=book_update)
     if "content_selectors" in update_dict or "removed_chapters" in update_dict:
         await epub_editor.apply_book_cleaning(updated_book, db)
+    if (
+        updated_book.title != previous_title
+        or updated_book.author != previous_author
+        or updated_book.series != previous_series
+        or updated_book.metadata_remote_ids != previous_remote_ids
+    ):
+        await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
     return updated_book
 
 

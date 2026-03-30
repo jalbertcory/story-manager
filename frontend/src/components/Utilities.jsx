@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  approveMetadataMatch,
+  dismissMetadataProposal,
+  getLatestMetadataJob,
+  getMetadataInbox,
+  queueMetadataSync,
+  rejectMetadataMatch,
+} from "../api/books";
 import ReaderKeys from "./ReaderKeys.jsx";
 
 function formatBytes(bytes) {
@@ -53,6 +61,15 @@ function buildRemoveAllWarning(preview) {
   return lines.join("\n");
 }
 
+function renderMetadataJobSummary(job) {
+  if (!job) return "No metadata sync jobs have run yet.";
+  const base = `${job.processed_books}/${job.total_books} processed, ${job.matched_books} matched, ${job.proposed_books} proposed, ${job.applied_books} applied.`;
+  if (job.status === "failed" && job.error) {
+    return `${base} Failed: ${job.error}`;
+  }
+  return base;
+}
+
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState(null);
@@ -83,6 +100,52 @@ function Utilities({ onBack }) {
     mutationFn: () =>
       fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+  });
+
+  const { data: latestMetadataJob } = useQuery({
+    queryKey: ["metadata-job-latest"],
+    queryFn: getLatestMetadataJob,
+    staleTime: 5000,
+    refetchOnWindowFocus: false,
+    refetchInterval: ({ state }) => (state.data?.status === "running" || state.data?.status === "queued" ? 5000 : false),
+  });
+
+  const { data: metadataInbox = [] } = useQuery({
+    queryKey: ["metadata-inbox"],
+    queryFn: getMetadataInbox,
+    staleTime: 15000,
+    refetchOnWindowFocus: false,
+    refetchInterval: latestMetadataJob?.status === "running" || latestMetadataJob?.status === "queued" ? 15000 : false,
+  });
+
+  const queueMetadataMutation = useMutation({
+    mutationFn: () => queueMetadataSync(null, "manual"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+    },
+  });
+
+  const approveMatchMutation = useMutation({
+    mutationFn: (matchId) => approveMetadataMatch(matchId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+      queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+    },
+  });
+
+  const rejectMatchMutation = useMutation({
+    mutationFn: (matchId) => rejectMetadataMatch(matchId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+    },
+  });
+
+  const dismissProposalMutation = useMutation({
+    mutationFn: (proposalId) => dismissMetadataProposal(proposalId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+    },
   });
 
   const handleDetectSeries = async () => {
@@ -198,6 +261,118 @@ function Utilities({ onBack }) {
               : detectState.updated === 0
               ? "No new series found."
               : `Updated ${detectState.updated} book${detectState.updated > 1 ? "s" : ""}: ${detectState.series_detected.join(", ")}`}
+          </p>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <h3>Sync Online Metadata</h3>
+        <p className="hint">
+          Runs in the background for new books and stale books, then puts uncertain matches into an inbox for approval.
+        </p>
+        <div className="settings-actions">
+          <button
+            onClick={() => queueMetadataMutation.mutate()}
+            disabled={queueMetadataMutation.isPending}
+          >
+            {queueMetadataMutation.isPending ? "Queueing…" : "Queue Library Metadata Sync"}
+          </button>
+        </div>
+        {(queueMetadataMutation.isError || approveMatchMutation.isError || rejectMatchMutation.isError || dismissProposalMutation.isError) && (
+          <p className="error" style={{ marginTop: "0.5rem" }}>
+            {(queueMetadataMutation.error || approveMatchMutation.error || rejectMatchMutation.error || dismissProposalMutation.error)?.message}
+          </p>
+        )}
+        <div style={{ marginTop: "1rem" }}>
+          <p className="hint">
+            Latest job: {latestMetadataJob ? `${latestMetadataJob.status} (${latestMetadataJob.trigger})` : "none"}
+          </p>
+          <p className="hint">{renderMetadataJobSummary(latestMetadataJob)}</p>
+        </div>
+        <div style={{ marginTop: "1rem" }}>
+          <h4>
+            Metadata Inbox
+            <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
+              {metadataInbox.length} item{metadataInbox.length !== 1 ? "s" : ""}
+            </span>
+          </h4>
+        </div>
+        {metadataInbox.length > 0 ? (
+          <div style={{ marginTop: "1rem" }}>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.75rem" }}>
+              {metadataInbox.slice(0, 20).map((entry) => (
+                <li
+                  key={entry.id}
+                  style={{
+                    border: "1px solid rgba(148, 163, 184, 0.2)",
+                    borderRadius: "8px",
+                    padding: "0.75rem",
+                    background: "rgba(15, 23, 42, 0.35)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "baseline" }}>
+                    <strong>{entry.book_title}</strong>
+                    <span className="hint">
+                      {entry.match?.status || entry.status}
+                    </span>
+                  </div>
+                  <p className="hint" style={{ marginTop: "0.35rem" }}>{entry.book_author}</p>
+                  {entry.match && (
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      Suggested match: {entry.match.remote_title || "Unknown title"}
+                      {entry.match.remote_author ? ` by ${entry.match.remote_author}` : ""}
+                      {entry.match.match_confidence != null ? ` (${Math.round(entry.match.match_confidence * 100)}%)` : ""}
+                    </p>
+                  )}
+                  {entry.proposed_genre_tags.length > 0 && (
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      Proposed genres: {entry.proposed_genre_tags.join(", ")}
+                    </p>
+                  )}
+                  {entry.possible_missing_series_books.length > 0 && (
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      Possible missing in series: {entry.possible_missing_series_books.join(", ")}
+                    </p>
+                  )}
+                  {entry.note && (
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      {entry.note}
+                    </p>
+                  )}
+                  <div className="settings-actions" style={{ marginTop: "0.75rem" }}>
+                    {entry.match?.status === "pending" && entry.match?.id ? (
+                      <>
+                        <button
+                          onClick={() => approveMatchMutation.mutate(entry.match.id)}
+                          disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
+                        >
+                          {approveMatchMutation.isPending ? "Approving…" : "Approve Match"}
+                        </button>
+                        <button
+                          className="btn-danger"
+                          onClick={() => rejectMatchMutation.mutate(entry.match.id)}
+                          disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
+                        >
+                          {rejectMatchMutation.isPending ? "Rejecting…" : "Reject Match"}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="btn-text"
+                        onClick={() => dismissProposalMutation.mutate(entry.id)}
+                        disabled={dismissProposalMutation.isPending}
+                      >
+                        {dismissProposalMutation.isPending ? "Dismissing…" : "Dismiss"}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="hint" style={{ marginTop: "0.75rem" }}>
+            No metadata approvals are waiting right now.
           </p>
         )}
       </section>
