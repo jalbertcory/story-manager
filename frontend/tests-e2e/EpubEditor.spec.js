@@ -85,7 +85,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByRole("button", { name: "Add" }).click();
 
   // Click Save & Re-process
-  await page.getByRole("button", { name: /save & re-process/i }).click();
+  await page.getByRole("button", { name: /save & rebuild epub/i }).click();
 
   // We should be back on the book list
   await expect(page.getByText("Story Manager")).toBeVisible();

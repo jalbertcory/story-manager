@@ -88,7 +88,7 @@ describe("BookSettings", () => {
       />,
     );
 
-    expect(await screen.findByDisplayValue("https://example.com/story")).toBeInTheDocument();
+    expect(await screen.findByText("https://example.com/story")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Web Marker" }));
 
@@ -321,6 +321,9 @@ describe("BookSettings", () => {
       />,
     );
 
+    // Expand the collapsed Identifiers section
+    fireEvent.click(screen.getByText("Identifiers"));
+
     fireEvent.change(screen.getByPlaceholderText("Manual ISBN-13"), {
       target: { value: "9780316339158" },
     });
@@ -331,7 +334,7 @@ describe("BookSettings", () => {
       target: { value: '{\n  "goodreads_id": "12345"\n}' },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Metadata" }));
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url, options]) => url === "/api/books/10" && options?.method === "PUT");
