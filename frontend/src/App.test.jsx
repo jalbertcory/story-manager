@@ -126,6 +126,7 @@ describe("App", () => {
         author: "Author A",
         series: "Saga",
         effective_genre_tags: ["Adventure", "Fantasy"],
+        effective_series_genre_tags: ["Adventure", "Fantasy"],
         source_type: "epub",
         current_word_count: 1200,
         cover_path: "library/covers/1.jpg",
@@ -136,6 +137,7 @@ describe("App", () => {
         author: "Author A",
         series: "Saga",
         effective_genre_tags: ["Fantasy"],
+        effective_series_genre_tags: ["Adventure", "Fantasy"],
         source_type: "epub",
         current_word_count: 1000,
         cover_path: "library/covers/2.jpg",
@@ -165,7 +167,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Saga")).toBeInTheDocument();
-      expect(screen.getByText("2 books")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
       expect(screen.getByText("Fantasy")).toBeInTheDocument();
     });
 
@@ -191,6 +193,7 @@ describe("App", () => {
         author: "Author A",
         series: "Saga",
         effective_genre_tags: ["Fantasy"],
+        effective_series_genre_tags: ["Fantasy"],
         series_user_genre_tags: ["Fantasy"],
         current_word_count: 1000,
         source_type: "epub",
@@ -253,7 +256,7 @@ describe("App", () => {
     });
   });
 
-  it("shows fallback series genres when book tags are mixed", async () => {
+  it("shows series genres from backend effective_series_genre_tags", async () => {
     const catalogBooks = [
       {
         id: 21,
@@ -261,6 +264,7 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Fantasy"],
+        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
         current_word_count: 1000,
         source_type: "epub",
       },
@@ -270,6 +274,7 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Adventure"],
+        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
         current_word_count: 1000,
         source_type: "epub",
       },
@@ -279,6 +284,7 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Progression Fantasy"],
+        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
         current_word_count: 1000,
         source_type: "epub",
       },

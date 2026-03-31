@@ -69,6 +69,7 @@ class BookCatalogEntry(BaseModel):
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
     series_user_genre_tags: Optional[List[str]] = Field(default_factory=list)
     effective_genre_tags: Optional[List[str]] = Field(default_factory=list)
+    effective_series_genre_tags: Optional[List[str]] = Field(default_factory=list)
     source_type: SourceType
     cover_path: Optional[str] = None
     current_word_count: Optional[int] = None
@@ -196,6 +197,7 @@ class ReaderBook(BaseModel):
     content_updated_at: datetime
     content_version: int
     current_word_count: Optional[int] = None
+    effective_genre_tags: List[str] = Field(default_factory=list)
     download_url: str
     cover_url: Optional[str] = None
 
@@ -206,6 +208,7 @@ class ReaderSeriesSummary(BaseModel):
     total_words: int
     latest_update: Optional[datetime] = None
     cover_url: Optional[str] = None
+    genre_tags: List[str] = Field(default_factory=list)
 
 
 class MetadataSyncPreviewRequest(BaseModel):

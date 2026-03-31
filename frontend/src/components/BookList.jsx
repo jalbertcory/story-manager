@@ -35,75 +35,23 @@ function compareSeriesBooks(left, right) {
   return left.id - right.id;
 }
 
-function normalizeGenreTags(tags) {
-  if (!Array.isArray(tags) || !tags.length) {
-    return [];
-  }
-
-  const normalized = [];
-  const seen = new Set();
-  for (const rawTag of tags) {
-    const cleaned = `${rawTag ?? ""}`.trim();
-    if (!cleaned) continue;
-    const folded = cleaned.toLowerCase();
-    if (seen.has(folded)) continue;
-    seen.add(folded);
-    normalized.push(cleaned);
-  }
-  return normalized.sort((left, right) => left.localeCompare(right));
-}
-
 function getEffectiveGenreTags(book) {
-  return normalizeGenreTags(
-    book.effective_genre_tags?.length
-      ? book.effective_genre_tags
-      : [...(book.series_user_genre_tags || []), ...(book.user_genre_tags || []), ...(book.genre_tags || [])],
-  );
+  return book.effective_genre_tags || [];
 }
 
 function getSeriesGenreTags(books) {
-  const explicitTags = normalizeGenreTags(
-    books.flatMap((book) => book.series_user_genre_tags || []),
-  );
-  if (explicitTags.length) {
-    return explicitTags;
-  }
-
-  const counts = new Map();
-  for (const book of books) {
-    for (const tag of getEffectiveGenreTags(book)) {
-      counts.set(tag, (counts.get(tag) || 0) + 1);
-    }
-  }
-
-  const minimumMatches = Math.ceil(books.length / 2);
-  const rankedTags = [...counts.entries()]
-    .sort((left, right) => {
-      if (right[1] !== left[1]) {
-        return right[1] - left[1];
-      }
-      return left[0].localeCompare(right[0]);
-    });
-
-  const sharedTags = rankedTags
-    .filter(([, count]) => count >= minimumMatches)
-    .map(([tag]) => tag);
-  if (sharedTags.length) {
-    return sharedTags;
-  }
-
-  return rankedTags.slice(0, 4).map(([tag]) => tag);
+  if (!books.length) return [];
+  return books[0].effective_series_genre_tags || [];
 }
 
 function GenreTagList({ tags, className = "" }) {
-  const normalizedTags = normalizeGenreTags(tags);
-  if (!normalizedTags.length) {
+  if (!tags?.length) {
     return null;
   }
 
   return (
     <div className={`genre-tag-list ${className}`.trim()}>
-      {normalizedTags.map((tag) => (
+      {tags.map((tag) => (
         <span key={tag} className="genre-tag">
           {tag}
         </span>
@@ -290,16 +238,26 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       (sum, book) => sum + (book.current_word_count ?? 0),
       0,
     );
-    const coverBook =
-      orderedBooks.find((book) => book.cover_path && !book.download_status) ??
+    const coverBooks = orderedBooks
+      .filter((book) => book.cover_path && !book.download_status)
+      .slice(0, 4);
+    const coverBook = coverBooks[0] ??
       orderedBooks.find((book) => !book.download_status) ??
       orderedBooks[0];
+
+    const latestUpdate = orderedBooks.reduce((latest, book) => {
+      if (!book.updated_at) return latest;
+      const d = new Date(book.updated_at);
+      return d > latest ? d : latest;
+    }, new Date(0));
 
     return {
       authors,
       totalWords,
       hasWebNovel: orderedBooks.some((book) => book.source_type === "web"),
       coverBook,
+      coverBooks,
+      latestUpdate: latestUpdate.getTime() > 0 ? latestUpdate : null,
     };
   }, [orderedBooks]);
 
@@ -328,12 +286,29 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     });
   };
 
+  const formatWords = (n) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+    return String(n);
+  };
+
   return (
-    <div className="series-group">
+    <div className={`series-group${expanded ? " series-group--expanded" : ""}`}>
       <div className="series-header" onClick={toggleExpanded}>
-        <span className="series-toggle">{expanded ? "▼" : "▶"}</span>
-        <div className="series-cover">
-          {summary.coverBook?.cover_path ? (
+        <div className="series-cover-stack">
+          {summary.coverBooks.length > 1 ? (
+            summary.coverBooks.slice(0, 3).map((book, i) => (
+              <img
+                key={book.id}
+                src={getCoverUrl(book)}
+                alt={i === 0 ? `${series} cover` : ""}
+                className="series-cover-image series-cover-stacked"
+                style={{ "--stack-i": i }}
+                loading="lazy"
+                decoding="async"
+              />
+            ))
+          ) : summary.coverBook?.cover_path ? (
             <img
               src={getCoverUrl(summary.coverBook)}
               alt={`${series} cover`}
@@ -342,64 +317,78 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
               decoding="async"
             />
           ) : (
-            <div className="series-cover-placeholder">No cover</div>
+            <div className="series-cover-placeholder">
+              <span className="series-cover-placeholder-text">{series.charAt(0)}</span>
+            </div>
           )}
         </div>
         <div className="series-summary">
           <div className="series-summary-topline">
             <span className="series-name">{series}</span>
-            {summary.hasWebNovel && <span className="badge-web">Web in series</span>}
+            {summary.hasWebNovel && <span className="badge-web">Web</span>}
           </div>
           <div className="series-meta">
-            <span>
-              {books.length} book{books.length !== 1 ? "s" : ""}
-            </span>
-            <span>{summary.authors.join(", ") || "Unknown author"}</span>
-            <span>
-              {summary.totalWords
-                ? `${summary.totalWords.toLocaleString()} words`
-                : "Word count unavailable"}
-            </span>
+            <span className="series-meta-author">{summary.authors.join(", ") || "Unknown author"}</span>
           </div>
+          <div className="series-stats">
+            <span className="series-stat">
+              <span className="series-stat-value">{books.length}</span>
+              <span className="series-stat-label">book{books.length !== 1 ? "s" : ""}</span>
+            </span>
+            {summary.totalWords > 0 && (
+              <span className="series-stat">
+                <span className="series-stat-value">{formatWords(summary.totalWords)}</span>
+                <span className="series-stat-label">words</span>
+              </span>
+            )}
+            {summary.latestUpdate && (
+              <span className="series-stat series-stat--date">
+                {summary.latestUpdate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            )}
+          </div>
+          <GenreTagList tags={seriesGenreTags} className="series-header-genres" />
         </div>
-        <GenreTagList tags={seriesGenreTags} className="series-header-genres" />
+        <span className={`series-toggle${expanded ? " series-toggle--open" : ""}`} aria-hidden="true" />
       </div>
       {expanded && (
         <div className="series-expanded">
-          <div className="series-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              title="Rename series"
-              onClick={() => {
-                setEditing(editing === "rename" ? null : "rename");
-                setRenameValue(series);
-              }}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              title="Merge into another series"
-              onClick={() => {
-                setEditing(editing === "merge" ? null : "merge");
-                setMergeTarget("");
-              }}
-            >
-              Merge
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              title="Edit series genres"
-              onClick={() => {
-                setEditing(editing === "genres" ? null : "genres");
-                setGenreValue(seriesGenreTags.join(", "));
-              }}
-            >
-              Genres
-            </button>
+          <div className="series-toolbar">
+            <div className="series-actions">
+              <button
+                type="button"
+                className={`series-action-btn${editing === "rename" ? " series-action-btn--active" : ""}`}
+                title="Rename series"
+                onClick={() => {
+                  setEditing(editing === "rename" ? null : "rename");
+                  setRenameValue(series);
+                }}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                className={`series-action-btn${editing === "merge" ? " series-action-btn--active" : ""}`}
+                title="Merge into another series"
+                onClick={() => {
+                  setEditing(editing === "merge" ? null : "merge");
+                  setMergeTarget("");
+                }}
+              >
+                Merge
+              </button>
+              <button
+                type="button"
+                className={`series-action-btn${editing === "genres" ? " series-action-btn--active" : ""}`}
+                title="Edit series genres"
+                onClick={() => {
+                  setEditing(editing === "genres" ? null : "genres");
+                  setGenreValue(seriesGenreTags.join(", "));
+                }}
+              >
+                Genres
+              </button>
+            </div>
           </div>
           {editing === "rename" && (
             <form

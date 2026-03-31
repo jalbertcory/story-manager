@@ -69,7 +69,39 @@ def _build_book_entry(book: models.Book, base_url: str) -> ET.Element:
     return entry
 
 
-def _reader_book_payload(book: models.Book, request: Request) -> dict:
+def _normalize_genre_tags(tags: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_tag in tags:
+        cleaned = raw_tag.strip()
+        if not cleaned:
+            continue
+        folded = cleaned.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        normalized.append(cleaned)
+    return sorted(normalized, key=str.casefold)
+
+
+def _effective_genre_tags(
+    book: models.Book, series_user_genre_tags: list[str] | None = None
+) -> list[str]:
+    return _normalize_genre_tags(
+        [
+            *(series_user_genre_tags or []),
+            *(book.user_genre_tags or []),
+            *(book.genre_tags or []),
+        ]
+    )
+
+
+def _reader_book_payload(
+    book: models.Book,
+    request: Request,
+    *,
+    series_user_genre_tags: list[str] | None = None,
+) -> dict:
     base_url = str(request.base_url).rstrip("/")
     return {
         "id": book.id,
@@ -81,6 +113,7 @@ def _reader_book_payload(book: models.Book, request: Request) -> dict:
         "content_updated_at": book.content_updated_at,
         "content_version": book.content_version,
         "current_word_count": book.current_word_count,
+        "effective_genre_tags": _effective_genre_tags(book, series_user_genre_tags),
         "download_url": f"{base_url}/reader/books/{book.id}/download",
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
     }
@@ -223,15 +256,56 @@ async def reader_opds_series_books(series_name: str, request: Request, db: Async
 async def get_reader_series(request: Request, db: AsyncSession = Depends(get_db)) -> list[schemas.ReaderSeriesSummary]:
     base_url = str(request.base_url).rstrip("/")
     series_rows = await crud.get_reader_series(db)
-    return [
-        schemas.ReaderSeriesSummary(
-            name=row["name"],
-            book_count=row["book_count"],
-            total_words=row["total_words"],
-            latest_update=row["latest_update"],
-            cover_url=f"{base_url}/reader/covers/{row['cover_book_id']}" if row.get("cover_book_id") else None,
+    series_names = [row["name"] for row in series_rows]
+
+    metadata_map = await crud.get_series_metadata_for_names(db, series_names)
+    needs_books = [n for n in series_names if n not in metadata_map]
+    book_groups = await crud.get_reader_books_by_series_names(db, needs_books)
+
+    results = []
+    for row in series_rows:
+        name = row["name"]
+        meta = metadata_map.get(name)
+        genre_tags = crud.compute_effective_series_genre_tags(
+            book_groups.get(name, []), meta
         )
-        for row in series_rows
+        results.append(
+            schemas.ReaderSeriesSummary(
+                name=name,
+                book_count=row["book_count"],
+                total_words=row["total_words"],
+                latest_update=row["latest_update"],
+                cover_url=f"{base_url}/reader/covers/{row['cover_book_id']}" if row.get("cover_book_id") else None,
+                genre_tags=genre_tags,
+            )
+        )
+    return results
+
+
+async def _series_metadata_map(
+    db: AsyncSession, books: list[models.Book]
+) -> dict[str, models.SeriesMetadata]:
+    series_names = sorted({book.series for book in books if book.series})
+    return await crud.get_series_metadata_for_names(db, series_names)
+
+
+async def _reader_books_response(
+    books: list[models.Book], request: Request, db: AsyncSession
+) -> list[schemas.ReaderBook]:
+    metadata_map = await _series_metadata_map(db, books)
+    return [
+        schemas.ReaderBook.model_validate(
+            _reader_book_payload(
+                book,
+                request,
+                series_user_genre_tags=(
+                    metadata_map[book.series].user_genre_tags
+                    if book.series and book.series in metadata_map
+                    else None
+                ),
+            )
+        )
+        for book in books
     ]
 
 
@@ -240,25 +314,26 @@ async def get_reader_series_books(
     series_name: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> list[schemas.ReaderBook]:
     books = await crud.get_reader_books_by_series(db, series_name)
-    return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
+    return await _reader_books_response(books, request, db)
 
 
 @router.get("/reader/books/all", response_model=list[schemas.ReaderBook])
 async def get_all_reader_books(request: Request, db: AsyncSession = Depends(get_db)) -> list[schemas.ReaderBook]:
     books = await crud.get_all_reader_books(db)
-    return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
+    return await _reader_books_response(books, request, db)
 
 
 @router.get("/reader/books/standalone", response_model=list[schemas.ReaderBook])
 async def get_reader_standalone_books(request: Request, db: AsyncSession = Depends(get_db)) -> list[schemas.ReaderBook]:
     books = await crud.get_reader_standalone_books(db)
-    return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
+    return await _reader_books_response(books, request, db)
 
 
 @router.get("/reader/books/{book_id}", response_model=schemas.ReaderBook)
 async def get_reader_book(book_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> schemas.ReaderBook:
     book = await crud.get_reader_book(db, book_id)
-    return schemas.ReaderBook.model_validate(_reader_book_payload(book, request))
+    results = await _reader_books_response([book], request, db)
+    return results[0]
 
 
 @router.get("/reader/updates", response_model=list[schemas.ReaderBook])
@@ -268,7 +343,7 @@ async def get_reader_updates(
     db: AsyncSession = Depends(get_db),
 ) -> list[schemas.ReaderBook]:
     books = await crud.get_reader_updates(db, since)
-    return [schemas.ReaderBook.model_validate(_reader_book_payload(book, request)) for book in books]
+    return await _reader_books_response(books, request, db)
 
 
 @router.get("/reader/books/{book_id}/download")

@@ -1,5 +1,6 @@
 """Series-related CRUD operations."""
 
+import math
 from decimal import Decimal
 from typing import List
 
@@ -8,6 +9,9 @@ from sqlalchemy import asc, case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models
+
+MAX_TAGS_PER_SERIES = 20
+MAX_TAG_LENGTH = 50
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str]:
@@ -175,3 +179,76 @@ async def merge_series(db: AsyncSession, source: str, target: str) -> int:
 
     await db.commit()
     return len(books)
+
+
+def validate_genre_tags(tags: list[str]) -> None:
+    """Raise HTTPException if tags exceed limits."""
+    if len(tags) > MAX_TAGS_PER_SERIES:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_TAGS_PER_SERIES} genre tags allowed")
+    for tag in tags:
+        if len(tag.strip()) > MAX_TAG_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Genre tags must be {MAX_TAG_LENGTH} characters or fewer")
+
+
+def compute_effective_series_genre_tags(
+    books: list,
+    series_metadata: "models.SeriesMetadata | None",
+) -> list[str]:
+    """Compute effective genre tags for a series.
+
+    If the series has explicit user genre tags, returns those.
+    Otherwise aggregates from book-level tags using frequency analysis.
+    """
+    if series_metadata and series_metadata.user_genre_tags:
+        return _normalize_tags(series_metadata.user_genre_tags)
+
+    if not books:
+        return []
+
+    counts: dict[str, int] = {}
+    canonical: dict[str, str] = {}
+    for book in books:
+        book_tags = _normalize_tags([
+            *(book.user_genre_tags or []),
+            *(book.genre_tags or []),
+        ])
+        for tag in book_tags:
+            key = tag.casefold()
+            counts[key] = counts.get(key, 0) + 1
+            if key not in canonical:
+                canonical[key] = tag
+
+    if not counts:
+        return []
+
+    minimum_matches = math.ceil(len(books) / 2)
+    ranked = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+
+    shared = [canonical[key] for key, count in ranked if count >= minimum_matches]
+    if shared:
+        return shared
+
+    return [canonical[key] for key, _ in ranked[:4]]
+
+
+async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
+    """Delete SeriesMetadata records whose series_name has no matching books."""
+    result = await db.execute(select(models.SeriesMetadata))
+    all_metadata = result.scalars().all()
+    if not all_metadata:
+        return 0
+
+    active_result = await db.execute(
+        select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct()
+    )
+    active_series = {row[0] for row in active_result.all()}
+
+    deleted = 0
+    for metadata in all_metadata:
+        if metadata.series_name.lower() not in active_series:
+            await db.delete(metadata)
+            deleted += 1
+
+    if deleted:
+        await db.commit()
+    return deleted
