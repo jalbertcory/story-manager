@@ -25,3 +25,11 @@ export function reorderSeries(series, orderedBookIds) {
     fallbackMessage: "Failed to reorder series",
   });
 }
+
+export function updateSeriesGenres(series, userGenreTags) {
+  return sendJson(`/api/series/${encodeURIComponent(series)}/genres`, {
+    method: "PUT",
+    body: { user_genre_tags: userGenreTags },
+    fallbackMessage: "Failed to update series genres",
+  });
+}

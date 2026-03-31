@@ -2,7 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getApiCoverUrl, updateBook } from "../api/books";
-import { getSeries, mergeSeries, renameSeries, reorderSeries } from "../api/series";
+import {
+  getSeries,
+  mergeSeries,
+  renameSeries,
+  reorderSeries,
+  updateSeriesGenres,
+} from "../api/series";
 
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
@@ -29,9 +35,87 @@ function compareSeriesBooks(left, right) {
   return left.id - right.id;
 }
 
+function normalizeGenreTags(tags) {
+  if (!Array.isArray(tags) || !tags.length) {
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const rawTag of tags) {
+    const cleaned = `${rawTag ?? ""}`.trim();
+    if (!cleaned) continue;
+    const folded = cleaned.toLowerCase();
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    normalized.push(cleaned);
+  }
+  return normalized.sort((left, right) => left.localeCompare(right));
+}
+
+function getEffectiveGenreTags(book) {
+  return normalizeGenreTags(
+    book.effective_genre_tags?.length
+      ? book.effective_genre_tags
+      : [...(book.series_user_genre_tags || []), ...(book.user_genre_tags || []), ...(book.genre_tags || [])],
+  );
+}
+
+function getSeriesGenreTags(books) {
+  const explicitTags = normalizeGenreTags(
+    books.flatMap((book) => book.series_user_genre_tags || []),
+  );
+  if (explicitTags.length) {
+    return explicitTags;
+  }
+
+  const counts = new Map();
+  for (const book of books) {
+    for (const tag of getEffectiveGenreTags(book)) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+
+  const minimumMatches = Math.ceil(books.length / 2);
+  const rankedTags = [...counts.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1];
+      }
+      return left[0].localeCompare(right[0]);
+    });
+
+  const sharedTags = rankedTags
+    .filter(([, count]) => count >= minimumMatches)
+    .map(([tag]) => tag);
+  if (sharedTags.length) {
+    return sharedTags;
+  }
+
+  return rankedTags.slice(0, 4).map(([tag]) => tag);
+}
+
+function GenreTagList({ tags, className = "" }) {
+  const normalizedTags = normalizeGenreTags(tags);
+  if (!normalizedTags.length) {
+    return null;
+  }
+
+  return (
+    <div className={`genre-tag-list ${className}`.trim()}>
+      {normalizedTags.map((tag) => (
+        <span key={tag} className="genre-tag">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function BookCard({ book, onEdit }) {
   const isPending = book.download_status === "pending";
   const isError = book.download_status === "error";
+  const genreTags = getEffectiveGenreTags(book);
 
   const handleCoverError = (e) => {
     e.target.onerror = null;
@@ -105,6 +189,7 @@ function BookCard({ book, onEdit }) {
         {!isPending && book.series && (
           <p className="book-series">Series: {book.series}</p>
         )}
+        {!isPending && <GenreTagList tags={genreTags} className="book-card-genres" />}
         {!isPending && (
           <p className="book-words">
             {book.current_word_count != null
@@ -133,9 +218,10 @@ function BookCard({ book, onEdit }) {
 function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(null); // null | "rename" | "merge"
+  const [editing, setEditing] = useState(null); // null | "rename" | "merge" | "genres"
   const [renameValue, setRenameValue] = useState(series);
   const [mergeTarget, setMergeTarget] = useState("");
+  const [genreValue, setGenreValue] = useState("");
   const [orderedBooks, setOrderedBooks] = useState(books);
   const [draggedBookId, setDraggedBookId] = useState(null);
   const [dragOverBookId, setDragOverBookId] = useState(null);
@@ -143,6 +229,17 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   useEffect(() => {
     setOrderedBooks(books);
   }, [books]);
+
+  const seriesGenreTags = useMemo(() => getSeriesGenreTags(orderedBooks), [orderedBooks]);
+
+  useEffect(() => {
+    setGenreValue(seriesGenreTags.join(", "));
+  }, [seriesGenreTags, series]);
+
+  const genreInputId = useMemo(
+    () => `series-genres-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    [series],
+  );
 
   const renameMutation = useMutation({
     mutationFn: (newName) => renameSeries(series, newName),
@@ -175,6 +272,15 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       setOrderedBooks(books);
       setDraggedBookId(null);
       setDragOverBookId(null);
+    },
+  });
+
+  const genresMutation = useMutation({
+    mutationFn: (userGenreTags) => updateSeriesGenres(series, userGenreTags),
+    onSuccess: () => {
+      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
     },
   });
 
@@ -212,9 +318,19 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     reorderMutation.mutate(next.map((book) => book.id));
   };
 
+  const toggleExpanded = () => {
+    setExpanded((current) => {
+      const next = !current;
+      if (!next) {
+        setEditing(null);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="series-group">
-      <div className="series-header" onClick={() => setExpanded(!expanded)}>
+      <div className="series-header" onClick={toggleExpanded}>
         <span className="series-toggle">{expanded ? "▼" : "▶"}</span>
         <div className="series-cover">
           {summary.coverBook?.cover_path ? (
@@ -246,127 +362,169 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
             </span>
           </div>
         </div>
-        <div className="series-actions" onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className="btn btn-sm"
-            title="Rename series"
-            onClick={() => {
-              setEditing(editing === "rename" ? null : "rename");
-              setRenameValue(series);
-            }}
-          >
-            Rename
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            title="Merge into another series"
-            onClick={() => {
-              setEditing(editing === "merge" ? null : "merge");
-              setMergeTarget("");
-            }}
-          >
-            Merge
-          </button>
-        </div>
+        <GenreTagList tags={seriesGenreTags} className="series-header-genres" />
       </div>
-      {editing === "rename" && (
-        <form
-          className="series-edit-form"
-          onClick={(e) => e.stopPropagation()}
-          onSubmit={(e) => {
-            e.preventDefault();
-            const trimmed = renameValue.trim();
-            if (trimmed && trimmed !== series) {
-              renameMutation.mutate(trimmed);
-            }
-          }}
-        >
-          <input
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            placeholder="New series name"
-            autoFocus
-          />
-          <button type="submit" className="btn" disabled={!renameValue.trim() || renameValue.trim() === series || renameMutation.isPending}>
-            {renameMutation.isPending ? "Saving..." : "Save"}
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
-          {renameMutation.isError && <span className="error-text">{renameMutation.error.message}</span>}
-        </form>
-      )}
-      {editing === "merge" && (
-        <form
-          className="series-edit-form"
-          onClick={(e) => e.stopPropagation()}
-          onSubmit={(e) => {
-            e.preventDefault();
-            const trimmed = mergeTarget.trim();
-            if (trimmed) {
-              mergeMutation.mutate(trimmed);
-            }
-          }}
-        >
-          <label>Merge into:</label>
-          <input
-            list="merge-target-options"
-            value={mergeTarget}
-            onChange={(e) => setMergeTarget(e.target.value)}
-            placeholder="Target series name"
-            autoFocus
-          />
-          <datalist id="merge-target-options">
-            {otherSeries.map((s) => (
-              <option key={s} value={s} />
-            ))}
-          </datalist>
-          <button type="submit" className="btn" disabled={!mergeTarget.trim() || mergeMutation.isPending}>
-            {mergeMutation.isPending ? "Merging..." : "Merge"}
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
-          {mergeMutation.isError && <span className="error-text">{mergeMutation.error.message}</span>}
-        </form>
-      )}
       {expanded && (
-        <div className="book-grid">
-          {orderedBooks.map((book) => (
-            <div
-              key={book.id}
-              className={`series-book-item${
-                draggedBookId === book.id ? " series-book-item--dragging" : ""
-              }${dragOverBookId === book.id ? " series-book-item--drop-target" : ""}`}
-              draggable={!reorderMutation.isPending}
-              onDragStart={() => {
-                setDraggedBookId(book.id);
-                setDragOverBookId(null);
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                if (draggedBookId !== book.id) {
-                  setDragOverBookId(book.id);
-                }
-              }}
-              onDragLeave={() => {
-                if (dragOverBookId === book.id) {
-                  setDragOverBookId(null);
-                }
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                moveBook(draggedBookId, book.id);
-              }}
-              onDragEnd={() => {
-                setDraggedBookId(null);
-                setDragOverBookId(null);
+        <div className="series-expanded">
+          <div className="series-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              title="Rename series"
+              onClick={() => {
+                setEditing(editing === "rename" ? null : "rename");
+                setRenameValue(series);
               }}
             >
-              <div className="series-book-order">
-                {book.series_index != null ? `#${book.series_index}` : "⋮⋮"}
+              Rename
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              title="Merge into another series"
+              onClick={() => {
+                setEditing(editing === "merge" ? null : "merge");
+                setMergeTarget("");
+              }}
+            >
+              Merge
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              title="Edit series genres"
+              onClick={() => {
+                setEditing(editing === "genres" ? null : "genres");
+                setGenreValue(seriesGenreTags.join(", "));
+              }}
+            >
+              Genres
+            </button>
+          </div>
+          {editing === "rename" && (
+            <form
+              className="series-edit-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = renameValue.trim();
+                if (trimmed && trimmed !== series) {
+                  renameMutation.mutate(trimmed);
+                }
+              }}
+            >
+              <input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                placeholder="New series name"
+                autoFocus
+              />
+              <button type="submit" className="btn" disabled={!renameValue.trim() || renameValue.trim() === series || renameMutation.isPending}>
+                {renameMutation.isPending ? "Saving..." : "Save"}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+              {renameMutation.isError && <span className="error-text">{renameMutation.error.message}</span>}
+            </form>
+          )}
+          {editing === "merge" && (
+            <form
+              className="series-edit-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = mergeTarget.trim();
+                if (trimmed) {
+                  mergeMutation.mutate(trimmed);
+                }
+              }}
+            >
+              <label>Merge into:</label>
+              <input
+                list="merge-target-options"
+                value={mergeTarget}
+                onChange={(e) => setMergeTarget(e.target.value)}
+                placeholder="Target series name"
+                autoFocus
+              />
+              <datalist id="merge-target-options">
+                {otherSeries.map((s) => (
+                  <option key={s} value={s} />
+                ))}
+              </datalist>
+              <button type="submit" className="btn" disabled={!mergeTarget.trim() || mergeMutation.isPending}>
+                {mergeMutation.isPending ? "Merging..." : "Merge"}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+              {mergeMutation.isError && <span className="error-text">{mergeMutation.error.message}</span>}
+            </form>
+          )}
+          {editing === "genres" && (
+            <form
+              className="series-edit-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                genresMutation.mutate(
+                  genreValue
+                    .split(",")
+                    .map((tag) => tag.trim())
+                    .filter(Boolean),
+                );
+              }}
+            >
+              <label htmlFor={genreInputId}>Genres:</label>
+              <input
+                id={genreInputId}
+                value={genreValue}
+                onChange={(e) => setGenreValue(e.target.value)}
+                placeholder="Fantasy, Science Fiction, Progression Fantasy"
+                autoFocus
+              />
+              <button type="submit" className="btn" disabled={genresMutation.isPending}>
+                {genresMutation.isPending ? "Saving..." : "Save"}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+              {genresMutation.isError && <span className="error-text">{genresMutation.error.message}</span>}
+            </form>
+          )}
+          <div className="book-grid">
+            {orderedBooks.map((book) => (
+              <div
+                key={book.id}
+                className={`series-book-item${
+                  draggedBookId === book.id ? " series-book-item--dragging" : ""
+                }${dragOverBookId === book.id ? " series-book-item--drop-target" : ""}`}
+                draggable={!reorderMutation.isPending}
+                onDragStart={() => {
+                  setDraggedBookId(book.id);
+                  setDragOverBookId(null);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  if (draggedBookId !== book.id) {
+                    setDragOverBookId(book.id);
+                  }
+                }}
+                onDragLeave={() => {
+                  if (dragOverBookId === book.id) {
+                    setDragOverBookId(null);
+                  }
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  moveBook(draggedBookId, book.id);
+                }}
+                onDragEnd={() => {
+                  setDraggedBookId(null);
+                  setDragOverBookId(null);
+                }}
+              >
+                <div className="series-book-order">
+                  {book.series_index != null ? `#${book.series_index}` : "⋮⋮"}
+                </div>
+                <BookCard book={book} onEdit={onEdit} />
               </div>
-              <BookCard book={book} onEdit={onEdit} />
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -400,6 +558,8 @@ function LibraryViewTabs({ view, onChange, counts }) {
 }
 
 function BookRow({ book, onEdit, actions = null, subtitle = null }) {
+  const genreTags = getEffectiveGenreTags(book);
+
   const handleClick = (e) => {
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
     e.preventDefault();
@@ -434,6 +594,7 @@ function BookRow({ book, onEdit, actions = null, subtitle = null }) {
             {book.source_type === "web" && <span className="badge-web">Web</span>}
           </div>
           {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
+          <GenreTagList tags={genreTags} className="book-row-genres" />
         </div>
       </a>
       {actions ? <div className="book-row-actions">{actions}</div> : null}

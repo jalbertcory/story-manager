@@ -24,9 +24,12 @@ from .books import (  # noqa: F401
 from .series import (  # noqa: F401
     get_all_series,
     get_books_by_series,
+    get_series_metadata,
+    get_series_metadata_for_names,
     merge_series,
     rename_series,
     reorder_series_books,
+    set_series_user_genre_tags,
 )
 from .logs import (  # noqa: F401
     complete_update_task,

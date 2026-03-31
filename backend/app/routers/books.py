@@ -69,6 +69,35 @@ def _normalize_genre_tags(tags: list[str]) -> list[str]:
     return sorted(normalized, key=str.casefold)
 
 
+def _effective_genre_tags(book: models.Book, series_user_genre_tags: list[str] | None = None) -> list[str]:
+    return _normalize_genre_tags(
+        [
+            *(series_user_genre_tags or []),
+            *(book.user_genre_tags or []),
+            *(book.genre_tags or []),
+        ]
+    )
+
+
+async def _series_metadata_map(
+    db: AsyncSession,
+    books: list[models.Book],
+) -> dict[str, models.SeriesMetadata]:
+    series_names = sorted({book.series for book in books if book.series})
+    return await crud.get_series_metadata_for_names(db, series_names)
+
+
+def _serialize_catalog_book(
+    book: models.Book,
+    *,
+    series_user_genre_tags: list[str] | None = None,
+) -> schemas.BookCatalogEntry:
+    payload = schemas.BookCatalogEntry.model_validate(book).model_dump()
+    payload["series_user_genre_tags"] = series_user_genre_tags or []
+    payload["effective_genre_tags"] = _effective_genre_tags(book, series_user_genre_tags)
+    return schemas.BookCatalogEntry.model_validate(payload)
+
+
 @router.get("/api/books", response_model=List[schemas.Book])
 async def get_all_books(
     skip: int = 0,
@@ -89,7 +118,14 @@ async def get_book_catalog(
     db: AsyncSession = Depends(get_db),
 ) -> List[schemas.BookCatalogEntry]:
     books = await crud.get_book_catalog(db, q=q, sort_by=sort_by, sort_order=sort_order)
-    return [schemas.BookCatalogEntry.model_validate(book) for book in books]
+    metadata_map = await _series_metadata_map(db, books)
+    return [
+        _serialize_catalog_book(
+            book,
+            series_user_genre_tags=(metadata_map.get(book.series).user_genre_tags if book.series in metadata_map else []),
+        )
+        for book in books
+    ]
 
 
 @router.get("/api/series", response_model=List[str])
@@ -132,6 +168,29 @@ async def reorder_series(series_name: str, body: schemas.SeriesReorder, db: Asyn
     if count == 0:
         raise HTTPException(status_code=404, detail="No books found with that series name")
     return {"updated": count, "series": series_name}
+
+
+@router.put("/api/series/{series_name}/genres", response_model=schemas.SeriesMetadataSummary)
+async def update_series_genres(
+    series_name: str,
+    body: schemas.SeriesGenresUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=1)
+    if not books:
+        raise HTTPException(status_code=404, detail="No books found with that series name")
+
+    canonical_name = books[0].series or series_name
+    user_genre_tags = _normalize_genre_tags(body.user_genre_tags)
+    metadata = await crud.set_series_user_genre_tags(
+        db,
+        series_name=canonical_name,
+        user_genre_tags=user_genre_tags,
+    )
+    return schemas.SeriesMetadataSummary(
+        series_name=canonical_name,
+        user_genre_tags=list(metadata.user_genre_tags or []) if metadata else [],
+    )
 
 
 @router.get("/api/books/search", response_model=List[schemas.Book])
