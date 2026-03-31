@@ -39,6 +39,7 @@ def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "
             models.Book.author.ilike(pattern),
             models.Book.series.ilike(pattern),
             cast(models.Book.genre_tags, String).ilike(pattern),
+            cast(models.Book.user_genre_tags, String).ilike(pattern),
         )
     )
 
@@ -213,6 +214,7 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
                     models.Book.author.ilike(pattern),
                     models.Book.series.ilike(pattern),
                     cast(models.Book.genre_tags, String).ilike(pattern),
+                    cast(models.Book.user_genre_tags, String).ilike(pattern),
                 )
             )
         )

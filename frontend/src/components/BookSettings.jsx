@@ -31,6 +31,7 @@ const fetchMatchedConfig = async ({ queryKey }) => {
 const COMMON_REMOTE_ID_KEYS = [
   "isbn_10",
   "isbn_13",
+  "google_books_volume_id",
   "open_library_work_key",
   "open_library_edition_key",
   "open_library_author_key",
@@ -107,11 +108,15 @@ function BookSettings({ book, onBack }) {
   const [notes, setNotes] = useState(book.notes || "");
   const [isbn10, setIsbn10] = useState(book.metadata_remote_ids?.isbn_10 || "");
   const [isbn13, setIsbn13] = useState(book.metadata_remote_ids?.isbn_13 || "");
+  const [googleBooksVolumeId, setGoogleBooksVolumeId] = useState(
+    book.metadata_remote_ids?.google_books_volume_id || "",
+  );
   const [openLibraryWorkKey, setOpenLibraryWorkKey] = useState(book.metadata_remote_ids?.open_library_work_key || "");
   const [openLibraryEditionKey, setOpenLibraryEditionKey] = useState(book.metadata_remote_ids?.open_library_edition_key || "");
   const [openLibraryAuthorKey, setOpenLibraryAuthorKey] = useState(book.metadata_remote_ids?.open_library_author_key || "");
   const [otherRemoteIdsJson, setOtherRemoteIdsJson] = useState(splitRemoteIds(book.metadata_remote_ids).extrasJson);
   const [identifierError, setIdentifierError] = useState("");
+  const [userGenreTags, setUserGenreTags] = useState((book.user_genre_tags || []).join(", "));
   const [removedChapters, setRemovedChapters] = useState(
     book.removed_chapters || [],
   );
@@ -132,11 +137,13 @@ function BookSettings({ book, onBack }) {
     setNotes(book.notes || "");
     setIsbn10(book.metadata_remote_ids?.isbn_10 || "");
     setIsbn13(book.metadata_remote_ids?.isbn_13 || "");
+    setGoogleBooksVolumeId(book.metadata_remote_ids?.google_books_volume_id || "");
     setOpenLibraryWorkKey(book.metadata_remote_ids?.open_library_work_key || "");
     setOpenLibraryEditionKey(book.metadata_remote_ids?.open_library_edition_key || "");
     setOpenLibraryAuthorKey(book.metadata_remote_ids?.open_library_author_key || "");
     setOtherRemoteIdsJson(splitRemoteIds(book.metadata_remote_ids).extrasJson);
     setIdentifierError("");
+    setUserGenreTags((book.user_genre_tags || []).join(", "));
     setRemovedChapters(book.removed_chapters || []);
     setContentSelectors(book.content_selectors || []);
     setPreviewResult(null);
@@ -259,6 +266,7 @@ function BookSettings({ book, onBack }) {
       ...extraRemoteIds,
       ...(isbn10.trim() ? { isbn_10: isbn10.trim() } : {}),
       ...(isbn13.trim() ? { isbn_13: isbn13.trim() } : {}),
+      ...(googleBooksVolumeId.trim() ? { google_books_volume_id: googleBooksVolumeId.trim() } : {}),
       ...(openLibraryWorkKey.trim() ? { open_library_work_key: openLibraryWorkKey.trim() } : {}),
       ...(openLibraryEditionKey.trim() ? { open_library_edition_key: openLibraryEditionKey.trim() } : {}),
       ...(openLibraryAuthorKey.trim() ? { open_library_author_key: openLibraryAuthorKey.trim() } : {}),
@@ -269,6 +277,10 @@ function BookSettings({ book, onBack }) {
       author,
       series: series.trim() || null,
       series_index: seriesIndex.trim() ? Number.parseFloat(seriesIndex) : null,
+      user_genre_tags: userGenreTags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
       metadata_remote_ids: Object.keys(metadataRemoteIds).length ? metadataRemoteIds : null,
       removed_chapters: removedChapters,
       content_selectors: contentSelectors,
@@ -389,11 +401,19 @@ function BookSettings({ book, onBack }) {
               </label>
             </div>
             <label>
-              Genre Tags
+              Synced Genre Tags
               <input
                 value={(book.genre_tags || []).join(", ")}
                 readOnly
                 placeholder="No synced genre tags yet"
+              />
+            </label>
+            <label>
+              User Genre Tags
+              <input
+                value={userGenreTags}
+                onChange={(e) => setUserGenreTags(e.target.value)}
+                placeholder="Fantasy, Romance, LitRPG"
               />
             </label>
             {book.metadata_synced_at && (
@@ -529,9 +549,17 @@ function BookSettings({ book, onBack }) {
         <div className="collapsible-header" onClick={() => setIdentifiersExpanded((e) => !e)}>
           <h3>
             Identifiers
-            {(isbn10 || isbn13 || openLibraryWorkKey) && (
+            {(isbn10 || isbn13 || googleBooksVolumeId || openLibraryWorkKey) && (
               <span className="field-count">
-                {[isbn10, isbn13, openLibraryWorkKey, openLibraryEditionKey, openLibraryAuthorKey].filter(Boolean).length} set
+                {[
+                  isbn10,
+                  isbn13,
+                  googleBooksVolumeId,
+                  openLibraryWorkKey,
+                  openLibraryEditionKey,
+                  openLibraryAuthorKey,
+                ].filter(Boolean).length}{" "}
+                set
               </span>
             )}
           </h3>
@@ -557,6 +585,14 @@ function BookSettings({ book, onBack }) {
                 />
               </label>
             </div>
+            <label>
+              Google Books Volume ID
+              <input
+                value={googleBooksVolumeId}
+                onChange={(e) => setGoogleBooksVolumeId(e.target.value)}
+                placeholder="zyTCAlFPjgYC"
+              />
+            </label>
             <label>
               Open Library Work Key
               <input

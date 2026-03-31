@@ -65,7 +65,7 @@ def _upsert_match(
 ) -> models.BookMetadataMatch:
     match = existing_match or models.BookMetadataMatch(book_id=book_id)
     match.status = status
-    match.source = "open_library" if suggestion and suggestion.matched else None
+    match.source = suggestion.source if suggestion and suggestion.matched else None
     match.match_confidence = Decimal(str(round(suggestion.match_confidence, 4))) if suggestion and suggestion.matched else None
     match.remote_title = suggestion.remote_title if suggestion and suggestion.matched else None
     match.remote_author = suggestion.remote_author if suggestion and suggestion.matched else None
@@ -165,7 +165,7 @@ async def _sync_one_book(
         await db.flush()
 
     if match_status in APPROVED_MATCH_STATUSES:
-        applied = apply_suggestion_to_book(book, suggestion, synced_at=checked_at)
+        applied = apply_suggestion_to_book(book, suggestion, source=suggestion.source, synced_at=checked_at)
         if suggestion.possible_missing_series_books:
             proposal = _upsert_proposal(
                 existing_proposal,

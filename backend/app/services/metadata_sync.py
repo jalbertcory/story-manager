@@ -17,6 +17,7 @@ from requests import exceptions as requests_exceptions
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
+from ..config import GOOGLE_BOOKS_API_KEY
 from .series import detect_series_from_titles
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,11 @@ OPEN_LIBRARY_READ_TIMEOUT_SECONDS = 10
 OPEN_LIBRARY_RETRY_ATTEMPTS = 2
 OPEN_LIBRARY_MIN_REQUEST_INTERVAL_SECONDS = 0.4
 OPEN_LIBRARY_USER_AGENT = "story-manager/0.1 (+https://openlibrary.org)"
+GOOGLE_BOOKS_BASE_URL = "https://www.googleapis.com/books/v1"
+GOOGLE_BOOKS_CONNECT_TIMEOUT_SECONDS = 3
+GOOGLE_BOOKS_READ_TIMEOUT_SECONDS = 10
+GOOGLE_BOOKS_RETRY_ATTEMPTS = 2
+GOOGLE_BOOKS_USER_AGENT = "story-manager/0.1 (+https://developers.google.com/books)"
 AUTO_APPROVE_THRESHOLD = 0.92
 PROPOSAL_THRESHOLD = 0.75
 
@@ -68,6 +74,8 @@ _GENRE_KEYWORDS = (
     ("litrpg", "LitRPG"),
     ("mythology", "Mythology"),
     ("war stories", "War"),
+    ("xianxia", "Xianxia"),
+    ("cultivation", "Cultivation"),
 )
 
 
@@ -75,6 +83,7 @@ _GENRE_KEYWORDS = (
 class MetadataSuggestion:
     book: models.Book
     matched: bool
+    source: str = "open_library"
     match_confidence: float = 0.0
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
@@ -100,6 +109,17 @@ class MetadataSuggestion:
             possible_missing_series_books=self.possible_missing_series_books or [],
             note=self.note,
         )
+
+
+@dataclass
+class GoogleBooksMatch:
+    volume_id: str
+    title: str
+    authors: list[str]
+    categories: list[str]
+    info_link: Optional[str]
+    remote_ids: dict[str, str]
+    match_confidence: float
 
 
 def _normalize_text(value: str) -> str:
@@ -139,6 +159,42 @@ def _request_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict
         except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
             last_error = exc
             if attempt < OPEN_LIBRARY_RETRY_ATTEMPTS:
+                time.sleep(0.5 * attempt)
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    return {}
+
+
+def _google_books_enabled() -> bool:
+    return bool(GOOGLE_BOOKS_API_KEY)
+
+
+def _request_google_books_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if not _google_books_enabled():
+        return {}
+
+    request_params = {"key": GOOGLE_BOOKS_API_KEY}
+    if params:
+        request_params.update(params)
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, GOOGLE_BOOKS_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                f"{GOOGLE_BOOKS_BASE_URL}{path}",
+                params=request_params,
+                timeout=(GOOGLE_BOOKS_CONNECT_TIMEOUT_SECONDS, GOOGLE_BOOKS_READ_TIMEOUT_SECONDS),
+                headers={"User-Agent": GOOGLE_BOOKS_USER_AGENT},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
+            last_error = exc
+            if attempt < GOOGLE_BOOKS_RETRY_ATTEMPTS:
                 time.sleep(0.5 * attempt)
                 continue
             raise
@@ -245,6 +301,26 @@ def _derive_genre_tags(subjects: Iterable[str]) -> list[str]:
     return genres
 
 
+def _merge_genre_tags(*groups: Iterable[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for tag in group:
+            folded = tag.casefold()
+            if folded in seen:
+                continue
+            seen.add(folded)
+            merged.append(tag)
+    return merged
+
+
+def _merge_remote_ids(*groups: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for group in groups:
+        merged.update(group)
+    return merged
+
+
 def _title_matches_local_series(title: str, series_name: str) -> bool:
     normalized_title = _normalize_series(title)
     normalized_series = _normalize_series(series_name)
@@ -344,6 +420,92 @@ def _extract_remote_ids(doc: dict[str, Any], author_key: Optional[str]) -> dict[
     return remote_ids
 
 
+def _extract_google_volume_info(volume: dict[str, Any]) -> dict[str, Any]:
+    volume_info = volume.get("volumeInfo")
+    return volume_info if isinstance(volume_info, dict) else {}
+
+
+def _extract_google_remote_ids(volume: dict[str, Any]) -> dict[str, str]:
+    remote_ids: dict[str, str] = {}
+    volume_id = volume.get("id")
+    if isinstance(volume_id, str) and volume_id.strip():
+        remote_ids["google_books_volume_id"] = volume_id.strip()
+
+    volume_info = _extract_google_volume_info(volume)
+    identifiers = volume_info.get("industryIdentifiers") or []
+    for identifier in identifiers:
+        if not isinstance(identifier, dict):
+            continue
+        id_type = str(identifier.get("type") or "").strip().upper()
+        value = str(identifier.get("identifier") or "").strip()
+        if not value:
+            continue
+        if id_type == "ISBN_10" and "isbn_10" not in remote_ids:
+            remote_ids["isbn_10"] = value
+        if id_type == "ISBN_13" and "isbn_13" not in remote_ids:
+            remote_ids["isbn_13"] = value
+
+    return remote_ids
+
+
+def _google_books_categories(volume: dict[str, Any]) -> list[str]:
+    volume_info = _extract_google_volume_info(volume)
+    raw_categories = volume_info.get("categories") or []
+    if isinstance(raw_categories, str):
+        raw_categories = [raw_categories]
+    main_category = volume_info.get("mainCategory")
+    if isinstance(main_category, str) and main_category.strip():
+        raw_categories = [main_category, *raw_categories]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for category in raw_categories:
+        if not isinstance(category, str):
+            continue
+        cleaned = category.strip()
+        if not cleaned:
+            continue
+        normalized = _normalize_text(cleaned)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(cleaned)
+    return deduped
+
+
+def _google_books_doc(volume: dict[str, Any]) -> dict[str, Any]:
+    volume_info = _extract_google_volume_info(volume)
+    return {
+        "title": volume_info.get("title", ""),
+        "author_name": volume_info.get("authors") or [],
+    }
+
+
+def _score_google_books_volume(book: models.Book, volume: dict[str, Any]) -> float:
+    volume_doc = _google_books_doc(volume)
+    title_score = _title_similarity(book.title, volume_doc.get("title", ""))
+    author_score = _author_similarity(book, volume_doc)
+    score = (title_score * 0.7) + (author_score * 0.3)
+
+    if _normalize_text(book.title) == _normalize_text(volume_doc.get("title", "")):
+        score += 0.12
+    if author_score > 0.95:
+        score += 0.05
+
+    identifiers = _extract_google_remote_ids(volume)
+    manual_remote_ids = _get_manual_remote_ids(book)
+    if manual_remote_ids.get("google_books_volume_id") and identifiers.get("google_books_volume_id") == manual_remote_ids.get(
+        "google_books_volume_id"
+    ):
+        score += 0.1
+    if manual_remote_ids.get("isbn_13") and identifiers.get("isbn_13") == manual_remote_ids.get("isbn_13"):
+        score += 0.08
+    if manual_remote_ids.get("isbn_10") and identifiers.get("isbn_10") == manual_remote_ids.get("isbn_10"):
+        score += 0.08
+
+    return min(score, 1.0)
+
+
 def _get_manual_remote_ids(book: models.Book) -> dict[str, str]:
     raw_ids = book.metadata_remote_ids or {}
     if not isinstance(raw_ids, dict):
@@ -359,6 +521,23 @@ def _fetch_search_docs(params: dict[str, Any]) -> list[dict[str, Any]]:
     payload = _request_json("/search.json", params=params)
     docs = payload.get("docs") or []
     return [doc for doc in docs if isinstance(doc, dict)]
+
+
+def _fetch_google_books_volumes(query: str) -> list[dict[str, Any]]:
+    if not _google_books_enabled():
+        return []
+
+    payload = _request_google_books_json("/volumes", params={"q": query, "maxResults": 5})
+    items = payload.get("items") or []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _fetch_google_books_volume_by_id(volume_id: str) -> Optional[dict[str, Any]]:
+    if not _google_books_enabled() or not volume_id.strip():
+        return None
+
+    payload = _request_google_books_json(f"/volumes/{volume_id.strip()}")
+    return payload if payload else None
 
 
 def _series_peer_author_keys(
@@ -505,6 +684,91 @@ def _fetch_search_doc(
     return best_doc, best_score, None
 
 
+def _fetch_google_books_match(book: models.Book) -> tuple[Optional[GoogleBooksMatch], float, Optional[str]]:
+    if not _google_books_enabled():
+        return None, 0.0, None
+
+    manual_remote_ids = _get_manual_remote_ids(book)
+    candidates: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    manual_volume_id = manual_remote_ids.get("google_books_volume_id")
+    if manual_volume_id:
+        try:
+            volume = _fetch_google_books_volume_by_id(manual_volume_id)
+        except requests.RequestException:
+            logger.warning("Failed to fetch Google Books volume metadata for %s.", manual_volume_id)
+            volume = None
+        if volume and isinstance(volume.get("id"), str):
+            seen_ids.add(volume["id"])
+            candidates.append(volume)
+
+    for isbn_key in ("isbn_13", "isbn_10"):
+        isbn_value = manual_remote_ids.get(isbn_key)
+        if not isbn_value:
+            continue
+        try:
+            isbn_candidates = _fetch_google_books_volumes(f"isbn:{isbn_value}")
+        except requests.RequestException:
+            logger.warning("Failed to search Google Books for ISBN %s.", isbn_value)
+            continue
+        for candidate in isbn_candidates:
+            candidate_id = candidate.get("id")
+            if isinstance(candidate_id, str) and candidate_id not in seen_ids:
+                seen_ids.add(candidate_id)
+                candidates.append(candidate)
+
+    for title_variant in _title_search_variants(book):
+        query = f'intitle:"{title_variant}" inauthor:"{book.author}"'
+        try:
+            search_candidates = _fetch_google_books_volumes(query)
+        except requests.RequestException:
+            logger.warning("Failed to search Google Books for %s by %s.", title_variant, book.author)
+            continue
+        for candidate in search_candidates:
+            candidate_id = candidate.get("id")
+            if isinstance(candidate_id, str) and candidate_id not in seen_ids:
+                seen_ids.add(candidate_id)
+                candidates.append(candidate)
+
+    if not candidates:
+        return None, 0.0, "No Google Books match found."
+
+    best_candidate = None
+    best_score = 0.0
+    for candidate in candidates:
+        score = _score_google_books_volume(book, candidate)
+        if score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    if best_candidate is None:
+        return None, 0.0, "No Google Books match found."
+
+    threshold = 0.78 if manual_remote_ids else 0.84
+    if best_score < threshold:
+        return None, best_score, "No confident Google Books match found."
+
+    volume_info = _extract_google_volume_info(best_candidate)
+    authors = volume_info.get("authors") or []
+    if isinstance(authors, str):
+        authors = [authors]
+
+    return (
+        GoogleBooksMatch(
+            volume_id=str(best_candidate.get("id")),
+            title=str(volume_info.get("title") or book.title),
+            authors=[author for author in authors if isinstance(author, str)],
+            categories=_google_books_categories(best_candidate),
+            info_link=volume_info.get("infoLink"),
+            remote_ids=_extract_google_remote_ids(best_candidate),
+            match_confidence=best_score,
+        ),
+        best_score,
+        None,
+    )
+
+
 def _fetch_work_data(doc: dict[str, Any]) -> dict[str, Any]:
     key = doc.get("key")
     if not key:
@@ -553,6 +817,7 @@ def _build_suggestion_for_book(
     if not book.title or not book.author or book.author.strip().lower() == "pending":
         return MetadataSuggestion(book=book, matched=False, note="Book is missing stable title/author metadata.")
 
+    google_match: Optional[GoogleBooksMatch] = None
     try:
         doc, score, note = _fetch_search_doc(
             book,
@@ -561,10 +826,40 @@ def _build_suggestion_for_book(
         )
     except requests.RequestException:
         logger.warning("Metadata sync request failed for %s by %s; continuing.", book.title, book.author)
-        return MetadataSuggestion(book=book, matched=False, note="Open Library request failed.")
+        doc, score, note = None, 0.0, "Open Library request failed."
 
     if doc is None:
-        return MetadataSuggestion(book=book, matched=False, match_confidence=score, note=note)
+        try:
+            google_match, google_score, google_note = _fetch_google_books_match(book)
+        except requests.RequestException:
+            logger.warning("Google Books metadata request failed for %s by %s; continuing.", book.title, book.author)
+            google_match, google_score, google_note = None, 0.0, "Google Books request failed."
+
+        if google_match is None:
+            return MetadataSuggestion(
+                book=book,
+                matched=False,
+                match_confidence=max(score, google_score),
+                note=google_note or note,
+            )
+
+        google_genre_tags = _derive_genre_tags(google_match.categories)
+        existing_tags = {tag.casefold() for tag in (book.genre_tags or [])}
+        new_tags = [tag for tag in google_genre_tags if tag.casefold() not in existing_tags]
+        return MetadataSuggestion(
+            book=book,
+            matched=True,
+            source="google_books",
+            match_confidence=google_match.match_confidence,
+            remote_title=google_match.title,
+            remote_author=google_match.authors[0] if google_match.authors else None,
+            remote_url=google_match.info_link,
+            genre_tags=google_genre_tags,
+            new_genre_tags=new_tags,
+            possible_missing_series_books=[],
+            remote_ids=google_match.remote_ids,
+            note=None if google_genre_tags else "Matched in Google Books, but no genre tags were found.",
+        )
 
     work_data = _fetch_work_data(doc)
     subjects = _extract_subjects(doc, work_data)
@@ -585,9 +880,29 @@ def _build_suggestion_for_book(
     possible_missing = _infer_possible_missing_books(book, local_books_by_author, author_work_titles)
 
     remote_ids = _extract_remote_ids(doc, author_key)
+    open_library_remote_ids = dict(remote_ids)
+    source = "open_library"
+    try:
+        google_match, _, _ = _fetch_google_books_match(book)
+    except requests.RequestException:
+        logger.warning("Google Books metadata request failed for %s by %s; continuing.", book.title, book.author)
+        google_match = None
+
+    if google_match is not None:
+        google_genre_tags = _derive_genre_tags(google_match.categories)
+        genre_tags = _merge_genre_tags(genre_tags, google_genre_tags)
+        new_tags = [tag for tag in genre_tags if tag.casefold() not in existing_tags]
+        remote_ids = _merge_remote_ids(google_match.remote_ids, remote_ids)
+        if google_genre_tags or any(
+            remote_ids.get(key) != open_library_remote_ids.get(key)
+            for key in google_match.remote_ids
+        ):
+            source = "open_library+google_books"
+
     return MetadataSuggestion(
         book=book,
         matched=True,
+        source=source,
         match_confidence=score,
         remote_title=doc.get("title"),
         remote_author=author_names[0] if author_names else None,
@@ -629,12 +944,13 @@ def apply_suggestion_to_book(
     book: models.Book,
     suggestion: MetadataSuggestion,
     *,
-    source: str = "open_library",
+    source: Optional[str] = None,
     synced_at: Optional[datetime] = None,
 ) -> bool:
     if not suggestion.matched:
         return False
 
+    resolved_source = source or suggestion.source or "open_library"
     synced_timestamp = synced_at or datetime.now(timezone.utc)
     merged_genres = sorted(
         {
@@ -651,12 +967,12 @@ def apply_suggestion_to_book(
     changed = (
         merged_genres != (book.genre_tags or [])
         or next_remote_ids != (book.metadata_remote_ids or {})
-        or book.metadata_sync_source != source
+        or book.metadata_sync_source != resolved_source
     )
 
     book.genre_tags = merged_genres
     book.metadata_remote_ids = next_remote_ids
-    book.metadata_sync_source = source
+    book.metadata_sync_source = resolved_source
     book.metadata_synced_at = synced_timestamp
     return changed
 
@@ -702,7 +1018,7 @@ async def apply_metadata_sync(
         if not suggestion.matched:
             continue
 
-        if apply_suggestion_to_book(suggestion.book, suggestion, synced_at=synced_at):
+        if apply_suggestion_to_book(suggestion.book, suggestion, source=suggestion.source, synced_at=synced_at):
             updated_books += 1
 
     await db.commit()
