@@ -95,6 +95,68 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
 
 
 @pytest.mark.asyncio
+async def test_get_book_catalog_includes_series_and_effective_genre_tags(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Catalog Book",
+                author="Catalog Author",
+                series="Catalog Saga",
+                immutable_path="catalog-immutable.epub",
+                current_path="catalog.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+                user_genre_tags=["Progression Fantasy"],
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Catalog Saga", ["Adventure", "Fantasy"])
+
+    response = client.get("/api/books/catalog")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["series_user_genre_tags"] == ["Adventure", "Fantasy"]
+    assert data[0]["effective_genre_tags"] == ["Adventure", "Fantasy", "Progression Fantasy"]
+
+
+@pytest.mark.asyncio
+async def test_update_series_genres_updates_catalog_effective_genres(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Series Book",
+                author="Series Author",
+                series="Dragon Saga",
+                immutable_path="dragon-saga-immutable.epub",
+                current_path="dragon-saga.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+            ),
+        )
+
+    response = client.put(
+        "/api/series/Dragon%20Saga/genres",
+        json={"user_genre_tags": [" Progression Fantasy ", "Fantasy", "Progression Fantasy"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "series_name": "Dragon Saga",
+        "user_genre_tags": ["Fantasy", "Progression Fantasy"],
+    }
+
+    catalog_response = client.get("/api/books/catalog")
+
+    assert catalog_response.status_code == 200
+    catalog_data = catalog_response.json()
+    assert catalog_data[0]["series_user_genre_tags"] == ["Fantasy", "Progression Fantasy"]
+    assert catalog_data[0]["effective_genre_tags"] == ["Fantasy", "Progression Fantasy"]
+
+
+@pytest.mark.asyncio
 async def test_metadata_sync_preview_returns_genres_and_possible_missing_series_books(db_session, mocker):
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -2747,3 +2809,316 @@ async def test_reader_opds_requires_auth_and_revoked_keys_fail(db_session):
 
     revoked = client.get("/reader/opds", auth=("reader", key["token"]))
     assert revoked.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_series_genres_endpoint(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Genre Book",
+                author="Author",
+                series="Test Series",
+                immutable_path="genre-immutable.epub",
+                current_path="genre.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Test Series", ["Fantasy", "Adventure"])
+
+    response = client.get("/api/series/Test%20Series/genres")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["series_name"] == "Test Series"
+    assert data["user_genre_tags"] == ["Adventure", "Fantasy"]
+
+
+@pytest.mark.asyncio
+async def test_get_series_genres_returns_404_for_unknown_series(db_session):
+    response = client.get("/api/series/Nonexistent/genres")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rename_series_merges_metadata(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Old Book",
+                author="Author",
+                series="Old Series",
+                immutable_path="old-immutable.epub",
+                current_path="old.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="New Book",
+                author="Author",
+                series="New Series",
+                immutable_path="new-immutable.epub",
+                current_path="new.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Old Series", ["Fantasy"])
+        await crud.set_series_user_genre_tags(session, "New Series", ["Adventure"])
+
+    response = client.put("/api/series/Old%20Series", json={"new_name": "New Series"})
+    assert response.status_code == 200
+
+    genres_response = client.get("/api/series/New%20Series/genres")
+    assert genres_response.status_code == 200
+    tags = genres_response.json()["user_genre_tags"]
+    assert "Adventure" in tags
+    assert "Fantasy" in tags
+
+
+@pytest.mark.asyncio
+async def test_rename_series_preserves_metadata_when_target_has_none(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Rename Book",
+                author="Author",
+                series="Rename Me",
+                immutable_path="rename-immutable.epub",
+                current_path="rename.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Rename Me", ["Sci-Fi"])
+
+    response = client.put("/api/series/Rename%20Me", json={"new_name": "Renamed"})
+    assert response.status_code == 200
+
+    genres_response = client.get("/api/series/Renamed/genres")
+    assert genres_response.status_code == 200
+    assert genres_response.json()["user_genre_tags"] == ["Sci-Fi"]
+
+
+@pytest.mark.asyncio
+async def test_merge_series_merges_metadata(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Source Book",
+                author="Author",
+                series="Source Series",
+                immutable_path="source-immutable.epub",
+                current_path="source.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Target Book",
+                author="Author",
+                series="Target Series",
+                immutable_path="target-immutable.epub",
+                current_path="target.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Source Series", ["Fantasy", "Dark Fantasy"])
+        await crud.set_series_user_genre_tags(session, "Target Series", ["Fantasy", "Adventure"])
+
+    response = client.post(
+        "/api/series/merge",
+        json={"source": "Source Series", "target": "Target Series"},
+    )
+    assert response.status_code == 200
+
+    genres_response = client.get("/api/series/Target%20Series/genres")
+    assert genres_response.status_code == 200
+    tags = genres_response.json()["user_genre_tags"]
+    assert "Adventure" in tags
+    assert "Dark Fantasy" in tags
+    assert "Fantasy" in tags
+
+
+@pytest.mark.asyncio
+async def test_merge_series_moves_metadata_when_target_has_none(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Source Only Book",
+                author="Author",
+                series="Has Tags",
+                immutable_path="has-tags-immutable.epub",
+                current_path="has-tags.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="No Tags Book",
+                author="Author",
+                series="No Tags",
+                immutable_path="no-tags-immutable.epub",
+                current_path="no-tags.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Has Tags", ["Progression Fantasy"])
+
+    response = client.post(
+        "/api/series/merge",
+        json={"source": "Has Tags", "target": "No Tags"},
+    )
+    assert response.status_code == 200
+
+    genres_response = client.get("/api/series/No%20Tags/genres")
+    assert genres_response.status_code == 200
+    assert genres_response.json()["user_genre_tags"] == ["Progression Fantasy"]
+
+
+@pytest.mark.asyncio
+async def test_orphaned_series_metadata_cleaned_up_on_book_delete(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Orphan Book",
+                author="Author",
+                series="Orphan Series",
+                immutable_path="orphan-immutable.epub",
+                current_path="orphan.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Orphan Series", ["Fantasy"])
+        book_id = book.id
+
+    # Verify metadata exists
+    genres_response = client.get("/api/series/Orphan%20Series/genres")
+    assert genres_response.status_code == 200
+    assert genres_response.json()["user_genre_tags"] == ["Fantasy"]
+
+    # Delete the only book in the series
+    client.delete(f"/api/books/{book_id}")
+
+    # Metadata should be cleaned up
+    genres_response = client.get("/api/series/Orphan%20Series/genres")
+    assert genres_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_tag_validation_rejects_too_many_tags(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Validation Book",
+                author="Author",
+                series="Validation Series",
+                immutable_path="validation-immutable.epub",
+                current_path="validation.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    tags = [f"Tag {i}" for i in range(21)]
+    response = client.put(
+        "/api/series/Validation%20Series/genres",
+        json={"user_genre_tags": tags},
+    )
+    assert response.status_code == 400
+    assert "Maximum 20" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_tag_validation_rejects_too_long_tags(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Long Tag Book",
+                author="Author",
+                series="Long Tag Series",
+                immutable_path="longtag-immutable.epub",
+                current_path="longtag.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.put(
+        "/api/series/Long%20Tag%20Series/genres",
+        json={"user_genre_tags": ["x" * 51]},
+    )
+    assert response.status_code == 400
+    assert "50 characters" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_includes_effective_series_genre_tags_from_books(db_session):
+    """When a series has no explicit tags, effective_series_genre_tags falls back to book-level tags."""
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book A",
+                author="Author",
+                series="Fallback Series",
+                immutable_path="fallback-a-immutable.epub",
+                current_path="fallback-a.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy", "Adventure"],
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Book B",
+                author="Author",
+                series="Fallback Series",
+                immutable_path="fallback-b-immutable.epub",
+                current_path="fallback-b.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy", "Romance"],
+            ),
+        )
+
+    response = client.get("/api/books/catalog")
+    assert response.status_code == 200
+    data = response.json()
+    series_books = [b for b in data if b["series"] == "Fallback Series"]
+    assert len(series_books) == 2
+    # Fantasy appears in both books (2/2 >= ceil(2/2)=1), Adventure and Romance in 1 each
+    effective_series = series_books[0]["effective_series_genre_tags"]
+    assert "Fantasy" in effective_series
+    assert "Adventure" in effective_series
+    assert "Romance" in effective_series
+
+
+@pytest.mark.asyncio
+async def test_catalog_effective_series_genre_tags_uses_explicit_when_set(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Explicit Book",
+                author="Author",
+                series="Explicit Series",
+                immutable_path="explicit-immutable.epub",
+                current_path="explicit.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy", "Adventure", "Romance"],
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Explicit Series", ["Sci-Fi"])
+
+    response = client.get("/api/books/catalog")
+    assert response.status_code == 200
+    data = response.json()
+    book = [b for b in data if b["series"] == "Explicit Series"][0]
+    assert book["effective_series_genre_tags"] == ["Sci-Fi"]

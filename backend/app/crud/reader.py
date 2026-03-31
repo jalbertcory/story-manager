@@ -111,3 +111,20 @@ async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> Lis
         query = query.where(models.Book.content_updated_at > since)
     result = await db.execute(query.order_by(desc(models.Book.content_updated_at), asc(models.Book.title)))
     return result.scalars().all()
+
+
+async def get_reader_books_by_series_names(
+    db: AsyncSession, series_names: list[str]
+) -> dict[str, list[models.Book]]:
+    """Fetch reader-eligible books grouped by series name."""
+    if not series_names:
+        return {}
+    lowered = [n.lower() for n in series_names]
+    result = await db.execute(
+        _reader_books_query().where(func.lower(models.Book.series).in_(lowered))
+    )
+    groups: dict[str, list[models.Book]] = {}
+    for book in result.scalars().all():
+        if book.series:
+            groups.setdefault(book.series, []).append(book)
+    return groups

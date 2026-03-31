@@ -22,11 +22,17 @@ from .books import (  # noqa: F401
     update_book,
 )
 from .series import (  # noqa: F401
+    cleanup_orphaned_series_metadata,
+    compute_effective_series_genre_tags,
     get_all_series,
     get_books_by_series,
+    get_series_metadata,
+    get_series_metadata_for_names,
     merge_series,
     rename_series,
     reorder_series_books,
+    set_series_user_genre_tags,
+    validate_genre_tags,
 )
 from .logs import (  # noqa: F401
     complete_update_task,
@@ -56,6 +62,7 @@ from .reader import (  # noqa: F401
     get_reader_book,
     get_reader_books,
     get_reader_books_by_series,
+    get_reader_books_by_series_names,
     get_reader_series,
     get_reader_standalone_books,
     get_reader_updates,
