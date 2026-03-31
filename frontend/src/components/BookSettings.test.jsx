@@ -224,6 +224,7 @@ describe("BookSettings", () => {
           series: "Saga",
           series_index: 1,
           genre_tags: ["Fantasy", "Adventure"],
+          user_genre_tags: ["Cozy"],
           metadata_sync_source: "open_library",
           metadata_synced_at: "2026-03-28T10:00:00Z",
           source_type: "epub",
@@ -241,6 +242,7 @@ describe("BookSettings", () => {
     );
 
     expect(await screen.findByDisplayValue("Fantasy, Adventure")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Cozy")).toBeInTheDocument();
     expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
   });
 
@@ -277,6 +279,7 @@ describe("BookSettings", () => {
                 open_library_work_key: "/works/OL500W",
                 goodreads_id: "12345",
               },
+              user_genre_tags: ["Fantasy", "Romance"],
               removed_chapters: [],
               content_selectors: [],
               created_at: "2026-03-17T00:00:00Z",
@@ -311,6 +314,7 @@ describe("BookSettings", () => {
           immutable_path: "library/original.epub",
           current_path: "library/current.epub",
           metadata_remote_ids: null,
+          user_genre_tags: ["Fantasy"],
           removed_chapters: [],
           content_selectors: [],
           created_at: "2026-03-17T00:00:00Z",
@@ -327,8 +331,14 @@ describe("BookSettings", () => {
     fireEvent.change(screen.getByPlaceholderText("Manual ISBN-13"), {
       target: { value: "9780316339158" },
     });
+    fireEvent.change(screen.getByPlaceholderText("zyTCAlFPjgYC"), {
+      target: { value: "google-volume-1" },
+    });
     fireEvent.change(screen.getByPlaceholderText("/works/OL123W"), {
       target: { value: "/works/OL500W" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Fantasy, Romance, LitRPG"), {
+      target: { value: "Fantasy, Romance" },
     });
     fireEvent.change(screen.getByLabelText("Other Identifiers (JSON)"), {
       target: { value: '{\n  "goodreads_id": "12345"\n}' },
@@ -345,8 +355,10 @@ describe("BookSettings", () => {
         author: "Author",
         series: "Saga",
         series_index: 1,
+        user_genre_tags: ["Fantasy", "Romance"],
         metadata_remote_ids: {
           isbn_13: "9780316339158",
+          google_books_volume_id: "google-volume-1",
           open_library_work_key: "/works/OL500W",
           goodreads_id: "12345",
         },

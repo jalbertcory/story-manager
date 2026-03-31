@@ -54,6 +54,21 @@ def _book_cleanup_preview(book: models.Book) -> dict[str, Any]:
     }
 
 
+def _normalize_genre_tags(tags: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_tag in tags:
+        cleaned = raw_tag.strip()
+        if not cleaned:
+            continue
+        folded = cleaned.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        normalized.append(cleaned)
+    return sorted(normalized, key=str.casefold)
+
+
 @router.get("/api/books", response_model=List[schemas.Book])
 async def get_all_books(
     skip: int = 0,
@@ -174,6 +189,8 @@ async def update_book_details(
     previous_author = db_book.author
     previous_series = db_book.series
     previous_remote_ids = db_book.metadata_remote_ids
+    if book_update.user_genre_tags is not None:
+        book_update.user_genre_tags = _normalize_genre_tags(book_update.user_genre_tags)
     update_dict = book_update.model_dump(exclude_unset=True)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=book_update)
     if "content_selectors" in update_dict or "removed_chapters" in update_dict:

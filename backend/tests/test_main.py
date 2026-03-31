@@ -262,6 +262,145 @@ async def test_metadata_sync_uses_manual_isbn_identifier(db_session, mocker):
 
 
 @pytest.mark.asyncio
+async def test_metadata_sync_falls_back_to_google_books_when_open_library_has_no_match(db_session, mocker):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Fallback Book",
+                author="Google Author",
+                immutable_path="fallback-immutable.epub",
+                current_path="fallback.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    def fake_requests_get(url, params=None, timeout=None, headers=None):
+        if url == "https://openlibrary.org/search.json":
+            return FakeRequestsResponse({"docs": []})
+        if url == "https://www.googleapis.com/books/v1/volumes":
+            return FakeRequestsResponse(
+                {
+                    "items": [
+                        {
+                            "id": "google-volume-1",
+                            "volumeInfo": {
+                                "title": "Fallback Book",
+                                "authors": ["Google Author"],
+                                "categories": ["Fiction / Fantasy / Epic"],
+                                "industryIdentifiers": [
+                                    {"type": "ISBN_10", "identifier": "1234567890"},
+                                    {"type": "ISBN_13", "identifier": "9781234567897"},
+                                ],
+                                "infoLink": "https://books.google.com/books?id=google-volume-1",
+                            },
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    mocker.patch("backend.app.services.metadata_sync.GOOGLE_BOOKS_API_KEY", "test-key")
+    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_requests_get)
+
+    response = client.post("/api/metadata/apply", json={"book_ids": [book.id]})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["matched_books"] == 1
+    assert data["updated_books"] == 1
+    assert data["results"][0]["genre_tags"] == ["Fantasy"]
+
+    async with AsyncTestingSessionLocal() as session:
+        stored = await crud.get_book(session, book.id)
+        assert stored is not None
+        assert stored.genre_tags == ["Fantasy"]
+        assert stored.metadata_sync_source == "google_books"
+        assert stored.metadata_remote_ids == {
+            "google_books_volume_id": "google-volume-1",
+            "isbn_10": "1234567890",
+            "isbn_13": "9781234567897",
+        }
+
+
+@pytest.mark.asyncio
+async def test_metadata_sync_supplements_open_library_match_with_google_books_categories(db_session, mocker):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Supplemented Book",
+                author="Alice Smith",
+                immutable_path="supplemented-immutable.epub",
+                current_path="supplemented.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    def fake_requests_get(url, params=None, timeout=None, headers=None):
+        if url == "https://openlibrary.org/search.json":
+            return FakeRequestsResponse(
+                {
+                    "docs": [
+                        {
+                            "key": "/works/OL55W",
+                            "title": "Supplemented Book",
+                            "author_name": ["Alice Smith"],
+                            "author_key": ["OLA55A"],
+                        }
+                    ]
+                }
+            )
+        if url == "https://openlibrary.org/works/OL55W.json":
+            return FakeRequestsResponse({})
+        if url == "https://openlibrary.org/authors/OLA55A/works.json":
+            return FakeRequestsResponse({"entries": [{"title": "Supplemented Book"}]})
+        if url == "https://www.googleapis.com/books/v1/volumes":
+            return FakeRequestsResponse(
+                {
+                    "items": [
+                        {
+                            "id": "google-volume-55",
+                            "volumeInfo": {
+                                "title": "Supplemented Book",
+                                "authors": ["Alice Smith"],
+                                "categories": ["Fiction / Fantasy / Romance"],
+                                "industryIdentifiers": [
+                                    {"type": "ISBN_13", "identifier": "9780316339158"},
+                                ],
+                                "infoLink": "https://books.google.com/books?id=google-volume-55",
+                            },
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    mocker.patch("backend.app.services.metadata_sync.GOOGLE_BOOKS_API_KEY", "test-key")
+    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_requests_get)
+
+    response = client.post("/api/metadata/apply", json={"book_ids": [book.id]})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["matched_books"] == 1
+    assert data["updated_books"] == 1
+    assert data["results"][0]["genre_tags"] == ["Fantasy", "Romance"]
+
+    async with AsyncTestingSessionLocal() as session:
+        stored = await crud.get_book(session, book.id)
+        assert stored is not None
+        assert stored.genre_tags == ["Fantasy", "Romance"]
+        assert stored.metadata_sync_source == "open_library+google_books"
+        assert stored.metadata_remote_ids == {
+            "google_books_volume_id": "google-volume-55",
+            "isbn_13": "9780316339158",
+            "open_library_work_key": "/works/OL55W",
+            "open_library_author_key": "OLA55A",
+        }
+
+
+@pytest.mark.asyncio
 async def test_metadata_sync_uses_same_series_open_library_author_key_for_related_books(db_session, mocker):
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -437,6 +576,30 @@ async def test_approve_metadata_match_applies_genres_and_resolves_proposal(db_se
         assert stored_book.metadata_sync_source == "open_library"
         assert stored_match.status == "approved"
         assert stored_proposal.status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_book_update_replaces_user_genre_tags(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="User Genre Book",
+                author="User Genre Author",
+                immutable_path="user-genre-immutable.epub",
+                current_path="user-genre.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+                user_genre_tags=["Progression Fantasy"],
+            ),
+        )
+
+    response = client.put(f"/api/books/{book.id}", json={"user_genre_tags": ["Romance", "Fantasy", "Romance", " LitRPG "]})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["genre_tags"] == ["Fantasy"]
+    assert data["user_genre_tags"] == ["Fantasy", "LitRPG", "Romance"]
 
 
 @pytest.mark.asyncio
