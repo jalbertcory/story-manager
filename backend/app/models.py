@@ -42,6 +42,16 @@ class Book(Base):
     content_version = Column(Integer, nullable=False, server_default="1")
 
 
+class SeriesMetadata(Base):
+    __tablename__ = "series_metadata"
+
+    id = Column(Integer, primary_key=True, index=True)
+    series_name = Column(String, unique=True, nullable=False, index=True)
+    user_genre_tags = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+
 class BookLog(Base):
     __tablename__ = "book_logs"
 

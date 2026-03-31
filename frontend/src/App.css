@@ -490,6 +490,29 @@
   font-size: 0.75rem;
   color: var(--accent);
 }
+.genre-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.genre-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(98, 114, 234, 0.12);
+  border: 1px solid rgba(98, 114, 234, 0.18);
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.book-card-genres {
+  margin-top: 0.45rem;
+}
+
 .book-words {
   margin: 0.25rem 0 0;
   font-size: 0.75rem;
@@ -603,11 +626,24 @@
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+.series-header-genres {
+  margin-left: auto;
+  justify-content: flex-end;
+  max-width: 34%;
+}
+
+.series-expanded {
+  margin-top: -0.1rem;
+  margin-bottom: 0.5rem;
+}
+
 .series-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
-  flex-shrink: 0;
-  margin-left: auto;
+  justify-content: flex-end;
+  padding: 0 0.2rem 0.55rem;
 }
 .series-edit-form {
   display: flex;
@@ -754,6 +790,10 @@
   font-size: 0.78rem;
 }
 
+.book-row-genres {
+  margin-top: 0.55rem;
+}
+
 .book-row-actions {
   flex-shrink: 0;
 }
@@ -782,6 +822,15 @@
 }
 
 @media (max-width: 720px) {
+  .series-header {
+    align-items: flex-start;
+  }
+
+  .series-header-genres {
+    margin-left: 0;
+    max-width: none;
+  }
+
   .book-row {
     flex-direction: column;
     align-items: stretch;

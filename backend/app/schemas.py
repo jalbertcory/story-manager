@@ -67,6 +67,8 @@ class BookCatalogEntry(BaseModel):
     series_index: Optional[float] = None
     genre_tags: Optional[List[str]] = Field(default_factory=list)
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
+    series_user_genre_tags: Optional[List[str]] = Field(default_factory=list)
+    effective_genre_tags: Optional[List[str]] = Field(default_factory=list)
     source_type: SourceType
     cover_path: Optional[str] = None
     current_word_count: Optional[int] = None
@@ -173,6 +175,15 @@ class SeriesMerge(BaseModel):
 
 class SeriesReorder(BaseModel):
     ordered_book_ids: List[int]
+
+
+class SeriesGenresUpdate(BaseModel):
+    user_genre_tags: List[str] = Field(default_factory=list)
+
+
+class SeriesMetadataSummary(BaseModel):
+    series_name: str
+    user_genre_tags: List[str] = Field(default_factory=list)
 
 
 class ReaderBook(BaseModel):

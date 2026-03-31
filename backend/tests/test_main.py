@@ -95,6 +95,68 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
 
 
 @pytest.mark.asyncio
+async def test_get_book_catalog_includes_series_and_effective_genre_tags(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Catalog Book",
+                author="Catalog Author",
+                series="Catalog Saga",
+                immutable_path="catalog-immutable.epub",
+                current_path="catalog.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+                user_genre_tags=["Progression Fantasy"],
+            ),
+        )
+        await crud.set_series_user_genre_tags(session, "Catalog Saga", ["Adventure", "Fantasy"])
+
+    response = client.get("/api/books/catalog")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["series_user_genre_tags"] == ["Adventure", "Fantasy"]
+    assert data[0]["effective_genre_tags"] == ["Adventure", "Fantasy", "Progression Fantasy"]
+
+
+@pytest.mark.asyncio
+async def test_update_series_genres_updates_catalog_effective_genres(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Series Book",
+                author="Series Author",
+                series="Dragon Saga",
+                immutable_path="dragon-saga-immutable.epub",
+                current_path="dragon-saga.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+            ),
+        )
+
+    response = client.put(
+        "/api/series/Dragon%20Saga/genres",
+        json={"user_genre_tags": [" Progression Fantasy ", "Fantasy", "Progression Fantasy"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "series_name": "Dragon Saga",
+        "user_genre_tags": ["Fantasy", "Progression Fantasy"],
+    }
+
+    catalog_response = client.get("/api/books/catalog")
+
+    assert catalog_response.status_code == 200
+    catalog_data = catalog_response.json()
+    assert catalog_data[0]["series_user_genre_tags"] == ["Fantasy", "Progression Fantasy"]
+    assert catalog_data[0]["effective_genre_tags"] == ["Fantasy", "Progression Fantasy"]
+
+
+@pytest.mark.asyncio
 async def test_metadata_sync_preview_returns_genres_and_possible_missing_series_books(db_session, mocker):
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
