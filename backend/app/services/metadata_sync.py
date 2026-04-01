@@ -270,7 +270,7 @@ def _score_search_doc(book: models.Book, doc: dict[str, Any]) -> float:
 
 def _extract_subjects(doc: dict[str, Any], work_data: dict[str, Any]) -> list[str]:
     subjects: list[str] = []
-    for raw_subject in (work_data.get("subjects") or doc.get("subject") or []):
+    for raw_subject in work_data.get("subjects") or doc.get("subject") or []:
         if isinstance(raw_subject, str):
             cleaned = raw_subject.strip()
             if cleaned:
@@ -510,11 +510,7 @@ def _get_manual_remote_ids(book: models.Book) -> dict[str, str]:
     raw_ids = book.metadata_remote_ids or {}
     if not isinstance(raw_ids, dict):
         return {}
-    return {
-        key: str(value).strip()
-        for key, value in raw_ids.items()
-        if value is not None and str(value).strip()
-    }
+    return {key: str(value).strip() for key, value in raw_ids.items() if value is not None and str(value).strip()}
 
 
 def _fetch_search_docs(params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -894,8 +890,7 @@ def _build_suggestion_for_book(
         new_tags = [tag for tag in genre_tags if tag.casefold() not in existing_tags]
         remote_ids = _merge_remote_ids(google_match.remote_ids, remote_ids)
         if google_genre_tags or any(
-            remote_ids.get(key) != open_library_remote_ids.get(key)
-            for key in google_match.remote_ids
+            remote_ids.get(key) != open_library_remote_ids.get(key) for key in google_match.remote_ids
         ):
             source = "open_library+google_books"
 
@@ -926,10 +921,7 @@ async def _generate_suggestions(
     author_work_cache: dict[str, list[dict[str, Any]]] = {}
 
     return await asyncio.to_thread(
-        lambda: [
-            _build_suggestion_for_book(book, local_books_by_author, author_work_cache)
-            for book in target_books
-        ]
+        lambda: [_build_suggestion_for_book(book, local_books_by_author, author_work_cache) for book in target_books]
     )
 
 
@@ -996,9 +988,7 @@ async def preview_metadata_sync(
         scanned_books=len(target_books),
         matched_books=sum(1 for suggestion in suggestions if suggestion.matched),
         books_with_new_genres=sum(1 for suggestion in suggestions if suggestion.new_genre_tags),
-        books_with_missing_series_candidates=sum(
-            1 for suggestion in suggestions if suggestion.possible_missing_series_books
-        ),
+        books_with_missing_series_candidates=sum(1 for suggestion in suggestions if suggestion.possible_missing_series_books),
         results=results,
     )
 
@@ -1028,8 +1018,6 @@ async def apply_metadata_sync(
         matched_books=sum(1 for suggestion in suggestions if suggestion.matched),
         updated_books=updated_books,
         books_with_new_genres=sum(1 for suggestion in suggestions if suggestion.new_genre_tags),
-        books_with_missing_series_candidates=sum(
-            1 for suggestion in suggestions if suggestion.possible_missing_series_books
-        ),
+        books_with_missing_series_candidates=sum(1 for suggestion in suggestions if suggestion.possible_missing_series_books),
         results=[suggestion.to_schema() for suggestion in suggestions],
     )

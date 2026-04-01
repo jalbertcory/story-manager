@@ -77,8 +77,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             "dry_run": dry_run,
             "files": [],
             "total_bytes": 0,
-            "skipped_reason": f"{len(pending)} book(s) are still downloading. "
-                              "Run cleanup after all downloads complete.",
+            "skipped_reason": f"{len(pending)} book(s) are still downloading. " "Run cleanup after all downloads complete.",
         }
 
     # Use case-folded paths for comparison so case-insensitive filesystems

@@ -84,9 +84,7 @@ def _normalize_genre_tags(tags: list[str]) -> list[str]:
     return sorted(normalized, key=str.casefold)
 
 
-def _effective_genre_tags(
-    book: models.Book, series_user_genre_tags: list[str] | None = None
-) -> list[str]:
+def _effective_genre_tags(book: models.Book, series_user_genre_tags: list[str] | None = None) -> list[str]:
     return _normalize_genre_tags(
         [
             *(series_user_genre_tags or []),
@@ -266,9 +264,7 @@ async def get_reader_series(request: Request, db: AsyncSession = Depends(get_db)
     for row in series_rows:
         name = row["name"]
         meta = metadata_map.get(name)
-        genre_tags = crud.compute_effective_series_genre_tags(
-            book_groups.get(name, []), meta
-        )
+        genre_tags = crud.compute_effective_series_genre_tags(book_groups.get(name, []), meta)
         results.append(
             schemas.ReaderSeriesSummary(
                 name=name,
@@ -282,16 +278,12 @@ async def get_reader_series(request: Request, db: AsyncSession = Depends(get_db)
     return results
 
 
-async def _series_metadata_map(
-    db: AsyncSession, books: list[models.Book]
-) -> dict[str, models.SeriesMetadata]:
+async def _series_metadata_map(db: AsyncSession, books: list[models.Book]) -> dict[str, models.SeriesMetadata]:
     series_names = sorted({book.series for book in books if book.series})
     return await crud.get_series_metadata_for_names(db, series_names)
 
 
-async def _reader_books_response(
-    books: list[models.Book], request: Request, db: AsyncSession
-) -> list[schemas.ReaderBook]:
+async def _reader_books_response(books: list[models.Book], request: Request, db: AsyncSession) -> list[schemas.ReaderBook]:
     metadata_map = await _series_metadata_map(db, books)
     return [
         schemas.ReaderBook.model_validate(
@@ -299,9 +291,7 @@ async def _reader_books_response(
                 book,
                 request,
                 series_user_genre_tags=(
-                    metadata_map[book.series].user_genre_tags
-                    if book.series and book.series in metadata_map
-                    else None
+                    metadata_map[book.series].user_genre_tags if book.series and book.series in metadata_map else None
                 ),
             )
         )

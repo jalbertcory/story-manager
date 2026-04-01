@@ -133,16 +133,10 @@ async def _sync_one_book(
         await db.commit()
         return False, False, False
 
-    if (
-        existing_match
-        and existing_match.status == "rejected"
-        and _match_same_remote(existing_match, suggestion)
-    ):
+    if existing_match and existing_match.status == "rejected" and _match_same_remote(existing_match, suggestion):
         match_status = "rejected"
     elif (
-        existing_match
-        and existing_match.status in APPROVED_MATCH_STATUSES
-        and _match_same_remote(existing_match, suggestion)
+        existing_match and existing_match.status in APPROVED_MATCH_STATUSES and _match_same_remote(existing_match, suggestion)
     ):
         match_status = existing_match.status
     elif suggestion.match_confidence >= AUTO_APPROVE_THRESHOLD:
