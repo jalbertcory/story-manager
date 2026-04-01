@@ -29,6 +29,44 @@ async function runLibraryValidation() {
   return res.json();
 }
 
+function formatAuditIssue(issue) {
+  switch (issue.issue) {
+    case "pending_web_import":
+      return "pending web import";
+    case "failed_web_import":
+      return "failed web import";
+    default:
+      return issue.issue.replace(/_/g, " ");
+  }
+}
+
+function getCleanupFiles(preview) {
+  return preview?.files || [];
+}
+
+function getCleanupBooks(preview) {
+  return preview?.books || [];
+}
+
+function getCleanupTargetCount(preview) {
+  return getCleanupFiles(preview).length + getCleanupBooks(preview).length;
+}
+
+function formatCleanupSummary(preview) {
+  const parts = [];
+  const fileCount = getCleanupFiles(preview).length;
+  const bookCount = getCleanupBooks(preview).length;
+
+  if (fileCount > 0) {
+    parts.push(`${fileCount} file${fileCount !== 1 ? "s" : ""}`);
+  }
+  if (bookCount > 0) {
+    parts.push(`${bookCount} failed import${bookCount !== 1 ? "s" : ""}`);
+  }
+
+  return parts.join(", ");
+}
+
 function renderMetadataJobSummary(job) {
   if (!job) return "No metadata sync jobs have run yet.";
   const base = `${job.processed_books}/${job.total_books} processed, ${job.matched_books} matched, ${job.proposed_books} proposed, ${job.applied_books} applied.`;
@@ -191,8 +229,11 @@ function Utilities({ onBack }) {
                       {issue.author && <span className="hint"> by {issue.author}</span>}
                     </span>
                     <span style={{ flexShrink: 0, color: "#f87171", fontFamily: "monospace", fontSize: "0.8rem" }}>
-                      {issue.issue.replace(/_/g, " ")}
+                      {formatAuditIssue(issue)}
                       {issue.path && <span className="hint" style={{ marginLeft: "0.5rem" }}>{issue.path}</span>}
+                      {!issue.path && issue.source_url && (
+                        <span className="hint" style={{ marginLeft: "0.5rem" }}>{issue.source_url}</span>
+                      )}
                     </span>
                   </li>
                 ))}
@@ -341,8 +382,8 @@ function Utilities({ onBack }) {
       <section className="settings-section">
         <h3>Storage Cleanup</h3>
         <p className="hint">
-          Scans the library directory for EPUB and cover files that are not
-          referenced by any book in the database.
+          Scans the library directory for orphaned EPUB and cover files, and
+          failed web imports that never produced EPUB files.
         </p>
 
         <div className="settings-actions">
@@ -355,7 +396,7 @@ function Utilities({ onBack }) {
             </button>
           )}
 
-          {preview && preview.dry_run && preview.files.length > 0 && (
+          {preview && preview.dry_run && getCleanupTargetCount(preview) > 0 && (
             <button
               className="btn-danger"
               onClick={() => deleteMutation.mutate()}
@@ -363,7 +404,7 @@ function Utilities({ onBack }) {
             >
               {deleteMutation.isPending
                 ? "Deleting..."
-                : `Delete ${preview.files.length} file${preview.files.length !== 1 ? "s" : ""} (${formatBytes(preview.total_bytes)})`}
+                : `Delete ${getCleanupTargetCount(preview)} item${getCleanupTargetCount(preview) !== 1 ? "s" : ""}${preview.total_bytes > 0 ? ` (${formatBytes(preview.total_bytes)})` : ""}`}
             </button>
           )}
 
@@ -397,44 +438,79 @@ function Utilities({ onBack }) {
         {preview && !preview.skipped_reason && (
           <div style={{ marginTop: "1rem" }}>
             <h4>
-              {deleted ? "Deleted Files" : "Orphaned Files Found"}
+              {deleted ? "Deleted Items" : "Cleanup Candidates Found"}
               <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
-                {preview.files.length} file{preview.files.length !== 1 ? "s" : ""} — {formatBytes(preview.total_bytes)}
+                {getCleanupTargetCount(preview) === 0
+                  ? "Nothing to remove"
+                  : `${formatCleanupSummary(preview)}${preview.total_bytes > 0 ? ` — ${formatBytes(preview.total_bytes)}` : ""}`}
               </span>
             </h4>
 
-            {preview.files.length === 0 ? (
-              <p className="hint">No orphaned files found. Library is clean.</p>
+            {getCleanupTargetCount(preview) === 0 ? (
+              <p className="hint">No orphaned files or failed web imports found. Library is clean.</p>
             ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                {preview.files.map((f) => (
-                  <li
-                    key={f.path}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      fontFamily: "monospace",
-                      fontSize: "0.8rem",
-                      padding: "0.3rem 0.5rem",
-                      borderRadius: "4px",
-                      background: "var(--surface, #1a1a2e)",
-                    }}
-                  >
-                    <span style={{ wordBreak: "break-all", color: deleted ? "#6b7280" : "#e2e8f0" }}>
-                      {f.path}
-                    </span>
-                    <span className="hint" style={{ flexShrink: 0, marginLeft: "1rem" }}>
-                      {formatBytes(f.size_bytes)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {getCleanupFiles(preview).length > 0 && (
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                    {getCleanupFiles(preview).map((f) => (
+                      <li
+                        key={f.path}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          fontFamily: "monospace",
+                          fontSize: "0.8rem",
+                          padding: "0.3rem 0.5rem",
+                          borderRadius: "4px",
+                          background: "var(--surface, #1a1a2e)",
+                        }}
+                      >
+                        <span style={{ wordBreak: "break-all", color: deleted ? "#6b7280" : "#e2e8f0" }}>
+                          {f.path}
+                        </span>
+                        <span className="hint" style={{ flexShrink: 0, marginLeft: "1rem" }}>
+                          {formatBytes(f.size_bytes)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {getCleanupBooks(preview).length > 0 && (
+                  <ul style={{ listStyle: "none", padding: 0, margin: getCleanupFiles(preview).length > 0 ? "0.75rem 0 0 0" : 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                    {getCleanupBooks(preview).map((book) => (
+                      <li
+                        key={book.book_id}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "baseline",
+                          fontSize: "0.85rem",
+                          padding: "0.4rem 0.6rem",
+                          borderRadius: "4px",
+                          background: "var(--surface, #1a1a2e)",
+                          gap: "1rem",
+                        }}
+                      >
+                        <span style={{ wordBreak: "break-word" }}>
+                          <strong>{book.title}</strong>
+                          {book.author && <span className="hint"> by {book.author}</span>}
+                        </span>
+                        <span style={{ flexShrink: 0, color: "#f87171", fontFamily: "monospace", fontSize: "0.8rem" }}>
+                          failed web import
+                          {book.source_url && <span className="hint" style={{ marginLeft: "0.5rem" }}>{book.source_url}</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
 
-            {deleted && preview.files.length > 0 && (
+            {deleted && getCleanupTargetCount(preview) > 0 && (
               <p style={{ marginTop: "0.75rem", color: "#4ade80", fontSize: "0.875rem" }}>
-                Deleted {preview.files.length} file{preview.files.length !== 1 ? "s" : ""}, freed {formatBytes(preview.total_bytes)}.
+                Deleted {getCleanupTargetCount(preview)} item{getCleanupTargetCount(preview) !== 1 ? "s" : ""}{preview.total_bytes > 0 ? `, freed ${formatBytes(preview.total_bytes)}` : ""}.
               </p>
             )}
           </div>
