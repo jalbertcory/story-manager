@@ -56,7 +56,7 @@ class BookLog(Base):
     __tablename__ = "book_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=False)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
     entry_type = Column(String, nullable=False)  # e.g., "added", "updated"
     previous_chapter_count = Column(Integer, nullable=True)
     new_chapter_count = Column(Integer, nullable=True)
@@ -97,7 +97,7 @@ class BookMetadataMatch(Base):
     __tablename__ = "book_metadata_matches"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     status = Column(String, nullable=False, default="pending")
     source = Column(String, nullable=True)
     match_confidence = Column(Numeric(5, 4), nullable=True)
@@ -116,8 +116,8 @@ class MetadataProposal(Base):
     __tablename__ = "metadata_proposals"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=False, unique=True, index=True)
-    match_id = Column(Integer, ForeignKey("book_metadata_matches.id"), nullable=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    match_id = Column(Integer, ForeignKey("book_metadata_matches.id", ondelete="SET NULL"), nullable=True)
     status = Column(String, nullable=False, default="open")
     proposed_genre_tags = Column(JSON, nullable=True)
     possible_missing_series_books = Column(JSON, nullable=True)
