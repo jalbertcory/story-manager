@@ -186,6 +186,8 @@ async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str
 
 async def delete_book(db: AsyncSession, book: models.Book) -> None:
     """Delete a book record from the database."""
+    await db.execute(delete(models.MetadataProposal).where(models.MetadataProposal.book_id == book.id))
+    await db.execute(delete(models.BookMetadataMatch).where(models.BookMetadataMatch.book_id == book.id))
     await db.execute(delete(models.BookLog).where(models.BookLog.book_id == book.id))
     await db.delete(book)
     await db.commit()
@@ -197,7 +199,10 @@ async def delete_all_books(db: AsyncSession) -> int:
     if book_count == 0:
         return 0
 
-    await db.execute(delete(models.BookLog).where(models.BookLog.book_id.in_([book.id for book in books])))
+    book_ids = [book.id for book in books]
+    await db.execute(delete(models.MetadataProposal).where(models.MetadataProposal.book_id.in_(book_ids)))
+    await db.execute(delete(models.BookMetadataMatch).where(models.BookMetadataMatch.book_id.in_(book_ids)))
+    await db.execute(delete(models.BookLog).where(models.BookLog.book_id.in_(book_ids)))
     await db.execute(delete(models.Book))
     await db.commit()
     return book_count
