@@ -71,6 +71,48 @@ describe("Utilities", () => {
     expect(screen.getByText(/1 issue/)).toBeInTheDocument();
   });
 
+  it("shows failed web imports distinctly in the audit", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/metadata/jobs/latest") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/metadata/inbox") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/library/validate") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_books: 1,
+              issues_count: 1,
+              issues: [
+                {
+                  book_id: 7,
+                  title: "Download failed",
+                  author: "Pending",
+                  issue: "failed_web_import",
+                  source_url: "https://example.com/story/failed",
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Library Audit" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Download failed")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText(/^failed web import$/i)[0]).toBeInTheDocument();
+    expect(screen.getByText("https://example.com/story/failed")).toBeInTheDocument();
+  });
+
   it("shows healthy message when audit finds no issues", async () => {
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/metadata/jobs/latest") {
@@ -313,5 +355,51 @@ describe("Utilities", () => {
     await waitFor(() => {
       expect(screen.getByText("library/orphan.epub")).toBeInTheDocument();
     });
+  });
+
+  it("shows failed imports in storage cleanup results", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/metadata/jobs/latest") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/metadata/inbox") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes("storage/cleanup")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              dry_run: true,
+              files: [],
+              books: [
+                {
+                  book_id: 9,
+                  title: "Download failed",
+                  author: "Pending",
+                  source_url: "https://example.com/story/failed-cleanup",
+                  issue: "failed_web_import",
+                },
+              ],
+              total_bytes: 0,
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Scan for Orphaned Files" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Download failed")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText(/^failed web import$/i)[0]).toBeInTheDocument();
+    expect(screen.getByText("https://example.com/story/failed-cleanup")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete 1 item" })).toBeInTheDocument();
   });
 });

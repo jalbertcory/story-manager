@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _is_failed_web_import_placeholder(book) -> bool:
+    return bool(
+        book.source_url
+        and book.download_status == "error"
+        and not book.immutable_path
+        and not book.current_path
+    )
+
+
 @router.get("/api/logs")
 async def get_logs(limit: int = 200, level: Optional[str] = None):
     entries = list(_LOG_BUFFER)
@@ -35,6 +44,13 @@ async def validate_library(db: AsyncSession = Depends(get_db)):
     issues: list[dict] = []
     for book in books:
         book_info = {"book_id": book.id, "title": book.title, "author": book.author}
+        if book.source_url and not book.immutable_path and not book.current_path:
+            if book.download_status == "pending":
+                issues.append({**book_info, "issue": "pending_web_import", "source_url": book.source_url})
+                continue
+            if _is_failed_web_import_placeholder(book):
+                issues.append({**book_info, "issue": "failed_web_import", "source_url": book.source_url})
+                continue
         if not book.immutable_path:
             issues.append({**book_info, "issue": "missing_immutable_path"})
         else:
@@ -60,14 +76,26 @@ async def validate_library(db: AsyncSession = Depends(get_db)):
 @router.post("/api/storage/cleanup")
 async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)):
     """
-    Scans the library directory for files not referenced by any book record.
+    Scans the library directory for files not referenced by any book record and
+    failed web-import placeholder books that never produced EPUB files.
     dry_run=True (default): returns what would be deleted without deleting.
-    dry_run=False: deletes orphaned files and returns what was deleted.
+    dry_run=False: deletes orphaned files and failed placeholder books.
     """
     if not LIBRARY_PATH.exists():
-        return {"dry_run": dry_run, "files": [], "total_bytes": 0}
+        return {"dry_run": dry_run, "files": [], "books": [], "total_bytes": 0}
 
     books = await crud.get_books(db, limit=100000)
+    failed_import_books = [
+        {
+            "book_id": book.id,
+            "title": book.title,
+            "author": book.author,
+            "source_url": book.source_url,
+            "issue": "failed_web_import",
+        }
+        for book in books
+        if _is_failed_web_import_placeholder(book)
+    ]
 
     # Refuse to run if any downloads are still in progress — their files
     # are not yet recorded in the DB and would be incorrectly flagged.
@@ -76,6 +104,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
         return {
             "dry_run": dry_run,
             "files": [],
+            "books": [],
             "total_bytes": 0,
             "skipped_reason": f"{len(pending)} book(s) are still downloading. " "Run cleanup after all downloads complete.",
         }
@@ -108,6 +137,13 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             full = LIBRARY_PATH.parent / f["path"]
             logger.info("Storage cleanup: deleting %s", f["path"])
             full.unlink(missing_ok=True)
+        for book in books:
+            if not _is_failed_web_import_placeholder(book):
+                continue
+            logger.info("Storage cleanup: deleting failed web import placeholder book %s (%s)", book.id, book.source_url)
+            await crud.delete_book(db, book=book)
+        if failed_import_books:
+            await crud.cleanup_orphaned_series_metadata(db)
         logger.info(f"Storage cleanup: deleted {len(orphans)} orphaned files ({total_bytes} bytes)")
 
-    return {"dry_run": dry_run, "files": orphans, "total_bytes": total_bytes}
+    return {"dry_run": dry_run, "files": orphans, "books": failed_import_books, "total_bytes": total_bytes}

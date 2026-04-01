@@ -762,6 +762,36 @@ async def test_add_existing_web_novel(db_session):
     assert "already exists" in response.json()["detail"]
 
 
+@pytest.mark.asyncio
+async def test_library_validate_classifies_failed_web_import_placeholders(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Download failed",
+                author="Pending",
+                source_url="https://example.com/story/failed",
+                source_type=models.SourceType.web,
+                download_status="error",
+            ),
+        )
+
+    response = client.get("/api/library/validate")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["issues_count"] == 1
+    assert data["issues"] == [
+        {
+            "book_id": 1,
+            "title": "Download failed",
+            "author": "Pending",
+            "issue": "failed_web_import",
+            "source_url": "https://example.com/story/failed",
+        }
+    ]
+
+
 def create_dummy_epub(filepath: Path, title: str, author: str, series: str = None):
     """Creates a dummy EPUB file for testing."""
     book = epub.EpubBook()
@@ -1506,6 +1536,78 @@ async def test_remove_all_books_preview_and_delete(db_session):
     assert not author_one_dir.exists()
     assert not author_two_dir.exists()
     assert not cover_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphans(db_session, tmp_path, monkeypatch):
+    from backend.app.routers import storage as storage_router
+
+    library_path = (tmp_path / "library").resolve()
+    monkeypatch.setattr(storage_router, "LIBRARY_PATH", library_path)
+    library_path.mkdir(parents=True, exist_ok=True)
+    orphan_path = library_path / "orphan.epub"
+    orphan_path.write_bytes(b"orphan")
+
+    valid_author_dir = library_path / "Valid Author"
+    valid_author_dir.mkdir(parents=True, exist_ok=True)
+    valid_immutable = valid_author_dir / "immutable_Keep Me.epub"
+    valid_current = valid_author_dir / "Keep Me.epub"
+    create_dummy_epub(valid_immutable, "Keep Me", "Valid Author")
+    create_dummy_epub(valid_current, "Keep Me", "Valid Author")
+
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Download failed",
+                author="Pending",
+                source_url="https://example.com/story/failed-cleanup",
+                source_type=models.SourceType.web,
+                download_status="error",
+            ),
+        )
+        keep_book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Keep Me",
+                author="Valid Author",
+                immutable_path=str(valid_immutable.relative_to(library_path.parent)),
+                current_path=str(valid_current.relative_to(library_path.parent)),
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    preview_response = client.post("/api/storage/cleanup?dry_run=true")
+
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+    assert preview["dry_run"] is True
+    assert preview["files"] == [{"path": "library/orphan.epub", "size_bytes": 6}]
+    assert preview["books"] == [
+        {
+            "book_id": 1,
+            "title": "Download failed",
+            "author": "Pending",
+            "source_url": "https://example.com/story/failed-cleanup",
+            "issue": "failed_web_import",
+        }
+    ]
+
+    delete_response = client.post("/api/storage/cleanup?dry_run=false")
+
+    assert delete_response.status_code == 200
+    deleted = delete_response.json()
+    assert deleted["dry_run"] is False
+    assert deleted["files"] == [{"path": "library/orphan.epub", "size_bytes": 6}]
+    assert len(deleted["books"]) == 1
+    assert not orphan_path.exists()
+
+    books_response = client.get("/api/books")
+    assert books_response.status_code == 200
+    books = books_response.json()
+    assert len(books) == 1
+    assert books[0]["id"] == keep_book.id
+    assert books[0]["title"] == "Keep Me"
 
 
 @pytest.mark.asyncio
