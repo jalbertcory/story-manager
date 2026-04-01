@@ -158,6 +158,11 @@ async def apply_book_cleaning(book, db, force: bool = False) -> None:
     if not force and not chapter_selectors and not content_selectors and not removed_chapters:
         return
 
+    if not book.immutable_path or not book.current_path:
+        logger.warning("Book %r (id=%s) is missing epub paths (immutable=%s, current=%s), skipping cleaning",
+                       book.title, book.id, book.immutable_path, book.current_path)
+        return
+
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path

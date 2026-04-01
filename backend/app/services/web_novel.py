@@ -260,6 +260,10 @@ async def update_web_novels() -> None:
         logger.info(f"Update task {task.id} processing {task.completed_books}/{task.total_books} books.")
 
         for book in books:
+            if not book.immutable_path or not book.current_path:
+                logger.warning("Skipping %s (id=%s): missing epub paths.", book.title, book.id)
+                await crud.increment_update_task(db, task)
+                continue
             latest_log = await crud.get_latest_book_log(db, book.id)
             if latest_log and latest_log.timestamp >= task.started_at:
                 logger.info(f"Skipping {book.title}, already processed in this task.")

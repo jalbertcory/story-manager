@@ -13,8 +13,18 @@ def _safe_segment(value: str, fallback: str) -> str:
 
 
 def get_author_library_dir(author: str) -> Path:
-    author_dir = LIBRARY_PATH / _safe_segment(author, "Unknown Author")
+    safe_name = _safe_segment(author, "Unknown Author")
+    author_dir = LIBRARY_PATH / safe_name
     author_dir.mkdir(parents=True, exist_ok=True)
+    # On case-insensitive filesystems (macOS), the directory may already exist
+    # with different casing. Resolve to the actual filesystem casing so DB
+    # paths match the real directory name.
+    try:
+        for entry in LIBRARY_PATH.iterdir():
+            if entry.is_dir() and entry.name.lower() == safe_name.lower():
+                return entry
+    except OSError:
+        pass
     return author_dir
 
 

@@ -131,12 +131,46 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
     existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
     if existing:
-        temp_immutable_path.unlink(missing_ok=True)
-        temp_current_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A book with title '{title}' by '{author}' already exists (id={existing.id})",
-        )
+        # Check if the existing book's files are missing — if so, restore them
+        # from the upload instead of rejecting as a duplicate.
+        files_intact = True
+        if existing.immutable_path:
+            files_intact = files_intact and (LIBRARY_PATH.parent / existing.immutable_path).exists()
+        else:
+            files_intact = False
+        if existing.current_path:
+            files_intact = files_intact and (LIBRARY_PATH.parent / existing.current_path).exists()
+        else:
+            files_intact = False
+
+        if files_intact:
+            temp_immutable_path.unlink(missing_ok=True)
+            temp_current_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A book with title '{title}' by '{author}' already exists (id={existing.id})",
+            )
+
+        # Restore missing files for the existing book record.
+        logger.info("Restoring missing files for '%s' by '%s' (id=%s)", title, author, existing.id)
+        immutable_path, current_path = build_book_paths(filename, author)
+        temp_immutable_path.replace(immutable_path)
+        temp_current_path.replace(current_path)
+
+        existing.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
+        existing.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
+        existing.master_word_count = epub_editor.get_word_count(str(immutable_path))
+        existing.current_word_count = existing.master_word_count
+
+        if not existing.cover_path or not (LIBRARY_PATH.parent / existing.cover_path).exists():
+            cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=existing.id)
+            if cover_path:
+                existing.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
+
+        await db.commit()
+        await db.refresh(existing)
+        await epub_editor.apply_book_cleaning(existing, db)
+        return existing
 
     immutable_path, current_path = build_book_paths(filename, author)
     temp_immutable_path.replace(immutable_path)
