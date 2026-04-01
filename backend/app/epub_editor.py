@@ -1,5 +1,7 @@
 import logging
+import filecmp
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import ebooklib
 from ebooklib import epub
@@ -7,6 +9,72 @@ from bs4 import BeautifulSoup
 import re
 
 logger = logging.getLogger(__name__)
+
+
+def _files_match(left: Path, right: Path) -> bool:
+    if not left.is_file() or not right.is_file():
+        return False
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    return filecmp.cmp(str(left), str(right), shallow=False)
+
+
+def _spine_entry_name(book: epub.EpubBook, spine_entry) -> str | None:
+    item_ref = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
+    if hasattr(item_ref, "get_name"):
+        return item_ref.get_name()
+    if isinstance(item_ref, str):
+        item = book.get_item_with_id(item_ref)
+        return item.get_name() if item is not None else None
+    return None
+
+
+def _toc_item_href(item) -> str | None:
+    if isinstance(item, epub.Link):
+        return item.href.split("#")[0]
+    if isinstance(item, epub.Section):
+        href = getattr(item, "href", None)
+        return href.split("#")[0] if href else None
+    if hasattr(item, "get_name"):
+        return item.get_name().split("#")[0]
+    return None
+
+
+def _filter_toc(items, chapters_to_remove: set[str]):
+    filtered = []
+    for item in items:
+        if isinstance(item, tuple):
+            section, children = item
+            filtered_children = _filter_toc(children, chapters_to_remove)
+            href = _toc_item_href(section)
+            if href in chapters_to_remove and not filtered_children:
+                continue
+            filtered.append((section, filtered_children))
+            continue
+
+        href = _toc_item_href(item)
+        if href and href in chapters_to_remove:
+            continue
+        filtered.append(item)
+
+    return tuple(filtered) if isinstance(items, tuple) else filtered
+
+
+def _merge_cleaning_rules(book, configs) -> tuple[list[str], list[str], list[str]]:
+    chapter_selectors: list[str] = []
+    content_selectors: list[str] = []
+    for cfg in configs:
+        chapter_selectors += list(cfg.chapter_selectors or [])
+        content_selectors += list(cfg.content_selectors or [])
+    content_selectors += list(book.content_selectors or [])
+    removed_chapters = list(book.removed_chapters or [])
+    return removed_chapters, content_selectors, chapter_selectors
+
+
+def _match_cleaning_configs(book, cleaning_configs) -> list:
+    if not book.source_url:
+        return []
+    return [cfg for cfg in cleaning_configs if re.search(cfg.url_pattern, str(book.source_url))]
 
 
 def get_chapters(epub_path: str):
@@ -67,7 +135,7 @@ def process_epub(
     removed_chapters: list[str],
     content_selectors: list[str],
     chapter_selectors: list[str] = [],
-):
+) -> bool:
     book = epub.read_epub(immutable_path)
     new_book = epub.EpubBook()
 
@@ -94,13 +162,28 @@ def process_epub(
                 item.set_content(str(soup).encode("utf-8"))
             new_book.add_item(item)
 
-    # Rebuild spine and TOC
-    new_book.spine = [item for item in book.spine if book.get_item_with_id(item[0]).get_name() not in chapters_to_remove]
-    new_book.toc = [
-        link for link in book.toc if isinstance(link, epub.Link) and link.href.split("#")[0] not in chapters_to_remove
+    # Rebuild spine and TOC without assuming every spine entry is a tuple
+    new_book.spine = [
+        spine_entry
+        for spine_entry in book.spine
+        if (entry_name := _spine_entry_name(book, spine_entry)) is None or entry_name not in chapters_to_remove
     ]
+    new_book.toc = _filter_toc(book.toc, chapters_to_remove)
 
-    epub.write_epub(current_path, new_book, {})
+    current_path_obj = Path(current_path)
+    current_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(suffix=".epub", dir=str(current_path_obj.parent), delete=False) as temp_file:
+            temporary_path = Path(temp_file.name)
+        epub.write_epub(str(temporary_path), new_book, {})
+        if _files_match(temporary_path, current_path_obj):
+            return False
+        temporary_path.replace(current_path_obj)
+        return True
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def preview_epub(
@@ -130,7 +213,7 @@ def preview_epub(
     return {"elements_removed": elements_removed, "estimated_word_count": estimated_word_count}
 
 
-async def apply_book_cleaning(book, db, force: bool = False) -> None:
+async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: list | None = None) -> bool:
     """Apply all cleaning rules (site-wide configs + per-book settings) to a book.
 
     Looks up all matching CleaningConfigs for the book's source URL, merges their
@@ -141,22 +224,18 @@ async def apply_book_cleaning(book, db, force: bool = False) -> None:
     """
     from . import crud
 
-    configs = []
-    if book.source_url:
-        configs = await crud.get_all_matching_cleaning_configs(db, str(book.source_url))
+    if cleaning_configs is None:
+        configs = []
+        if book.source_url:
+            configs = await crud.get_all_matching_cleaning_configs(db, str(book.source_url))
+    else:
+        configs = _match_cleaning_configs(book, cleaning_configs)
 
-    # Merge selectors from all matching configs and per-book settings
-    chapter_selectors: list[str] = []
-    content_selectors: list[str] = []
-    for cfg in configs:
-        chapter_selectors += list(cfg.chapter_selectors or [])
-        content_selectors += list(cfg.content_selectors or [])
-    content_selectors += list(book.content_selectors or [])
-    removed_chapters = list(book.removed_chapters or [])
+    removed_chapters, content_selectors, chapter_selectors = _merge_cleaning_rules(book, configs)
 
     # Nothing to do — skip the (potentially expensive) epub rewrite
     if not force and not chapter_selectors and not content_selectors and not removed_chapters:
-        return
+        return False
 
     if not book.immutable_path or not book.current_path:
         logger.warning(
@@ -166,23 +245,36 @@ async def apply_book_cleaning(book, db, force: bool = False) -> None:
             book.immutable_path,
             book.current_path,
         )
-        return
+        return False
 
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path
 
+    if (
+        force
+        and not chapter_selectors
+        and not content_selectors
+        and not removed_chapters
+        and _files_match(immutable_path, current_path)
+    ):
+        return False
+
     try:
-        process_epub(
+        changed = process_epub(
             str(immutable_path),
             str(current_path),
             removed_chapters,
             content_selectors,
             chapter_selectors,
         )
+        if not changed:
+            return False
         book.current_word_count = get_word_count(str(current_path))
         await crud.touch_book_content(db, book)
         await db.commit()
         await db.refresh(book)
+        return True
     except Exception as e:
         logger.error("Failed to apply cleaning to %s: %s", book.title, e)
+        return False

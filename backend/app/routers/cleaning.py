@@ -25,9 +25,13 @@ class PreviewCleaningRequest(BaseModel):
 @router.post("/api/books/reprocess-all", response_model=dict)
 async def reprocess_all_books(db: AsyncSession = Depends(get_db)):
     books = await crud.get_books(db, limit=10000)
+    configs = await crud.get_cleaning_configs(db)
+    updated = 0
     for book in books:
-        await epub_editor.apply_book_cleaning(book, db, force=True)
-    return {"reprocessed": len(books)}
+        changed = await epub_editor.apply_book_cleaning(book, db, force=True, cleaning_configs=configs)
+        if changed:
+            updated += 1
+    return {"reprocessed": len(books), "updated": updated}
 
 
 @router.post("/api/books/{book_id}/process", response_model=schemas.Book)
@@ -97,10 +101,11 @@ async def update_cleaning_config_endpoint(
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     config = await crud.update_cleaning_config(db, config, update)
+    configs = await crud.get_cleaning_configs(db)
     books = await crud.get_web_books(db)
     for book in books:
         if book.source_url and re.search(config.url_pattern, str(book.source_url)):
-            await epub_editor.apply_book_cleaning(book, db)
+            await epub_editor.apply_book_cleaning(book, db, cleaning_configs=configs)
     return config
 
 

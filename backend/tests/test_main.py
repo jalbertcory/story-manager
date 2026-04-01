@@ -12,7 +12,7 @@ from backend.app.main import app
 from backend.app.services import update_scheduler
 from backend.app.services.series import SeriesBook, detect_series_from_books, detect_series_from_titles
 from backend.app.database import Base, get_db
-from backend.app import models, schemas, crud
+from backend.app import crud, epub_editor, models, schemas
 
 # Use an in-memory SQLite database for testing with an async driver
 SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -830,6 +830,23 @@ class FakeRequestsResponse:
 
     def json(self):
         return self.payload
+
+
+def test_process_epub_handles_string_spine_entries(tmp_path: Path):
+    immutable_path = tmp_path / "immutable.epub"
+    current_path = tmp_path / "current.epub"
+    create_dummy_epub(immutable_path, "Spine Book", "Spine Author")
+
+    changed = epub_editor.process_epub(
+        str(immutable_path),
+        str(current_path),
+        removed_chapters=[],
+        content_selectors=["p"],
+    )
+
+    assert changed is True
+    chapters = epub_editor.get_chapters(str(current_path))
+    assert "Introduction text." not in chapters[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -1834,6 +1851,46 @@ async def test_reprocess_all(db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["reprocessed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_reprocess_all_skips_unchanged_books_without_cleaning_rules(db_session):
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    author_dir = library_path / "Reprocess Author"
+    author_dir.mkdir(exist_ok=True)
+    immutable_path = author_dir / "immutable_reprocess.epub"
+    current_path = author_dir / "reprocess.epub"
+    create_dummy_epub(immutable_path, "Reprocess Book", "Reprocess Author")
+    current_path.write_bytes(immutable_path.read_bytes())
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Reprocess Book",
+                author="Reprocess Author",
+                immutable_path=str(immutable_path.relative_to(library_path.parent)),
+                current_path=str(current_path.relative_to(library_path.parent)),
+                source_type=models.SourceType.epub,
+                current_word_count=2,
+            ),
+        )
+        original_version = book.content_version
+
+    response = client.post("/api/books/reprocess-all")
+
+    assert response.status_code == 200
+    assert response.json() == {"reprocessed": 1, "updated": 0}
+
+    async with AsyncTestingSessionLocal() as session:
+        refreshed = await crud.get_book(session, book.id)
+        assert refreshed is not None
+        assert refreshed.content_version == original_version
+
+    immutable_path.unlink()
+    current_path.unlink()
+    author_dir.rmdir()
 
 
 @pytest.mark.asyncio
