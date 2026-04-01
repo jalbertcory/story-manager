@@ -85,6 +85,12 @@ function CleaningConfigs({ onBack }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
+  const reprocessMutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+  });
+
   const {
     data: configs = [],
     isLoading,
@@ -176,6 +182,29 @@ function CleaningConfigs({ onBack }) {
           )}
         </div>
       )}
+
+      <section className="settings-section">
+        <h3>Clean All Books</h3>
+        <p className="hint">
+          Re-applies cleaning configs and selectors to every book in the library.
+        </p>
+        <div className="settings-actions">
+          <button
+            onClick={() => reprocessMutation.mutate()}
+            disabled={reprocessMutation.isPending}
+          >
+            {reprocessMutation.isPending ? "Cleaning..." : "Clean All Books"}
+          </button>
+        </div>
+        {reprocessMutation.isError && (
+          <p className="error" style={{ marginTop: "0.5rem" }}>
+            {reprocessMutation.error?.message}
+          </p>
+        )}
+        {reprocessMutation.isSuccess && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>Done.</p>
+        )}
+      </section>
 
       <div className="config-list">
         {configs.map((config) => (

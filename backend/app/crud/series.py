@@ -100,15 +100,8 @@ async def get_series_metadata_for_names(
     result = await db.execute(
         select(models.SeriesMetadata).filter(func.lower(models.SeriesMetadata.series_name).in_(lowered_names))
     )
-    metadata_by_lower = {
-        metadata.series_name.lower(): metadata
-        for metadata in result.scalars().all()
-    }
-    return {
-        name: metadata_by_lower[name.lower()]
-        for name in normalized_names
-        if name.lower() in metadata_by_lower
-    }
+    metadata_by_lower = {metadata.series_name.lower(): metadata for metadata in result.scalars().all()}
+    return {name: metadata_by_lower[name.lower()] for name in normalized_names if name.lower() in metadata_by_lower}
 
 
 async def set_series_user_genre_tags(
@@ -208,10 +201,12 @@ def compute_effective_series_genre_tags(
     counts: dict[str, int] = {}
     canonical: dict[str, str] = {}
     for book in books:
-        book_tags = _normalize_tags([
-            *(book.user_genre_tags or []),
-            *(book.genre_tags or []),
-        ])
+        book_tags = _normalize_tags(
+            [
+                *(book.user_genre_tags or []),
+                *(book.genre_tags or []),
+            ]
+        )
         for tag in book_tags:
             key = tag.casefold()
             counts[key] = counts.get(key, 0) + 1
@@ -238,9 +233,7 @@ async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
     if not all_metadata:
         return 0
 
-    active_result = await db.execute(
-        select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct()
-    )
+    active_result = await db.execute(select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct())
     active_series = {row[0] for row in active_result.all()}
 
     deleted = 0

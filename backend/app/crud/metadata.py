@@ -54,9 +54,7 @@ async def get_pending_metadata_sync_jobs(db: AsyncSession) -> list[models.Metada
 
 
 async def reset_running_metadata_sync_jobs(db: AsyncSession) -> None:
-    result = await db.execute(
-        select(models.MetadataSyncJob).where(models.MetadataSyncJob.status == "running")
-    )
+    result = await db.execute(select(models.MetadataSyncJob).where(models.MetadataSyncJob.status == "running"))
     jobs = result.scalars().all()
     for job in jobs:
         job.status = "queued"

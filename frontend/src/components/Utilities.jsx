@@ -23,42 +23,10 @@ async function runCleanup(dryRun) {
   return res.json();
 }
 
-async function runRemoveAllBooks(dryRun) {
-  const res = await fetch(`/api/books/remove-all?dry_run=${dryRun}`, { method: "POST" });
-  if (!res.ok) throw new Error("Remove-all request failed");
+async function runLibraryValidation() {
+  const res = await fetch("/api/library/validate");
+  if (!res.ok) throw new Error("Validation request failed");
   return res.json();
-}
-
-function buildRemoveAllWarning(preview) {
-  const lines = [
-    `This will permanently remove ${preview.book_count} book${preview.book_count !== 1 ? "s" : ""} from the library.`,
-    `${preview.file_count} file${preview.file_count !== 1 ? "s" : ""} will be deleted (${formatBytes(preview.total_bytes)}).`,
-    `${preview.log_count} log entr${preview.log_count === 1 ? "y" : "ies"} will also be removed.`,
-  ];
-
-  if (preview.books.length > 0) {
-    lines.push("");
-    lines.push("Books to remove:");
-    preview.books.slice(0, 5).forEach((book) => {
-      lines.push(`- ${book.title} by ${book.author}`);
-    });
-    if (preview.books.length > 5) {
-      lines.push(`- ...and ${preview.books.length - 5} more`);
-    }
-  }
-
-  if (preview.paths.length > 0) {
-    lines.push("");
-    lines.push("Files to delete:");
-    preview.paths.slice(0, 5).forEach((path) => lines.push(`- ${path}`));
-    if (preview.paths.length > 5) {
-      lines.push(`- ...and ${preview.paths.length - 5} more`);
-    }
-  }
-
-  lines.push("");
-  lines.push("This cannot be undone.");
-  return lines.join("\n");
 }
 
 function renderMetadataJobSummary(job) {
@@ -74,7 +42,6 @@ function Utilities({ onBack }) {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
-  const [removeAllError, setRemoveAllError] = useState("");
 
   const previewMutation = useMutation({
     mutationFn: () => runCleanup(true),
@@ -86,20 +53,11 @@ function Utilities({ onBack }) {
     onSuccess: (data) => setPreview(data),
   });
 
-  const removeAllMutation = useMutation({
-    mutationFn: () => runRemoveAllBooks(false),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-    },
-  });
-
   const isPending = previewMutation.isPending || deleteMutation.isPending;
   const deleted = preview && !preview.dry_run;
 
-  const reprocessMutation = useMutation({
-    mutationFn: () =>
-      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+  const validateMutation = useMutation({
+    mutationFn: runLibraryValidation,
   });
 
   const { data: latestMetadataJob } = useQuery({
@@ -148,6 +106,8 @@ function Utilities({ onBack }) {
     },
   });
 
+  const validationResult = validateMutation.data;
+
   const handleDetectSeries = async () => {
     setDetectState("pending");
     try {
@@ -159,25 +119,6 @@ function Utilities({ onBack }) {
       setDetectState(data);
     } catch {
       setDetectState({ updated: 0, series_detected: [], error: true });
-    }
-  };
-
-  const handleRemoveAllBooks = async () => {
-    setRemoveAllError("");
-    try {
-      const preview = await runRemoveAllBooks(true);
-      if (preview.book_count === 0) {
-        window.alert("No books are currently stored in the library.");
-        return;
-      }
-
-      if (!window.confirm(buildRemoveAllWarning(preview))) {
-        return;
-      }
-
-      removeAllMutation.mutate();
-    } catch (error) {
-      setRemoveAllError(error.message || "Remove-all request failed");
     }
   };
 
@@ -193,51 +134,71 @@ function Utilities({ onBack }) {
       )}
 
       <section className="settings-section">
-        <h3>Clean All Books</h3>
+        <h3>Library Audit</h3>
         <p className="hint">
-          Re-applies cleaning configs and selectors to every book in the library.
+          Checks every book record for missing or broken file paths (EPUB files, covers).
         </p>
         <div className="settings-actions">
           <button
-            onClick={() => reprocessMutation.mutate()}
-            disabled={reprocessMutation.isPending}
+            onClick={() => validateMutation.mutate()}
+            disabled={validateMutation.isPending}
           >
-            {reprocessMutation.isPending ? "Cleaning..." : "Clean All Books"}
+            {validateMutation.isPending ? "Auditing..." : "Run Library Audit"}
           </button>
+          {validationResult && (
+            <button
+              className="btn-text"
+              onClick={() => validateMutation.reset()}
+            >
+              Reset
+            </button>
+          )}
         </div>
-        {reprocessMutation.isError && (
+        {validateMutation.isError && (
           <p className="error" style={{ marginTop: "0.5rem" }}>
-            {reprocessMutation.error?.message}
+            {validateMutation.error?.message}
           </p>
         )}
-        {reprocessMutation.isSuccess && (
-          <p className="hint" style={{ marginTop: "0.5rem" }}>Done.</p>
-        )}
-      </section>
-
-      <section className="settings-section">
-        <h3>Remove All Books</h3>
-        <p className="hint">
-          Permanently deletes every book record, its EPUB files, extracted covers, and update history.
-        </p>
-        <div className="settings-actions">
-          <button
-            className="btn-danger"
-            onClick={handleRemoveAllBooks}
-            disabled={removeAllMutation.isPending}
-          >
-            {removeAllMutation.isPending ? "Removing..." : "Remove All Books"}
-          </button>
-        </div>
-        {(removeAllError || removeAllMutation.isError) && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>
-            {removeAllError || removeAllMutation.error?.message}
-          </p>
-        )}
-        {removeAllMutation.isSuccess && (
-          <p className="hint" style={{ marginTop: "0.5rem" }}>
-            Library cleared.
-          </p>
+        {validationResult && (
+          <div style={{ marginTop: "1rem" }}>
+            <h4>
+              {validationResult.issues_count === 0 ? "No Issues Found" : "Issues Found"}
+              <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
+                {validationResult.total_books} book{validationResult.total_books !== 1 ? "s" : ""} checked,{" "}
+                {validationResult.issues_count} issue{validationResult.issues_count !== 1 ? "s" : ""}
+              </span>
+            </h4>
+            {validationResult.issues_count === 0 ? (
+              <p className="hint">All books have valid file paths. Library is healthy.</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {validationResult.issues.map((issue, i) => (
+                  <li
+                    key={i}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      fontSize: "0.85rem",
+                      padding: "0.4rem 0.6rem",
+                      borderRadius: "4px",
+                      background: "var(--surface, #1a1a2e)",
+                      gap: "1rem",
+                    }}
+                  >
+                    <span style={{ wordBreak: "break-word" }}>
+                      <strong>{issue.title}</strong>
+                      {issue.author && <span className="hint"> by {issue.author}</span>}
+                    </span>
+                    <span style={{ flexShrink: 0, color: "#f87171", fontFamily: "monospace", fontSize: "0.8rem" }}>
+                      {issue.issue.replace(/_/g, " ")}
+                      {issue.path && <span className="hint" style={{ marginLeft: "0.5rem" }}>{issue.path}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </section>
 
@@ -427,7 +388,13 @@ function Utilities({ onBack }) {
           </p>
         )}
 
-        {preview && (
+        {preview?.skipped_reason && (
+          <p className="hint" style={{ marginTop: "0.5rem", color: "#fbbf24" }}>
+            {preview.skipped_reason}
+          </p>
+        )}
+
+        {preview && !preview.skipped_reason && (
           <div style={{ marginTop: "1rem" }}>
             <h4>
               {deleted ? "Deleted Files" : "Orphaned Files Found"}
