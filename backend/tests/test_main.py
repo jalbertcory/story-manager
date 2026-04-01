@@ -1556,7 +1556,7 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
     create_dummy_epub(valid_current, "Keep Me", "Valid Author")
 
     async with AsyncTestingSessionLocal() as session:
-        await crud.create_book(
+        failed_book = await crud.create_book(
             session,
             schemas.BookCreate(
                 title="Download failed",
@@ -1565,6 +1565,25 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
                 source_type=models.SourceType.web,
                 download_status="error",
             ),
+        )
+        match = models.BookMetadataMatch(
+            book_id=failed_book.id,
+            status="pending",
+            source="open_library",
+            remote_title="Remote Failed Story",
+            remote_author="Pending",
+        )
+        session.add(match)
+        await session.flush()
+        session.add(
+            models.MetadataProposal(
+                book_id=failed_book.id,
+                match_id=match.id,
+                status="open",
+                proposed_genre_tags=["Fantasy"],
+                possible_missing_series_books=[],
+                note=None,
+            )
         )
         keep_book = await crud.create_book(
             session,
@@ -1608,6 +1627,12 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
     assert len(books) == 1
     assert books[0]["id"] == keep_book.id
     assert books[0]["title"] == "Keep Me"
+
+    async with AsyncTestingSessionLocal() as session:
+        remaining_match = await crud.get_metadata_match_by_book_id(session, failed_book.id)
+        remaining_proposal = await crud.get_metadata_proposal_by_book_id(session, failed_book.id)
+        assert remaining_match is None
+        assert remaining_proposal is None
 
 
 @pytest.mark.asyncio
