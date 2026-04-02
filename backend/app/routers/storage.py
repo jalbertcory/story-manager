@@ -19,12 +19,7 @@ router = APIRouter()
 
 
 def _is_failed_web_import_placeholder(book) -> bool:
-    return bool(
-        book.source_url
-        and book.download_status == "error"
-        and not book.immutable_path
-        and not book.current_path
-    )
+    return bool(book.source_url and book.download_status == "error" and not book.immutable_path and not book.current_path)
 
 
 class ClientLogEntry(BaseModel):

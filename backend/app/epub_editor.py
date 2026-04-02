@@ -152,11 +152,7 @@ def process_epub(
         if ns:
             new_book.metadata[ns] = values
         else:
-            new_book.metadata[ns] = {
-                name: vals
-                for name, vals in values.items()
-                if not name.startswith("user_metadata:")
-            }
+            new_book.metadata[ns] = {name: vals for name, vals in values.items() if not name.startswith("user_metadata:")}
 
     # Build the set of chapters to remove: explicit list + CSS-selector matches
     chapters_to_remove = set(removed_chapters)
