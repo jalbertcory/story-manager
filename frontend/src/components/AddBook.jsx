@@ -152,6 +152,7 @@ function AddBook() {
       <form onSubmit={handleSubmit}>
         <div className="add-book-columns">
           <div
+            id="drop-zone"
             className={`drop-zone ${dragging ? "dragging" : ""} ${files.length > 0 ? "drop-zone--has-files" : ""}`}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -180,6 +181,7 @@ function AddBook() {
               </div>
             )}
             <input
+              id="file-upload"
               type="file"
               accept=".epub,.zip"
               multiple
