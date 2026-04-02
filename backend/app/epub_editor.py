@@ -120,12 +120,18 @@ def get_chapters(epub_path: str):
 
 def get_word_count(epub_path: str) -> int:
     book = epub.read_epub(epub_path)
+    return _compute_word_count(book)
+
+
+def _compute_word_count(book: epub.EpubBook) -> int:
+    """Count words across all document items in an in-memory EpubBook."""
     word_count = 0
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        if isinstance(item, (epub.EpubNav, epub.EpubNcx)):
+            continue
         content = item.get_content()
         soup = BeautifulSoup(content, "html.parser")
-        text = soup.get_text()
-        word_count += len(re.findall(r"\S+", text))
+        word_count += len(re.findall(r"\S+", soup.get_text()))
     return word_count
 
 
@@ -135,13 +141,18 @@ def process_epub(
     removed_chapters: list[str],
     content_selectors: list[str],
     chapter_selectors: list[str] = [],
-) -> bool:
+) -> int | None:
+    """Process an epub, returning the new word count if changed, or None if unchanged."""
     book = epub.read_epub(immutable_path)
     new_book = epub.EpubBook()
 
-    # Copy metadata
-    for key, value in book.metadata.items():
-        new_book.metadata[key] = value
+    # Copy metadata, filtering out Calibre custom columns (e.g. "user_metadata:#sort")
+    # that cause ValueError in ebooklib when serialising to XML.
+    for ns, values in book.metadata.items():
+        if ns:
+            new_book.metadata[ns] = values
+        else:
+            new_book.metadata[ns] = {name: vals for name, vals in values.items() if not name.startswith("user_metadata:")}
 
     # Build the set of chapters to remove: explicit list + CSS-selector matches
     chapters_to_remove = set(removed_chapters)
@@ -152,6 +163,8 @@ def process_epub(
                 chapters_to_remove.add(item.get_name())
 
     for item in book.items:
+        if item is None:
+            continue
         if item.get_name() not in chapters_to_remove:
             if item.get_type() == ebooklib.ITEM_DOCUMENT:
                 content = item.get_content().decode("utf-8", "ignore")
@@ -178,9 +191,9 @@ def process_epub(
             temporary_path = Path(temp_file.name)
         epub.write_epub(str(temporary_path), new_book, {})
         if _files_match(temporary_path, current_path_obj):
-            return False
+            return None
         temporary_path.replace(current_path_obj)
-        return True
+        return _compute_word_count(new_book)
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
@@ -220,7 +233,8 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
     selectors with the book's own settings, then rewrites current_path from
     immutable_path and updates current_word_count in the DB.
 
-    If force=True, always rewrites even when no selectors are set (resets to immutable).
+    Books with no applicable rules are always skipped. If force=True, rewrites
+    even when the output would match the current file.
     """
     from . import crud
 
@@ -233,8 +247,10 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
 
     removed_chapters, content_selectors, chapter_selectors = _merge_cleaning_rules(book, configs)
 
+    has_rules = bool(chapter_selectors or content_selectors or removed_chapters)
+
     # Nothing to do — skip the (potentially expensive) epub rewrite
-    if not force and not chapter_selectors and not content_selectors and not removed_chapters:
+    if not has_rules:
         return False
 
     if not book.immutable_path or not book.current_path:
@@ -251,30 +267,21 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path
 
-    if (
-        force
-        and not chapter_selectors
-        and not content_selectors
-        and not removed_chapters
-        and _files_match(immutable_path, current_path)
-    ):
-        return False
-
     try:
-        changed = process_epub(
+        word_count = process_epub(
             str(immutable_path),
             str(current_path),
             removed_chapters,
             content_selectors,
             chapter_selectors,
         )
-        if not changed:
+        if word_count is None:
             return False
-        book.current_word_count = get_word_count(str(current_path))
+        book.current_word_count = word_count
         await crud.touch_book_content(db, book)
         await db.commit()
         await db.refresh(book)
         return True
     except Exception as e:
-        logger.error("Failed to apply cleaning to %s: %s", book.title, e)
+        logger.error("Failed to apply cleaning to %s: %s", book.title, e, exc_info=True)
         return False

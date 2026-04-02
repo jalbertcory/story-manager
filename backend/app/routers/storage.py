@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
@@ -12,17 +13,30 @@ from ..database import get_db
 from ..logging_config import _LOG_BUFFER
 
 logger = logging.getLogger(__name__)
+_ui_logger = logging.getLogger("frontend")
 
 router = APIRouter()
 
 
 def _is_failed_web_import_placeholder(book) -> bool:
-    return bool(
-        book.source_url
-        and book.download_status == "error"
-        and not book.immutable_path
-        and not book.current_path
-    )
+    return bool(book.source_url and book.download_status == "error" and not book.immutable_path and not book.current_path)
+
+
+class ClientLogEntry(BaseModel):
+    level: str = "ERROR"
+    message: str
+    source: Optional[str] = None
+
+
+@router.post("/api/logs/client")
+async def post_client_log(entry: ClientLogEntry):
+    """Receive log entries from the frontend UI."""
+    msg = entry.message
+    if entry.source:
+        msg = f"[{entry.source}] {msg}"
+    level = getattr(logging, entry.level.upper(), logging.ERROR)
+    _ui_logger.log(level, msg)
+    return {"ok": True}
 
 
 @router.get("/api/logs")

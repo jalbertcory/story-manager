@@ -42,7 +42,7 @@ class _MemoryLogHandler(logging.Handler):
         _LOG_BUFFER.append(entry)
 
 
-def setup_logging() -> _MemoryLogHandler:
+def setup_logging() -> tuple[logging.StreamHandler, _MemoryLogHandler]:
     use_json = os.getenv("LOG_FORMAT", "").lower() == "json"
 
     root_logger = logging.getLogger()
@@ -60,4 +60,4 @@ def setup_logging() -> _MemoryLogHandler:
     mem_handler = _MemoryLogHandler()
     mem_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(mem_handler)
-    return mem_handler
+    return console_handler, mem_handler

@@ -1,10 +1,11 @@
 """Cleaning config CRUD, per-book processing, and cleaning preview endpoints."""
 
+import asyncio
 import logging
 import re
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,22 +17,53 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_reprocess_lock = asyncio.Lock()
+_reprocess_status: dict | None = None
+
 
 class PreviewCleaningRequest(BaseModel):
     content_selectors: List[str] = []
     removed_chapters: List[str] = []
 
 
-@router.post("/api/books/reprocess-all", response_model=dict)
-async def reprocess_all_books(db: AsyncSession = Depends(get_db)):
-    books = await crud.get_books(db, limit=10000)
-    configs = await crud.get_cleaning_configs(db)
-    updated = 0
-    for book in books:
-        changed = await epub_editor.apply_book_cleaning(book, db, force=True, cleaning_configs=configs)
-        if changed:
-            updated += 1
-    return {"reprocessed": len(books), "updated": updated}
+async def _run_reprocess_all(db: AsyncSession):
+    global _reprocess_status
+    try:
+        books = await crud.get_books(db, limit=10000)
+        configs = await crud.get_cleaning_configs(db)
+        total = len(books)
+        updated = 0
+        for i, book in enumerate(books):
+            _reprocess_status = {"running": True, "total": total, "processed": i, "updated": updated}
+            changed = await epub_editor.apply_book_cleaning(book, db, force=True, cleaning_configs=configs)
+            if changed:
+                updated += 1
+        _reprocess_status = {"running": False, "total": total, "processed": total, "updated": updated}
+        logger.info("Reprocess-all complete: %d/%d books updated.", updated, total)
+    except Exception:
+        logger.error("Reprocess-all failed", exc_info=True)
+        _reprocess_status = {"running": False, "error": "Reprocess failed, check logs."}
+    finally:
+        _reprocess_lock.release()
+
+
+@router.post("/api/books/reprocess-all")
+async def reprocess_all_books(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    if _reprocess_lock.locked():
+        raise HTTPException(status_code=409, detail="Reprocess already in progress")
+    await _reprocess_lock.acquire()
+    background_tasks.add_task(_run_reprocess_all, db)
+    return {"status": "started"}
+
+
+@router.get("/api/books/reprocess-all/status")
+async def reprocess_all_status():
+    if _reprocess_status is None:
+        return {"running": False}
+    return _reprocess_status
 
 
 @router.post("/api/books/{book_id}/process", response_model=schemas.Book)

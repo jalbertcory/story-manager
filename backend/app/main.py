@@ -25,7 +25,7 @@ from .services.web_import_queue import get_web_import_queue
 
 logger = logging.getLogger(__name__)
 
-_mem_handler = setup_logging()
+_console_handler, _mem_handler = setup_logging()
 _scheduler = get_scheduler()
 _web_import_queue = get_web_import_queue()
 _metadata_sync_queue = get_metadata_sync_queue()
@@ -34,8 +34,10 @@ _metadata_sync_queue = get_metadata_sync_queue()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     is_test_app = bool(app.dependency_overrides)
-    # Re-attach memory handler after uvicorn resets logging config on startup
+    # Re-attach handlers after uvicorn resets logging config on startup
     root_logger = logging.getLogger()
+    if _console_handler not in root_logger.handlers:
+        root_logger.addHandler(_console_handler)
     if _mem_handler not in root_logger.handlers:
         root_logger.addHandler(_mem_handler)
     logger.info("Starting up Story Manager services.")

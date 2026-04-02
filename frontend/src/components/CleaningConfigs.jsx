@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 const fetchConfigs = async () => {
@@ -85,11 +85,48 @@ function CleaningConfigs({ onBack }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
+  const [reprocessStatus, setReprocessStatus] = useState(null);
+  const [polling, setPolling] = useState(false);
+
+  const pollStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/books/reprocess-all/status");
+      const data = await res.json();
+      setReprocessStatus(data);
+      if (!data.running) {
+        setPolling(false);
+        queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      }
+    } catch {
+      setPolling(false);
+    }
+  }, [queryClient]);
+
+  useEffect(() => {
+    // Check if a reprocess is already running on mount
+    pollStatus();
+  }, [pollStatus]);
+
+  useEffect(() => {
+    if (!polling) return;
+    const interval = setInterval(pollStatus, 2000);
+    return () => clearInterval(interval);
+  }, [polling, pollStatus]);
+
   const reprocessMutation = useMutation({
-    mutationFn: () =>
-      fetch("/api/books/reprocess-all", { method: "POST" }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+    mutationFn: async () => {
+      const res = await fetch("/api/books/reprocess-all", { method: "POST" });
+      if (res.status === 409) throw new Error("Reprocess already in progress");
+      if (!res.ok) throw new Error("Failed to start reprocess");
+      return res.json();
+    },
+    onSuccess: () => {
+      setReprocessStatus({ running: true, total: 0, processed: 0, updated: 0 });
+      setPolling(true);
+    },
   });
+
+  const isReprocessing = polling || reprocessStatus?.running;
 
   const {
     data: configs = [],
@@ -191,18 +228,30 @@ function CleaningConfigs({ onBack }) {
         <div className="settings-actions">
           <button
             onClick={() => reprocessMutation.mutate()}
-            disabled={reprocessMutation.isPending}
+            disabled={isReprocessing || reprocessMutation.isPending}
           >
-            {reprocessMutation.isPending ? "Cleaning..." : "Clean All Books"}
+            {isReprocessing ? "Cleaning..." : "Clean All Books"}
           </button>
         </div>
+        {isReprocessing && reprocessStatus?.total > 0 && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>
+            {reprocessStatus.processed} / {reprocessStatus.total} books processed ({reprocessStatus.updated} updated)
+          </p>
+        )}
         {reprocessMutation.isError && (
           <p className="error" style={{ marginTop: "0.5rem" }}>
             {reprocessMutation.error?.message}
           </p>
         )}
-        {reprocessMutation.isSuccess && (
-          <p className="hint" style={{ marginTop: "0.5rem" }}>Done.</p>
+        {!isReprocessing && reprocessStatus && !reprocessStatus.running && reprocessStatus.total > 0 && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>
+            Done. {reprocessStatus.updated} / {reprocessStatus.total} books updated.
+          </p>
+        )}
+        {reprocessStatus?.error && (
+          <p className="error" style={{ marginTop: "0.5rem" }}>
+            {reprocessStatus.error}
+          </p>
         )}
       </section>
 
