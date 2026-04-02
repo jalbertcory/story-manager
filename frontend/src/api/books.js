@@ -100,6 +100,10 @@ export function getBookChapters(bookId) {
   return getJson(`/api/books/${bookId}/chapters`, "Failed to fetch chapters");
 }
 
+export function getBookCleanedChapters(bookId) {
+  return getJson(`/api/books/${bookId}/cleaned-chapters`, "Failed to fetch cleaned chapters");
+}
+
 export function getMatchedConfigs(bookId) {
   return getJson(`/api/books/${bookId}/matched-config`, "Failed to fetch matched config");
 }

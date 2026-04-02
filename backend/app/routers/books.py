@@ -313,6 +313,21 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
     return epub_editor.get_chapters(str(epub_path))
 
 
+@router.get("/api/books/{book_id}/cleaned-chapters", response_model=List[Dict[str, Any]])
+async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+    db_book = await crud.get_book(db, book_id=book_id)
+    if db_book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.current_path:
+        raise HTTPException(status_code=404, detail="Cleaned EPUB file not found")
+
+    epub_path = LIBRARY_PATH.parent / db_book.current_path
+    if not epub_path.exists():
+        raise HTTPException(status_code=404, detail="Cleaned EPUB file not found")
+
+    return epub_editor.get_chapters(str(epub_path))
+
+
 @router.get("/api/books/{book_id}/download")
 async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     db_book = await crud.get_book(db, book_id=book_id)

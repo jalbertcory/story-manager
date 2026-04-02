@@ -6,6 +6,7 @@ import {
   detachBookSource,
   getApiCoverUrl,
   getBookChapters,
+  getBookCleanedChapters,
   getMatchedConfigs,
   previewCleaning,
   processBook,
@@ -21,6 +22,11 @@ import { getSeries } from "../api/series";
 const fetchChapters = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
   return getBookChapters(bookId);
+};
+
+const fetchCleanedChapters = async ({ queryKey }) => {
+  const [_key, bookId] = queryKey;
+  return getBookCleanedChapters(bookId);
 };
 
 const fetchMatchedConfig = async ({ queryKey }) => {
@@ -127,6 +133,7 @@ function BookSettings({ book, onBack }) {
   const [previewedChapter, setPreviewedChapter] = useState(null);
   const [chapterSearch, setChapterSearch] = useState("");
   const [chaptersExpanded, setChaptersExpanded] = useState(false);
+  const [chapterPreviewMode, setChapterPreviewMode] = useState("original");
   const [identifiersExpanded, setIdentifiersExpanded] = useState(false);
 
   useEffect(() => {
@@ -149,6 +156,7 @@ function BookSettings({ book, onBack }) {
     setPreviewResult(null);
     setChapterSearch("");
     setChaptersExpanded(false);
+    setChapterPreviewMode("original");
     setIdentifiersExpanded(false);
   }, [book]);
 
@@ -159,6 +167,12 @@ function BookSettings({ book, onBack }) {
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
     queryFn: fetchChapters,
+  });
+
+  const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } = useQuery({
+    queryKey: ["cleaned-chapters", book.id],
+    queryFn: fetchCleanedChapters,
+    enabled: chapterPreviewMode === "cleaned",
   });
 
   const { data: matchedConfigs = [] } = useQuery({
@@ -184,7 +198,7 @@ function BookSettings({ book, onBack }) {
     mutationFn: () => processBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      onBack();
+      queryClient.invalidateQueries({ queryKey: ["cleaned-chapters", book.id] });
     },
   });
 
@@ -347,11 +361,14 @@ function BookSettings({ book, onBack }) {
   const canDetachWebMarker =
     book.source_type === "web" && book.immutable_path && book.current_path;
 
+  const activeChapters = chapterPreviewMode === "cleaned" ? cleanedChapters : chapters;
+  const activeChaptersLoading = chapterPreviewMode === "cleaned" ? cleanedChaptersLoading : chaptersLoading;
+
   const filteredChapters = useMemo(() => {
-    if (!chapterSearch.trim()) return chapters;
+    if (!chapterSearch.trim()) return activeChapters;
     const q = chapterSearch.toLowerCase();
-    return chapters.filter((ch) => ch.title.toLowerCase().includes(q));
-  }, [chapters, chapterSearch]);
+    return activeChapters.filter((ch) => ch.title.toLowerCase().includes(q));
+  }, [activeChapters, chapterSearch]);
 
   return (
     <div className="book-settings">
@@ -711,22 +728,34 @@ function BookSettings({ book, onBack }) {
         <div className="chapter-section-header">
           <h3>
             Chapters
-            {chapters.length > 0 && (
-              <span className="chapter-count"> ({chapters.length})</span>
+            {activeChapters.length > 0 && (
+              <span className="chapter-count"> ({activeChapters.length})</span>
             )}
           </h3>
-          <button
-            className="btn-text"
-            onClick={() => setChaptersExpanded((e) => !e)}
-            disabled={chaptersLoading}
-          >
-            {chaptersExpanded ? "▲ Collapse" : "▼ Expand"}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {chaptersExpanded && (
+              <select
+                value={chapterPreviewMode}
+                onChange={(e) => setChapterPreviewMode(e.target.value)}
+                className="chapter-preview-mode-select"
+              >
+                <option value="original">Original</option>
+                <option value="cleaned">Cleaned</option>
+              </select>
+            )}
+            <button
+              className="btn-text"
+              onClick={() => setChaptersExpanded((e) => !e)}
+              disabled={activeChaptersLoading}
+            >
+              {chaptersExpanded ? "▲ Collapse" : "▼ Expand"}
+            </button>
+          </div>
         </div>
 
-        {chaptersLoading && <p className="hint" style={{ marginTop: "0.5rem" }}>Loading chapters…</p>}
+        {activeChaptersLoading && <p className="hint" style={{ marginTop: "0.5rem" }}>Loading chapters…</p>}
 
-        {chaptersExpanded && !chaptersLoading && (
+        {chaptersExpanded && !activeChaptersLoading && (
           <>
             {chapters.length > 10 && (
               <input
@@ -743,7 +772,7 @@ function BookSettings({ book, onBack }) {
                   <li className="chapter-no-results">No chapters match your search.</li>
                 ) : (
                   filteredChapters.map((chapter) => {
-                    const isRemoved = removedChapters.includes(chapter.filename);
+                    const isRemoved = chapterPreviewMode === "original" && removedChapters.includes(chapter.filename);
                     const isPreviewed = previewedChapter === chapter.filename;
                     return (
                       <li
@@ -751,14 +780,18 @@ function BookSettings({ book, onBack }) {
                         className={isRemoved ? "removed" : ""}
                       >
                         <div className="chapter-row">
-                          <label>
-                            <input
-                              type="checkbox"
-                              checked={!isRemoved}
-                              onChange={() => toggleChapter(chapter.filename)}
-                            />
-                            {chapter.title}
-                          </label>
+                          {chapterPreviewMode === "original" ? (
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={!isRemoved}
+                                onChange={() => toggleChapter(chapter.filename)}
+                              />
+                              {chapter.title}
+                            </label>
+                          ) : (
+                            <span>{chapter.title}</span>
+                          )}
                           <button
                             className="btn-text chapter-preview-toggle"
                             onClick={() => toggleChapterPreview(chapter.filename)}

@@ -149,65 +149,73 @@ function AddBook() {
 
   return (
     <div className="add-book-container">
-      <h2>Add Books</h2>
       <form onSubmit={handleSubmit}>
-        <div
-          id="drop-zone"
-          className={`drop-zone ${dragging ? "dragging" : ""}`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current.click()}
-        >
-          {files.length > 0 ? (
-            <ul className="file-list" onClick={(e) => e.stopPropagation()}>
-              {files.map((f, i) => (
-                <li key={i}>
-                  <span>{f.name}</span>
-                  <button type="button" className="remove-btn" onClick={() => removeFile(i)}>
+        <div className="add-book-columns">
+          <div
+            className={`drop-zone ${dragging ? "dragging" : ""} ${files.length > 0 ? "drop-zone--has-files" : ""}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current.click()}
+          >
+            {files.length > 0 ? (
+              <ul className="file-list" onClick={(e) => e.stopPropagation()}>
+                {files.map((f, i) => (
+                  <li key={i}>
+                    <span>{f.name}</span>
+                    <button type="button" className="remove-btn" onClick={() => removeFile(i)}>
+                      ×
+                    </button>
+                  </li>
+                ))}
+                <li className="add-more-hint">+ more files</li>
+              </ul>
+            ) : (
+              <div className="drop-zone-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="28" height="28">
+                  <path d="M12 16V6m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M20 16.7V19a2 2 0 01-2 2H6a2 2 0 01-2-2v-2.3" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <span>Drop EPUBs or ZIPs here, or click to browse</span>
+              </div>
+            )}
+            <input
+              type="file"
+              accept=".epub,.zip"
+              multiple
+              onChange={handleFileChange}
+              ref={fileInputRef}
+              style={{ display: "none" }}
+            />
+          </div>
+
+          <div className="add-book-divider">
+            <span>or</span>
+          </div>
+
+          <div className="url-section">
+            {urls.map((url, i) => (
+              <div key={i} className="url-row">
+                <input
+                  type="text"
+                  placeholder="Paste a web novel URL"
+                  value={url}
+                  onChange={(e) => handleUrlChange(i, e.target.value)}
+                />
+                {urls.length > 1 && (
+                  <button type="button" className="remove-btn" onClick={() => removeUrlField(i)}>
                     ×
                   </button>
-                </li>
-              ))}
-              <li className="add-more-hint">Click or drop to add more EPUBs or ZIPs</li>
-            </ul>
-          ) : (
-            <p>Drag & drop EPUB or ZIP files here, or click to select</p>
-          )}
-          <input
-            id="file-upload"
-            type="file"
-            accept=".epub,.zip"
-            multiple
-            onChange={handleFileChange}
-            ref={fileInputRef}
-            style={{ display: "none" }}
-          />
+                )}
+              </div>
+            ))}
+            <button type="button" className="add-url-btn" onClick={addUrlField}>
+              + Add another URL
+            </button>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label>Or add by URL:</label>
-          {urls.map((url, i) => (
-            <div key={i} className="url-row">
-              <input
-                type="text"
-                placeholder="Enter URL"
-                value={url}
-                onChange={(e) => handleUrlChange(i, e.target.value)}
-              />
-              {urls.length > 1 && (
-                <button type="button" className="remove-btn" onClick={() => removeUrlField(i)}>
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
-          <button type="button" className="add-url-btn" onClick={addUrlField}>
-            + Add URL
-          </button>
-        </div>
-
-        <button type="submit" disabled={pending || total === 0}>
+        <button className="btn-primary add-book-submit" type="submit" disabled={pending || total === 0}>
           {pending ? "Adding..." : total > 1 ? `Add ${total} Books` : "Add Book"}
         </button>
       </form>
