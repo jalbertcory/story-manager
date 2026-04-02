@@ -643,7 +643,7 @@ function StandaloneTagAction({ book, seriesOptions }) {
 
 const TAB_PAGE_SIZE = 30;
 
-function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryViewChange }) {
+function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryViewChange, sortBy = "title", sortOrder = "asc" }) {
   const sentinelRef = useRef(null);
   const [internalView, setInternalView] = useState("series");
   const libraryView = libraryViewProp ?? internalView;
@@ -686,7 +686,25 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
       seriesBooks.sort(compareSeriesBooks);
     }
 
-    const sorted = Object.keys(sMap).sort();
+    const dir = sortOrder === "desc" ? -1 : 1;
+    const sorted = Object.keys(sMap).sort((a, b) => {
+      const booksA = sMap[a];
+      const booksB = sMap[b];
+      if (sortBy === "author") {
+        return dir * (booksA[0].author || "").localeCompare(booksB[0].author || "");
+      }
+      if (sortBy === "word_count") {
+        const wcA = booksA.reduce((sum, bk) => sum + (bk.current_word_count || 0), 0);
+        const wcB = booksB.reduce((sum, bk) => sum + (bk.current_word_count || 0), 0);
+        return dir * (wcA - wcB);
+      }
+      if (sortBy === "updated_at") {
+        const latestA = Math.max(...booksA.map((bk) => new Date(bk.updated_at || 0).getTime()));
+        const latestB = Math.max(...booksB.map((bk) => new Date(bk.updated_at || 0).getTime()));
+        return dir * (latestA - latestB);
+      }
+      return dir * a.localeCompare(b);
+    });
     return {
       seriesMap: sMap,
       sortedSeries: sorted,
@@ -694,7 +712,7 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
       webBooks: web,
       counts: { series: sorted.length, standalone: standalone.length, web: web.length },
     };
-  }, [books]);
+  }, [books, sortBy, sortOrder]);
 
   const tabItems =
     libraryView === "series" ? sortedSeries :
