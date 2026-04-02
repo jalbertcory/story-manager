@@ -52,10 +52,8 @@ async def reprocess_all_books(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    if _reprocess_lock.locked():
+    if not await _start_reprocess(background_tasks, db):
         raise HTTPException(status_code=409, detail="Reprocess already in progress")
-    await _reprocess_lock.acquire()
-    background_tasks.add_task(_run_reprocess_all, db)
     return {"status": "started"}
 
 
@@ -123,21 +121,27 @@ async def get_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depend
     return config
 
 
+async def _start_reprocess(background_tasks: BackgroundTasks, db: AsyncSession):
+    """Start a reprocess-all run if one isn't already running."""
+    if _reprocess_lock.locked():
+        return False
+    await _reprocess_lock.acquire()
+    background_tasks.add_task(_run_reprocess_all, db)
+    return True
+
+
 @router.put("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
 async def update_cleaning_config_endpoint(
     config_id: int,
     update: schemas.CleaningConfigUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> models.CleaningConfig:
     config = await crud.get_cleaning_config(db, config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     config = await crud.update_cleaning_config(db, config, update)
-    configs = await crud.get_cleaning_configs(db)
-    books = await crud.get_web_books(db)
-    for book in books:
-        if book.source_url and re.search(config.url_pattern, str(book.source_url)):
-            await epub_editor.apply_book_cleaning(book, db, cleaning_configs=configs)
+    await _start_reprocess(background_tasks, db)
     return config
 
 
