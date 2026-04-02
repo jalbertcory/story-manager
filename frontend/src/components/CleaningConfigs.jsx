@@ -172,6 +172,7 @@ function CleaningConfigs({ onBack }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setEditingId(null);
+      setPolling(true);
     },
   });
 

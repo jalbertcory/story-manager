@@ -52,10 +52,8 @@ async def reprocess_all_books(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    if _reprocess_lock.locked():
+    if not await _start_reprocess(background_tasks, db):
         raise HTTPException(status_code=409, detail="Reprocess already in progress")
-    await _reprocess_lock.acquire()
-    background_tasks.add_task(_run_reprocess_all, db)
     return {"status": "started"}
 
 
@@ -123,20 +121,13 @@ async def get_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depend
     return config
 
 
-async def _apply_config_to_matching_books(db: AsyncSession, config: models.CleaningConfig):
-    """Re-apply cleaning to all books matching the updated config."""
-    try:
-        configs = await crud.get_cleaning_configs(db)
-        books = await crud.get_web_books(db)
-        updated = 0
-        for book in books:
-            if book.source_url and re.search(config.url_pattern, str(book.source_url)):
-                changed = await epub_editor.apply_book_cleaning(book, db, cleaning_configs=configs)
-                if changed:
-                    updated += 1
-        logger.info("Config %r update: re-cleaned %d matching books.", config.name, updated)
-    except Exception:
-        logger.error("Failed to re-clean books after config %r update", config.name, exc_info=True)
+async def _start_reprocess(background_tasks: BackgroundTasks, db: AsyncSession):
+    """Start a reprocess-all run if one isn't already running."""
+    if _reprocess_lock.locked():
+        return False
+    await _reprocess_lock.acquire()
+    background_tasks.add_task(_run_reprocess_all, db)
+    return True
 
 
 @router.put("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
@@ -150,7 +141,7 @@ async def update_cleaning_config_endpoint(
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     config = await crud.update_cleaning_config(db, config, update)
-    background_tasks.add_task(_apply_config_to_matching_books, db, config)
+    await _start_reprocess(background_tasks, db)
     return config
 
 
