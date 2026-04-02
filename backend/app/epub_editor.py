@@ -276,6 +276,11 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
             chapter_selectors,
         )
         if word_count is None:
+            if force:
+                await crud.touch_book_content(db, book)
+                await db.commit()
+                await db.refresh(book)
+                return True
             return False
         book.current_word_count = word_count
         await crud.touch_book_content(db, book)

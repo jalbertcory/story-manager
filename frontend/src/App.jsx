@@ -128,25 +128,36 @@ function App() {
         return (
           <>
             <div className="search-controls">
-              <input
-                type="text"
-                placeholder="Search by title, author, series, or tag"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-              <button onClick={handleClearSearch}>Clear</button>
-              <select
-                value={sortBy}
-                onChange={(e) => handleSortByChange(e.target.value)}
-              >
-                <option value="title">Title</option>
-                <option value="author">Author</option>
-                <option value="word_count">Word Count</option>
-                <option value="updated_at">Last Updated</option>
-              </select>
-              <button onClick={handleToggleSortOrder}>
-                {sortOrder === "asc" ? "↑" : "↓"}
-              </button>
+              <div className="search-input-wrap">
+                <svg className="search-icon" viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                  <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.45 4.38l3.09 3.08a.75.75 0 11-1.06 1.06l-3.09-3.08A7 7 0 012 9z" clipRule="evenodd" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Search by title, author, series, or tag"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
+                {q && (
+                  <button className="search-clear" onClick={handleClearSearch} aria-label="Clear search">
+                    ×
+                  </button>
+                )}
+              </div>
+              <div className="sort-controls">
+                <select
+                  value={sortBy}
+                  onChange={(e) => handleSortByChange(e.target.value)}
+                >
+                  <option value="title">Title</option>
+                  <option value="author">Author</option>
+                  <option value="word_count">Word Count</option>
+                  <option value="updated_at">Last Updated</option>
+                </select>
+                <button className="sort-order-btn" onClick={handleToggleSortOrder} aria-label="Toggle sort order">
+                  {sortOrder === "asc" ? "↑" : "↓"}
+                </button>
+              </div>
             </div>
             <details className="add-book-details" open={addBookOpen}>
               <summary
