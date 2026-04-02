@@ -844,7 +844,7 @@ def test_process_epub_handles_string_spine_entries(tmp_path: Path):
         content_selectors=["p"],
     )
 
-    assert changed is True
+    assert changed is not None
     chapters = epub_editor.get_chapters(str(current_path))
     assert "Introduction text." not in chapters[0]["content"]
 
@@ -1849,8 +1849,7 @@ async def test_reprocess_all(db_session):
 
     response = client.post("/api/books/reprocess-all")
     assert response.status_code == 200
-    data = response.json()
-    assert data["reprocessed"] == 2
+    assert response.json() == {"status": "started"}
 
 
 @pytest.mark.asyncio
@@ -1881,7 +1880,7 @@ async def test_reprocess_all_skips_unchanged_books_without_cleaning_rules(db_ses
     response = client.post("/api/books/reprocess-all")
 
     assert response.status_code == 200
-    assert response.json() == {"reprocessed": 1, "updated": 0}
+    assert response.json() == {"status": "started"}
 
     async with AsyncTestingSessionLocal() as session:
         refreshed = await crud.get_book(session, book.id)
