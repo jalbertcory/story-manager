@@ -173,7 +173,7 @@ function App() {
             </details>
             {isLoading && <p>Loading...</p>}
             {error && <p className="error">{error.message}</p>}
-            <BookList books={catalog} onEdit={handleEdit} libraryView={libraryView} onLibraryViewChange={handleLibraryViewChange} />
+            <BookList books={catalog} onEdit={handleEdit} libraryView={libraryView} onLibraryViewChange={handleLibraryViewChange} sortBy={sortBy} sortOrder={sortOrder} />
           </>
         );
     }
