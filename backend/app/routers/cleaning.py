@@ -123,21 +123,34 @@ async def get_cleaning_config_endpoint(config_id: int, db: AsyncSession = Depend
     return config
 
 
+async def _apply_config_to_matching_books(db: AsyncSession, config: models.CleaningConfig):
+    """Re-apply cleaning to all books matching the updated config."""
+    try:
+        configs = await crud.get_cleaning_configs(db)
+        books = await crud.get_web_books(db)
+        updated = 0
+        for book in books:
+            if book.source_url and re.search(config.url_pattern, str(book.source_url)):
+                changed = await epub_editor.apply_book_cleaning(book, db, cleaning_configs=configs)
+                if changed:
+                    updated += 1
+        logger.info("Config %r update: re-cleaned %d matching books.", config.name, updated)
+    except Exception:
+        logger.error("Failed to re-clean books after config %r update", config.name, exc_info=True)
+
+
 @router.put("/api/cleaning-configs/{config_id}", response_model=schemas.CleaningConfig)
 async def update_cleaning_config_endpoint(
     config_id: int,
     update: schemas.CleaningConfigUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> models.CleaningConfig:
     config = await crud.get_cleaning_config(db, config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Cleaning config not found")
     config = await crud.update_cleaning_config(db, config, update)
-    configs = await crud.get_cleaning_configs(db)
-    books = await crud.get_web_books(db)
-    for book in books:
-        if book.source_url and re.search(config.url_pattern, str(book.source_url)):
-            await epub_editor.apply_book_cleaning(book, db, cleaning_configs=configs)
+    background_tasks.add_task(_apply_config_to_matching_books, db, config)
     return config
 
 
