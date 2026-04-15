@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 # call, defeating the purpose. This single lock ensures only one FFF invocation
 # runs at a time, preventing the before/after EPUB-detection race condition.
 _fff_lock = asyncio.Lock()
-_DEFAULT_USER_PERSONAL_INI = Path("/app/config/personal.ini")
+_DEFAULT_USER_PERSONAL_INI_CANDIDATES = (
+    (APP_DIR.parent.parent / "config" / "fanficfare" / "personal.ini").resolve(),
+    Path("/app/config/personal.ini"),
+)
 
 
 def _run_fff_main(args: List[str]) -> int:
@@ -51,9 +54,25 @@ def _get_optional_user_ini_path() -> Optional[Path]:
     if env_path is not None:
         stripped = env_path.strip()
         if not stripped:
+            logger.info("FFF_USER_CONFIG_PATH is set to an empty value; skipping optional FanFicFare config.")
             return None
-        return Path(stripped).expanduser()
-    return _DEFAULT_USER_PERSONAL_INI
+        resolved = Path(stripped).expanduser()
+        if not resolved.is_file():
+            logger.warning("FFF_USER_CONFIG_PATH points to %s, but that file was not found.", resolved)
+            return None
+        logger.info("Using FanFicFare user config from FFF_USER_CONFIG_PATH: %s", resolved)
+        return resolved
+
+    for candidate in _DEFAULT_USER_PERSONAL_INI_CANDIDATES:
+        if candidate.is_file():
+            logger.info("Using FanFicFare user config override: %s", candidate)
+            return candidate
+
+    logger.info(
+        "No optional FanFicFare user config found. Checked: %s",
+        ", ".join(str(candidate) for candidate in _DEFAULT_USER_PERSONAL_INI_CANDIDATES),
+    )
+    return None
 
 
 def _get_fff_config_paths() -> List[Path]:
@@ -73,6 +92,7 @@ def _get_fff_config_paths() -> List[Path]:
         except FileNotFoundError:
             # Another process may have removed it between is_file and resolve.
             pass
+    logger.info("FanFicFare config chain: %s", " -> ".join(str(path) for path in config_paths))
     return config_paths
 
 

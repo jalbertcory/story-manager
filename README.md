@@ -174,6 +174,10 @@ If you want to customize FanFicFare behavior, create:
 config/fanficfare/personal.ini
 ```
 
+That path works for both:
+- local development from the repository root
+- Docker deployments that mount `./config/fanficfare:/app/config:ro`
+
 Story Manager will load configs in this order:
 1. Built-in `backend/app/personal.ini`
 2. Optional mounted `config/fanficfare/personal.ini`

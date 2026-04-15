@@ -17,6 +17,7 @@ from .books import (  # noqa: F401
     get_books_without_series,
     get_pending_web_books,
     get_web_books,
+    reset_failed_web_book_for_retry,
     search_books,
     touch_book_content,
     update_book,

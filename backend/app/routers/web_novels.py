@@ -11,6 +11,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_epub_word_and_chapter_count
+from ..services.library_paths import build_book_paths
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.web_import_queue import get_web_import_queue
 from ..services.web_novel import download_web_novel
@@ -35,9 +36,20 @@ async def add_web_novel(
 ) -> models.Book:
     """Creates a pending book record immediately and queues the download."""
     source_url_str = str(request.url)
+    queue = get_web_import_queue()
 
     existing_book = await crud.get_book_by_source_url(db, source_url=source_url_str)
     if existing_book:
+        if (
+            existing_book.source_type == models.SourceType.web
+            and existing_book.download_status == "error"
+            and not existing_book.immutable_path
+            and not existing_book.current_path
+        ):
+            logger.info("Retrying failed web import placeholder for %s (book_id=%s).", source_url_str, existing_book.id)
+            retried_book = await crud.reset_failed_web_book_for_retry(db, existing_book, source_url_str)
+            await queue.enqueue(retried_book.id, source_url_str)
+            return retried_book
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Book from URL {source_url_str} already exists in the library.",
@@ -51,7 +63,7 @@ async def add_web_novel(
         download_status="pending",
     )
     db_book = await crud.create_book(db=db, book=book_to_create)
-    await get_web_import_queue().enqueue(db_book.id, source_url_str)
+    await queue.enqueue(db_book.id, source_url_str)
     return db_book
 
 
@@ -63,6 +75,41 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         raise HTTPException(status_code=404, detail="Book not found")
     if not db_book.source_url:
         raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
+
+    if not db_book.immutable_path or not db_book.current_path:
+        result = await download_web_novel(db_book.source_url, overwrite=True)
+        if result is None:
+            raise HTTPException(status_code=500, detail="FanFicFare did not produce a refreshed EPUB.")
+        new_epub_path, metadata = result
+
+        immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
+        new_epub_path.rename(immutable_path)
+        shutil.copyfile(immutable_path, current_path)
+
+        new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
+        update_data = schemas.BookUpdate(**metadata)
+        updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
+        updated_book.removed_chapters = []
+        updated_book.master_word_count = new_word_count
+        updated_book.current_word_count = new_word_count
+        updated_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
+        updated_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
+        updated_book.download_status = None
+        await crud.touch_book_content(db, updated_book)
+        await db.commit()
+        await db.refresh(updated_book)
+
+        log_entry = schemas.BookLogCreate(
+            book_id=updated_book.id,
+            entry_type="updated",
+            previous_chapter_count=0,
+            new_chapter_count=new_chapter_count,
+            words_added=new_word_count,
+        )
+        await crud.create_book_log(db, log_entry)
+        await epub_editor.apply_book_cleaning(updated_book, db)
+        await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
+        return updated_book
 
     immutable_path = LIBRARY_PATH.parent / db_book.immutable_path
     current_path = LIBRARY_PATH.parent / db_book.current_path

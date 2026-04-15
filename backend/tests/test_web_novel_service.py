@@ -136,3 +136,28 @@ async def test_download_web_novel_new_download_uses_story_manager_output_path(tm
     output_arg = f"output_filename={library_path.resolve()}/${{title}}-${{siteabbrev}}_${{storyId}}${{formatext}}"
     assert output_arg in args
     assert "https://www.royalroad.com/fiction/123" == args[-1]
+
+
+def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch):
+    app_dir = tmp_path / "backend" / "app"
+    app_dir.mkdir(parents=True)
+    (app_dir / "personal.ini").write_text("[defaults]\nwrite_raw_metadata: true\n", encoding="utf-8")
+
+    local_user_ini = tmp_path / "config" / "fanficfare" / "personal.ini"
+    local_user_ini.parent.mkdir(parents=True)
+    local_user_ini.write_text("[defaults]\nslow_down_sleep_time: 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(web_novel, "APP_DIR", app_dir)
+    monkeypatch.setattr(
+        web_novel,
+        "_DEFAULT_USER_PERSONAL_INI_CANDIDATES",
+        (
+            local_user_ini,
+            tmp_path / "missing-docker-path.ini",
+        ),
+    )
+    monkeypatch.delenv("FFF_USER_CONFIG_PATH", raising=False)
+
+    config_paths = web_novel._get_fff_config_paths()
+
+    assert config_paths == [app_dir / "personal.ini", local_user_ini]

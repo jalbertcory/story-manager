@@ -146,6 +146,31 @@ async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.
     return book
 
 
+async def reset_failed_web_book_for_retry(
+    db: AsyncSession,
+    book: models.Book,
+    source_url: str,
+) -> models.Book:
+    """Reuse a failed web-import placeholder so the same URL can be retried."""
+    book.title = source_url
+    book.author = "Pending"
+    book.series = None
+    book.series_index = None
+    book.cover_path = None
+    book.immutable_path = None
+    book.current_path = None
+    book.master_word_count = None
+    book.current_word_count = None
+    book.removed_chapters = []
+    book.content_selectors = []
+    book.download_status = "pending"
+    book.source_url = source_url
+    book.source_type = models.SourceType.web
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+
 async def detach_book_source(db: AsyncSession, book: models.Book) -> models.Book:
     """Clear a book's remote source metadata and treat it as a normal EPUB."""
     book.source_url = None
