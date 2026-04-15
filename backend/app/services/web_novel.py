@@ -250,6 +250,7 @@ async def update_web_novels() -> None:
     db = SessionLocal()
     task = None
     failed = False
+    had_book_failures = False
     try:
         books = await crud.get_web_books(db)
         task = await crud.get_active_update_task(db)
@@ -260,16 +261,18 @@ async def update_web_novels() -> None:
         logger.info(f"Update task {task.id} processing {task.completed_books}/{task.total_books} books.")
 
         for book in books:
-            if not book.immutable_path or not book.current_path:
-                logger.warning("Skipping %s (id=%s): missing epub paths.", book.title, book.id)
-                await crud.increment_update_task(db, task)
-                continue
-            latest_log = await crud.get_latest_book_log(db, book.id)
-            if latest_log and latest_log.timestamp >= task.started_at:
-                logger.info(f"Skipping {book.title}, already processed in this task.")
-                continue
-            logger.info(f"Checking {book.title} for updates.")
+            old_chapter_count: Optional[int] = None
             try:
+                if not book.immutable_path or not book.current_path:
+                    logger.warning("Skipping %s (id=%s): missing epub paths.", book.title, book.id)
+                    continue
+
+                latest_log = await crud.get_latest_book_log(db, book.id)
+                if latest_log and latest_log.timestamp >= task.started_at:
+                    logger.info(f"Skipping {book.title}, already processed in this task.")
+                    continue
+
+                logger.info(f"Checking {book.title} for updates.")
                 immutable_path = LIBRARY_PATH.parent / book.immutable_path
                 current_path = LIBRARY_PATH.parent / book.current_path
 
@@ -286,7 +289,6 @@ async def update_web_novels() -> None:
                         words_added=0,
                     )
                     await crud.create_book_log(db, log_entry)
-                    await crud.increment_update_task(db, task)
                     continue
 
                 new_epub_path, _ = result
@@ -320,15 +322,27 @@ async def update_web_novels() -> None:
                     )
                 await crud.create_book_log(db, log_entry)
                 await epub_editor.apply_book_cleaning(book, db)
-                await crud.increment_update_task(db, task)
             except Exception as e:
+                had_book_failures = True
                 logger.error(f"Failed to update {book.title}: {e}\n{traceback.format_exc()}")
+                await crud.create_book_log(
+                    db,
+                    schemas.BookLogCreate(
+                        book_id=book.id,
+                        entry_type="error",
+                        previous_chapter_count=old_chapter_count,
+                        new_chapter_count=old_chapter_count,
+                        words_added=0,
+                    ),
+                )
+            finally:
+                await crud.increment_update_task(db, task)
     except Exception as e:
         logger.error(f"Scheduler run failed: {e}\n{traceback.format_exc()}")
         failed = True
     finally:
         if task is not None:
-            if failed:
+            if failed or had_book_failures:
                 await crud.fail_update_task(db, task)
             else:
                 await crud.complete_update_task(db, task)

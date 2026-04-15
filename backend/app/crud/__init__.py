@@ -46,6 +46,7 @@ from .logs import (  # noqa: F401
     get_latest_update_task,
     get_update_tasks,
     increment_update_task,
+    interrupt_update_task,
     reset_stuck_update_tasks,
 )
 from .cleaning import (  # noqa: F401
@@ -67,6 +68,10 @@ from .reader import (  # noqa: F401
     get_reader_standalone_books,
     get_reader_updates,
     search_reader_books,
+)
+from .scheduler_settings import (  # noqa: F401
+    get_scheduler_settings,
+    upsert_scheduler_settings,
 )
 from .api_keys import (  # noqa: F401
     create_api_key,

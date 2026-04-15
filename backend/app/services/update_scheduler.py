@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -41,10 +42,6 @@ def is_scheduler_running() -> bool:
     return _scheduler.running
 
 
-def get_schedule_label() -> str:
-    return f"Every {WEB_NOVEL_UPDATE_INTERVAL_HOURS} hours"
-
-
 def get_metadata_schedule_label() -> str:
     return f"Check for stale metadata every {METADATA_STALE_SCAN_INTERVAL_HOURS} hours"
 
@@ -69,6 +66,54 @@ def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+def has_daily_schedule(settings: Optional[models.SchedulerSettings]) -> bool:
+    return bool(
+        settings is not None
+        and settings.web_novel_schedule_hour is not None
+        and settings.web_novel_schedule_minute is not None
+        and settings.web_novel_schedule_timezone
+    )
+
+
+def get_schedule_mode(settings: Optional[models.SchedulerSettings]) -> str:
+    return "daily_time" if has_daily_schedule(settings) else "interval"
+
+
+def get_schedule_time_local(settings: Optional[models.SchedulerSettings]) -> Optional[str]:
+    if not has_daily_schedule(settings):
+        return None
+    return f"{settings.web_novel_schedule_hour:02d}:{settings.web_novel_schedule_minute:02d}"
+
+
+def get_schedule_timezone(settings: Optional[models.SchedulerSettings]) -> Optional[str]:
+    if not has_daily_schedule(settings):
+        return None
+    return settings.web_novel_schedule_timezone
+
+
+def _format_hour_minute(hour: int, minute: int) -> str:
+    suffix = "AM" if hour < 12 else "PM"
+    hour_12 = hour % 12 or 12
+    return f"{hour_12}:{minute:02d} {suffix}"
+
+
+def get_schedule_label(settings: Optional[models.SchedulerSettings] = None) -> str:
+    if has_daily_schedule(settings):
+        return (
+            f"Daily at {_format_hour_minute(settings.web_novel_schedule_hour, settings.web_novel_schedule_minute)} "
+            f"({settings.web_novel_schedule_timezone})"
+        )
+    return f"Every {WEB_NOVEL_UPDATE_INTERVAL_HOURS} hours"
+
+
+def _get_zoneinfo(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown scheduler timezone %s; falling back to UTC.", timezone_name)
+        return ZoneInfo("UTC")
+
+
 def get_last_run_anchor(task: Optional[models.UpdateTask]) -> Optional[datetime]:
     if task is None:
         return None
@@ -89,11 +134,45 @@ def calculate_next_run_time(last_run_at: Optional[datetime], now: Optional[datet
     return next_run_at
 
 
+def calculate_next_daily_run_time(
+    hour: int,
+    minute: int,
+    timezone_name: str,
+    now: Optional[datetime] = None,
+) -> datetime:
+    now_utc = _as_utc(now) or datetime.now(timezone.utc)
+    schedule_tz = _get_zoneinfo(timezone_name)
+    now_local = now_utc.astimezone(schedule_tz)
+    next_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if next_local <= now_local:
+        next_local += timedelta(days=1)
+    return next_local.astimezone(timezone.utc)
+
+
+def get_next_run_time_for_task(
+    task: Optional[models.UpdateTask],
+    schedule_settings: Optional[models.SchedulerSettings] = None,
+    now: Optional[datetime] = None,
+) -> datetime:
+    now_utc = _as_utc(now) or datetime.now(timezone.utc)
+    if task is not None and task.status == "interrupted" and task.completed_books < task.total_books:
+        return now_utc + OVERDUE_RUN_DELAY
+    if has_daily_schedule(schedule_settings):
+        return calculate_next_daily_run_time(
+            schedule_settings.web_novel_schedule_hour,
+            schedule_settings.web_novel_schedule_minute,
+            schedule_settings.web_novel_schedule_timezone,
+            now=now_utc,
+        )
+    return calculate_next_run_time(get_last_run_anchor(task), now=now_utc)
+
+
 async def schedule_next_web_novel_update() -> datetime:
     async with SessionLocal() as db:
         latest_task = await crud.get_latest_update_task(db)
+        schedule_settings = await crud.get_scheduler_settings(db)
 
-    next_run_at = calculate_next_run_time(get_last_run_anchor(latest_task))
+    next_run_at = get_next_run_time_for_task(latest_task, schedule_settings=schedule_settings)
     _scheduler.add_job(
         run_web_novel_update,
         "date",

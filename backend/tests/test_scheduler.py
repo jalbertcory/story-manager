@@ -5,9 +5,13 @@ from datetime import datetime, timezone
 from backend.app.services.update_scheduler import (
     OVERDUE_RUN_DELAY,
     WEB_NOVEL_UPDATE_INTERVAL,
+    calculate_next_daily_run_time,
     calculate_next_run_time,
     get_last_run_anchor,
+    get_next_run_time_for_task,
+    get_schedule_label,
 )
+from backend.app import models
 
 
 def _utc(year=2025, month=1, day=1, hour=12, minute=0):
@@ -82,3 +86,61 @@ class TestGetLastRunAnchor:
 
         result = get_last_run_anchor(FakeTask())
         assert result == _utc(hour=10)
+
+
+class TestGetNextRunTimeForTask:
+    def test_interrupted_incomplete_task_retries_soon(self):
+        class FakeTask:
+            status = "interrupted"
+            started_at = _utc(hour=10)
+            completed_at = _utc(hour=10, minute=15)
+            completed_books = 14
+            total_books = 30
+
+        now = _utc(hour=10, minute=16)
+        result = get_next_run_time_for_task(FakeTask(), now=now)
+        assert result == now + OVERDUE_RUN_DELAY
+
+    def test_completed_task_uses_normal_interval(self):
+        class FakeTask:
+            status = "completed"
+            started_at = _utc(hour=10)
+            completed_at = _utc(hour=11)
+            completed_books = 30
+            total_books = 30
+
+        now = _utc(hour=12)
+        result = get_next_run_time_for_task(FakeTask(), now=now)
+        assert result == _utc(year=2025, month=1, day=2, hour=11)
+
+    def test_daily_schedule_uses_fixed_local_time(self):
+        class FakeTask:
+            status = "completed"
+            started_at = _utc(hour=6)
+            completed_at = _utc(hour=7)
+            completed_books = 30
+            total_books = 30
+
+        settings = models.SchedulerSettings(
+            web_novel_schedule_hour=6,
+            web_novel_schedule_minute=30,
+            web_novel_schedule_timezone="America/New_York",
+        )
+        now = _utc(year=2025, month=1, day=1, hour=12)
+        result = get_next_run_time_for_task(FakeTask(), schedule_settings=settings, now=now)
+        assert result == _utc(year=2025, month=1, day=2, hour=11, minute=30)
+
+
+class TestDailyScheduleHelpers:
+    def test_calculate_next_daily_run_time(self):
+        now = _utc(year=2025, month=1, day=1, hour=12)
+        result = calculate_next_daily_run_time(6, 30, "America/New_York", now=now)
+        assert result == _utc(year=2025, month=1, day=2, hour=11, minute=30)
+
+    def test_get_schedule_label_for_daily_time(self):
+        settings = models.SchedulerSettings(
+            web_novel_schedule_hour=6,
+            web_novel_schedule_minute=30,
+            web_novel_schedule_timezone="America/New_York",
+        )
+        assert get_schedule_label(settings) == "Daily at 6:30 AM (America/New_York)"

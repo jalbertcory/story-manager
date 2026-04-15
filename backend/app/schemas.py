@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from datetime import datetime
 from typing import Optional, List
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
 
 
@@ -132,12 +133,39 @@ class UpdateTask(BaseModel):
 class SchedulerJobStatus(BaseModel):
     job_id: str
     schedule: str
+    schedule_mode: str = "interval"
+    schedule_time_local: Optional[str] = None
+    schedule_timezone: Optional[str] = None
     next_run_at: Optional[datetime] = None
     scheduler_running: bool
     run_in_progress: bool
     last_run_started_at: Optional[datetime] = None
     last_run_completed_at: Optional[datetime] = None
     last_run_status: Optional[str] = None
+
+
+class SchedulerConfigUpdate(BaseModel):
+    time_local: str = Field(pattern=r"^\d{2}:\d{2}$")
+    timezone: str = Field(min_length=1, max_length=100)
+
+    @field_validator("time_local")
+    @classmethod
+    def validate_time_local(cls, value: str) -> str:
+        hour_text, minute_text = value.split(":")
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("time_local must be a valid 24-hour time")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
 
 
 class BookLogWithTitle(BookLog):

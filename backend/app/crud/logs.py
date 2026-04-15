@@ -68,12 +68,19 @@ async def fail_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
     await db.refresh(task)
 
 
+async def interrupt_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
+    task.status = "interrupted"
+    task.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(task)
+
+
 async def reset_stuck_update_tasks(db: AsyncSession) -> None:
-    """Mark any tasks left in 'running' state (e.g. from a crashed run) as 'failed'."""
+    """Mark any tasks left in 'running' state (e.g. from a crashed run) as 'interrupted'."""
     result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == "running"))
     stuck = result.scalars().all()
     for task in stuck:
-        task.status = "failed"
+        task.status = "interrupted"
         task.completed_at = datetime.now(timezone.utc)
     if stuck:
         await db.commit()
