@@ -159,9 +159,28 @@ The `docker-compose.yml` is configured to store persistent data on the host mach
 
 This `config` directory will contain the following subdirectories:
 *   `config/library`: Stores your uploaded EPUB files and downloaded web novels.
+*   `config/fanficfare`: Optional FanFicFare overrides. If you place `config/fanficfare/personal.ini` here, Story Manager will load it after its built-in `personal.ini`, so your settings win.
 *   `config/pgdata`: Stores the PostgreSQL database.
 
 This setup ensures that your library and application data are preserved even if you stop or remove the container.
+
+### Optional FanFicFare Overrides
+
+Story Manager now uses FanFicFare's real EPUB update mode for tracked web novels. That means daily checks can reuse the existing immutable EPUB and avoid re-fetching every chapter on every run.
+
+If you want to customize FanFicFare behavior, create:
+
+```text
+config/fanficfare/personal.ini
+```
+
+Story Manager will load configs in this order:
+1. Built-in `backend/app/personal.ini`
+2. Optional mounted `config/fanficfare/personal.ini`
+
+Because FanFicFare applies later config files last, your mounted settings override the built-in defaults without replacing them entirely.
+
+If you need a different path, set `FFF_USER_CONFIG_PATH` in the container environment.
 
 ### Running the Application
 

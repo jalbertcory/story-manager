@@ -1184,20 +1184,22 @@ async def test_refresh_book(db_session, mocker):
     """
     Test refreshing a book from its source URL.
     """
-    # Mock the helper function to simulate a successful download and metadata parsing
     library_path = Path("./library").resolve()
-    new_epub_path = library_path / "Refreshed Title-Refreshed Author.epub"
-    mocker.patch(
+    library_path.mkdir(exist_ok=True)
+    author_dir = library_path / "Original Author"
+    author_dir.mkdir(exist_ok=True)
+    immutable_path = author_dir / "immutable_Original Title.epub"
+    current_path = author_dir / "Original Title.epub"
+    create_dummy_epub(immutable_path, "Original Title", "Original Author")
+    current_path.write_bytes(immutable_path.read_bytes())
+
+    download_mock = mocker.patch(
         "backend.app.routers.web_novels.download_web_novel",
         return_value=(
-            new_epub_path,
+            immutable_path,
             {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"},
         ),
     )
-
-    # Since we are not mocking the file system, we need to create the dummy files
-    library_path.mkdir(exist_ok=True)
-    create_dummy_epub(new_epub_path, "Refreshed Title", "Refreshed Author")
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1206,8 +1208,8 @@ async def test_refresh_book(db_session, mocker):
                 title="Original Title",
                 author="Original Author",
                 source_url="http://example.com/story/refresh",
-                immutable_path="p1i",
-                current_path="p1c",
+                immutable_path=str(immutable_path.relative_to(library_path.parent)),
+                current_path=str(current_path.relative_to(library_path.parent)),
                 source_type=models.SourceType.web,
             ),
         )
@@ -1221,10 +1223,16 @@ async def test_refresh_book(db_session, mocker):
     assert data["series"] == "Refreshed Series"
     assert data["master_word_count"] > 0
     assert data["current_word_count"] == data["master_word_count"]
+    download_mock.assert_called_once_with(
+        "http://example.com/story/refresh",
+        overwrite=True,
+        existing_epub_path=immutable_path,
+    )
 
     # Clean up dummy files
     (library_path.parent / data["immutable_path"]).unlink()
     (library_path.parent / data["current_path"]).unlink()
+    author_dir.rmdir()
 
 
 @pytest.mark.asyncio
