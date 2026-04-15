@@ -2,6 +2,7 @@ import pytest
 import pytest_asyncio
 import zipfile
 from datetime import datetime, timedelta, timezone
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from ebooklib import epub
 from backend.app.main import app
-from backend.app.services import update_scheduler
+from backend.app.services import update_scheduler, web_novel
 from backend.app.services.series import SeriesBook, detect_series_from_books, detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import crud, epub_editor, models, schemas
@@ -1798,6 +1799,17 @@ def test_get_last_run_anchor_prefers_start_for_failed_tasks():
     assert anchor == task.started_at
 
 
+def test_get_next_run_time_for_interrupted_task_runs_soon():
+    now = datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+    task = models.UpdateTask(status="interrupted", total_books=30, completed_books=14)
+    task.started_at = now - timedelta(minutes=15)
+    task.completed_at = now - timedelta(seconds=5)
+
+    next_run = update_scheduler.get_next_run_time_for_task(task, now=now)
+
+    assert next_run == now + update_scheduler.OVERDUE_RUN_DELAY
+
+
 @pytest.mark.asyncio
 async def test_scheduler_job_status(db_session, mocker):
     """
@@ -1823,9 +1835,96 @@ async def test_scheduler_job_status(db_session, mocker):
     assert data["next_run_at"] == "2026-03-20T14:30:00Z"
     assert data["scheduler_running"] is True
     assert data["run_in_progress"] is False
+    assert data["schedule_mode"] == "interval"
+    assert data["schedule_time_local"] is None
+    assert data["schedule_timezone"] is None
     assert data["last_run_status"] == "completed"
     assert data["last_run_started_at"] is not None
     assert data["last_run_completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_persists_daily_time_and_reschedules(db_session, mocker):
+    class DummyJob:
+        next_run_time = datetime(2026, 3, 20, 10, 30, tzinfo=timezone.utc)
+
+    schedule_mock = mocker.patch(
+        "backend.app.routers.scheduler.update_scheduler.schedule_next_web_novel_update",
+        return_value=DummyJob.next_run_time,
+    )
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.get_scheduled_job", return_value=DummyJob())
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.is_scheduler_running", return_value=True)
+    mocker.patch("backend.app.routers.scheduler.update_scheduler.is_update_running", return_value=False)
+
+    response = client.put(
+        "/api/scheduler/config",
+        json={"time_local": "06:30", "timezone": "America/New_York"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["schedule"] == "Daily at 6:30 AM (America/New_York)"
+    assert data["schedule_mode"] == "daily_time"
+    assert data["schedule_time_local"] == "06:30"
+    assert data["schedule_timezone"] == "America/New_York"
+    assert data["next_run_at"] == "2026-03-20T10:30:00Z"
+    schedule_mock.assert_awaited_once()
+
+    async with AsyncTestingSessionLocal() as session:
+        settings = await crud.get_scheduler_settings(session)
+        assert settings is not None
+        assert settings.web_novel_schedule_hour == 6
+        assert settings.web_novel_schedule_minute == 30
+        assert settings.web_novel_schedule_timezone == "America/New_York"
+
+
+@pytest.mark.asyncio
+async def test_update_web_novels_counts_and_logs_book_failures(db_session, mocker):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Broken Book A",
+                author="Author",
+                immutable_path="broken_a.epub",
+                current_path="broken_a_current.epub",
+                source_type=models.SourceType.web,
+                source_url="https://example.com/broken-a",
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Broken Book B",
+                author="Author",
+                immutable_path="broken_b.epub",
+                current_path="broken_b_current.epub",
+                source_type=models.SourceType.web,
+                source_url="https://example.com/broken-b",
+            ),
+        )
+
+    mocker.patch("backend.app.services.web_novel.get_epub_word_and_chapter_count", return_value=(1000, 10))
+    mocker.patch(
+        "backend.app.services.web_novel.download_web_novel",
+        side_effect=HTTPException(status_code=500, detail="boom"),
+    )
+    mocker.patch("backend.app.services.web_novel.SessionLocal", AsyncTestingSessionLocal)
+
+    await web_novel.update_web_novels()
+
+    async with AsyncTestingSessionLocal() as session:
+        task = await crud.get_latest_update_task(session)
+        assert task is not None
+        assert task.total_books == 2
+        assert task.completed_books == 2
+        assert task.status == "failed"
+
+        logs = await crud.get_book_logs_for_task(session, task.id)
+        _, rows = logs
+        assert rows is not None
+        assert len(rows) == 2
+        assert {row[0].entry_type for row in rows} == {"error"}
 
 
 @pytest.mark.asyncio
@@ -2423,7 +2522,7 @@ async def test_scheduler_history_task_logs(db_session):
         )
         await crud.complete_update_task(session, task)
 
-    response = client.get(f"/api/scheduler/history/{task.id}/logs")
+        response = client.get(f"/api/scheduler/history/{task.id}/logs")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -2440,6 +2539,41 @@ async def test_scheduler_history_task_logs(db_session):
     checked = next(e for e in data if e["entry_type"] == "checked")
     assert checked["book_title"] == "Log Book B"
     assert checked["words_added"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_history_task_logs_includes_error_entries(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Errored Book",
+                author="Author",
+                immutable_path="err_i",
+                current_path="err_c",
+                source_type=models.SourceType.web,
+                source_url="http://example.com/err",
+            ),
+        )
+        task = await crud.create_update_task(session, total_books=1)
+        await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="error",
+                previous_chapter_count=12,
+                new_chapter_count=12,
+                words_added=0,
+            ),
+        )
+        await crud.fail_update_task(session, task)
+
+    response = client.get(f"/api/scheduler/history/{task.id}/logs")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["entry_type"] == "error"
+    assert data[0]["book_title"] == "Errored Book"
 
 
 @pytest.mark.asyncio

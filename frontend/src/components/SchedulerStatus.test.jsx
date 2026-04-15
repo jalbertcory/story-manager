@@ -6,6 +6,9 @@ import { renderWithClient } from "../test-utils";
 const mockJob = {
   job_id: "update_web_novels",
   schedule: "Every 24 hours",
+  schedule_mode: "interval",
+  schedule_time_local: null,
+  schedule_timezone: null,
   next_run_at: new Date(Date.now() + 7200000).toISOString(),
   scheduler_running: true,
   run_in_progress: false,
@@ -60,6 +63,16 @@ const mockLogs = [
     entry_type: "checked",
     previous_chapter_count: 10,
     new_chapter_count: 10,
+    words_added: 0,
+    timestamp: new Date().toISOString(),
+  },
+  {
+    id: 3,
+    book_id: 12,
+    book_title: "Broken Orbit",
+    entry_type: "error",
+    previous_chapter_count: 7,
+    new_chapter_count: 7,
     words_added: 0,
     timestamp: new Date().toISOString(),
   },
@@ -174,6 +187,8 @@ describe("SchedulerStatus", () => {
     await waitFor(() => {
       expect(screen.getByText("Dragon's Lair")).toBeInTheDocument();
       expect(screen.getByText("Moonlight")).toBeInTheDocument();
+      expect(screen.getByText("Broken Orbit")).toBeInTheDocument();
+      expect(screen.getByText("Errors (1)")).toBeInTheDocument();
     });
 
     // Updated entry shows chapter and word counts
@@ -236,6 +251,46 @@ describe("SchedulerStatus", () => {
     await waitFor(() => {
       expect(screen.getByText("Current Run")).toBeInTheDocument();
       expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("saves a daily scheduler time from the app", async () => {
+    const savedJob = {
+      ...mockJob,
+      schedule: "Daily at 6:30 AM (America/New_York)",
+      schedule_mode: "daily_time",
+      schedule_time_local: "06:30",
+      schedule_timezone: "America/New_York",
+    };
+
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/scheduler/config") {
+        expect(options.method).toBe("PUT");
+        expect(options.body).toContain("\"time_local\":\"06:30\"");
+        expect(options.body).toContain("\"timezone\":");
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(savedJob) });
+      }
+      if (url.includes("/api/scheduler/job")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+      }
+      if (url.includes("/api/scheduler/status")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+      }
+      if (url.includes("/api/scheduler/history")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<SchedulerStatus onBack={() => {}} />);
+
+    const timeInput = await screen.findByLabelText("Daily Run Time");
+    fireEvent.change(timeInput, { target: { value: "06:30" } });
+    fireEvent.click(screen.getByText("Save Schedule"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Daily schedule updated.")).toBeInTheDocument();
+      expect(screen.getByText("Daily at 6:30 AM (America/New_York)")).toBeInTheDocument();
     });
   });
 });

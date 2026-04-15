@@ -25,6 +25,14 @@ const fetchTaskLogs = async (taskId) => {
   return res.json();
 };
 
+function getBrowserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return "Never";
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -39,6 +47,14 @@ function timeAgo(dateStr) {
 function formatDate(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleString();
+}
+
+function toTimeInputValue(dateStr) {
+  if (!dateStr) return "06:00";
+  const date = new Date(dateStr);
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 function formatTimeUntil(dateStr, now) {
@@ -80,6 +96,7 @@ function TaskLogsList({ taskId }) {
   const updatedLogs = logs.filter((l) => l.entry_type === "updated");
   const checkedLogs = logs.filter((l) => l.entry_type === "checked");
   const addedLogs = logs.filter((l) => l.entry_type === "added");
+  const errorLogs = logs.filter((l) => l.entry_type === "error");
 
   return (
     <div className="task-logs">
@@ -124,6 +141,19 @@ function TaskLogsList({ taskId }) {
           </ul>
         </div>
       )}
+      {errorLogs.length > 0 && (
+        <div>
+          <p className="task-logs-group-label">Errors ({errorLogs.length})</p>
+          <ul className="task-logs-list">
+            {errorLogs.map((log) => (
+              <li key={log.id} className="task-log-entry">
+                <span className="task-log-title">{log.book_title}</span>
+                <span className="task-log-detail">Update failed</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -153,6 +183,9 @@ function TaskHistoryRow({ task }) {
 function SchedulerStatus({ onBack }) {
   const queryClient = useQueryClient();
   const [now, setNow] = useState(Date.now());
+  const [scheduleTime, setScheduleTime] = useState("06:00");
+  const [scheduleTimezone, setScheduleTimezone] = useState(() => getBrowserTimezone());
+  const [scheduleDirty, setScheduleDirty] = useState(false);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -180,6 +213,12 @@ function SchedulerStatus({ onBack }) {
     refetchInterval: task?.status === "running" ? 5000 : false,
   });
 
+  useEffect(() => {
+    if (!job || scheduleDirty) return;
+    setScheduleTime(job.schedule_time_local || toTimeInputValue(job.next_run_at));
+    setScheduleTimezone(job.schedule_timezone || getBrowserTimezone());
+  }, [job, scheduleDirty]);
+
   const triggerMutation = useMutation({
     mutationFn: () =>
       fetch("/api/scheduler/trigger", { method: "POST" }).then((r) => r.json()),
@@ -187,6 +226,35 @@ function SchedulerStatus({ onBack }) {
       queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
+    },
+  });
+
+  const scheduleMutation = useMutation({
+    mutationFn: async ({ timeLocal, timezone }) => {
+      const res = await fetch("/api/scheduler/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ time_local: timeLocal, timezone }),
+      });
+      if (!res.ok) {
+        let detail = "Failed to update schedule";
+        try {
+          const body = await res.json();
+          if (body?.detail) {
+            detail = Array.isArray(body.detail)
+              ? body.detail.map((item) => item.msg || item).join(", ")
+              : body.detail;
+          }
+        } catch {
+          // Ignore JSON parse failures and keep the default message.
+        }
+        throw new Error(detail);
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setScheduleDirty(false);
+      queryClient.setQueryData(["scheduler-job"], data);
     },
   });
 
@@ -206,30 +274,66 @@ function SchedulerStatus({ onBack }) {
         <h3>Automatic Schedule</h3>
         {jobLoading && <p>Loading...</p>}
         {job && (
-          <div className="scheduler-grid">
-            <div className="scheduler-stat">
-              <span className="hint">Schedule</span>
-              <strong className="scheduler-value">{job.schedule}</strong>
+          <>
+            <div className="scheduler-grid">
+              <div className="scheduler-stat">
+                <span className="hint">Schedule</span>
+                <strong className="scheduler-value">{job.schedule}</strong>
+              </div>
+              <div className="scheduler-stat">
+                <span className="hint">Next Run</span>
+                <strong className="scheduler-value">
+                  {job.next_run_at ? formatDate(job.next_run_at) : "Not scheduled"}
+                </strong>
+              </div>
+              <div className="scheduler-stat">
+                <span className="hint">Time Until Next Run</span>
+                <strong className="scheduler-value">
+                  {formatTimeUntil(job.next_run_at, now)}
+                </strong>
+              </div>
+              <div className="scheduler-stat">
+                <span className="hint">Run State</span>
+                <strong className="scheduler-value">
+                  {formatRunState(job)}
+                </strong>
+              </div>
             </div>
-            <div className="scheduler-stat">
-              <span className="hint">Next Run</span>
-              <strong className="scheduler-value">
-                {job.next_run_at ? formatDate(job.next_run_at) : "Not scheduled"}
-              </strong>
-            </div>
-            <div className="scheduler-stat">
-              <span className="hint">Time Until Next Run</span>
-              <strong className="scheduler-value">
-                {formatTimeUntil(job.next_run_at, now)}
-              </strong>
-            </div>
-            <div className="scheduler-stat">
-              <span className="hint">Run State</span>
-              <strong className="scheduler-value">
-                {formatRunState(job)}
-              </strong>
-            </div>
-          </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                scheduleMutation.mutate({ timeLocal: scheduleTime, timezone: scheduleTimezone });
+              }}
+            >
+              <label>
+                Daily Run Time
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(event) => {
+                    setScheduleDirty(true);
+                    setScheduleTime(event.target.value);
+                  }}
+                />
+              </label>
+              <p className="hint">
+                {job.schedule_mode === "daily_time"
+                  ? `Saved in ${job.schedule_timezone}.`
+                  : `Saving will switch from the rolling 24-hour interval to a fixed daily time in ${scheduleTimezone}.`}
+              </p>
+              <div className="settings-actions">
+                <button type="submit" disabled={scheduleMutation.isPending}>
+                  {scheduleMutation.isPending ? "Saving..." : "Save Schedule"}
+                </button>
+                {scheduleMutation.isError && (
+                  <p className="error">Failed: {scheduleMutation.error.message}</p>
+                )}
+                {scheduleMutation.isSuccess && !scheduleMutation.isPending && (
+                  <p className="hint">Daily schedule updated.</p>
+                )}
+              </div>
+            </form>
+          </>
         )}
       </section>
 

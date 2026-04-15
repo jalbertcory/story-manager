@@ -172,7 +172,29 @@ class TestLogsCrud:
         assert task.status == "running"
         await crud.reset_stuck_update_tasks(db)
         await db.refresh(task)
-        assert task.status == "failed"
+        assert task.status == "interrupted"
+
+    @pytest.mark.asyncio
+    async def test_upsert_scheduler_settings(self, db):
+        settings = await crud.upsert_scheduler_settings(
+            db,
+            web_novel_schedule_hour=6,
+            web_novel_schedule_minute=30,
+            web_novel_schedule_timezone="America/New_York",
+        )
+        assert settings.id is not None
+        assert settings.web_novel_schedule_hour == 6
+
+        updated = await crud.upsert_scheduler_settings(
+            db,
+            web_novel_schedule_hour=7,
+            web_novel_schedule_minute=45,
+            web_novel_schedule_timezone="UTC",
+        )
+        assert updated.id == settings.id
+        assert updated.web_novel_schedule_hour == 7
+        assert updated.web_novel_schedule_minute == 45
+        assert updated.web_novel_schedule_timezone == "UTC"
 
 
 class TestCleaningCrud:

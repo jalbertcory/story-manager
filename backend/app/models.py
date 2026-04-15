@@ -137,6 +137,15 @@ class CleaningConfig(Base):
     content_selectors = Column(JSON, nullable=True)
 
 
+class SchedulerSettings(Base):
+    __tablename__ = "scheduler_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    web_novel_schedule_hour = Column(Integer, nullable=True)
+    web_novel_schedule_minute = Column(Integer, nullable=True)
+    web_novel_schedule_timezone = Column(String, nullable=True)
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
