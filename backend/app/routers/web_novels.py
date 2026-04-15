@@ -1,6 +1,7 @@
 """Web novel endpoints: add from URL, queue imports, and refresh from source."""
 
 import logging
+import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -67,11 +68,14 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     current_path = LIBRARY_PATH.parent / db_book.current_path
 
     old_word_count, old_chapter_count = get_epub_word_and_chapter_count(current_path)
-    new_epub_path, metadata = await download_web_novel(db_book.source_url, overwrite=True)
+    result = await download_web_novel(db_book.source_url, overwrite=True, existing_epub_path=immutable_path)
+    if result is None:
+        raise HTTPException(status_code=500, detail="FanFicFare did not update the existing EPUB during refresh.")
+    new_epub_path, metadata = result
 
-    new_epub_path.rename(immutable_path)
-    with open(immutable_path, "rb") as f_in, open(current_path, "wb") as f_out:
-        f_out.write(f_in.read())
+    if new_epub_path != immutable_path:
+        new_epub_path.rename(immutable_path)
+    shutil.copyfile(immutable_path, current_path)
 
     new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
 
