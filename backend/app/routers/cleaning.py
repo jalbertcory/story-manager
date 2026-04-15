@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
