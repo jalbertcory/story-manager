@@ -19,6 +19,7 @@ class BookBase(BaseModel):
     series: Optional[str] = None
     series_index: Optional[float] = None
     genre_tags: Optional[List[str]] = Field(default_factory=list)
+    source_tags: Optional[List[str]] = Field(default_factory=list)
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
     metadata_remote_ids: Optional[dict] = None
     metadata_sync_source: Optional[str] = None
@@ -42,7 +43,9 @@ class BookUpdate(BaseModel):
     author: Optional[str] = None
     series: Optional[str] = None
     series_index: Optional[float] = None
+    genre_tags: Optional[List[str]] = None
     user_genre_tags: Optional[List[str]] = None
+    source_tags: Optional[List[str]] = None
     metadata_remote_ids: Optional[dict] = None
     removed_chapters: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None

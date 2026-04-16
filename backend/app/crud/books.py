@@ -156,6 +156,8 @@ async def reset_failed_web_book_for_retry(
     book.author = "Pending"
     book.series = None
     book.series_index = None
+    book.genre_tags = []
+    book.source_tags = []
     book.cover_path = None
     book.immutable_path = None
     book.current_path = None

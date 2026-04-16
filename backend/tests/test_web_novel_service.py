@@ -5,7 +5,7 @@ import pytest
 from ebooklib import epub
 from lxml import etree
 
-from backend.app.services import web_novel
+from backend.app.services import fanficfare_config, web_novel
 
 
 def create_dummy_epub(filepath: Path, title: str, author: str):
@@ -100,7 +100,7 @@ async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config
 
     args = captured_args["args"]
     assert args.count("-c") == 2
-    assert str(web_novel.APP_DIR / "personal.ini") in args
+    assert str(fanficfare_config.APP_DIR / "personal.ini") in args
     assert str(user_ini) in args
     assert "-u" in args
     assert "-U" not in args
@@ -147,9 +147,9 @@ def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch)
     local_user_ini.parent.mkdir(parents=True)
     local_user_ini.write_text("[defaults]\nslow_down_sleep_time: 1\n", encoding="utf-8")
 
-    monkeypatch.setattr(web_novel, "APP_DIR", app_dir)
+    monkeypatch.setattr(fanficfare_config, "APP_DIR", app_dir)
     monkeypatch.setattr(
-        web_novel,
+        fanficfare_config,
         "_DEFAULT_USER_PERSONAL_INI_CANDIDATES",
         (
             local_user_ini,
@@ -158,6 +158,6 @@ def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch)
     )
     monkeypatch.delenv("FFF_USER_CONFIG_PATH", raising=False)
 
-    config_paths = web_novel._get_fff_config_paths()
+    config_paths = fanficfare_config.get_fff_config_paths()
 
     assert config_paths == [app_dir / "personal.ini", local_user_ini]

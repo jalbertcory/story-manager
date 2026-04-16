@@ -93,6 +93,7 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
     assert "immutable_path" not in data[0]
     assert "current_path" not in data[0]
     assert "notes" not in data[0]
+    assert "source_tags" not in data[0]
 
 
 @pytest.mark.asyncio
@@ -1225,7 +1226,13 @@ async def test_refresh_book(db_session, mocker):
         "backend.app.routers.web_novels.download_web_novel",
         return_value=(
             immutable_path,
-            {"title": "Refreshed Title", "author": "Refreshed Author", "series": "Refreshed Series"},
+            {
+                "title": "Refreshed Title",
+                "author": "Refreshed Author",
+                "series": "Refreshed Series",
+                "genre_tags": ["Action"],
+                "source_tags": ["Character Growth"],
+            },
         ),
     )
 
@@ -1249,6 +1256,8 @@ async def test_refresh_book(db_session, mocker):
     assert data["title"] == "Refreshed Title"
     assert data["author"] == "Refreshed Author"
     assert data["series"] == "Refreshed Series"
+    assert data["genre_tags"] == ["Action"]
+    assert data["source_tags"] == ["Character Growth"]
     assert data["master_word_count"] > 0
     assert data["current_word_count"] == data["master_word_count"]
     download_mock.assert_called_once_with(

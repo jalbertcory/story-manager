@@ -51,12 +51,16 @@ function splitRemoteIds(remoteIds) {
   });
 
   const extras = Object.fromEntries(
-    Object.entries(source).filter(([key]) => !COMMON_REMOTE_ID_KEYS.includes(key)),
+    Object.entries(source).filter(
+      ([key]) => !COMMON_REMOTE_ID_KEYS.includes(key),
+    ),
   );
 
   return {
     common,
-    extrasJson: Object.keys(extras).length ? JSON.stringify(extras, null, 2) : "",
+    extrasJson: Object.keys(extras).length
+      ? JSON.stringify(extras, null, 2)
+      : "",
   };
 }
 
@@ -101,6 +105,38 @@ function SelectorPills({ selectors, onChange }) {
   );
 }
 
+function SourceTagList({ tags }) {
+  if (!tags?.length) return null;
+
+  return (
+    <div className="source-tag-list" aria-label="Source tags">
+      {tags.map((tag) => (
+        <span key={tag} className="source-tag">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SyncedGenreTagList({ tags }) {
+  if (!tags?.length) {
+    return (
+      <span className="settings-empty-value">No synced genre tags yet</span>
+    );
+  }
+
+  return (
+    <div className="genre-tag-list" aria-label="Synced genre tags">
+      {tags.map((tag) => (
+        <span key={tag} className="genre-tag">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function BookSettings({ book, onBack }) {
   const queryClient = useQueryClient();
   const coverInputRef = useRef(null);
@@ -117,12 +153,22 @@ function BookSettings({ book, onBack }) {
   const [googleBooksVolumeId, setGoogleBooksVolumeId] = useState(
     book.metadata_remote_ids?.google_books_volume_id || "",
   );
-  const [openLibraryWorkKey, setOpenLibraryWorkKey] = useState(book.metadata_remote_ids?.open_library_work_key || "");
-  const [openLibraryEditionKey, setOpenLibraryEditionKey] = useState(book.metadata_remote_ids?.open_library_edition_key || "");
-  const [openLibraryAuthorKey, setOpenLibraryAuthorKey] = useState(book.metadata_remote_ids?.open_library_author_key || "");
-  const [otherRemoteIdsJson, setOtherRemoteIdsJson] = useState(splitRemoteIds(book.metadata_remote_ids).extrasJson);
+  const [openLibraryWorkKey, setOpenLibraryWorkKey] = useState(
+    book.metadata_remote_ids?.open_library_work_key || "",
+  );
+  const [openLibraryEditionKey, setOpenLibraryEditionKey] = useState(
+    book.metadata_remote_ids?.open_library_edition_key || "",
+  );
+  const [openLibraryAuthorKey, setOpenLibraryAuthorKey] = useState(
+    book.metadata_remote_ids?.open_library_author_key || "",
+  );
+  const [otherRemoteIdsJson, setOtherRemoteIdsJson] = useState(
+    splitRemoteIds(book.metadata_remote_ids).extrasJson,
+  );
   const [identifierError, setIdentifierError] = useState("");
-  const [userGenreTags, setUserGenreTags] = useState((book.user_genre_tags || []).join(", "));
+  const [userGenreTags, setUserGenreTags] = useState(
+    (book.user_genre_tags || []).join(", "),
+  );
   const [removedChapters, setRemovedChapters] = useState(
     book.removed_chapters || [],
   );
@@ -144,10 +190,18 @@ function BookSettings({ book, onBack }) {
     setNotes(book.notes || "");
     setIsbn10(book.metadata_remote_ids?.isbn_10 || "");
     setIsbn13(book.metadata_remote_ids?.isbn_13 || "");
-    setGoogleBooksVolumeId(book.metadata_remote_ids?.google_books_volume_id || "");
-    setOpenLibraryWorkKey(book.metadata_remote_ids?.open_library_work_key || "");
-    setOpenLibraryEditionKey(book.metadata_remote_ids?.open_library_edition_key || "");
-    setOpenLibraryAuthorKey(book.metadata_remote_ids?.open_library_author_key || "");
+    setGoogleBooksVolumeId(
+      book.metadata_remote_ids?.google_books_volume_id || "",
+    );
+    setOpenLibraryWorkKey(
+      book.metadata_remote_ids?.open_library_work_key || "",
+    );
+    setOpenLibraryEditionKey(
+      book.metadata_remote_ids?.open_library_edition_key || "",
+    );
+    setOpenLibraryAuthorKey(
+      book.metadata_remote_ids?.open_library_author_key || "",
+    );
     setOtherRemoteIdsJson(splitRemoteIds(book.metadata_remote_ids).extrasJson);
     setIdentifierError("");
     setUserGenreTags((book.user_genre_tags || []).join(", "));
@@ -170,11 +224,12 @@ function BookSettings({ book, onBack }) {
     enabled: Boolean(book.immutable_path),
   });
 
-  const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } = useQuery({
-    queryKey: ["cleaned-chapters", book.id],
-    queryFn: fetchCleanedChapters,
-    enabled: chapterPreviewMode === "cleaned" && Boolean(book.current_path),
-  });
+  const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } =
+    useQuery({
+      queryKey: ["cleaned-chapters", book.id],
+      queryFn: fetchCleanedChapters,
+      enabled: chapterPreviewMode === "cleaned" && Boolean(book.current_path),
+    });
 
   const { data: matchedConfigs = [] } = useQuery({
     queryKey: ["matched-config", book.id],
@@ -199,7 +254,9 @@ function BookSettings({ book, onBack }) {
     mutationFn: () => processBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["cleaned-chapters", book.id] });
+      queryClient.invalidateQueries({
+        queryKey: ["cleaned-chapters", book.id],
+      });
     },
   });
 
@@ -228,10 +285,11 @@ function BookSettings({ book, onBack }) {
   });
 
   const previewMutation = useMutation({
-    mutationFn: () => previewCleaning(book.id, {
-      content_selectors: contentSelectors,
-      removed_chapters: removedChapters,
-    }),
+    mutationFn: () =>
+      previewCleaning(book.id, {
+        content_selectors: contentSelectors,
+        removed_chapters: removedChapters,
+      }),
     onSuccess: (data) => setPreviewResult(data),
   });
 
@@ -239,12 +297,14 @@ function BookSettings({ book, onBack }) {
 
   const coverMutation = useMutation({
     mutationFn: (file) => uploadBookCover(book.id, file),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const retryCoverMutation = useMutation({
     mutationFn: () => retryBookCover(book.id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
   });
 
   const coverUrlMutation = useMutation({
@@ -281,10 +341,18 @@ function BookSettings({ book, onBack }) {
       ...extraRemoteIds,
       ...(isbn10.trim() ? { isbn_10: isbn10.trim() } : {}),
       ...(isbn13.trim() ? { isbn_13: isbn13.trim() } : {}),
-      ...(googleBooksVolumeId.trim() ? { google_books_volume_id: googleBooksVolumeId.trim() } : {}),
-      ...(openLibraryWorkKey.trim() ? { open_library_work_key: openLibraryWorkKey.trim() } : {}),
-      ...(openLibraryEditionKey.trim() ? { open_library_edition_key: openLibraryEditionKey.trim() } : {}),
-      ...(openLibraryAuthorKey.trim() ? { open_library_author_key: openLibraryAuthorKey.trim() } : {}),
+      ...(googleBooksVolumeId.trim()
+        ? { google_books_volume_id: googleBooksVolumeId.trim() }
+        : {}),
+      ...(openLibraryWorkKey.trim()
+        ? { open_library_work_key: openLibraryWorkKey.trim() }
+        : {}),
+      ...(openLibraryEditionKey.trim()
+        ? { open_library_edition_key: openLibraryEditionKey.trim() }
+        : {}),
+      ...(openLibraryAuthorKey.trim()
+        ? { open_library_author_key: openLibraryAuthorKey.trim() }
+        : {}),
     };
 
     return {
@@ -296,7 +364,9 @@ function BookSettings({ book, onBack }) {
         .split(",")
         .map((tag) => tag.trim())
         .filter(Boolean),
-      metadata_remote_ids: Object.keys(metadataRemoteIds).length ? metadataRemoteIds : null,
+      metadata_remote_ids: Object.keys(metadataRemoteIds).length
+        ? metadataRemoteIds
+        : null,
       removed_chapters: removedChapters,
       content_selectors: contentSelectors,
       notes: notes || null,
@@ -362,8 +432,10 @@ function BookSettings({ book, onBack }) {
   const canDetachWebMarker =
     book.source_type === "web" && book.immutable_path && book.current_path;
 
-  const activeChapters = chapterPreviewMode === "cleaned" ? cleanedChapters : chapters;
-  const activeChaptersLoading = chapterPreviewMode === "cleaned" ? cleanedChaptersLoading : chaptersLoading;
+  const activeChapters =
+    chapterPreviewMode === "cleaned" ? cleanedChapters : chapters;
+  const activeChaptersLoading =
+    chapterPreviewMode === "cleaned" ? cleanedChaptersLoading : chaptersLoading;
 
   const filteredChapters = useMemo(() => {
     if (!chapterSearch.trim()) return activeChapters;
@@ -374,7 +446,12 @@ function BookSettings({ book, onBack }) {
   return (
     <div className="book-settings">
       <div className="settings-header">
-        <button className="btn-text" onClick={onBack} disabled={isBusy} style={{ flexShrink: 0 }}>
+        <button
+          className="btn-text"
+          onClick={onBack}
+          disabled={isBusy}
+          style={{ flexShrink: 0 }}
+        >
           ← Back
         </button>
         <h2>{book.title}</h2>
@@ -390,7 +467,10 @@ function BookSettings({ book, onBack }) {
             </label>
             <label>
               Author
-              <input value={author} onChange={(e) => setAuthor(e.target.value)} />
+              <input
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+              />
             </label>
             <div className="field-row">
               <label className="field-row-grow">
@@ -418,14 +498,16 @@ function BookSettings({ book, onBack }) {
                 />
               </label>
             </div>
-            <label>
-              Synced Genre Tags
-              <input
-                value={(book.genre_tags || []).join(", ")}
-                readOnly
-                placeholder="No synced genre tags yet"
-              />
-            </label>
+            <div className="settings-tag-field">
+              <span className="settings-field-label">Synced Genre Tags</span>
+              <SyncedGenreTagList tags={book.genre_tags || []} />
+            </div>
+            {(book.source_tags || []).length > 0 && (
+              <div className="settings-tag-field">
+                <span className="settings-field-label">Source Tags</span>
+                <SourceTagList tags={book.source_tags || []} />
+              </div>
+            )}
             <label>
               User Genre Tags
               <input
@@ -436,7 +518,8 @@ function BookSettings({ book, onBack }) {
             </label>
             {book.metadata_synced_at && (
               <p className="hint">
-                Synced from {book.metadata_sync_source || "online metadata"} on {new Date(book.metadata_synced_at).toLocaleString()}.
+                Synced from {book.metadata_sync_source || "online metadata"} on{" "}
+                {new Date(book.metadata_synced_at).toLocaleString()}.
               </p>
             )}
             <div className="settings-actions">
@@ -445,7 +528,9 @@ function BookSettings({ book, onBack }) {
                 onClick={() => metadataSyncMutation.mutate()}
                 disabled={metadataSyncMutation.isPending}
               >
-                {metadataSyncMutation.isPending ? "Queueing…" : "Recheck Online Metadata"}
+                {metadataSyncMutation.isPending
+                  ? "Queueing…"
+                  : "Recheck Online Metadata"}
               </button>
             </div>
             {metadataSyncMutation.isSuccess && (
@@ -476,13 +561,21 @@ function BookSettings({ book, onBack }) {
               onClick={() => coverInputRef.current.click()}
               disabled={coverMutation.isPending || coverUrlMutation.isPending}
             >
-              {coverMutation.isPending ? "Uploading…" : book.cover_path ? "Replace" : "Upload"}
+              {coverMutation.isPending
+                ? "Uploading…"
+                : book.cover_path
+                  ? "Replace"
+                  : "Upload"}
             </button>
             {book.immutable_path && (
               <button
                 className="btn-sm btn-secondary"
                 onClick={() => retryCoverMutation.mutate()}
-                disabled={retryCoverMutation.isPending || coverMutation.isPending || coverUrlMutation.isPending}
+                disabled={
+                  retryCoverMutation.isPending ||
+                  coverMutation.isPending ||
+                  coverUrlMutation.isPending
+                }
               >
                 {retryCoverMutation.isPending ? "Retrying…" : "Re-extract"}
               </button>
@@ -494,13 +587,19 @@ function BookSettings({ book, onBack }) {
                 value={coverUrl}
                 onChange={(e) => setCoverUrl(e.target.value)}
                 onKeyDown={(e) =>
-                  e.key === "Enter" && coverUrl.trim() && coverUrlMutation.mutate(coverUrl.trim())
+                  e.key === "Enter" &&
+                  coverUrl.trim() &&
+                  coverUrlMutation.mutate(coverUrl.trim())
                 }
               />
               <button
                 className="btn-sm"
                 onClick={() => coverUrlMutation.mutate(coverUrl.trim())}
-                disabled={!coverUrl.trim() || coverUrlMutation.isPending || coverMutation.isPending}
+                disabled={
+                  !coverUrl.trim() ||
+                  coverUrlMutation.isPending ||
+                  coverMutation.isPending
+                }
               >
                 {coverUrlMutation.isPending ? "…" : "Set"}
               </button>
@@ -534,7 +633,12 @@ function BookSettings({ book, onBack }) {
           {book.source_url ? (
             <div className="source-info">
               <span className="badge-web">{book.source_type}</span>
-              <a href={book.source_url} target="_blank" rel="noreferrer" className="source-link">
+              <a
+                href={book.source_url}
+                target="_blank"
+                rel="noreferrer"
+                className="source-link"
+              >
                 {book.source_url}
               </a>
             </div>
@@ -554,7 +658,10 @@ function BookSettings({ book, onBack }) {
                   : "Remove Web Marker"}
               </button>
               {!canDetachWebMarker && (
-                <span className="hint" style={{ margin: 0, alignSelf: "center" }}>
+                <span
+                  className="hint"
+                  style={{ margin: 0, alignSelf: "center" }}
+                >
                   Requires EPUB files first
                 </span>
               )}
@@ -564,24 +671,34 @@ function BookSettings({ book, onBack }) {
       )}
 
       <section className="settings-section">
-        <div className="collapsible-header" onClick={() => setIdentifiersExpanded((e) => !e)}>
+        <div
+          className="collapsible-header"
+          onClick={() => setIdentifiersExpanded((e) => !e)}
+        >
           <h3>
             Identifiers
-            {(isbn10 || isbn13 || googleBooksVolumeId || openLibraryWorkKey) && (
+            {(isbn10 ||
+              isbn13 ||
+              googleBooksVolumeId ||
+              openLibraryWorkKey) && (
               <span className="field-count">
-                {[
-                  isbn10,
-                  isbn13,
-                  googleBooksVolumeId,
-                  openLibraryWorkKey,
-                  openLibraryEditionKey,
-                  openLibraryAuthorKey,
-                ].filter(Boolean).length}{" "}
+                {
+                  [
+                    isbn10,
+                    isbn13,
+                    googleBooksVolumeId,
+                    openLibraryWorkKey,
+                    openLibraryEditionKey,
+                    openLibraryAuthorKey,
+                  ].filter(Boolean).length
+                }{" "}
                 set
               </span>
             )}
           </h3>
-          <span className="collapse-toggle">{identifiersExpanded ? "▲" : "▼"}</span>
+          <span className="collapse-toggle">
+            {identifiersExpanded ? "▲" : "▼"}
+          </span>
         </div>
         {identifiersExpanded && (
           <div className="collapsible-body">
@@ -646,9 +763,7 @@ function BookSettings({ book, onBack }) {
                 rows={3}
               />
             </label>
-            {identifierError && (
-              <p className="error">{identifierError}</p>
-            )}
+            {identifierError && <p className="error">{identifierError}</p>}
           </div>
         )}
       </section>
@@ -754,11 +869,16 @@ function BookSettings({ book, onBack }) {
           </div>
         </div>
 
-        {activeChaptersLoading && <p className="hint" style={{ marginTop: "0.5rem" }}>Loading chapters…</p>}
+        {activeChaptersLoading && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>
+            Loading chapters…
+          </p>
+        )}
 
         {!book.immutable_path && (
           <p className="hint" style={{ marginTop: "0.5rem" }}>
-            This web import does not have EPUB files yet. Retry the source download or delete the placeholder entry.
+            This web import does not have EPUB files yet. Retry the source
+            download or delete the placeholder entry.
           </p>
         )}
 
@@ -776,10 +896,14 @@ function BookSettings({ book, onBack }) {
             <div className="chapter-list-scroll">
               <ul className="chapter-list">
                 {filteredChapters.length === 0 ? (
-                  <li className="chapter-no-results">No chapters match your search.</li>
+                  <li className="chapter-no-results">
+                    No chapters match your search.
+                  </li>
                 ) : (
                   filteredChapters.map((chapter) => {
-                    const isRemoved = chapterPreviewMode === "original" && removedChapters.includes(chapter.filename);
+                    const isRemoved =
+                      chapterPreviewMode === "original" &&
+                      removedChapters.includes(chapter.filename);
                     const isPreviewed = previewedChapter === chapter.filename;
                     return (
                       <li
@@ -801,7 +925,9 @@ function BookSettings({ book, onBack }) {
                           )}
                           <button
                             className="btn-text chapter-preview-toggle"
-                            onClick={() => toggleChapterPreview(chapter.filename)}
+                            onClick={() =>
+                              toggleChapterPreview(chapter.filename)
+                            }
                           >
                             {isPreviewed ? "▲ Hide" : "▼ Preview"}
                           </button>
@@ -826,11 +952,21 @@ function BookSettings({ book, onBack }) {
 
       <section className="settings-section actions-bar">
         <div className="actions-primary">
-          <button className="btn-primary" onClick={handleSave} disabled={isBusy}>
+          <button
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={isBusy}
+          >
             {saveMutation.isPending ? "Saving..." : "Save Metadata"}
           </button>
-          <button onClick={handleProcess} disabled={isBusy} title="Save changes and rebuild the EPUB file with current cleaning rules">
-            {processMutation.isPending ? "Rebuilding..." : "Save & Rebuild EPUB"}
+          <button
+            onClick={handleProcess}
+            disabled={isBusy}
+            title="Save changes and rebuild the EPUB file with current cleaning rules"
+          >
+            {processMutation.isPending
+              ? "Rebuilding..."
+              : "Save & Rebuild EPUB"}
           </button>
           {book.source_type === "web" && (
             <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
@@ -841,13 +977,23 @@ function BookSettings({ book, onBack }) {
           )}
         </div>
         <p className="hint actions-hint">
-          <strong>Save Metadata</strong> updates the database only. <strong>Save & Rebuild EPUB</strong> also regenerates the downloadable file with your cleaning rules applied.
+          <strong>Save Metadata</strong> updates the database only.{" "}
+          <strong>Save & Rebuild EPUB</strong> also regenerates the downloadable
+          file with your cleaning rules applied.
         </p>
         <div className="actions-secondary">
-          <a href={`/api/books/${book.id}/download`} download className="btn btn-secondary btn-sm">
+          <a
+            href={`/api/books/${book.id}/download`}
+            download
+            className="btn btn-secondary btn-sm"
+          >
             Download EPUB
           </a>
-          <button className="btn-danger btn-sm" onClick={handleDelete} disabled={isBusy}>
+          <button
+            className="btn-danger btn-sm"
+            onClick={handleDelete}
+            disabled={isBusy}
+          >
             Delete Book
           </button>
         </div>

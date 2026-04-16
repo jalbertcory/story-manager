@@ -18,6 +18,7 @@ class Book(Base):
     series = Column(String, nullable=True, index=True)
     series_index = Column(Numeric(6, 2), nullable=True)
     genre_tags = Column(JSON, nullable=True)
+    source_tags = Column(JSON, nullable=True)
     user_genre_tags = Column(JSON, nullable=True)
     metadata_remote_ids = Column(JSON, nullable=True)
     metadata_sync_source = Column(String, nullable=True)

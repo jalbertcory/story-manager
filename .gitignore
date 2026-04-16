@@ -187,3 +187,8 @@ backend.log
 
 # where the books are stored
 library
+config
+
+# Mac specific files
+.DS_Store
+.DS_Store?
