@@ -23,5 +23,5 @@ async def collect_cover(source_url: str, book_id: int) -> Optional[Path]:
             return await collector.collect(source_url, book_id)
         except Exception as e:
             logger.error("Failed to collect cover from %s with %s: %s", source_url, collector.__name__, e)
-            return None
+            continue
     return None

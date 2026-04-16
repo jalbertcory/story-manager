@@ -43,6 +43,7 @@ class BookUpdate(BaseModel):
     author: Optional[str] = None
     series: Optional[str] = None
     series_index: Optional[float] = None
+    genre_tags: Optional[List[str]] = None
     user_genre_tags: Optional[List[str]] = None
     source_tags: Optional[List[str]] = None
     metadata_remote_ids: Optional[dict] = None

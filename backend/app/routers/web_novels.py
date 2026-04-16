@@ -89,10 +89,6 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
         update_data = schemas.BookUpdate(**metadata)
         updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
-        if metadata.get("genre_tags"):
-            updated_book.genre_tags = metadata["genre_tags"]
-        if metadata.get("source_tags"):
-            updated_book.source_tags = metadata["source_tags"]
         updated_book.removed_chapters = []
         updated_book.master_word_count = new_word_count
         updated_book.current_word_count = new_word_count
@@ -143,10 +139,6 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
 
     update_data = schemas.BookUpdate(**metadata)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
-    if metadata.get("genre_tags"):
-        updated_book.genre_tags = metadata["genre_tags"]
-    if metadata.get("source_tags"):
-        updated_book.source_tags = metadata["source_tags"]
 
     # Reset per-source processing state; preserve per-book content_selectors
     updated_book.removed_chapters = []

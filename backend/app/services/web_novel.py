@@ -274,10 +274,8 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             db_book.title = metadata["title"]
             db_book.author = metadata["author"]
             db_book.series = metadata["series"]
-            if metadata.get("genre_tags"):
-                db_book.genre_tags = metadata["genre_tags"]
-            if metadata.get("source_tags"):
-                db_book.source_tags = metadata["source_tags"]
+            db_book.genre_tags = metadata.get("genre_tags") or []
+            db_book.source_tags = metadata.get("source_tags") or []
             db_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
             db_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
             db_book.master_word_count = master_word_count

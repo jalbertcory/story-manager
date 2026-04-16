@@ -31,6 +31,7 @@ IMAGE_EXTENSION_BY_MEDIA_TYPE = {
 }
 SYNTHETIC_SUBJECTS = {"Completed", "In-Progress", "Unknown"}
 SYNTHETIC_SUBJECT_PREFIXES = ("Last Update:", "Last Update Year/Month:")
+# Intentionally duplicated in migration 0015 — migrations must be self-contained.
 SCRIBBLEHUB_GENRES = {
     "Action",
     "Adult",
