@@ -764,6 +764,34 @@ async def test_add_existing_web_novel(db_session):
 
 
 @pytest.mark.asyncio
+async def test_add_failed_web_novel_retries_placeholder(db_session, mocker):
+    queue = mocker.Mock()
+    queue.enqueue = mocker.AsyncMock(return_value=True)
+    mocker.patch("backend.app.routers.web_novels.get_web_import_queue", return_value=queue)
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Download failed",
+                author="Pending",
+                source_url="https://example.com/story/retry",
+                source_type=models.SourceType.web,
+                download_status="error",
+            ),
+        )
+
+    response = client.post("/api/books/add_web_novel", json={"url": "https://example.com/story/retry"})
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["id"] == book.id
+    assert data["download_status"] == "pending"
+    assert data["title"] == "https://example.com/story/retry"
+    queue.enqueue.assert_awaited_once_with(book.id, "https://example.com/story/retry")
+
+
+@pytest.mark.asyncio
 async def test_library_validate_classifies_failed_web_import_placeholders(db_session):
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(
@@ -1256,6 +1284,52 @@ async def test_refresh_book_no_source_url(db_session):
 
     assert response.status_code == 400
     assert "does not have a source URL" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_placeholder_downloads_fresh_epub(db_session, mocker):
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    new_epub_path = library_path / "Recovered Title-rr_456.epub"
+    create_dummy_epub(new_epub_path, "Recovered Title", "Recovered Author")
+
+    download_mock = mocker.patch(
+        "backend.app.routers.web_novels.download_web_novel",
+        return_value=(
+            new_epub_path,
+            {"title": "Recovered Title", "author": "Recovered Author", "series": "Recovered Series"},
+        ),
+    )
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Download failed",
+                author="Pending",
+                source_url="https://example.com/story/recovered",
+                source_type=models.SourceType.web,
+                download_status="error",
+            ),
+        )
+
+    response = client.post(f"/api/books/{book.id}/refresh")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Recovered Title"
+    assert data["author"] == "Recovered Author"
+    assert data["series"] == "Recovered Series"
+    assert data["download_status"] is None
+    assert data["immutable_path"]
+    assert data["current_path"]
+    download_mock.assert_called_once_with("https://example.com/story/recovered", overwrite=True)
+
+    immutable_result_path = library_path.parent / data["immutable_path"]
+    current_result_path = library_path.parent / data["current_path"]
+    immutable_result_path.unlink()
+    current_result_path.unlink()
+    immutable_result_path.parent.rmdir()
 
 
 @pytest.mark.asyncio

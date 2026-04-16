@@ -167,12 +167,13 @@ function BookSettings({ book, onBack }) {
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
     queryFn: fetchChapters,
+    enabled: Boolean(book.immutable_path),
   });
 
   const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } = useQuery({
     queryKey: ["cleaned-chapters", book.id],
     queryFn: fetchCleanedChapters,
-    enabled: chapterPreviewMode === "cleaned",
+    enabled: chapterPreviewMode === "cleaned" && Boolean(book.current_path),
   });
 
   const { data: matchedConfigs = [] } = useQuery({
@@ -755,7 +756,13 @@ function BookSettings({ book, onBack }) {
 
         {activeChaptersLoading && <p className="hint" style={{ marginTop: "0.5rem" }}>Loading chapters…</p>}
 
-        {chaptersExpanded && !activeChaptersLoading && (
+        {!book.immutable_path && (
+          <p className="hint" style={{ marginTop: "0.5rem" }}>
+            This web import does not have EPUB files yet. Retry the source download or delete the placeholder entry.
+          </p>
+        )}
+
+        {chaptersExpanded && !activeChaptersLoading && book.immutable_path && (
           <>
             {chapters.length > 10 && (
               <input
