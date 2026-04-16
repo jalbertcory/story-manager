@@ -382,9 +382,7 @@ async def run_book_refresh(book_id: int) -> None:
             current_path = LIBRARY_PATH.parent / db_book.current_path
 
             old_word_count, old_chapter_count = get_epub_word_and_chapter_count(current_path)
-            result = await download_web_novel(
-                db_book.source_url, overwrite=True, existing_epub_path=immutable_path
-            )
+            result = await download_web_novel(db_book.source_url, overwrite=True, existing_epub_path=immutable_path)
             if result is None:
                 raise RuntimeError("FanFicFare did not update the existing EPUB during refresh.")
             new_epub_path, metadata = result

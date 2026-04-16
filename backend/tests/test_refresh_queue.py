@@ -19,9 +19,7 @@ engine = create_async_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-AsyncTestingSessionLocal = async_sessionmaker(
-    autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
-)
+AsyncTestingSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -238,9 +236,7 @@ async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db)
     # get_epub_word_and_chapter_count is the first call that touches disk in
     # the "has existing paths" branch — failing it short-circuits the job into
     # the error handler without requiring real EPUB files on disk.
-    monkeypatch.setattr(
-        web_novel_mod, "get_epub_word_and_chapter_count", broken_word_count
-    )
+    monkeypatch.setattr(web_novel_mod, "get_epub_word_and_chapter_count", broken_word_count)
 
     await web_novel_mod.run_book_refresh(book.id)
 
