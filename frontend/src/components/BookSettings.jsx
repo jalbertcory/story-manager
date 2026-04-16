@@ -5,6 +5,7 @@ import {
   deleteBook,
   detachBookSource,
   getApiCoverUrl,
+  getBook,
   getBookChapters,
   getBookCleanedChapters,
   getMatchedConfigs,
@@ -137,43 +138,82 @@ function SyncedGenreTagList({ tags }) {
   );
 }
 
-function BookSettings({ book, onBack }) {
+function BookSettings({ book: initialBook, onBack }) {
   const queryClient = useQueryClient();
   const coverInputRef = useRef(null);
 
-  const [title, setTitle] = useState(book.title || "");
-  const [author, setAuthor] = useState(book.author || "");
-  const [series, setSeries] = useState(book.series || "");
+  // Poll the individual book while a refresh is in-flight so the UI reflects
+  // backend state without the user navigating away. The query is seeded with
+  // the book the parent passed so the page renders immediately; staleTime is
+  // Infinity so we only hit the network when the refetchInterval fires or when
+  // a mutation explicitly invalidates this key.
+  const { data: polledBook } = useQuery({
+    queryKey: ["book", initialBook.id],
+    queryFn: () => getBook(initialBook.id),
+    initialData: initialBook,
+    staleTime: Infinity,
+    refetchInterval: ({ state }) => {
+      const current = state.data;
+      if (!current || typeof current !== "object" || !current.id) return false;
+      return current.refresh_status === "queued" ||
+        current.refresh_status === "processing"
+        ? 2000
+        : false;
+    },
+  });
+
+  // Guard against malformed responses (e.g., a test mock's catch-all): if the
+  // polled value doesn't look like a book, fall back to the prop.
+  const book =
+    polledBook && typeof polledBook === "object" && polledBook.id
+      ? polledBook
+      : initialBook;
+  const isRefreshing =
+    book.refresh_status === "queued" || book.refresh_status === "processing";
+  const refreshErrored = book.refresh_status === "error";
+
+  // Cache-buster for the cover <img> — incremented whenever a cover mutation
+  // succeeds so the browser fetches the freshly-saved file instead of a stale
+  // copy at the same deterministic URL.
+  const [coverVersion, setCoverVersion] = useState(0);
+
+  const [title, setTitle] = useState(initialBook.title || "");
+  const [author, setAuthor] = useState(initialBook.author || "");
+  const [series, setSeries] = useState(initialBook.series || "");
   const [seriesIndex, setSeriesIndex] = useState(
-    book.series_index != null ? String(book.series_index) : "",
+    initialBook.series_index != null ? String(initialBook.series_index) : "",
   );
-  const [notes, setNotes] = useState(book.notes || "");
-  const [isbn10, setIsbn10] = useState(book.metadata_remote_ids?.isbn_10 || "");
-  const [isbn13, setIsbn13] = useState(book.metadata_remote_ids?.isbn_13 || "");
+  const [notes, setNotes] = useState(initialBook.notes || "");
+  const [isbn10, setIsbn10] = useState(
+    initialBook.metadata_remote_ids?.isbn_10 || "",
+  );
+  const [isbn13, setIsbn13] = useState(
+    initialBook.metadata_remote_ids?.isbn_13 || "",
+  );
   const [googleBooksVolumeId, setGoogleBooksVolumeId] = useState(
-    book.metadata_remote_ids?.google_books_volume_id || "",
+    initialBook.metadata_remote_ids?.google_books_volume_id || "",
   );
   const [openLibraryWorkKey, setOpenLibraryWorkKey] = useState(
-    book.metadata_remote_ids?.open_library_work_key || "",
+    initialBook.metadata_remote_ids?.open_library_work_key || "",
   );
   const [openLibraryEditionKey, setOpenLibraryEditionKey] = useState(
-    book.metadata_remote_ids?.open_library_edition_key || "",
+    initialBook.metadata_remote_ids?.open_library_edition_key || "",
   );
   const [openLibraryAuthorKey, setOpenLibraryAuthorKey] = useState(
-    book.metadata_remote_ids?.open_library_author_key || "",
+    initialBook.metadata_remote_ids?.open_library_author_key || "",
   );
   const [otherRemoteIdsJson, setOtherRemoteIdsJson] = useState(
-    splitRemoteIds(book.metadata_remote_ids).extrasJson,
+    splitRemoteIds(initialBook.metadata_remote_ids).extrasJson,
   );
   const [identifierError, setIdentifierError] = useState("");
   const [userGenreTags, setUserGenreTags] = useState(
-    (book.user_genre_tags || []).join(", "),
+    (initialBook.user_genre_tags || []).join(", "),
   );
   const [removedChapters, setRemovedChapters] = useState(
-    book.removed_chapters || [],
+    initialBook.removed_chapters || [],
   );
   const [contentSelectors, setContentSelectors] = useState(
-    book.content_selectors || [],
+    initialBook.content_selectors || [],
   );
   const [previewResult, setPreviewResult] = useState(null);
   const [previewedChapter, setPreviewedChapter] = useState(null);
@@ -182,37 +222,44 @@ function BookSettings({ book, onBack }) {
   const [chapterPreviewMode, setChapterPreviewMode] = useState("original");
   const [identifiersExpanded, setIdentifiersExpanded] = useState(false);
 
+  // Reset form state when the parent navigates to a different book. We key this
+  // on the initial prop (not the polled `book`) so background refetches — e.g.
+  // while a refresh is in-flight — don't wipe out in-progress edits.
   useEffect(() => {
-    setTitle(book.title || "");
-    setAuthor(book.author || "");
-    setSeries(book.series || "");
-    setSeriesIndex(book.series_index != null ? String(book.series_index) : "");
-    setNotes(book.notes || "");
-    setIsbn10(book.metadata_remote_ids?.isbn_10 || "");
-    setIsbn13(book.metadata_remote_ids?.isbn_13 || "");
+    setTitle(initialBook.title || "");
+    setAuthor(initialBook.author || "");
+    setSeries(initialBook.series || "");
+    setSeriesIndex(
+      initialBook.series_index != null ? String(initialBook.series_index) : "",
+    );
+    setNotes(initialBook.notes || "");
+    setIsbn10(initialBook.metadata_remote_ids?.isbn_10 || "");
+    setIsbn13(initialBook.metadata_remote_ids?.isbn_13 || "");
     setGoogleBooksVolumeId(
-      book.metadata_remote_ids?.google_books_volume_id || "",
+      initialBook.metadata_remote_ids?.google_books_volume_id || "",
     );
     setOpenLibraryWorkKey(
-      book.metadata_remote_ids?.open_library_work_key || "",
+      initialBook.metadata_remote_ids?.open_library_work_key || "",
     );
     setOpenLibraryEditionKey(
-      book.metadata_remote_ids?.open_library_edition_key || "",
+      initialBook.metadata_remote_ids?.open_library_edition_key || "",
     );
     setOpenLibraryAuthorKey(
-      book.metadata_remote_ids?.open_library_author_key || "",
+      initialBook.metadata_remote_ids?.open_library_author_key || "",
     );
-    setOtherRemoteIdsJson(splitRemoteIds(book.metadata_remote_ids).extrasJson);
+    setOtherRemoteIdsJson(
+      splitRemoteIds(initialBook.metadata_remote_ids).extrasJson,
+    );
     setIdentifierError("");
-    setUserGenreTags((book.user_genre_tags || []).join(", "));
-    setRemovedChapters(book.removed_chapters || []);
-    setContentSelectors(book.content_selectors || []);
+    setUserGenreTags((initialBook.user_genre_tags || []).join(", "));
+    setRemovedChapters(initialBook.removed_chapters || []);
+    setContentSelectors(initialBook.content_selectors || []);
     setPreviewResult(null);
     setChapterSearch("");
     setChaptersExpanded(false);
     setChapterPreviewMode("original");
     setIdentifiersExpanded(false);
-  }, [book]);
+  }, [initialBook]);
 
   useEffect(() => {
     setPreviewResult(null);
@@ -260,11 +307,15 @@ function BookSettings({ book, onBack }) {
     },
   });
 
+  // Kicks off an async refresh job and returns immediately. The useQuery above
+  // polls until the book's refresh_status goes back to null (or "error"). We
+  // keep the user on the page so they can see the progress and the final result
+  // without having to rediscover the book in the catalog.
   const refreshMutation = useMutation({
     mutationFn: () => refreshBook(book.id),
-    onSuccess: () => {
+    onSuccess: (updatedBook) => {
+      queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      onBack();
     },
   });
 
@@ -295,22 +346,36 @@ function BookSettings({ book, onBack }) {
 
   const [coverUrl, setCoverUrl] = useState("");
 
+  // Cover files live at a deterministic URL (/api/covers/{book_id}), so the
+  // browser happily caches them. Whenever any cover mutation succeeds we bump
+  // `coverVersion` and append it as a cache-busting query param on the <img>,
+  // forcing the browser to fetch the freshly-written file.
+  const bumpCoverVersion = () => setCoverVersion((v) => v + 1);
+
   const coverMutation = useMutation({
     mutationFn: (file) => uploadBookCover(book.id, file),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+    onSuccess: () => {
+      bumpCoverVersion();
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
+    },
   });
 
   const retryCoverMutation = useMutation({
     mutationFn: () => retryBookCover(book.id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] }),
+    onSuccess: () => {
+      bumpCoverVersion();
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
+    },
   });
 
   const coverUrlMutation = useMutation({
     mutationFn: (url) => setBookCoverUrl(book.id, url),
     onSuccess: () => {
+      bumpCoverVersion();
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
       setCoverUrl("");
     },
   });
@@ -428,7 +493,8 @@ function BookSettings({ book, onBack }) {
     processMutation.isPending ||
     refreshMutation.isPending ||
     detachSourceMutation.isPending ||
-    deleteMutation.isPending;
+    deleteMutation.isPending ||
+    isRefreshing;
   const canDetachWebMarker =
     book.source_type === "web" && book.immutable_path && book.current_path;
 
@@ -449,13 +515,33 @@ function BookSettings({ book, onBack }) {
         <button
           className="btn-text"
           onClick={onBack}
-          disabled={isBusy}
+          disabled={
+            saveMutation.isPending ||
+            processMutation.isPending ||
+            refreshMutation.isPending ||
+            detachSourceMutation.isPending ||
+            deleteMutation.isPending
+          }
           style={{ flexShrink: 0 }}
         >
           ← Back
         </button>
         <h2>{book.title}</h2>
       </div>
+
+      {isRefreshing && (
+        <div className="hint" role="status" style={{ marginBottom: "0.75rem" }}>
+          {book.refresh_status === "queued"
+            ? "This book is queued for refresh. It will start once the previous job finishes."
+            : "Refreshing from source — pulling new chapters via FanFicFare. This can take a few minutes for long stories."}
+        </div>
+      )}
+      {refreshErrored && (
+        <p className="error" role="alert">
+          The last refresh attempt failed. Check the logs, then click “Refresh
+          from Source” to try again.
+        </p>
+      )}
 
       <section className="settings-section">
         <h3>Metadata</h3>
@@ -540,7 +626,7 @@ function BookSettings({ book, onBack }) {
           <div className="settings-cover-aside">
             {book.cover_path ? (
               <img
-                src={getApiCoverUrl(book.id)}
+                src={`${getApiCoverUrl(book.id)}?v=${coverVersion}`}
                 alt="Cover"
                 className="settings-cover-img"
               />
@@ -971,8 +1057,12 @@ function BookSettings({ book, onBack }) {
           {book.source_type === "web" && (
             <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
               {refreshMutation.isPending
-                ? "Refreshing..."
-                : "Refresh from Source"}
+                ? "Queueing…"
+                : book.refresh_status === "queued"
+                  ? "Queued for refresh…"
+                  : book.refresh_status === "processing"
+                    ? "Refreshing from source…"
+                    : "Refresh from Source"}
             </button>
           )}
         </div>

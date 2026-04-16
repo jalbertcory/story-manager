@@ -8,7 +8,13 @@ function useLibraryCatalog({ q, sortBy, sortOrder }) {
     queryFn: () => getBookCatalog({ q, sortBy, sortOrder }),
     refetchInterval: ({ state }) => {
       const books = state.data ?? [];
-      return books.some((book) => book.download_status === "pending") ? 2000 : false;
+      const hasInFlight = books.some(
+        (book) =>
+          book.download_status === "pending" ||
+          book.refresh_status === "queued" ||
+          book.refresh_status === "processing",
+      );
+      return hasInFlight ? 2000 : false;
     },
   });
 }

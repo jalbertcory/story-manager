@@ -35,6 +35,9 @@ class Book(Base):
     cover_path = Column(String, nullable=True)
     notes = Column(String, nullable=True)
     download_status = Column(String, nullable=True)
+    # Tracks the lifecycle of a "refresh from source" job independently from the
+    # initial download state. Values: None (idle), "queued", "processing", "error".
+    refresh_status = Column(String, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
