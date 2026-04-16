@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
+from ..services.cover_collectors import collect_cover
+from ..services.cover_images import save_cover_from_url
 from ..services.epub_utils import get_and_save_epub_cover
-from ..services.web_novel import save_cover_from_url, scrape_cover
 from ..upload_validation import validate_image_upload
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ async def retry_cover(book_id: int, db: AsyncSession = Depends(get_db)):
     epub_path = LIBRARY_PATH.parent / db_book.immutable_path
     cover_path = get_and_save_epub_cover(epub_path=epub_path, book_id=book_id)
     if cover_path is None and db_book.source_url:
-        cover_path = await scrape_cover(db_book.source_url, book_id)
+        cover_path = await collect_cover(db_book.source_url, book_id)
     if cover_path is None:
         raise HTTPException(status_code=400, detail="Could not extract or scrape a cover image")
 

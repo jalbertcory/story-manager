@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..services.epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
+from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
 from ..services.library_paths import build_book_paths
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import SeriesBook, detect_series_from_books
@@ -199,11 +199,14 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         logger.warning(f"Failed to parse dc:source metadata: {e}")
 
     master_word_count = epub_editor.get_word_count(str(immutable_path))
+    tag_metadata = get_epub_tag_metadata(immutable_path)
 
     book_to_create = schemas.BookCreate(
         title=title,
         author=author,
         series=series,
+        genre_tags=tag_metadata["genre_tags"],
+        source_tags=tag_metadata["source_tags"],
         immutable_path=str(immutable_path.relative_to(LIBRARY_PATH.parent)),
         current_path=str(current_path.relative_to(LIBRARY_PATH.parent)),
         source_url=source_url,

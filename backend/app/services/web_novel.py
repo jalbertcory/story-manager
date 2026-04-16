@@ -2,23 +2,22 @@
 
 import asyncio
 import logging
-import os
 import shutil
 import traceback
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import requests as http_requests
-from bs4 import BeautifulSoup
 from ebooklib import epub
 from fastapi import HTTPException, status
 from lxml import etree
 
 from .. import crud, epub_editor, schemas
-from ..config import APP_DIR, LIBRARY_PATH
+from ..config import LIBRARY_PATH
 from ..database import SessionLocal
-from .epub_utils import get_and_save_epub_cover, get_epub_word_and_chapter_count
+from .cover_collectors import collect_cover
+from .epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
+from .fanficfare_config import get_fff_config_paths
 from .library_paths import build_book_paths
 from .metadata_jobs import queue_metadata_sync_job
 
@@ -29,10 +28,6 @@ logger = logging.getLogger(__name__)
 # call, defeating the purpose. This single lock ensures only one FFF invocation
 # runs at a time, preventing the before/after EPUB-detection race condition.
 _fff_lock = asyncio.Lock()
-_DEFAULT_USER_PERSONAL_INI_CANDIDATES = (
-    (APP_DIR.parent.parent / "config" / "fanficfare" / "personal.ini").resolve(),
-    Path("/app/config/personal.ini"),
-)
 
 
 def _run_fff_main(args: List[str]) -> int:
@@ -47,53 +42,6 @@ def _run_fff_main(args: List[str]) -> int:
     except Exception as e:
         logger.error(f"An unexpected error occurred in FanFicFare: {e}")
         return 1
-
-
-def _get_optional_user_ini_path() -> Optional[Path]:
-    env_path = os.getenv("FFF_USER_CONFIG_PATH")
-    if env_path is not None:
-        stripped = env_path.strip()
-        if not stripped:
-            logger.info("FFF_USER_CONFIG_PATH is set to an empty value; skipping optional FanFicFare config.")
-            return None
-        resolved = Path(stripped).expanduser()
-        if not resolved.is_file():
-            logger.warning("FFF_USER_CONFIG_PATH points to %s, but that file was not found.", resolved)
-            return None
-        logger.info("Using FanFicFare user config from FFF_USER_CONFIG_PATH: %s", resolved)
-        return resolved
-
-    for candidate in _DEFAULT_USER_PERSONAL_INI_CANDIDATES:
-        if candidate.is_file():
-            logger.info("Using FanFicFare user config override: %s", candidate)
-            return candidate
-
-    logger.info(
-        "No optional FanFicFare user config found. Checked: %s",
-        ", ".join(str(candidate) for candidate in _DEFAULT_USER_PERSONAL_INI_CANDIDATES),
-    )
-    return None
-
-
-def _get_fff_config_paths() -> List[Path]:
-    ini_path = APP_DIR / "personal.ini"
-    if not ini_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error: personal.ini not found.",
-        )
-
-    config_paths = [ini_path]
-    optional_user_ini = _get_optional_user_ini_path()
-    if optional_user_ini and optional_user_ini.is_file():
-        try:
-            if optional_user_ini.resolve() != ini_path.resolve():
-                config_paths.append(optional_user_ini)
-        except FileNotFoundError:
-            # Another process may have removed it between is_file and resolve.
-            pass
-    logger.info("FanFicFare config chain: %s", " -> ".join(str(path) for path in config_paths))
-    return config_paths
 
 
 def _get_story_manager_output_filename() -> str:
@@ -116,7 +64,13 @@ def _read_epub_metadata(epub_path: Path) -> Dict[str, Any]:
     except KeyError:
         series_metadata = []
     series = series_metadata[0][0] if series_metadata else None
-    return {"title": title, "author": author, "series": series}
+    metadata = {"title": title, "author": author, "series": series}
+    tag_metadata = get_epub_tag_metadata(epub_path)
+    if tag_metadata["genre_tags"]:
+        metadata["genre_tags"] = tag_metadata["genre_tags"]
+    if tag_metadata["source_tags"]:
+        metadata["source_tags"] = tag_metadata["source_tags"]
+    return metadata
 
 
 def _get_rootfile_path(epub_path: Path) -> str:
@@ -187,8 +141,10 @@ def _sync_epub_source_url(epub_path: Path, source_url: str) -> None:
         source_node.text = source_url
 
         for info in src.infolist():
-            data = etree.tostring(package, encoding="utf-8", xml_declaration=True) if info.filename == rootfile_path else src.read(
-                info.filename
+            data = (
+                etree.tostring(package, encoding="utf-8", xml_declaration=True)
+                if info.filename == rootfile_path
+                else src.read(info.filename)
             )
             dst.writestr(info, data)
 
@@ -214,7 +170,7 @@ async def download_web_novel(
     that EPUB in place using -u/-U and reuses previously downloaded chapters.
     """
     LIBRARY_PATH.mkdir(exist_ok=True)
-    config_paths = _get_fff_config_paths()
+    config_paths = get_fff_config_paths()
 
     async with _fff_lock:
         args: List[str] = []
@@ -281,63 +237,6 @@ async def download_web_novel(
         )
 
 
-async def save_cover_from_url(url: str, book_id: int) -> Optional[Path]:
-    """Downloads an image from a URL and saves it as the book cover. Returns the path or None."""
-    covers_path = (LIBRARY_PATH / "covers").resolve()
-    covers_path.mkdir(exist_ok=True)
-
-    def fetch():
-        r = http_requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"}, stream=True)
-        r.raise_for_status()
-        data = b""
-        for chunk in r.iter_content(8192):
-            data += chunk
-            if len(data) > 10 * 1024 * 1024:
-                raise ValueError("Image exceeds 10 MB limit")
-        return r.headers.get("Content-Type", ""), data
-
-    try:
-        loop = asyncio.get_running_loop()
-        content_type, image_bytes = await loop.run_in_executor(None, fetch)
-        ext_map = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-        }
-        ext = ext_map.get(content_type.split(";")[0].strip()) or Path(url.split("?")[0]).suffix or ".jpg"
-        save_path = covers_path / f"{book_id}{ext}"
-        with open(save_path, "wb") as f:
-            f.write(image_bytes)
-        return save_path
-    except Exception as e:
-        logger.error(f"Failed to download cover from {url}: {e}")
-        return None
-
-
-async def scrape_cover(source_url: str, book_id: int) -> Optional[Path]:
-    """Scrapes a cover image from a supported site (currently Royal Road)."""
-    if "royalroad.com" not in source_url:
-        return None
-
-    def fetch_page():
-        r = http_requests.get(source_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        return r.text
-
-    try:
-        loop = asyncio.get_running_loop()
-        html = await loop.run_in_executor(None, fetch_page)
-        soup = BeautifulSoup(html, "html.parser")
-        img = soup.select_one("div.cover-art-container img.thumbnail")
-        if not img or not img.get("src"):
-            return None
-        return await save_cover_from_url(img["src"], book_id)
-    except Exception as e:
-        logger.error(f"Failed to scrape cover from {source_url}: {e}")
-        return None
-
-
 async def finish_web_novel_download(book_id: int, source_url: str) -> None:
     """Background task: downloads the EPUB for a pending book and updates the DB record."""
     async with SessionLocal() as db:
@@ -375,6 +274,10 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             db_book.title = metadata["title"]
             db_book.author = metadata["author"]
             db_book.series = metadata["series"]
+            if metadata.get("genre_tags"):
+                db_book.genre_tags = metadata["genre_tags"]
+            if metadata.get("source_tags"):
+                db_book.source_tags = metadata["source_tags"]
             db_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
             db_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
             db_book.master_word_count = master_word_count
@@ -383,7 +286,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
 
             cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
             if cover_path is None:
-                cover_path = await scrape_cover(source_url, db_book.id)
+                cover_path = await collect_cover(source_url, db_book.id)
             if cover_path:
                 db_book.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
 

@@ -88,7 +88,9 @@ describe("BookSettings", () => {
       />,
     );
 
-    expect(await screen.findByText("https://example.com/story")).toBeInTheDocument();
+    expect(
+      await screen.findByText("https://example.com/story"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Web Marker" }));
 
@@ -185,9 +187,13 @@ describe("BookSettings", () => {
       />,
     );
 
-    expect(await screen.findByText("No source URL is currently attached.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No source URL is currently attached."),
+    ).toBeInTheDocument();
 
-    const removeButton = screen.getByRole("button", { name: "Remove Web Marker" });
+    const removeButton = screen.getByRole("button", {
+      name: "Remove Web Marker",
+    });
     expect(removeButton).toBeEnabled();
     fireEvent.click(removeButton);
 
@@ -203,7 +209,11 @@ describe("BookSettings", () => {
 
   it("shows synced genre tags in metadata", async () => {
     globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/9/chapters" || url === "/api/books/9/matched-config" || url === "/api/series") {
+      if (
+        url === "/api/books/9/chapters" ||
+        url === "/api/books/9/matched-config" ||
+        url === "/api/series"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([]),
@@ -224,6 +234,7 @@ describe("BookSettings", () => {
           series: "Saga",
           series_index: 1,
           genre_tags: ["Fantasy", "Adventure"],
+          source_tags: ["Character Growth", "Female Protagonist"],
           user_genre_tags: ["Cozy"],
           metadata_sync_source: "open_library",
           metadata_synced_at: "2026-03-28T10:00:00Z",
@@ -241,14 +252,20 @@ describe("BookSettings", () => {
       />,
     );
 
-    expect(await screen.findByDisplayValue("Fantasy, Adventure")).toBeInTheDocument();
+    expect(await screen.findByText("Fantasy")).toBeInTheDocument();
+    expect(screen.getByText("Adventure")).toBeInTheDocument();
+    expect(screen.getByText("Character Growth")).toBeInTheDocument();
+    expect(screen.getByText("Female Protagonist")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Cozy")).toBeInTheDocument();
     expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
   });
 
   it("saves manual metadata identifiers", async () => {
     const fetchMock = vi.fn((url, options) => {
-      if (url === "/api/books/10/chapters" || url === "/api/books/10/matched-config") {
+      if (
+        url === "/api/books/10/chapters" ||
+        url === "/api/books/10/matched-config"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([]),
@@ -347,9 +364,14 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Metadata" }));
 
     await waitFor(() => {
-      const saveCall = fetchMock.mock.calls.find(([url, options]) => url === "/api/books/10" && options?.method === "PUT");
+      const saveCall = fetchMock.mock.calls.find(
+        ([url, options]) =>
+          url === "/api/books/10" && options?.method === "PUT",
+      );
       expect(saveCall).toBeTruthy();
-      expect(saveCall[1].headers).toEqual({ "Content-Type": "application/json" });
+      expect(saveCall[1].headers).toEqual({
+        "Content-Type": "application/json",
+      });
       expect(JSON.parse(saveCall[1].body)).toEqual({
         title: "Identifier Book",
         author: "Author",
