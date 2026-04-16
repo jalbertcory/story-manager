@@ -1210,9 +1210,7 @@ async def test_update_book_details(db_session):
 
 @pytest.mark.asyncio
 async def test_refresh_book(db_session, mocker):
-    """
-    Test refreshing a book from its source URL.
-    """
+    """Refresh now enqueues a background job and returns 202 with queued status."""
     library_path = Path("./library").resolve()
     library_path.mkdir(exist_ok=True)
     author_dir = library_path / "Original Author"
@@ -1222,19 +1220,9 @@ async def test_refresh_book(db_session, mocker):
     create_dummy_epub(immutable_path, "Original Title", "Original Author")
     current_path.write_bytes(immutable_path.read_bytes())
 
-    download_mock = mocker.patch(
-        "backend.app.routers.web_novels.download_web_novel",
-        return_value=(
-            immutable_path,
-            {
-                "title": "Refreshed Title",
-                "author": "Refreshed Author",
-                "series": "Refreshed Series",
-                "genre_tags": ["Action"],
-                "source_tags": ["Character Growth"],
-            },
-        ),
-    )
+    queue = mocker.Mock()
+    queue.enqueue = mocker.AsyncMock(return_value=True)
+    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1251,25 +1239,54 @@ async def test_refresh_book(db_session, mocker):
 
     response = client.post(f"/api/books/{book.id}/refresh")
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()
-    assert data["title"] == "Refreshed Title"
-    assert data["author"] == "Refreshed Author"
-    assert data["series"] == "Refreshed Series"
-    assert data["genre_tags"] == ["Action"]
-    assert data["source_tags"] == ["Character Growth"]
-    assert data["master_word_count"] > 0
-    assert data["current_word_count"] == data["master_word_count"]
-    download_mock.assert_called_once_with(
-        "http://example.com/story/refresh",
-        overwrite=True,
-        existing_epub_path=immutable_path,
-    )
+    assert data["id"] == book.id
+    assert data["refresh_status"] == "queued"
+    # Book content should not have changed yet — only the status flipped.
+    assert data["title"] == "Original Title"
+    assert data["author"] == "Original Author"
+    queue.enqueue.assert_awaited_once_with(book.id)
+
+    async with AsyncTestingSessionLocal() as session:
+        persisted = await crud.get_book(session, book_id=book.id)
+        assert persisted.refresh_status == "queued"
 
     # Clean up dummy files
-    (library_path.parent / data["immutable_path"]).unlink()
-    (library_path.parent / data["current_path"]).unlink()
+    immutable_path.unlink()
+    current_path.unlink()
     author_dir.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_refresh_book_while_already_queued_is_idempotent(db_session, mocker):
+    """A second refresh while one is still queued/processing should not flip status back."""
+    queue = mocker.Mock()
+    queue.enqueue = mocker.AsyncMock(return_value=False)
+    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Title",
+                author="Author",
+                source_url="http://example.com/story/already-queued",
+                immutable_path="p1i",
+                current_path="p1c",
+                source_type=models.SourceType.web,
+            ),
+        )
+        book.refresh_status = "processing"
+        await session.commit()
+
+    response = client.post(f"/api/books/{book.id}/refresh")
+
+    assert response.status_code == 202
+    data = response.json()
+    # Still "processing" — the endpoint should not step on an in-flight job.
+    assert data["refresh_status"] == "processing"
+    queue.enqueue.assert_awaited_once_with(book.id)
 
 
 @pytest.mark.asyncio
@@ -1296,19 +1313,11 @@ async def test_refresh_book_no_source_url(db_session):
 
 
 @pytest.mark.asyncio
-async def test_refresh_failed_placeholder_downloads_fresh_epub(db_session, mocker):
-    library_path = Path("./library").resolve()
-    library_path.mkdir(exist_ok=True)
-    new_epub_path = library_path / "Recovered Title-rr_456.epub"
-    create_dummy_epub(new_epub_path, "Recovered Title", "Recovered Author")
-
-    download_mock = mocker.patch(
-        "backend.app.routers.web_novels.download_web_novel",
-        return_value=(
-            new_epub_path,
-            {"title": "Recovered Title", "author": "Recovered Author", "series": "Recovered Series"},
-        ),
-    )
+async def test_refresh_failed_placeholder_enqueues_refresh(db_session, mocker):
+    """Refresh for a failed placeholder (no EPUB yet) enqueues a job without touching files."""
+    queue = mocker.Mock()
+    queue.enqueue = mocker.AsyncMock(return_value=True)
+    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1324,21 +1333,13 @@ async def test_refresh_failed_placeholder_downloads_fresh_epub(db_session, mocke
 
     response = client.post(f"/api/books/{book.id}/refresh")
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()
-    assert data["title"] == "Recovered Title"
-    assert data["author"] == "Recovered Author"
-    assert data["series"] == "Recovered Series"
-    assert data["download_status"] is None
-    assert data["immutable_path"]
-    assert data["current_path"]
-    download_mock.assert_called_once_with("https://example.com/story/recovered", overwrite=True)
-
-    immutable_result_path = library_path.parent / data["immutable_path"]
-    current_result_path = library_path.parent / data["current_path"]
-    immutable_result_path.unlink()
-    current_result_path.unlink()
-    immutable_result_path.parent.rmdir()
+    assert data["id"] == book.id
+    assert data["refresh_status"] == "queued"
+    # download_status is not cleared at enqueue time — the worker clears it on success.
+    assert data["download_status"] == "error"
+    queue.enqueue.assert_awaited_once_with(book.id)
 
 
 @pytest.mark.asyncio

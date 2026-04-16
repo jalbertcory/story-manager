@@ -30,6 +30,7 @@ class BookBase(BaseModel):
     content_selectors: Optional[List[str]] = Field(default_factory=list)
     notes: Optional[str] = None
     download_status: Optional[str] = None
+    refresh_status: Optional[str] = None
 
 
 # Pydantic model for creating a new book.
@@ -79,6 +80,7 @@ class BookCatalogEntry(BaseModel):
     current_word_count: Optional[int] = None
     updated_at: Optional[datetime] = None
     download_status: Optional[str] = None
+    refresh_status: Optional[str] = None
 
 
 # Pydantic model for creating a new book log.

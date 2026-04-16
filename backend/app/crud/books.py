@@ -67,6 +67,17 @@ async def get_pending_web_books(db: AsyncSession) -> List[models.Book]:
     return result.scalars().all()
 
 
+async def get_pending_refresh_books(db: AsyncSession) -> List[models.Book]:
+    """Return web books whose refresh job was in-flight, so the queue can resume them."""
+    result = await db.execute(
+        select(models.Book).filter(
+            models.Book.source_type == models.SourceType.web,
+            models.Book.refresh_status.in_(["queued", "processing"]),
+        )
+    )
+    return result.scalars().all()
+
+
 async def get_books(
     db: AsyncSession,
     skip: int = 0,

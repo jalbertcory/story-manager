@@ -20,6 +20,7 @@ from .database import SessionLocal, get_db
 from .logging_config import setup_logging
 from .routers import api_keys, books, cleaning, covers, metadata, reader, scheduler, storage, upload, web_novels
 from .services.metadata_sync_queue import get_metadata_sync_queue
+from .services.refresh_queue import get_refresh_queue
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
 from .services.web_import_queue import get_web_import_queue
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 _console_handler, _mem_handler = setup_logging()
 _scheduler = get_scheduler()
 _web_import_queue = get_web_import_queue()
+_refresh_queue = get_refresh_queue()
 _metadata_sync_queue = get_metadata_sync_queue()
 
 
@@ -44,11 +46,15 @@ async def lifespan(app: FastAPI):
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     await _web_import_queue.start()
+    await _refresh_queue.start()
     if not is_test_app:
         await _metadata_sync_queue.start()
     requeued = await _web_import_queue.requeue_pending_books()
     if requeued:
         logger.info("Re-queued %s pending web novel imports.", requeued)
+    refresh_requeued = await _refresh_queue.requeue_pending_books()
+    if refresh_requeued:
+        logger.info("Re-queued %s in-flight book refreshes.", refresh_requeued)
     if not is_test_app:
         metadata_requeued = await _metadata_sync_queue.requeue_pending_jobs()
         if metadata_requeued:
@@ -60,6 +66,7 @@ async def lifespan(app: FastAPI):
         await schedule_next_metadata_recheck()
     yield
     await _web_import_queue.stop()
+    await _refresh_queue.stop()
     if not is_test_app:
         await _metadata_sync_queue.stop()
     if _scheduler.running:

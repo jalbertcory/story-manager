@@ -1,20 +1,15 @@
 """Web novel endpoints: add from URL, queue imports, and refresh from source."""
 
 import logging
-import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud, epub_editor, models, schemas
-from ..config import LIBRARY_PATH
+from .. import crud, models, schemas
 from ..database import get_db
-from ..services.epub_utils import get_epub_word_and_chapter_count
-from ..services.library_paths import build_book_paths
-from ..services.metadata_jobs import queue_metadata_sync_job
+from ..services.refresh_queue import get_refresh_queue
 from ..services.web_import_queue import get_web_import_queue
-from ..services.web_novel import download_web_novel
 
 logger = logging.getLogger(__name__)
 
@@ -67,90 +62,38 @@ async def add_web_novel(
     return db_book
 
 
-@router.post("/api/books/{book_id}/refresh", response_model=schemas.Book)
+@router.post(
+    "/api/books/{book_id}/refresh",
+    response_model=schemas.Book,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
-    """Re-downloads a web novel from its source URL and applies cleaning."""
+    """Queue a background refresh of a web novel from its source URL.
+
+    Returns 202 Accepted immediately with the book's updated ``refresh_status``.
+    Clients should poll ``GET /api/books/{book_id}`` until ``refresh_status`` is
+    null (success) or ``"error"``. The actual work — re-downloading via
+    FanFicFare, rebuilding the cleaned EPUB, re-syncing metadata — runs on the
+    single-worker :class:`RefreshQueue`, the same lane used by the scheduled
+    daily update job.
+    """
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     if not db_book.source_url:
         raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
 
-    if not db_book.immutable_path or not db_book.current_path:
-        result = await download_web_novel(db_book.source_url, overwrite=True)
-        if result is None:
-            raise HTTPException(status_code=500, detail="FanFicFare did not produce a refreshed EPUB.")
-        new_epub_path, metadata = result
-
-        immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
-        new_epub_path.rename(immutable_path)
-        shutil.copyfile(immutable_path, current_path)
-
-        new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
-        update_data = schemas.BookUpdate(**metadata)
-        updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
-        updated_book.removed_chapters = []
-        updated_book.master_word_count = new_word_count
-        updated_book.current_word_count = new_word_count
-        updated_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
-        updated_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
-        updated_book.download_status = None
-        await crud.touch_book_content(db, updated_book)
+    queue = get_refresh_queue()
+    # If a refresh is already queued/running for this book, treat the request as a
+    # no-op rather than doubling it up — return the current status so the client
+    # can begin polling.
+    if db_book.refresh_status not in ("queued", "processing"):
+        db_book.refresh_status = "queued"
         await db.commit()
-        await db.refresh(updated_book)
+        await db.refresh(db_book)
 
-        log_entry = schemas.BookLogCreate(
-            book_id=updated_book.id,
-            entry_type="updated",
-            previous_chapter_count=0,
-            new_chapter_count=new_chapter_count,
-            words_added=new_word_count,
-        )
-        await crud.create_book_log(db, log_entry)
-        await epub_editor.apply_book_cleaning(updated_book, db)
-        await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
-        return updated_book
-
-    immutable_path = LIBRARY_PATH.parent / db_book.immutable_path
-    current_path = LIBRARY_PATH.parent / db_book.current_path
-
-    old_word_count, old_chapter_count = get_epub_word_and_chapter_count(current_path)
-    result = await download_web_novel(db_book.source_url, overwrite=True, existing_epub_path=immutable_path)
-    if result is None:
-        raise HTTPException(status_code=500, detail="FanFicFare did not update the existing EPUB during refresh.")
-    new_epub_path, metadata = result
-
-    if new_epub_path != immutable_path:
-        new_epub_path.rename(immutable_path)
-    shutil.copyfile(immutable_path, current_path)
-
-    new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
-
-    if new_chapter_count > old_chapter_count:
-        logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {db_book.title}.")
-        log_entry = schemas.BookLogCreate(
-            book_id=db_book.id,
-            entry_type="updated",
-            previous_chapter_count=old_chapter_count,
-            new_chapter_count=new_chapter_count,
-            words_added=new_word_count - old_word_count,
-        )
-        await crud.create_book_log(db, log_entry)
-
-    update_data = schemas.BookUpdate(**metadata)
-    updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
-
-    # Reset per-source processing state; preserve per-book content_selectors
-    updated_book.removed_chapters = []
-    updated_book.master_word_count = new_word_count
-    updated_book.current_word_count = new_word_count
-    await crud.touch_book_content(db, updated_book)
-    await db.commit()
-    await db.refresh(updated_book)
-
-    await epub_editor.apply_book_cleaning(updated_book, db)
-    await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
-    return updated_book
+    await queue.enqueue(db_book.id)
+    return db_book
 
 
 @router.post("/api/books/{book_id}/detach-source", response_model=schemas.Book)

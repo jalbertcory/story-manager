@@ -315,6 +315,129 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
         await queue_metadata_sync_job(db, trigger="new_book", book_ids=[db_book.id])
 
 
+async def run_book_refresh(book_id: int) -> None:
+    """Re-download a single web novel from its source URL and apply cleaning.
+
+    This mirrors what the scheduled ``update_web_novels`` job does for one book,
+    but also handles web imports that never finished their initial download
+    (no ``immutable_path``/``current_path``). Updates ``book.refresh_status``
+    throughout: "processing" while running, ``None`` on success, and "error"
+    on any failure.
+    """
+    async with SessionLocal() as db:
+        db_book = await crud.get_book(db, book_id=book_id)
+        if db_book is None:
+            logger.error("Refresh worker: book %s not found.", book_id)
+            return
+        if not db_book.source_url:
+            logger.warning("Refresh worker: book %s has no source_url.", book_id)
+            db_book.refresh_status = "error"
+            await db.commit()
+            return
+
+        db_book.refresh_status = "processing"
+        await db.commit()
+        await db.refresh(db_book)
+
+        try:
+            if not db_book.immutable_path or not db_book.current_path:
+                result = await download_web_novel(db_book.source_url, overwrite=True)
+                if result is None:
+                    raise RuntimeError("FanFicFare did not produce a refreshed EPUB.")
+                new_epub_path, metadata = result
+
+                immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
+                new_epub_path.rename(immutable_path)
+                shutil.copyfile(immutable_path, current_path)
+
+                new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
+                update_data = schemas.BookUpdate(**metadata)
+                updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
+                updated_book.removed_chapters = []
+                updated_book.master_word_count = new_word_count
+                updated_book.current_word_count = new_word_count
+                updated_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
+                updated_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
+                updated_book.download_status = None
+                await crud.touch_book_content(db, updated_book)
+                await db.commit()
+                await db.refresh(updated_book)
+
+                log_entry = schemas.BookLogCreate(
+                    book_id=updated_book.id,
+                    entry_type="updated",
+                    previous_chapter_count=0,
+                    new_chapter_count=new_chapter_count,
+                    words_added=new_word_count,
+                )
+                await crud.create_book_log(db, log_entry)
+                await epub_editor.apply_book_cleaning(updated_book, db)
+                await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
+
+                updated_book.refresh_status = None
+                await db.commit()
+                return
+
+            immutable_path = LIBRARY_PATH.parent / db_book.immutable_path
+            current_path = LIBRARY_PATH.parent / db_book.current_path
+
+            old_word_count, old_chapter_count = get_epub_word_and_chapter_count(current_path)
+            result = await download_web_novel(db_book.source_url, overwrite=True, existing_epub_path=immutable_path)
+            if result is None:
+                raise RuntimeError("FanFicFare did not update the existing EPUB during refresh.")
+            new_epub_path, metadata = result
+
+            if new_epub_path != immutable_path:
+                new_epub_path.rename(immutable_path)
+            shutil.copyfile(immutable_path, current_path)
+
+            new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
+
+            if new_chapter_count > old_chapter_count:
+                logger.info(
+                    "Found %s new chapters for %s.",
+                    new_chapter_count - old_chapter_count,
+                    db_book.title,
+                )
+                log_entry = schemas.BookLogCreate(
+                    book_id=db_book.id,
+                    entry_type="updated",
+                    previous_chapter_count=old_chapter_count,
+                    new_chapter_count=new_chapter_count,
+                    words_added=new_word_count - old_word_count,
+                )
+                await crud.create_book_log(db, log_entry)
+
+            update_data = schemas.BookUpdate(**metadata)
+            updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
+
+            # Reset per-source processing state; preserve per-book content_selectors
+            updated_book.removed_chapters = []
+            updated_book.master_word_count = new_word_count
+            updated_book.current_word_count = new_word_count
+            await crud.touch_book_content(db, updated_book)
+            await db.commit()
+            await db.refresh(updated_book)
+
+            await epub_editor.apply_book_cleaning(updated_book, db)
+            await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
+
+            updated_book.refresh_status = None
+            await db.commit()
+        except Exception as exc:
+            logger.error(
+                "Manual refresh failed for book %s: %s\n%s",
+                book_id,
+                exc,
+                traceback.format_exc(),
+            )
+            try:
+                db_book.refresh_status = "error"
+                await db.commit()
+            except Exception:
+                logger.exception("Failed to mark refresh_status=error for book %s", book_id)
+
+
 async def update_web_novels() -> None:
     """Scheduler job: checks all web novels for updates every 24 hours."""
     logger.info("Starting web novel update job.")
