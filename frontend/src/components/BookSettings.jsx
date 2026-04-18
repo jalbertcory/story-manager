@@ -8,6 +8,7 @@ import {
   getBook,
   getBookChapters,
   getBookCleanedChapters,
+  getBookUpdateHistory,
   getMatchedConfigs,
   previewCleaning,
   processBook,
@@ -33,6 +34,11 @@ const fetchCleanedChapters = async ({ queryKey }) => {
 const fetchMatchedConfig = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
   return getMatchedConfigs(bookId);
+};
+
+const fetchUpdateHistory = async ({ queryKey }) => {
+  const [_key, bookId] = queryKey;
+  return getBookUpdateHistory(bookId);
 };
 
 const COMMON_REMOTE_ID_KEYS = [
@@ -135,6 +141,149 @@ function SyncedGenreTagList({ tags }) {
         </span>
       ))}
     </div>
+  );
+}
+
+const EMPTY_UPDATE_HISTORY = {
+  history: [],
+  summary: {
+    total_update_events: 0,
+    total_chapters_added: 0,
+    total_words_added: 0,
+    average_words_per_week: null,
+    average_words_per_month: null,
+    average_days_between_updates: null,
+    predicted_next_update_at: null,
+    last_update_at: null,
+  },
+};
+
+function normalizeUpdateHistory(data) {
+  if (!data || !Array.isArray(data.history) || !data.summary) {
+    return EMPTY_UPDATE_HISTORY;
+  }
+  return data;
+}
+
+function formatNumber(value, options = {}) {
+  if (value == null || Number.isNaN(Number(value))) return "Not enough data";
+  return new Intl.NumberFormat(undefined, options).format(value);
+}
+
+function formatCompactNumber(value) {
+  if (value == null || Number.isNaN(Number(value))) return "0";
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatDate(value) {
+  if (!value) return "Not enough data";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatHistoryEntryLabel(entry) {
+  if (entry.is_initial_sync) return "Initial sync";
+  if (entry.is_catch_up_sync) return "Catch-up sync";
+  return `+${entry.chapters_added} ch`;
+}
+
+function ChapterUpdateHistory({ updateHistory, isLoading, isError, error }) {
+  const { history, summary } = normalizeUpdateHistory(updateHistory);
+  const chartEntries = history.filter((entry) => entry.included_in_stats);
+  const maxWords = Math.max(...chartEntries.map((entry) => entry.words_added), 1);
+
+  return (
+    <section className="settings-section chapter-history-section">
+      <h3>Update History</h3>
+      {isLoading && <p className="hint">Loading update history...</p>}
+      {isError && (
+        <p className="error">
+          Update history failed: {error?.message || "Unable to load history"}
+        </p>
+      )}
+      {!isLoading && !isError && history.length === 0 && (
+        <p className="hint">
+          No tracked chapter updates yet. New chapter batches will appear here
+          after a refresh finds them.
+        </p>
+      )}
+      {!isLoading && !isError && history.length > 0 && (
+        <>
+          <div className="chapter-history-stats">
+            <div className="chapter-history-stat">
+              <span className="hint">Words / Week</span>
+              <strong>
+                {formatNumber(summary.average_words_per_week, {
+                  maximumFractionDigits: 0,
+                })}
+              </strong>
+            </div>
+            <div className="chapter-history-stat">
+              <span className="hint">Words / Month</span>
+              <strong>
+                {formatNumber(summary.average_words_per_month, {
+                  maximumFractionDigits: 0,
+                })}
+              </strong>
+            </div>
+            <div className="chapter-history-stat">
+              <span className="hint">Next Update</span>
+              <strong>{formatDate(summary.predicted_next_update_at)}</strong>
+            </div>
+          </div>
+
+          <div
+            className="chapter-history-chart"
+            aria-label="Words added by update date"
+          >
+            {chartEntries.length === 0 ? (
+              <p className="hint chapter-history-chart-empty">
+                No post-import chapter updates yet.
+              </p>
+            ) : (
+              chartEntries.slice(-12).map((entry) => {
+                const height = Math.max((entry.words_added / maxWords) * 100, 8);
+                return (
+                  <div className="chapter-history-bar-wrap" key={entry.id}>
+                    <div className="chapter-history-bar-stage">
+                      <div
+                        className="chapter-history-bar"
+                        style={{ height: `${height}%` }}
+                        title={`${formatDate(entry.timestamp)}: ${formatNumber(
+                          entry.words_added,
+                        )} words`}
+                      />
+                    </div>
+                    <span>{formatCompactNumber(entry.words_added)}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <ul className="chapter-history-list">
+            {history
+              .slice()
+              .reverse()
+              .map((entry) => (
+                <li key={entry.id}>
+                  <span>{formatDate(entry.timestamp)}</span>
+                  <strong>
+                    {formatHistoryEntryLabel(entry)} ·{" "}
+                    {formatNumber(entry.words_added)} words
+                  </strong>
+                </li>
+              ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -283,6 +432,18 @@ function BookSettings({ book: initialBook, onBack }) {
     queryFn: fetchMatchedConfig,
   });
 
+  const {
+    data: updateHistory,
+    isLoading: updateHistoryLoading,
+    isError: updateHistoryIsError,
+    error: updateHistoryError,
+  } = useQuery({
+    queryKey: ["book-update-history", book.id, book.content_version],
+    queryFn: fetchUpdateHistory,
+    enabled: book.source_type === "web",
+    refetchInterval: isRefreshing ? 5000 : false,
+  });
+
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
     queryFn: getSeries,
@@ -316,6 +477,7 @@ function BookSettings({ book: initialBook, onBack }) {
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book-update-history", book.id] });
     },
   });
 
@@ -754,6 +916,15 @@ function BookSettings({ book: initialBook, onBack }) {
             </div>
           )}
         </section>
+      )}
+
+      {book.source_type === "web" && (
+        <ChapterUpdateHistory
+          updateHistory={updateHistory}
+          isLoading={updateHistoryLoading}
+          isError={updateHistoryIsError}
+          error={updateHistoryError}
+        />
       )}
 
       <section className="settings-section">

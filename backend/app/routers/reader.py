@@ -60,6 +60,12 @@ def _build_book_entry(book: models.Book, base_url: str) -> ET.Element:
     acq_link.set("href", f"{base_url}/reader/books/{book.id}/download")
     acq_link.set("type", "application/epub+zip")
 
+    if book.source_type == models.SourceType.web and book.source_url:
+        source_link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
+        source_link.set("rel", "alternate")
+        source_link.set("href", book.source_url)
+        source_link.set("type", "text/html")
+
     if book.cover_path:
         img_link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
         img_link.set("rel", "http://opds-spec.org/image")
@@ -107,6 +113,7 @@ def _reader_book_payload(
         "author": book.author,
         "series": book.series,
         "series_index": float(book.series_index) if book.series_index is not None else None,
+        "source_url": book.source_url if book.source_type == models.SourceType.web else None,
         "source_type": book.source_type,
         "content_updated_at": book.content_updated_at,
         "content_version": book.content_version,

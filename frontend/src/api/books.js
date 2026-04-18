@@ -104,6 +104,10 @@ export function getBookCleanedChapters(bookId) {
   return getJson(`/api/books/${bookId}/cleaned-chapters`, "Failed to fetch cleaned chapters");
 }
 
+export function getBookUpdateHistory(bookId) {
+  return getJson(`/api/books/${bookId}/update-history`, "Failed to fetch update history");
+}
+
 export function getMatchedConfigs(bookId) {
   return getJson(`/api/books/${bookId}/matched-config`, "Failed to fetch matched config");
 }

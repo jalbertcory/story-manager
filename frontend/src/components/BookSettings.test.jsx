@@ -260,6 +260,129 @@ describe("BookSettings", () => {
     expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
   });
 
+  it("shows chapter update history for web books", async () => {
+    const fetchMock = vi.fn((url) => {
+      if (
+        url === "/api/books/11/chapters" ||
+        url === "/api/books/11/matched-config" ||
+        url === "/api/series"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      if (url === "/api/books/11/update-history") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              book_id: 11,
+              history: [
+                {
+                  id: 0,
+                  timestamp: "2025-12-25T00:00:00Z",
+                  entry_type: "added",
+                  previous_chapter_count: null,
+                  new_chapter_count: 100,
+                  chapters_added: 100,
+                  words_added: 100000,
+                  average_words_per_chapter: 1000,
+                  included_in_stats: false,
+                  is_initial_sync: true,
+                },
+                {
+                  id: 1,
+                  timestamp: "2025-12-28T00:00:00Z",
+                  entry_type: "updated",
+                  previous_chapter_count: 100,
+                  new_chapter_count: 115,
+                  chapters_added: 15,
+                  words_added: 50000,
+                  average_words_per_chapter: 3333.33,
+                  included_in_stats: false,
+                  is_initial_sync: false,
+                  is_catch_up_sync: true,
+                },
+                {
+                  id: 2,
+                  timestamp: "2026-01-01T00:00:00Z",
+                  entry_type: "updated",
+                  previous_chapter_count: 10,
+                  new_chapter_count: 12,
+                  chapters_added: 2,
+                  words_added: 4000,
+                  average_words_per_chapter: 2000,
+                  included_in_stats: true,
+                  is_initial_sync: false,
+                  is_catch_up_sync: false,
+                },
+                {
+                  id: 3,
+                  timestamp: "2026-01-08T00:00:00Z",
+                  entry_type: "updated",
+                  previous_chapter_count: 12,
+                  new_chapter_count: 15,
+                  chapters_added: 3,
+                  words_added: 8000,
+                  average_words_per_chapter: 2666.67,
+                  included_in_stats: true,
+                  is_initial_sync: false,
+                  is_catch_up_sync: false,
+                },
+              ],
+              summary: {
+                total_update_events: 2,
+                total_chapters_added: 5,
+                total_words_added: 12000,
+                average_words_per_week: 6000,
+                average_words_per_month: 26000,
+                average_days_between_updates: 7,
+                predicted_next_update_at: "2026-01-15T00:00:00Z",
+                last_update_at: "2026-01-08T00:00:00Z",
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(
+      <BookSettings
+        book={{
+          id: 11,
+          title: "Growing Story",
+          author: "Author",
+          series: null,
+          series_index: null,
+          source_type: "web",
+          source_url: "https://example.com/growing",
+          immutable_path: "library/original.epub",
+          current_path: "library/current.epub",
+          removed_chapters: [],
+          content_selectors: [],
+          created_at: "2026-03-17T00:00:00Z",
+          content_updated_at: "2026-03-17T00:00:00Z",
+          content_version: 3,
+        }}
+        onBack={() => {}}
+      />,
+    );
+
+    expect(await screen.findByText("Words / Week")).toBeInTheDocument();
+    expect(screen.getByText("Update History")).toBeInTheDocument();
+    expect(screen.getByText("6,000")).toBeInTheDocument();
+    expect(screen.getByText(/\+3 ch/)).toBeInTheDocument();
+    expect(screen.getByText(/8,000 words/)).toBeInTheDocument();
+    expect(screen.getByText(/Initial sync/)).toBeInTheDocument();
+    expect(screen.getByText(/Catch-up sync/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/books/11/update-history");
+  });
+
   it("saves manual metadata identifiers", async () => {
     const fetchMock = vi.fn((url, options) => {
       if (

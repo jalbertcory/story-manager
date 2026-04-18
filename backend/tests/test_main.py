@@ -2678,6 +2678,97 @@ async def test_scheduler_history_task_logs_not_found(db_session):
     assert "not found" in response.json()["detail"].lower()
 
 
+@pytest.mark.asyncio
+async def test_book_update_history_uses_growth_logs(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Growing Story",
+                author="Author",
+                immutable_path="growing_i",
+                current_path="growing_c",
+                source_type=models.SourceType.web,
+                source_url="https://example.com/growing",
+            ),
+        )
+
+        initial = await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="added",
+                new_chapter_count=100,
+                words_added=100000,
+            ),
+        )
+        catch_up_update = await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="updated",
+                previous_chapter_count=100,
+                new_chapter_count=115,
+                words_added=50000,
+            ),
+        )
+        first_update = await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="updated",
+                previous_chapter_count=115,
+                new_chapter_count=117,
+                words_added=5000,
+            ),
+        )
+        checked = await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="checked",
+                previous_chapter_count=117,
+                new_chapter_count=117,
+                words_added=0,
+            ),
+        )
+        second_update = await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(
+                book_id=book.id,
+                entry_type="updated",
+                previous_chapter_count=117,
+                new_chapter_count=120,
+                words_added=9000,
+            ),
+        )
+
+        initial.timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        catch_up_update.timestamp = datetime(2026, 1, 8, tzinfo=timezone.utc)
+        first_update.timestamp = datetime(2026, 1, 15, tzinfo=timezone.utc)
+        checked.timestamp = datetime(2026, 1, 17, tzinfo=timezone.utc)
+        second_update.timestamp = datetime(2026, 1, 22, tzinfo=timezone.utc)
+        await session.commit()
+
+    response = client.get(f"/api/books/{book.id}/update-history")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert [entry["words_added"] for entry in payload["history"]] == [100000, 50000, 5000, 9000]
+    assert [entry["chapters_added"] for entry in payload["history"]] == [100, 15, 2, 3]
+    assert payload["history"][0]["is_initial_sync"] is True
+    assert payload["history"][0]["included_in_stats"] is False
+    assert payload["history"][1]["is_catch_up_sync"] is True
+    assert payload["history"][1]["included_in_stats"] is False
+    assert payload["history"][2]["average_words_per_chapter"] == 2500
+    assert [entry["included_in_stats"] for entry in payload["history"][2:]] == [True, True]
+    assert payload["summary"]["total_update_events"] == 2
+    assert payload["summary"]["total_chapters_added"] == 5
+    assert payload["summary"]["total_words_added"] == 14000
+    assert payload["summary"]["average_days_between_updates"] == 7
+    assert payload["summary"]["predicted_next_update_at"].startswith("2026-01-29")
+
+
 # ─── detect_series_from_titles unit tests ────────────────────────────────────
 
 
@@ -3134,6 +3225,44 @@ async def test_reader_series_api_and_opds_feeds(db_session):
     assert self_links == ["http://testserver/reader/opds/series/Arcane%20Saga"]
     book_entries = books_root.findall(f"{ATOM}entry")
     assert [entry.findtext(f"{ATOM}title") for entry in book_entries] == ["Arcane Saga 1", "Arcane Saga 2"]
+
+
+@pytest.mark.asyncio
+async def test_reader_opds_and_json_include_web_book_source_url(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Web Reader Story",
+                author="Author W",
+                immutable_path="library/immutable_web_reader.epub",
+                current_path="library/web_reader.epub",
+                source_type=models.SourceType.web,
+                source_url="https://example.com/story/reader",
+                current_word_count=1500,
+            ),
+        )
+
+    key_response = client.post("/api/reader-keys", json={"label": "Web Reader"})
+    assert key_response.status_code == 201
+    token = key_response.json()["token"]
+
+    books_response = client.get("/reader/books/all", auth=("reader", token))
+    assert books_response.status_code == 200
+    assert books_response.json()[0]["source_url"] == "https://example.com/story/reader"
+
+    import xml.etree.ElementTree as ET
+
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    opds_response = client.get("/reader/opds/catalog", auth=("reader", token))
+    assert opds_response.status_code == 200
+    root = ET.fromstring(opds_response.content)
+    entry = root.find(f"{ATOM}entry")
+    assert entry is not None
+    alternate_links = [link for link in entry.findall(f"{ATOM}link") if link.get("rel") == "alternate"]
+    assert len(alternate_links) == 1
+    assert alternate_links[0].get("href") == "https://example.com/story/reader"
+    assert alternate_links[0].get("type") == "text/html"
 
 
 @pytest.mark.asyncio
