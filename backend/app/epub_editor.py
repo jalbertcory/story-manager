@@ -40,22 +40,40 @@ def _toc_item_href(item) -> str | None:
     return None
 
 
-def _filter_toc(items, chapters_to_remove: set[str]):
+def _toc_link_with_uid(item: epub.Link, uid_counter: list[int]) -> epub.Link:
+    if item.uid:
+        return item
+    uid_counter[0] += 1
+    href = item.href.split("#")[0] if item.href else "toc"
+    uid_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", href).strip("-._") or "toc"
+    return epub.Link(item.href, item.title, f"toc-{uid_counter[0]}-{uid_slug}")
+
+
+def _normalize_toc_item(item, uid_counter: list[int]):
+    if isinstance(item, epub.Link):
+        return _toc_link_with_uid(item, uid_counter)
+    return item
+
+
+def _filter_toc(items, chapters_to_remove: set[str], uid_counter: list[int] | None = None):
+    if uid_counter is None:
+        uid_counter = [0]
+
     filtered = []
     for item in items:
         if isinstance(item, tuple):
             section, children = item
-            filtered_children = _filter_toc(children, chapters_to_remove)
+            filtered_children = _filter_toc(children, chapters_to_remove, uid_counter)
             href = _toc_item_href(section)
             if href in chapters_to_remove and not filtered_children:
                 continue
-            filtered.append((section, filtered_children))
+            filtered.append((_normalize_toc_item(section, uid_counter), filtered_children))
             continue
 
         href = _toc_item_href(item)
         if href and href in chapters_to_remove:
             continue
-        filtered.append(item)
+        filtered.append(_normalize_toc_item(item, uid_counter))
 
     return tuple(filtered) if isinstance(items, tuple) else filtered
 
