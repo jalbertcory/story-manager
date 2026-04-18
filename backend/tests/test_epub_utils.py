@@ -97,12 +97,10 @@ def test_get_epub_tags_split_fff_title_page_category_and_genre(tmp_path):
   </spine>
 </package>
 """,
-        {
-            "OEBPS/title_page.xhtml": b"""<html><body>
+        {"OEBPS/title_page.xhtml": b"""<html><body>
 <b>Category:</b> Awkward Protagonist, Character Growth<br />
 <b>Genre:</b> Action, Comedy, Action<br />
-</body></html>"""
-        },
+</body></html>"""},
     )
 
     assert get_epub_genre_tags(epub_path) == [
