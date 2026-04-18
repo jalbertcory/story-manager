@@ -3230,7 +3230,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
 @pytest.mark.asyncio
 async def test_reader_opds_and_json_include_web_book_source_url(db_session):
     async with AsyncTestingSessionLocal() as session:
-        book = await crud.create_book(
+        await crud.create_book(
             session,
             schemas.BookCreate(
                 title="Web Reader Story",

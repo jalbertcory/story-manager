@@ -109,10 +109,7 @@ def _build_chapter_update_history(
 
     if len(stats_points) >= 2:
         timestamps = [_as_utc(point.timestamp) for point in stats_points]
-        intervals = [
-            (current - previous).total_seconds() / 86400
-            for previous, current in zip(timestamps, timestamps[1:])
-        ]
+        intervals = [(current - previous).total_seconds() / 86400 for previous, current in zip(timestamps, timestamps[1:])]
         average_days_between_updates = sum(intervals) / len(intervals)
         predicted_next_update_at = timestamps[-1] + timedelta(days=average_days_between_updates)
 
