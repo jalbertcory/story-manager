@@ -179,6 +179,37 @@ class BookLogWithTitle(BookLog):
     book_title: str
 
 
+class BookChapterUpdateHistoryPoint(BaseModel):
+    id: int
+    timestamp: datetime
+    entry_type: str
+    previous_chapter_count: Optional[int] = None
+    new_chapter_count: Optional[int] = None
+    chapters_added: int
+    words_added: int
+    average_words_per_chapter: Optional[float] = None
+    included_in_stats: bool = False
+    is_initial_sync: bool = False
+    is_catch_up_sync: bool = False
+
+
+class BookChapterUpdateHistorySummary(BaseModel):
+    total_update_events: int
+    total_chapters_added: int
+    total_words_added: int
+    average_words_per_week: Optional[float] = None
+    average_words_per_month: Optional[float] = None
+    average_days_between_updates: Optional[float] = None
+    predicted_next_update_at: Optional[datetime] = None
+    last_update_at: Optional[datetime] = None
+
+
+class BookChapterUpdateHistory(BaseModel):
+    book_id: int
+    history: List[BookChapterUpdateHistoryPoint] = Field(default_factory=list)
+    summary: BookChapterUpdateHistorySummary
+
+
 class ApiKeyCreate(BaseModel):
     label: str
 
@@ -226,6 +257,7 @@ class ReaderBook(BaseModel):
     author: str
     series: Optional[str] = None
     series_index: Optional[float] = None
+    source_url: Optional[str] = None
     source_type: SourceType
     content_updated_at: datetime
     content_version: int

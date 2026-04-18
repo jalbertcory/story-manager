@@ -25,6 +25,13 @@ async def get_latest_book_log(db: AsyncSession, book_id: int) -> Optional[models
     return result.scalars().first()
 
 
+async def get_book_logs(db: AsyncSession, book_id: int) -> List[models.BookLog]:
+    result = await db.execute(
+        select(models.BookLog).filter(models.BookLog.book_id == book_id).order_by(models.BookLog.timestamp.asc())
+    )
+    return result.scalars().all()
+
+
 async def count_book_logs(db: AsyncSession, book_id: int) -> int:
     result = await db.execute(select(func.count(models.BookLog.id)).where(models.BookLog.book_id == book_id))
     return result.scalar() or 0
