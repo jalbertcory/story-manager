@@ -3,33 +3,10 @@
 import asyncio
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 from backend.app import crud, models, schemas
-from backend.app.database import Base
 from backend.app.services import refresh_queue as refresh_queue_mod
 from backend.app.services import web_novel as web_novel_mod
-
-SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-
-engine = create_async_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-AsyncTestingSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
-
-
-@pytest_asyncio.fixture(scope="function")
-async def db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with AsyncTestingSessionLocal() as session:
-        yield session
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
 
 
 async def _make_web_book(db, **overrides):
@@ -163,7 +140,7 @@ async def test_refresh_queue_continues_after_worker_exception(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_refresh_queue_requeue_pending_books_uses_crud(monkeypatch, db):
+async def test_refresh_queue_requeue_pending_books_uses_crud(monkeypatch, db, sqlite_sessionmaker):
     queued = await _make_web_book(db, source_url="https://example.com/q")
     queued.refresh_status = "queued"
     processing = await _make_web_book(db, source_url="https://example.com/p")
@@ -173,7 +150,7 @@ async def test_refresh_queue_requeue_pending_books_uses_crud(monkeypatch, db):
 
     # Point the queue module's SessionLocal at the test database so
     # requeue_pending_books sees our fixture rows.
-    monkeypatch.setattr(refresh_queue_mod, "SessionLocal", AsyncTestingSessionLocal)
+    monkeypatch.setattr(refresh_queue_mod, "SessionLocal", sqlite_sessionmaker)
 
     enqueued: list[int] = []
 
@@ -192,7 +169,7 @@ async def test_refresh_queue_requeue_pending_books_uses_crud(monkeypatch, db):
 
 
 @pytest.mark.asyncio
-async def test_run_book_refresh_marks_error_when_no_source_url(monkeypatch, db):
+async def test_run_book_refresh_marks_error_when_no_source_url(monkeypatch, db, sqlite_sessionmaker):
     # Build a web book with no source_url (sneak past the schema by creating
     # it as epub first and then mutating source_type).
     book = await crud.create_book(
@@ -209,7 +186,7 @@ async def test_run_book_refresh_marks_error_when_no_source_url(monkeypatch, db):
     book.source_url = None
     await db.commit()
 
-    monkeypatch.setattr(web_novel_mod, "SessionLocal", AsyncTestingSessionLocal)
+    monkeypatch.setattr(web_novel_mod, "SessionLocal", sqlite_sessionmaker)
 
     await web_novel_mod.run_book_refresh(book.id)
 
@@ -219,7 +196,7 @@ async def test_run_book_refresh_marks_error_when_no_source_url(monkeypatch, db):
 
 
 @pytest.mark.asyncio
-async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db):
+async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db, sqlite_sessionmaker):
     book = await _make_web_book(
         db,
         source_url="https://example.com/story/fail",
@@ -228,7 +205,7 @@ async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db)
     )
     await db.commit()
 
-    monkeypatch.setattr(web_novel_mod, "SessionLocal", AsyncTestingSessionLocal)
+    monkeypatch.setattr(web_novel_mod, "SessionLocal", sqlite_sessionmaker)
 
     def broken_word_count(path):
         raise RuntimeError("cannot read epub")
@@ -246,8 +223,8 @@ async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db)
 
 
 @pytest.mark.asyncio
-async def test_run_book_refresh_swallows_missing_book(monkeypatch, db):
+async def test_run_book_refresh_swallows_missing_book(monkeypatch, db, sqlite_sessionmaker):
     """Worker should no-op cleanly when the book was deleted between enqueue and run."""
-    monkeypatch.setattr(web_novel_mod, "SessionLocal", AsyncTestingSessionLocal)
+    monkeypatch.setattr(web_novel_mod, "SessionLocal", sqlite_sessionmaker)
     # Should not raise even though book 99999 does not exist.
     await web_novel_mod.run_book_refresh(99999)

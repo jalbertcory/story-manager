@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
+import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
+import AdminLogin from "./components/AdminLogin.jsx";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
@@ -10,7 +12,12 @@ import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
 import useDebouncedValue from "./hooks/useDebouncedValue";
 import useLibraryCatalog from "./hooks/useLibraryCatalog";
-import { buildBookPath, buildTabPath, parseLocation, TABS } from "./lib/navigation";
+import {
+  buildBookPath,
+  buildTabPath,
+  parseLocation,
+  TABS,
+} from "./lib/navigation";
 
 function App() {
   const [q, setQ] = useState("");
@@ -20,33 +27,53 @@ function App() {
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
   const [addBookOpen, setAddBookOpen] = useState(false);
+  const [authStatus, setAuthStatus] = useState(null);
   const debouncedQuery = useDebouncedValue(q.trim(), 300);
 
-  const applyLocation = useCallback(async (pathname, hash, stateData = null) => {
-    const parsed = parseLocation(pathname, hash);
-    if (parsed.view === "book") {
-      if (stateData?.id === parsed.bookId) {
-        setEditingBook(stateData);
-        return;
+  useEffect(() => {
+    let mounted = true;
+    getAuthStatus().then((status) => {
+      if (mounted) {
+        setAuthStatus(status);
       }
-
-      const book = await getBook(parsed.bookId);
-      if (book) {
-        setEditingBook(book);
-        return;
-      }
-
-      window.history.replaceState({ view: "tab", tab: "library" }, "", buildTabPath("library", "series"));
-      setEditingBook(null);
-      setActiveTab("library");
-      setLibraryView("series");
-      return;
-    }
-
-    setEditingBook(null);
-    setActiveTab(parsed.tab);
-    setLibraryView(parsed.libraryView);
+    });
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  const applyLocation = useCallback(
+    async (pathname, hash, stateData = null) => {
+      const parsed = parseLocation(pathname, hash);
+      if (parsed.view === "book") {
+        if (stateData?.id === parsed.bookId) {
+          setEditingBook(stateData);
+          return;
+        }
+
+        const book = await getBook(parsed.bookId);
+        if (book) {
+          setEditingBook(book);
+          return;
+        }
+
+        window.history.replaceState(
+          { view: "tab", tab: "library" },
+          "",
+          buildTabPath("library", "series"),
+        );
+        setEditingBook(null);
+        setActiveTab("library");
+        setLibraryView("series");
+        return;
+      }
+
+      setEditingBook(null);
+      setActiveTab(parsed.tab);
+      setLibraryView(parsed.libraryView);
+    },
+    [],
+  );
 
   const navigate = (view, data = null) => {
     if (view === "book" && data?.id) {
@@ -63,20 +90,34 @@ function App() {
 
   const handleLibraryViewChange = (view) => {
     setLibraryView(view);
-    window.history.pushState({ view: "tab", tab: "library" }, "", buildTabPath("library", view));
+    window.history.pushState(
+      { view: "tab", tab: "library" },
+      "",
+      buildTabPath("library", view),
+    );
   };
 
   useEffect(() => {
+    if (!authStatus?.authenticated) {
+      return;
+    }
     void applyLocation(window.location.pathname, window.location.hash);
-  }, [applyLocation]);
+  }, [applyLocation, authStatus?.authenticated]);
 
   useEffect(() => {
+    if (!authStatus?.authenticated) {
+      return undefined;
+    }
     const onPop = (e) => {
-      void applyLocation(window.location.pathname, window.location.hash, e.state?.data ?? null);
+      void applyLocation(
+        window.location.pathname,
+        window.location.hash,
+        e.state?.data ?? null,
+      );
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [applyLocation]);
+  }, [applyLocation, authStatus?.authenticated]);
 
   const {
     data: catalog = [],
@@ -86,6 +127,7 @@ function App() {
     q: debouncedQuery,
     sortBy,
     sortOrder,
+    enabled: Boolean(authStatus?.authenticated),
   });
 
   const handleClearSearch = () => {
@@ -108,6 +150,26 @@ function App() {
     }
   };
 
+  const handleLogout = async () => {
+    const nextStatus = await logout();
+    setAuthStatus(nextStatus);
+  };
+
+  if (authStatus === null) {
+    return (
+      <div className="app-container">
+        <header className="app-header">
+          <h1>Story Manager</h1>
+        </header>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (!authStatus.authenticated) {
+    return <AdminLogin onAuthenticated={setAuthStatus} />;
+  }
+
   if (editingBook) {
     return (
       <BookSettings book={editingBook} onBack={() => window.history.back()} />
@@ -129,8 +191,18 @@ function App() {
           <>
             <div className="search-controls">
               <div className="search-input-wrap">
-                <svg className="search-icon" viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
-                  <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.45 4.38l3.09 3.08a.75.75 0 11-1.06 1.06l-3.09-3.08A7 7 0 012 9z" clipRule="evenodd" />
+                <svg
+                  className="search-icon"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.45 4.38l3.09 3.08a.75.75 0 11-1.06 1.06l-3.09-3.08A7 7 0 012 9z"
+                    clipRule="evenodd"
+                  />
                 </svg>
                 <input
                   type="text"
@@ -139,7 +211,11 @@ function App() {
                   onChange={(e) => setQ(e.target.value)}
                 />
                 {q && (
-                  <button className="search-clear" onClick={handleClearSearch} aria-label="Clear search">
+                  <button
+                    className="search-clear"
+                    onClick={handleClearSearch}
+                    aria-label="Clear search"
+                  >
                     ×
                   </button>
                 )}
@@ -154,7 +230,11 @@ function App() {
                   <option value="word_count">Word Count</option>
                   <option value="updated_at">Last Updated</option>
                 </select>
-                <button className="sort-order-btn" onClick={handleToggleSortOrder} aria-label="Toggle sort order">
+                <button
+                  className="sort-order-btn"
+                  onClick={handleToggleSortOrder}
+                  aria-label="Toggle sort order"
+                >
                   {sortOrder === "asc" ? "↑" : "↓"}
                 </button>
               </div>
@@ -173,7 +253,14 @@ function App() {
             </details>
             {isLoading && <p>Loading...</p>}
             {error && <p className="error">{error.message}</p>}
-            <BookList books={catalog} onEdit={handleEdit} libraryView={libraryView} onLibraryViewChange={handleLibraryViewChange} sortBy={sortBy} sortOrder={sortOrder} />
+            <BookList
+              books={catalog}
+              onEdit={handleEdit}
+              libraryView={libraryView}
+              onLibraryViewChange={handleLibraryViewChange}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+            />
           </>
         );
     }
@@ -183,6 +270,11 @@ function App() {
     <div className="app-container">
       <header className="app-header">
         <h1>Story Manager</h1>
+        {authStatus.mode === "password" && (
+          <button className="btn-text" onClick={handleLogout}>
+            Sign Out
+          </button>
+        )}
       </header>
       <nav className="main-tabs">
         {TABS.map((tab) => (

@@ -18,6 +18,29 @@ The default `docker-compose.yml` stores persistent data under `./config`:
 
 The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container.
 
+## Admin Authentication
+
+By default, Story Manager preserves the historical local-network behavior: if no admin password is configured, the admin UI and `/api/*` routes do not require built-in login.
+
+To enable built-in admin password auth, set:
+
+```bash
+STORY_MANAGER_AUTH_MODE=password
+STORY_MANAGER_ADMIN_PASSWORD=change-me
+```
+
+The app stores a signed, HTTP-only session cookie after login. To keep sessions valid across container restarts without using the password as the signing key, also set:
+
+```bash
+STORY_MANAGER_ADMIN_SESSION_SECRET=long-random-value
+```
+
+If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 Proxy, or Cloudflare Access, disable built-in auth explicitly:
+
+```bash
+STORY_MANAGER_AUTH_MODE=disabled
+```
+
 ## FanFicFare Overrides
 
 Story Manager uses FanFicFare's EPUB update mode for tracked web novels. Daily checks can reuse the existing immutable EPUB instead of fetching every chapter again.

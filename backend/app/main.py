@@ -13,12 +13,13 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
+from .admin_auth_middleware import AdminAuthMiddleware
 from .config import LIBRARY_PATH
 from .errors import install_error_handlers
 from .middleware import RequestIdMiddleware
 from .database import SessionLocal, get_db
 from .logging_config import setup_logging
-from .routers import api_keys, books, cleaning, covers, metadata, reader, scheduler, storage, upload, web_novels
+from .routers import api_keys, auth, books, cleaning, covers, metadata, reader, scheduler, storage, upload, web_novels
 from .services.metadata_sync_queue import get_metadata_sync_queue
 from .services.refresh_queue import get_refresh_queue
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Story Manager", lifespan=lifespan)
 install_error_handlers(app)
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(AdminAuthMiddleware)
 app.mount(
     "/library/covers",
     StaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
@@ -90,6 +92,7 @@ app.include_router(covers.router)
 app.include_router(scheduler.router)
 app.include_router(storage.router)
 app.include_router(api_keys.router)
+app.include_router(auth.router)
 app.include_router(reader.router)
 app.include_router(metadata.router)
 

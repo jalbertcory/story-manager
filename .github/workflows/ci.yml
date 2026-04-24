@@ -10,7 +10,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python
@@ -25,19 +25,14 @@ jobs:
         uv venv
         source .venv/bin/activate
         uv pip install -e ".[dev]"
-    - name: Format with black
+    - name: Check formatting with black
       run: |
         source .venv/bin/activate
-        black backend
-    - name: Fix with autoflake
+        black --check backend
+    - name: Check unused imports with autoflake
       run: |
         source .venv/bin/activate
-        autoflake --in-place --remove-all-unused-imports --recursive backend
-    - name: Commit formatting changes
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: 'chore: format python code'
-        file_pattern: backend/**/*.py
+        autoflake --check --remove-all-unused-imports --recursive backend
     - name: Lint with flake8
       run: |
         source .venv/bin/activate
@@ -68,7 +63,7 @@ jobs:
   lint-ui:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         working-directory: frontend
@@ -83,12 +78,7 @@ jobs:
     - name: Install dependencies
       run: npm ci
     - name: Lint with eslint
-      run: npm run lint -- --fix
-    - name: Commit formatting changes
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: 'chore: format frontend code'
-        file_pattern: "frontend/**/*.{js,jsx}"
+      run: npm run lint -- --max-warnings=0
 
   ui-tests:
     runs-on: ubuntu-latest

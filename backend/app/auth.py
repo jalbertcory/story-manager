@@ -1,10 +1,14 @@
-"""Reader API key helpers and authentication dependencies."""
+"""Reader API key helpers and admin authentication dependencies."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
+import os
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -19,6 +23,11 @@ from .database import get_db
 _bearer = HTTPBearer(auto_error=False)
 _basic = HTTPBasic(auto_error=False)
 
+ADMIN_AUTH_COOKIE = "story_manager_admin"
+ADMIN_AUTH_DISABLED = "disabled"
+ADMIN_AUTH_PASSWORD = "password"
+ADMIN_SESSION_SECONDS = 60 * 60 * 24 * 14
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -26,6 +35,65 @@ def _now_utc() -> datetime:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def get_admin_auth_mode() -> str:
+    configured_mode = os.getenv("STORY_MANAGER_AUTH_MODE", "").strip().lower()
+    if configured_mode:
+        return configured_mode
+    return ADMIN_AUTH_PASSWORD if os.getenv("STORY_MANAGER_ADMIN_PASSWORD") else ADMIN_AUTH_DISABLED
+
+
+def is_admin_auth_enabled() -> bool:
+    return get_admin_auth_mode() == ADMIN_AUTH_PASSWORD
+
+
+def _admin_password() -> Optional[str]:
+    password = os.getenv("STORY_MANAGER_ADMIN_PASSWORD")
+    return password if password else None
+
+
+def _admin_session_secret() -> Optional[str]:
+    return os.getenv("STORY_MANAGER_ADMIN_SESSION_SECRET") or _admin_password()
+
+
+def verify_admin_password(password: str) -> bool:
+    expected = _admin_password()
+    if expected is None:
+        return False
+    return hmac.compare_digest(password, expected)
+
+
+def _sign_admin_payload(payload: str) -> str:
+    secret = _admin_session_secret()
+    if secret is None:
+        raise RuntimeError("Admin auth is enabled but no admin password/session secret is configured")
+    return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_admin_session_token(now: int | None = None) -> str:
+    expires_at = (now or int(time.time())) + ADMIN_SESSION_SECONDS
+    payload = base64.urlsafe_b64encode(str(expires_at).encode("ascii")).decode("ascii").rstrip("=")
+    signature = _sign_admin_payload(payload)
+    return f"{payload}.{signature}"
+
+
+def validate_admin_session_token(token: str | None, now: int | None = None) -> bool:
+    if not token or "." not in token:
+        return False
+
+    payload, signature = token.split(".", 1)
+    expected_signature = _sign_admin_payload(payload)
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    try:
+        padded = payload + "=" * (-len(payload) % 4)
+        expires_at = int(base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii"))
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return False
+
+    return expires_at > (now or int(time.time()))
 
 
 def generate_reader_token() -> tuple[str, str]:

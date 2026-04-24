@@ -72,6 +72,8 @@ See [docs/reader-api.md](docs/reader-api.md) for endpoint and authentication det
 
 ## Security
 
-The admin web UI and `/api/*` routes do not currently have built-in user login. Keep them on a private network, VPN, or behind a real authentication layer. The `/reader/*` routes are designed for read-only API-key access.
+The `/reader/*` routes are read-only and use per-device API keys. The admin web UI and `/api/*` routes can use built-in password auth by setting `STORY_MANAGER_ADMIN_PASSWORD`.
+
+If you already protect the app with a reverse proxy or Cloudflare Access, set `STORY_MANAGER_AUTH_MODE=disabled` and let that outer layer own admin authentication.
 
 See [docs/reverse-proxy.md](docs/reverse-proxy.md) before exposing anything publicly.

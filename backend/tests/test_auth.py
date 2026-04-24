@@ -1,6 +1,13 @@
 """Tests for authentication: token generation, hashing, prefix extraction."""
 
-from backend.app.auth import generate_reader_token, hash_token, _extract_prefix
+from backend.app.auth import (
+    create_admin_session_token,
+    generate_reader_token,
+    hash_token,
+    validate_admin_session_token,
+    verify_admin_password,
+    _extract_prefix,
+)
 
 
 class TestGenerateReaderToken:
@@ -55,3 +62,25 @@ class TestExtractPrefix:
 
     def test_empty_string(self):
         assert _extract_prefix("") is None
+
+
+class TestAdminAuth:
+    def test_verify_admin_password_uses_env(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_ADMIN_PASSWORD", "secret")
+
+        assert verify_admin_password("secret") is True
+        assert verify_admin_password("wrong") is False
+
+    def test_admin_session_token_expires(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_ADMIN_PASSWORD", "secret")
+        token = create_admin_session_token(now=100)
+
+        assert validate_admin_session_token(token, now=101) is True
+        assert validate_admin_session_token(token, now=60 * 60 * 24 * 15) is False
+
+    def test_admin_session_token_rejects_tampering(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_ADMIN_PASSWORD", "secret")
+        token = create_admin_session_token(now=100)
+        tampered = token.replace(".", "x.", 1)
+
+        assert validate_admin_session_token(tampered, now=101) is False
