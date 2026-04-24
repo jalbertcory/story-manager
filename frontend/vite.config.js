@@ -16,6 +16,7 @@ const parseAllowedHosts = (value) => {
 };
 
 const allowedHosts = parseAllowedHosts(process.env.VITE_ALLOWED_HOSTS);
+const apiTarget = process.env.VITE_API_TARGET || "http://localhost:8000";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -26,7 +27,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: apiTarget,
         changeOrigin: true,
       },
     },
