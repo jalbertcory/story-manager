@@ -1,275 +1,77 @@
-# 📚 Story Manager: Your Personal Digital Library
+# Story Manager
 
-Story Manager is a self-hosted digital library and reader for your personal collection of EPUBs and web novels. It provides a clean web interface to manage your books and leverages the power of FanFicFare to keep your favorite web novels up-to-date automatically.
+Story Manager is a self-hosted library manager for EPUBs and web novels. It gives you a web UI for uploading, organizing, editing, and updating books, plus a read-only reader API for e-readers and OPDS clients.
 
+## Features
 
+- Manage uploaded EPUBs and tracked web novels in one library.
+- Download and refresh supported web novels with FanFicFare.
+- Preserve existing chapters when source sites remove older content.
+- Edit book metadata, covers, chapters, cleaning configs, and series information.
+- Expose read-only `/reader/*` endpoints secured by per-device API keys.
 
----
+## Stack
 
-## ✨ Core Features
+- Backend: FastAPI, SQLAlchemy, Alembic, APScheduler
+- Database: PostgreSQL
+- Frontend: React, Vite, TanStack Query
+- Packaging: Docker, Docker Compose
+- Tooling: `uv`, `pyenv`, `nvm`, npm, pytest, Vitest, Playwright
 
-* **Unified Library**: Manage both local EPUB files and web novels in one place.
-* **EPUB Upload**: Easily upload your existing `.epub` files directly through the web UI.
-* **Web Novel Tracking**: Simply add a URL, and InkWell will download the story and package it as an EPUB.
-* **Automatic Updates**: A background scheduler periodically checks for new chapters for all your tracked web novels using FanFicFare.
-* **Stub Protection**: InkWell is configured to **never delete old chapters**, so you won't lose content if an author removes it from the source to publish commercially.
-* **API-First Design**: A robust backend API allows for integration with other applications, such as a future mobile e-reader or audiobook player.
-* **(Future) Audiobook Conversion**: Planned integration for background text-to-speech conversion to turn any book in your library into an audiobook.
+## Quick Start
 
----
+The simplest deployment path is Docker Compose:
 
-## 🛠️ Technology Stack
-
-* **Backend**: Python with **FastAPI** for a high-performance API.
-* **Web Novel Fetching**: **FanFicFare** library.
-* **Task Scheduling**: **APScheduler** for periodic chapter updates.
-* **Database**: **SQLite** for simple, file-based storage of metadata.
-* **Frontend**: **React** (using Vite) for a modern, responsive user interface.
-* **Containerization**: **Docker** for easy deployment.
-
----
-
-## 🚀 Getting Started
-
-### Local Development Setup
-
-This project uses `uv` for python package management, `pyenv` for Python version management, and `nvm` for Node.js version management to ensure a consistent development environment.
-
-#### Prerequisites
-
-*   **uv**: Follow the official installation guides for your OS.
-*   **pyenv**: Follow the official installation guides for your OS.
-*   **nvm**: Follow the official `nvm` installation guide.
-*   **Docker**: Required for running the application with Docker Compose.
-
-#### Installation & Setup
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/jalbertcory/story-manager.git
-    cd story-manager
-    ```
-
-2.  **Set up the Backend (Python):**
-    *   Install the required Python version (this will be read from the `.python-version` file):
-        ```bash
-        pyenv install
-        ```
-    *   Create and activate a virtual environment:
-        ```bash
-        # Create the virtual environment
-        uv venv
-        # Activate the virtual environment
-        source .venv/bin/activate
-        ```
-    *   Install dependencies:
-        ```bash
-        uv pip install -e ".[dev]"
-        ```
-
-3.  **Set up the Database (PostgreSQL):**
-    *   Start PostgreSQL in Docker:
-        ```bash
-        make run-db
-        ```
-    *   Create a `.env` file in the project root with the database configuration:
-        ```bash
-        DATABASE_URL=postgresql+psycopg://storyuser:storypass@localhost:5432/story_manager
-        ```
-    *   To stop the database: `docker stop story-manager-db`
-    *   To start it again: `docker start story-manager-db`
-    *   To remove it completely: `docker rm -f story-manager-db`
-
-4.  **Run Database Migrations:**
-    *   Apply the database schema migrations (make sure your virtual environment is activated):
-        ```bash
-        # Activate the virtual environment first
-        source .venv/bin/activate
-        # Run migrations
-        alembic -c backend/alembic.ini upgrade head
-        ```
-
-5.  **Set up the Frontend (Node.js):**
-    *   Install and use the required Node.js version (this will be read from the `.nvmrc` file):
-        ```bash
-        nvm install
-        nvm use
-        ```
-    *   Install dependencies from the `frontend` directory:
-        ```bash
-        cd frontend
-        npm install
-        cd ..
-        ```
-
-6.  **Run the Application:**
-    *   **Backend**:
-        ```bash
-        # From the project root
-        make run-api
-        ```
-    *   **Frontend**:
-        ```bash
-        # From the project root, in a separate terminal
-        make run-ui
-        ```
-
-Your application should now be running!
-*   Web UI: `http://localhost:5173`
-*   API: `http://localhost:8000`
-
-### Reader API Keys
-
-Story Manager now includes a separate read-only reader API for e-readers and OPDS clients.
-
-Generate reader keys from the web UI:
-*   Open `Utilities`
-*   Use the `Reader API Keys` section
-*   Create one key per device, such as `Kobo` or `Boox`
-*   Copy the token when it is shown. It is only displayed once.
-
-Reader endpoints:
-*   `GET /reader/opds`
-*   `GET /reader/opds/catalog`
-*   `GET /reader/opds/search?q=...`
-*   `GET /reader/books/all`
-*   `GET /reader/updates?since=2026-03-14T12:00:00Z`
-*   `GET /reader/books/{id}`
-*   `GET /reader/books/{id}/download`
-*   `GET /reader/covers/{id}`
-
-Authentication options for reader clients:
-*   `Authorization: Bearer <token>`
-*   HTTP Basic auth with any username and the token as the password
-*   `?api_key=<token>` for clients that only support query-string credentials
-
-The `/reader/*` namespace is read-only by design. Existing `/api/*` routes remain admin-style application routes for the web UI.
-
----
-
-## 🐋 Deploy with Docker Compose
-
-The easiest way to run Story Manager is with Docker Compose. This method sets up the application and all its dependencies in a containerized environment.
-
-The web UI is exposed on port **7890**, and the API is on port **8000**.
-
-### Data Persistence
-
-The `docker-compose.yml` is configured to store persistent data on the host machine inside a `config` directory. When you first run the `docker compose up` command, Docker will automatically create this directory in the same folder where your `docker-compose.yml` file is located.
-
-This `config` directory will contain the following subdirectories:
-*   `config/library`: Stores your uploaded EPUB files and downloaded web novels.
-*   `config/fanficfare`: Optional FanFicFare overrides. If you place `config/fanficfare/personal.ini` here, Story Manager will load it after its built-in `personal.ini`, so your settings win.
-*   `config/pgdata`: Stores the PostgreSQL database.
-
-This setup ensures that your library and application data are preserved even if you stop or remove the container.
-
-### Optional FanFicFare Overrides
-
-Story Manager now uses FanFicFare's real EPUB update mode for tracked web novels. That means daily checks can reuse the existing immutable EPUB and avoid re-fetching every chapter on every run.
-
-If you want to customize FanFicFare behavior, create:
-
-```text
-config/fanficfare/personal.ini
-```
-
-That path works for both:
-- local development from the repository root
-- Docker deployments that mount `./config/fanficfare:/app/config:ro`
-
-Story Manager will load configs in this order:
-1. Built-in `backend/app/personal.ini`
-2. Optional mounted `config/fanficfare/personal.ini`
-
-Because FanFicFare applies later config files last, your mounted settings override the built-in defaults without replacing them entirely.
-
-If you need a different path, set `FFF_USER_CONFIG_PATH` in the container environment.
-
-### Running the Application
-
-To start the application, run the following command from the root of the repository:
 ```bash
 docker compose up -d
 ```
 
-If you access the web UI through a reverse proxy or custom hostname, set `VITE_ALLOWED_HOSTS` before starting the container. The value is a comma-separated list of hostnames that Vite should allow:
+The app is available at `http://localhost:8000`. Persistent data is stored under `./config`.
+
+For more deployment details, see [docs/deployment.md](docs/deployment.md).
+
+## Local Development
+
+Install the project runtimes:
 
 ```bash
-VITE_ALLOWED_HOSTS=story-reader.example.com docker compose up -d
+pyenv install
+nvm install
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+cd frontend && npm ci && cd ..
 ```
 
-### Using on Unraid
+Start PostgreSQL and run the app:
 
-The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Manager.
-
-1.  **Copy the `docker-compose.yml` file** to a new directory on your Unraid server (e.g., `/mnt/user/appdata/story-manager`).
-2.  **Review the Volume Mappings**: The `docker-compose.yml` uses relative paths for its volumes (`./config`). When you run it on Unraid, it will create the `config` directory inside the path you chose in step 1 (e.g., `/mnt/user/appdata/story-manager/config`). You don't need to edit the `docker-compose.yml` file if this is what you want.
-3.  **Start the Container**: From the directory containing `docker-compose.yml`, run `docker compose up -d`.
-4.  **Access Story Manager**: You can now access the web interface at `http://<UNRAID_HOST>:8000`.
-
----
-
-### Running tests
-
-To run e2e tests
-- `cd frontend && npm install && npx playwright install`
-- Go back to the root of the project and run `make e2e`
-- If you need to debug the tests, run `make e2e-debug`
-
-## Reverse Proxy Safety
-
-Story Manager does not yet have user login for the admin web UI. That means the existing `/api/*` routes are trusted admin routes, not internet-safe public routes.
-
-Safe deployment guidance:
-*   Expose `/reader/*` publicly only if needed for e-readers.
-*   Keep the admin UI and `/api/*` behind a VPN, Tailscale, local network, or an extra proxy auth layer such as Authelia, OAuth2 Proxy, or your reverse proxy's built-in access control.
-*   Terminate TLS at the proxy and redirect all HTTP traffic to HTTPS.
-*   Preserve the `Authorization` header so Bearer and Basic auth continue to work for `/reader/*`.
-*   Disable proxy caching for `/reader/*` responses that contain private library metadata.
-*   Set a reasonable request body limit on admin upload routes.
-
-Recommended layout:
-*   Public: `/reader/*`
-*   Private: `/`, `/api/*`
-
-Example Nginx sketch:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name books.example.com;
-
-    ssl_certificate /etc/letsencrypt/live/books.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/books.example.com/privkey.pem;
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Authorization $http_authorization;
-
-    location /reader/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_buffering off;
-        add_header Cache-Control "private, no-store";
-    }
-
-    location /api/ {
-        allow 192.168.0.0/16;
-        allow 10.0.0.0/8;
-        allow 127.0.0.1;
-        deny all;
-        proxy_pass http://127.0.0.1:8000;
-    }
-
-    location / {
-        allow 192.168.0.0/16;
-        allow 10.0.0.0/8;
-        allow 127.0.0.1;
-        deny all;
-        proxy_pass http://127.0.0.1:8000;
-    }
-}
+```bash
+make ensure-db
+make run-api
+make run-ui
 ```
 
-If you do want the admin UI reachable over the internet, put the UI and `/api/*` behind a real authentication layer first. Reader API keys alone are not a substitute for admin authentication.
+The development UI runs at `http://localhost:5173`; the API runs at `http://localhost:8000`.
+
+Useful commands:
+
+```bash
+make migrate
+make test
+make test-migrations
+make e2e
+```
+
+For setup notes and testing details, see [docs/development.md](docs/development.md).
+
+## Reader API
+
+Story Manager includes a read-only API for e-readers and OPDS clients. Create one reader key per device from `Utilities` -> `Reader API Keys` in the web UI.
+
+See [docs/reader-api.md](docs/reader-api.md) for endpoint and authentication details.
+
+## Security
+
+The admin web UI and `/api/*` routes do not currently have built-in user login. Keep them on a private network, VPN, or behind a real authentication layer. The `/reader/*` routes are designed for read-only API-key access.
+
+See [docs/reverse-proxy.md](docs/reverse-proxy.md) before exposing anything publicly.
