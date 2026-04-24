@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -20,6 +20,7 @@ import {
   uploadBookCover,
 } from "../api/books";
 import { getSeries } from "../api/series";
+import BookSettingsChapters from "./BookSettingsChapters";
 
 const fetchChapters = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
@@ -196,7 +197,10 @@ function formatHistoryEntryLabel(entry) {
 function ChapterUpdateHistory({ updateHistory, isLoading, isError, error }) {
   const { history, summary } = normalizeUpdateHistory(updateHistory);
   const chartEntries = history.filter((entry) => entry.included_in_stats);
-  const maxWords = Math.max(...chartEntries.map((entry) => entry.words_added), 1);
+  const maxWords = Math.max(
+    ...chartEntries.map((entry) => entry.words_added),
+    1,
+  );
 
   return (
     <section className="settings-section chapter-history-section">
@@ -248,7 +252,10 @@ function ChapterUpdateHistory({ updateHistory, isLoading, isError, error }) {
               </p>
             ) : (
               chartEntries.slice(-12).map((entry) => {
-                const height = Math.max((entry.words_added / maxWords) * 100, 8);
+                const height = Math.max(
+                  (entry.words_added / maxWords) * 100,
+                  8,
+                );
                 return (
                   <div className="chapter-history-bar-wrap" key={entry.id}>
                     <div className="chapter-history-bar-stage">
@@ -477,7 +484,9 @@ function BookSettings({ book: initialBook, onBack }) {
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["book-update-history", book.id] });
+      queryClient.invalidateQueries({
+        queryKey: ["book-update-history", book.id],
+      });
     },
   });
 
@@ -645,11 +654,6 @@ function BookSettings({ book: initialBook, onBack }) {
     setPreviewedChapter((prev) => (prev === filename ? null : filename));
   };
 
-  const getBodyContent = (html) => {
-    const match = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    return match ? match[1] : html;
-  };
-
   const isBusy =
     saveMutation.isPending ||
     processMutation.isPending ||
@@ -659,17 +663,6 @@ function BookSettings({ book: initialBook, onBack }) {
     isRefreshing;
   const canDetachWebMarker =
     book.source_type === "web" && book.immutable_path && book.current_path;
-
-  const activeChapters =
-    chapterPreviewMode === "cleaned" ? cleanedChapters : chapters;
-  const activeChaptersLoading =
-    chapterPreviewMode === "cleaned" ? cleanedChaptersLoading : chaptersLoading;
-
-  const filteredChapters = useMemo(() => {
-    if (!chapterSearch.trim()) return activeChapters;
-    const q = chapterSearch.toLowerCase();
-    return activeChapters.filter((ch) => ch.title.toLowerCase().includes(q));
-  }, [activeChapters, chapterSearch]);
 
   return (
     <div className="book-settings">
@@ -1097,115 +1090,23 @@ function BookSettings({ book: initialBook, onBack }) {
         </div>
       </section>
 
-      <section className="settings-section">
-        <div className="chapter-section-header">
-          <h3>
-            Chapters
-            {activeChapters.length > 0 && (
-              <span className="chapter-count"> ({activeChapters.length})</span>
-            )}
-          </h3>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            {chaptersExpanded && (
-              <select
-                value={chapterPreviewMode}
-                onChange={(e) => setChapterPreviewMode(e.target.value)}
-                className="chapter-preview-mode-select"
-              >
-                <option value="original">Original</option>
-                <option value="cleaned">Cleaned</option>
-              </select>
-            )}
-            <button
-              className="btn-text"
-              onClick={() => setChaptersExpanded((e) => !e)}
-              disabled={activeChaptersLoading}
-            >
-              {chaptersExpanded ? "▲ Collapse" : "▼ Expand"}
-            </button>
-          </div>
-        </div>
-
-        {activeChaptersLoading && (
-          <p className="hint" style={{ marginTop: "0.5rem" }}>
-            Loading chapters…
-          </p>
-        )}
-
-        {!book.immutable_path && (
-          <p className="hint" style={{ marginTop: "0.5rem" }}>
-            This web import does not have EPUB files yet. Retry the source
-            download or delete the placeholder entry.
-          </p>
-        )}
-
-        {chaptersExpanded && !activeChaptersLoading && book.immutable_path && (
-          <>
-            {chapters.length > 10 && (
-              <input
-                className="chapter-search"
-                type="text"
-                placeholder="Filter chapters…"
-                value={chapterSearch}
-                onChange={(e) => setChapterSearch(e.target.value)}
-              />
-            )}
-            <div className="chapter-list-scroll">
-              <ul className="chapter-list">
-                {filteredChapters.length === 0 ? (
-                  <li className="chapter-no-results">
-                    No chapters match your search.
-                  </li>
-                ) : (
-                  filteredChapters.map((chapter) => {
-                    const isRemoved =
-                      chapterPreviewMode === "original" &&
-                      removedChapters.includes(chapter.filename);
-                    const isPreviewed = previewedChapter === chapter.filename;
-                    return (
-                      <li
-                        key={chapter.filename}
-                        className={isRemoved ? "removed" : ""}
-                      >
-                        <div className="chapter-row">
-                          {chapterPreviewMode === "original" ? (
-                            <label>
-                              <input
-                                type="checkbox"
-                                checked={!isRemoved}
-                                onChange={() => toggleChapter(chapter.filename)}
-                              />
-                              {chapter.title}
-                            </label>
-                          ) : (
-                            <span>{chapter.title}</span>
-                          )}
-                          <button
-                            className="btn-text chapter-preview-toggle"
-                            onClick={() =>
-                              toggleChapterPreview(chapter.filename)
-                            }
-                          >
-                            {isPreviewed ? "▲ Hide" : "▼ Preview"}
-                          </button>
-                        </div>
-                        {isPreviewed && (
-                          <div
-                            className="chapter-preview"
-                            dangerouslySetInnerHTML={{
-                              __html: getBodyContent(chapter.content),
-                            }}
-                          />
-                        )}
-                      </li>
-                    );
-                  })
-                )}
-              </ul>
-            </div>
-          </>
-        )}
-      </section>
+      <BookSettingsChapters
+        book={book}
+        chapters={chapters}
+        cleanedChapters={cleanedChapters}
+        chaptersLoading={chaptersLoading}
+        cleanedChaptersLoading={cleanedChaptersLoading}
+        chaptersExpanded={chaptersExpanded}
+        setChaptersExpanded={setChaptersExpanded}
+        chapterPreviewMode={chapterPreviewMode}
+        setChapterPreviewMode={setChapterPreviewMode}
+        chapterSearch={chapterSearch}
+        setChapterSearch={setChapterSearch}
+        removedChapters={removedChapters}
+        toggleChapter={toggleChapter}
+        previewedChapter={previewedChapter}
+        toggleChapterPreview={toggleChapterPreview}
+      />
 
       <section className="settings-section actions-bar">
         <div className="actions-primary">

@@ -1,11 +1,13 @@
 # Reverse Proxy Safety
 
-Story Manager does not yet have built-in user login for the admin web UI. The web UI and `/api/*` routes should be treated as trusted admin surfaces.
+Story Manager can protect the admin web UI and `/api/*` routes with built-in password auth by setting `STORY_MANAGER_AUTH_MODE=password` and `STORY_MANAGER_ADMIN_PASSWORD`.
+
+If you use a reverse proxy or Cloudflare Access as the admin auth layer, set `STORY_MANAGER_AUTH_MODE=disabled` and keep the proxy rules strict. Reader API keys only protect `/reader/*`; they are not admin credentials.
 
 Safe deployment guidance:
 
 - Expose `/reader/*` publicly only if needed for e-readers.
-- Keep `/` and `/api/*` behind a VPN, Tailscale, local network, or proxy authentication.
+- Keep `/` and `/api/*` behind built-in password auth, a VPN, Tailscale, local network, or proxy authentication.
 - Terminate TLS at the proxy and redirect HTTP to HTTPS.
 - Preserve the `Authorization` header so Bearer and Basic auth work for `/reader/*`.
 - Disable proxy caching for `/reader/*` responses that contain private library metadata.
@@ -55,4 +57,4 @@ server {
 }
 ```
 
-If the admin UI needs to be reachable over the internet, put `/` and `/api/*` behind a real authentication layer first. Reader API keys are not a substitute for admin authentication.
+If the admin UI needs to be reachable over the internet, put `/` and `/api/*` behind built-in password auth or a real upstream authentication layer first.

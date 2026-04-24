@@ -17,6 +17,18 @@
   margin-right: auto;
 }
 
+.login-panel {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+}
+
+.login-form {
+  width: min(100%, 28rem);
+  display: grid;
+  gap: 1rem;
+}
+
 /* ─── Main Tabs ──────────────────────────────────────────── */
 .main-tabs {
   display: flex;
