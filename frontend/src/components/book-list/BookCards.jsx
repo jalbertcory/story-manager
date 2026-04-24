@@ -1,0 +1,182 @@
+import { getCoverUrl } from "./catalogDisplay";
+
+const NO_COVER_SVG =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
+
+function getEffectiveGenreTags(book) {
+  return book.effective_genre_tags || [];
+}
+
+export function GenreTagList({ tags, className = "" }) {
+  if (!tags?.length) {
+    return null;
+  }
+
+  return (
+    <div className={`genre-tag-list ${className}`.trim()}>
+      {tags.map((tag) => (
+        <span key={tag} className="genre-tag">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function BookCard({ book, onEdit }) {
+  const isPending = book.download_status === "pending";
+  const isError = book.download_status === "error";
+  const genreTags = getEffectiveGenreTags(book);
+
+  const handleCoverError = (e) => {
+    e.target.onerror = null;
+    e.target.src = NO_COVER_SVG;
+  };
+
+  const formattedDate = book.updated_at
+    ? new Date(book.updated_at).toLocaleDateString()
+    : null;
+
+  let coverContent;
+  if (isPending) {
+    coverContent = (
+      <div className="book-cover book-cover--placeholder">
+        <div className="spinner" />
+        <span>Downloading…</span>
+      </div>
+    );
+  } else if (isError) {
+    coverContent = (
+      <div className="book-cover book-cover--placeholder book-cover--error">
+        <span>⚠ Download failed</span>
+      </div>
+    );
+  } else if (book.cover_path) {
+    coverContent = (
+      <div className="book-cover-container">
+        <img
+          src={getCoverUrl(book)}
+          alt={`${book.title} cover`}
+          className="book-cover"
+          loading="lazy"
+          decoding="async"
+          onError={handleCoverError}
+        />
+        <div className="book-cover-title-overlay">{book.title}</div>
+      </div>
+    );
+  } else {
+    coverContent = (
+      <div className="book-cover book-cover--placeholder book-cover--no-cover">
+        <span className="book-no-cover-title">{book.title}</span>
+        {book.author && (
+          <span className="book-no-cover-author">{book.author}</span>
+        )}
+      </div>
+    );
+  }
+
+  const handleClick = (e) => {
+    if (isPending) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    onEdit(book);
+  };
+
+  return (
+    <a
+      href={isPending ? undefined : `/books/${book.id}`}
+      className={`book-card${isPending ? " book-card--pending" : ""}${isError ? " book-card--error" : ""}`}
+      onClick={handleClick}
+    >
+      {coverContent}
+      <div className="book-info">
+        <h3 title={isPending || isError ? book.source_url : book.title}>
+          {isPending
+            ? "Downloading…"
+            : isError
+              ? "Download failed"
+              : book.title}
+        </h3>
+        {!isPending && <p className="book-author">{book.author}</p>}
+        {!isPending && book.series && (
+          <p className="book-series">Series: {book.series}</p>
+        )}
+        {!isPending && (
+          <GenreTagList tags={genreTags} className="book-card-genres" />
+        )}
+        {!isPending && (
+          <p className="book-words">
+            {book.current_word_count != null
+              ? book.current_word_count.toLocaleString() + " words"
+              : "—"}
+          </p>
+        )}
+        {formattedDate && !isPending && (
+          <p className="book-updated">Updated: {formattedDate}</p>
+        )}
+        {book.source_type === "web" && !isPending && (
+          <span className="badge-web">Web</span>
+        )}
+        {isError && book.source_url && (
+          <p className="book-error-url" title={book.source_url}>
+            {book.source_url.length > 40
+              ? book.source_url.slice(0, 40) + "…"
+              : book.source_url}
+          </p>
+        )}
+      </div>
+    </a>
+  );
+}
+
+export function BookRow({ book, onEdit, actions = null, subtitle = null }) {
+  const genreTags = getEffectiveGenreTags(book);
+
+  const handleClick = (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    onEdit(book);
+  };
+
+  return (
+    <div className="book-row">
+      <a
+        href={`/books/${book.id}`}
+        className="book-row-main"
+        onClick={handleClick}
+      >
+        <div className="book-row-cover">
+          {book.cover_path ? (
+            <img
+              src={getCoverUrl(book)}
+              alt={`${book.title} cover`}
+              className="book-row-cover-image"
+              loading="lazy"
+              decoding="async"
+            />
+          ) : (
+            <div className="book-row-cover-placeholder">No cover</div>
+          )}
+        </div>
+        <div className="book-row-body">
+          <div className="book-row-title">{book.title}</div>
+          <div className="book-row-meta">
+            <span>{book.author || "Unknown author"}</span>
+            <span>
+              {book.current_word_count != null
+                ? `${book.current_word_count.toLocaleString()} words`
+                : "Word count unavailable"}
+            </span>
+            {book.source_type === "web" && (
+              <span className="badge-web">Web</span>
+            )}
+          </div>
+          {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
+          <GenreTagList tags={genreTags} className="book-row-genres" />
+        </div>
+      </a>
+      {actions ? <div className="book-row-actions">{actions}</div> : null}
+    </div>
+  );
+}

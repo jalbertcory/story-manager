@@ -7,7 +7,7 @@ import {
   getMetadataInbox,
   queueMetadataSync,
   rejectMetadataMatch,
-} from "../api/books";
+} from "../api/metadata";
 import ReaderKeys from "./ReaderKeys.jsx";
 
 function formatBytes(bytes) {
