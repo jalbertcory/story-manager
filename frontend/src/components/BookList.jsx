@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getApiCoverUrl, updateBook } from "../api/books";
+import { updateBook } from "../api/books";
+import { buildCatalogGroups } from "../lib/catalogGrouping";
+import { BookCard, BookRow, GenreTagList } from "./book-list/BookCards";
+import { getCoverUrl, getSeriesGenreTags } from "./book-list/catalogDisplay";
 import {
   getSeries,
   mergeSeries,
@@ -9,159 +12,6 @@ import {
   reorderSeries,
   updateSeriesGenres,
 } from "../api/series";
-
-const NO_COVER_SVG =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
-
-function getCoverUrl(book) {
-  if (!book.cover_path) {
-    return null;
-  }
-  return getApiCoverUrl(book.id);
-}
-
-function compareSeriesBooks(left, right) {
-  const leftIndex = left.series_index;
-  const rightIndex = right.series_index;
-
-  if (leftIndex != null && rightIndex != null && leftIndex !== rightIndex) {
-    return Number(leftIndex) - Number(rightIndex);
-  }
-  if (leftIndex != null && rightIndex == null) return -1;
-  if (leftIndex == null && rightIndex != null) return 1;
-
-  const byTitle = left.title.localeCompare(right.title);
-  if (byTitle !== 0) return byTitle;
-  return left.id - right.id;
-}
-
-function getEffectiveGenreTags(book) {
-  return book.effective_genre_tags || [];
-}
-
-function getSeriesGenreTags(books) {
-  if (!books.length) return [];
-  return books[0].effective_series_genre_tags || [];
-}
-
-function GenreTagList({ tags, className = "" }) {
-  if (!tags?.length) {
-    return null;
-  }
-
-  return (
-    <div className={`genre-tag-list ${className}`.trim()}>
-      {tags.map((tag) => (
-        <span key={tag} className="genre-tag">
-          {tag}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function BookCard({ book, onEdit }) {
-  const isPending = book.download_status === "pending";
-  const isError = book.download_status === "error";
-  const genreTags = getEffectiveGenreTags(book);
-
-  const handleCoverError = (e) => {
-    e.target.onerror = null;
-    e.target.src = NO_COVER_SVG;
-  };
-
-  const formattedDate = book.updated_at
-    ? new Date(book.updated_at).toLocaleDateString()
-    : null;
-
-  let coverContent;
-  if (isPending) {
-    coverContent = (
-      <div className="book-cover book-cover--placeholder">
-        <div className="spinner" />
-        <span>Downloading…</span>
-      </div>
-    );
-  } else if (isError) {
-    coverContent = (
-      <div className="book-cover book-cover--placeholder book-cover--error">
-        <span>⚠ Download failed</span>
-      </div>
-    );
-  } else if (book.cover_path) {
-    coverContent = (
-      <div className="book-cover-container">
-        <img
-          src={getCoverUrl(book)}
-          alt={`${book.title} cover`}
-          className="book-cover"
-          loading="lazy"
-          decoding="async"
-          onError={handleCoverError}
-        />
-        <div className="book-cover-title-overlay">{book.title}</div>
-      </div>
-    );
-  } else {
-    coverContent = (
-      <div className="book-cover book-cover--placeholder book-cover--no-cover">
-        <span className="book-no-cover-title">{book.title}</span>
-        {book.author && <span className="book-no-cover-author">{book.author}</span>}
-      </div>
-    );
-  }
-
-  const handleClick = (e) => {
-    if (isPending) return;
-    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
-    e.preventDefault();
-    onEdit(book);
-  };
-
-  return (
-    <a
-      href={isPending ? undefined : `/books/${book.id}`}
-      className={`book-card${isPending ? " book-card--pending" : ""}${isError ? " book-card--error" : ""}`}
-      onClick={handleClick}
-    >
-      {coverContent}
-      <div className="book-info">
-        <h3 title={isPending || isError ? book.source_url : book.title}>
-          {isPending
-            ? "Downloading…"
-            : isError
-              ? "Download failed"
-              : book.title}
-        </h3>
-        {!isPending && <p className="book-author">{book.author}</p>}
-        {!isPending && book.series && (
-          <p className="book-series">Series: {book.series}</p>
-        )}
-        {!isPending && <GenreTagList tags={genreTags} className="book-card-genres" />}
-        {!isPending && (
-          <p className="book-words">
-            {book.current_word_count != null
-              ? book.current_word_count.toLocaleString() + " words"
-              : "—"}
-          </p>
-        )}
-        {formattedDate && !isPending && (
-          <p className="book-updated">Updated: {formattedDate}</p>
-        )}
-        {book.source_type === "web" && !isPending && (
-          <span className="badge-web">Web</span>
-        )}
-        {isError && book.source_url && (
-          <p className="book-error-url" title={book.source_url}>
-            {book.source_url.length > 40
-              ? book.source_url.slice(0, 40) + "…"
-              : book.source_url}
-          </p>
-        )}
-      </div>
-    </a>
-  );
-}
 
 function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   const queryClient = useQueryClient();
@@ -178,7 +28,10 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     setOrderedBooks(books);
   }, [books]);
 
-  const seriesGenreTags = useMemo(() => getSeriesGenreTags(orderedBooks), [orderedBooks]);
+  const seriesGenreTags = useMemo(
+    () => getSeriesGenreTags(orderedBooks),
+    [orderedBooks],
+  );
 
   useEffect(() => {
     setGenreValue(seriesGenreTags.join(", "));
@@ -233,7 +86,9 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
   });
 
   const summary = useMemo(() => {
-    const authors = [...new Set(orderedBooks.map((book) => book.author).filter(Boolean))];
+    const authors = [
+      ...new Set(orderedBooks.map((book) => book.author).filter(Boolean)),
+    ];
     const totalWords = orderedBooks.reduce(
       (sum, book) => sum + (book.current_word_count ?? 0),
       0,
@@ -241,7 +96,8 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     const coverBooks = orderedBooks
       .filter((book) => book.cover_path && !book.download_status)
       .slice(0, 4);
-    const coverBook = coverBooks[0] ??
+    const coverBook =
+      coverBooks[0] ??
       orderedBooks.find((book) => !book.download_status) ??
       orderedBooks[0];
 
@@ -261,7 +117,9 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
     };
   }, [orderedBooks]);
 
-  const otherSeries = allSeries.filter((s) => s.toLowerCase() !== series.toLowerCase());
+  const otherSeries = allSeries.filter(
+    (s) => s.toLowerCase() !== series.toLowerCase(),
+  );
 
   const moveBook = (fromId, toId) => {
     if (fromId == null || toId == null || fromId === toId) return;
@@ -297,17 +155,19 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       <div className="series-header" onClick={toggleExpanded}>
         <div className="series-cover-stack">
           {summary.coverBooks.length > 1 ? (
-            summary.coverBooks.slice(0, 3).map((book, i) => (
-              <img
-                key={book.id}
-                src={getCoverUrl(book)}
-                alt={i === 0 ? `${series} cover` : ""}
-                className="series-cover-image series-cover-stacked"
-                style={{ "--stack-i": i }}
-                loading="lazy"
-                decoding="async"
-              />
-            ))
+            summary.coverBooks
+              .slice(0, 3)
+              .map((book, i) => (
+                <img
+                  key={book.id}
+                  src={getCoverUrl(book)}
+                  alt={i === 0 ? `${series} cover` : ""}
+                  className="series-cover-image series-cover-stacked"
+                  style={{ "--stack-i": i }}
+                  loading="lazy"
+                  decoding="async"
+                />
+              ))
           ) : summary.coverBook?.cover_path ? (
             <img
               src={getCoverUrl(summary.coverBook)}
@@ -318,7 +178,9 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
             />
           ) : (
             <div className="series-cover-placeholder">
-              <span className="series-cover-placeholder-text">{series.charAt(0)}</span>
+              <span className="series-cover-placeholder-text">
+                {series.charAt(0)}
+              </span>
             </div>
           )}
         </div>
@@ -328,28 +190,43 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
             {summary.hasWebNovel && <span className="badge-web">Web</span>}
           </div>
           <div className="series-meta">
-            <span className="series-meta-author">{summary.authors.join(", ") || "Unknown author"}</span>
+            <span className="series-meta-author">
+              {summary.authors.join(", ") || "Unknown author"}
+            </span>
           </div>
           <div className="series-stats">
             <span className="series-stat">
               <span className="series-stat-value">{books.length}</span>
-              <span className="series-stat-label">book{books.length !== 1 ? "s" : ""}</span>
+              <span className="series-stat-label">
+                book{books.length !== 1 ? "s" : ""}
+              </span>
             </span>
             {summary.totalWords > 0 && (
               <span className="series-stat">
-                <span className="series-stat-value">{formatWords(summary.totalWords)}</span>
+                <span className="series-stat-value">
+                  {formatWords(summary.totalWords)}
+                </span>
                 <span className="series-stat-label">words</span>
               </span>
             )}
             {summary.latestUpdate && (
               <span className="series-stat series-stat--date">
-                {summary.latestUpdate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                {summary.latestUpdate.toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
               </span>
             )}
           </div>
-          <GenreTagList tags={seriesGenreTags} className="series-header-genres" />
+          <GenreTagList
+            tags={seriesGenreTags}
+            className="series-header-genres"
+          />
         </div>
-        <span className={`series-toggle${expanded ? " series-toggle--open" : ""}`} aria-hidden="true" />
+        <span
+          className={`series-toggle${expanded ? " series-toggle--open" : ""}`}
+          aria-hidden="true"
+        />
       </div>
       {expanded && (
         <div className="series-expanded">
@@ -407,11 +284,29 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
                 placeholder="New series name"
                 autoFocus
               />
-              <button type="submit" className="btn" disabled={!renameValue.trim() || renameValue.trim() === series || renameMutation.isPending}>
+              <button
+                type="submit"
+                className="btn"
+                disabled={
+                  !renameValue.trim() ||
+                  renameValue.trim() === series ||
+                  renameMutation.isPending
+                }
+              >
                 {renameMutation.isPending ? "Saving..." : "Save"}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
-              {renameMutation.isError && <span className="error-text">{renameMutation.error.message}</span>}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEditing(null)}
+              >
+                Cancel
+              </button>
+              {renameMutation.isError && (
+                <span className="error-text">
+                  {renameMutation.error.message}
+                </span>
+              )}
             </form>
           )}
           {editing === "merge" && (
@@ -438,11 +333,25 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
                   <option key={s} value={s} />
                 ))}
               </datalist>
-              <button type="submit" className="btn" disabled={!mergeTarget.trim() || mergeMutation.isPending}>
+              <button
+                type="submit"
+                className="btn"
+                disabled={!mergeTarget.trim() || mergeMutation.isPending}
+              >
                 {mergeMutation.isPending ? "Merging..." : "Merge"}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
-              {mergeMutation.isError && <span className="error-text">{mergeMutation.error.message}</span>}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEditing(null)}
+              >
+                Cancel
+              </button>
+              {mergeMutation.isError && (
+                <span className="error-text">
+                  {mergeMutation.error.message}
+                </span>
+              )}
             </form>
           )}
           {editing === "genres" && (
@@ -466,13 +375,25 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
                 placeholder="Fantasy, Science Fiction, Progression Fantasy"
                 autoFocus
               />
-              <button type="submit" className="btn" disabled={genresMutation.isPending}>
+              <button
+                type="submit"
+                className="btn"
+                disabled={genresMutation.isPending}
+              >
                 {genresMutation.isPending ? "Saving..." : "Save"}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEditing(null)}
+              >
                 Cancel
               </button>
-              {genresMutation.isError && <span className="error-text">{genresMutation.error.message}</span>}
+              {genresMutation.isError && (
+                <span className="error-text">
+                  {genresMutation.error.message}
+                </span>
+              )}
             </form>
           )}
           <div className="book-grid">
@@ -528,7 +449,11 @@ function LibraryViewTabs({ view, onChange, counts }) {
   ];
 
   return (
-    <div className="library-view-tabs" role="tablist" aria-label="Library views">
+    <div
+      className="library-view-tabs"
+      role="tablist"
+      aria-label="Library views"
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -546,51 +471,6 @@ function LibraryViewTabs({ view, onChange, counts }) {
   );
 }
 
-function BookRow({ book, onEdit, actions = null, subtitle = null }) {
-  const genreTags = getEffectiveGenreTags(book);
-
-  const handleClick = (e) => {
-    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
-    e.preventDefault();
-    onEdit(book);
-  };
-
-  return (
-    <div className="book-row">
-      <a href={`/books/${book.id}`} className="book-row-main" onClick={handleClick}>
-        <div className="book-row-cover">
-          {book.cover_path ? (
-            <img
-              src={getCoverUrl(book)}
-              alt={`${book.title} cover`}
-              className="book-row-cover-image"
-              loading="lazy"
-              decoding="async"
-            />
-          ) : (
-            <div className="book-row-cover-placeholder">No cover</div>
-          )}
-        </div>
-        <div className="book-row-body">
-          <div className="book-row-title">{book.title}</div>
-          <div className="book-row-meta">
-            <span>{book.author || "Unknown author"}</span>
-            <span>
-              {book.current_word_count != null
-                ? `${book.current_word_count.toLocaleString()} words`
-                : "Word count unavailable"}
-            </span>
-            {book.source_type === "web" && <span className="badge-web">Web</span>}
-          </div>
-          {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
-          <GenreTagList tags={genreTags} className="book-row-genres" />
-        </div>
-      </a>
-      {actions ? <div className="book-row-actions">{actions}</div> : null}
-    </div>
-  );
-}
-
 function StandaloneTagAction({ book, seriesOptions }) {
   const queryClient = useQueryClient();
   const [value, setValue] = useState(book.series || "");
@@ -600,7 +480,8 @@ function StandaloneTagAction({ book, seriesOptions }) {
   }, [book.id, book.series]);
 
   const saveMutation = useMutation({
-    mutationFn: (nextSeries) => updateBook(book.id, { series: nextSeries.trim() || null }),
+    mutationFn: (nextSeries) =>
+      updateBook(book.id, { series: nextSeries.trim() || null }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
@@ -634,7 +515,11 @@ function StandaloneTagAction({ book, seriesOptions }) {
           <option key={series} value={series} />
         ))}
       </datalist>
-      <button type="submit" className="btn" disabled={unchanged || saveMutation.isPending}>
+      <button
+        type="submit"
+        className="btn"
+        disabled={unchanged || saveMutation.isPending}
+      >
         {saveMutation.isPending ? "Saving..." : "Save"}
       </button>
     </form>
@@ -643,12 +528,20 @@ function StandaloneTagAction({ book, seriesOptions }) {
 
 const TAB_PAGE_SIZE = 30;
 
-function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryViewChange, sortBy = "title", sortOrder = "asc" }) {
+function BookList({
+  books = [],
+  onEdit,
+  libraryView: libraryViewProp,
+  onLibraryViewChange,
+  sortBy = "title",
+  sortOrder = "asc",
+}) {
   const sentinelRef = useRef(null);
   const [internalView, setInternalView] = useState("series");
   const libraryView = libraryViewProp ?? internalView;
   const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
-  const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] = useState(false);
+  const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] =
+    useState(false);
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -662,62 +555,18 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
     setTabVisibleCount(TAB_PAGE_SIZE);
   };
 
-  const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } = useMemo(() => {
-    const sMap = {};
-    const standalone = [];
-    const web = [];
-
-    for (const book of books) {
-      if (book.source_type === "web" && !book.download_status) {
-        web.push(book);
-      }
-
-      if (book.series && !book.download_status) {
-        if (!sMap[book.series]) {
-          sMap[book.series] = [];
-        }
-        sMap[book.series].push(book);
-      } else if (book.source_type !== "web") {
-        standalone.push(book);
-      }
-    }
-
-    for (const seriesBooks of Object.values(sMap)) {
-      seriesBooks.sort(compareSeriesBooks);
-    }
-
-    const dir = sortOrder === "desc" ? -1 : 1;
-    const sorted = Object.keys(sMap).sort((a, b) => {
-      const booksA = sMap[a];
-      const booksB = sMap[b];
-      if (sortBy === "author") {
-        return dir * (booksA[0].author || "").localeCompare(booksB[0].author || "");
-      }
-      if (sortBy === "word_count") {
-        const wcA = booksA.reduce((sum, bk) => sum + (bk.current_word_count || 0), 0);
-        const wcB = booksB.reduce((sum, bk) => sum + (bk.current_word_count || 0), 0);
-        return dir * (wcA - wcB);
-      }
-      if (sortBy === "updated_at") {
-        const latestA = Math.max(...booksA.map((bk) => new Date(bk.updated_at || 0).getTime()));
-        const latestB = Math.max(...booksB.map((bk) => new Date(bk.updated_at || 0).getTime()));
-        return dir * (latestA - latestB);
-      }
-      return dir * a.localeCompare(b);
-    });
-    return {
-      seriesMap: sMap,
-      sortedSeries: sorted,
-      standaloneBooks: standalone,
-      webBooks: web,
-      counts: { series: sorted.length, standalone: standalone.length, web: web.length },
-    };
-  }, [books, sortBy, sortOrder]);
+  const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } =
+    useMemo(
+      () => buildCatalogGroups(books, sortBy, sortOrder),
+      [books, sortBy, sortOrder],
+    );
 
   const tabItems =
-    libraryView === "series" ? sortedSeries :
-    libraryView === "standalone" ? standaloneBooks :
-    webBooks;
+    libraryView === "series"
+      ? sortedSeries
+      : libraryView === "standalone"
+        ? standaloneBooks
+        : webBooks;
 
   useEffect(() => {
     const el = sentinelRef.current;
@@ -740,24 +589,29 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
 
   return (
     <div className="book-list">
-      <LibraryViewTabs view={libraryView} onChange={handleTabChange} counts={counts} />
-      {libraryView === "series" && (
-        sortedSeries.length ? (
-          sortedSeries.slice(0, tabVisibleCount).map((series) => (
-            <SeriesSummaryRow
-              key={series}
-              series={series}
-              books={seriesMap[series]}
-              onEdit={onEdit}
-              allSeries={allSeries}
-            />
-          ))
+      <LibraryViewTabs
+        view={libraryView}
+        onChange={handleTabChange}
+        counts={counts}
+      />
+      {libraryView === "series" &&
+        (sortedSeries.length ? (
+          sortedSeries
+            .slice(0, tabVisibleCount)
+            .map((series) => (
+              <SeriesSummaryRow
+                key={series}
+                series={series}
+                books={seriesMap[series]}
+                onEdit={onEdit}
+                allSeries={allSeries}
+              />
+            ))
         ) : (
           <p>No series found.</p>
-        )
-      )}
-      {libraryView === "standalone" && (
-        standaloneBooks.length ? (
+        ))}
+      {libraryView === "standalone" &&
+        (standaloneBooks.length ? (
           <>
             <div className="standalone-header">
               <button
@@ -774,12 +628,18 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
                   key={book.id}
                   book={book}
                   onEdit={onEdit}
-                  subtitle={book.series ? `Series: ${book.series}` : "No series assigned"}
+                  subtitle={
+                    book.series
+                      ? `Series: ${book.series}`
+                      : "No series assigned"
+                  }
                   actions={
                     showStandaloneSeriesEdit && !book.download_status ? (
                       <StandaloneTagAction
                         book={book}
-                        seriesOptions={allSeries.filter((series) => series !== book.series)}
+                        seriesOptions={allSeries.filter(
+                          (series) => series !== book.series,
+                        )}
                       />
                     ) : null
                   }
@@ -789,10 +649,9 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
           </>
         ) : (
           <p>No standalone books found.</p>
-        )
-      )}
-      {libraryView === "web" && (
-        webBooks.length ? (
+        ))}
+      {libraryView === "web" &&
+        (webBooks.length ? (
           <div className="book-rows book-rows--web">
             {webBooks.slice(0, tabVisibleCount).map((book) => (
               <BookRow
@@ -805,8 +664,7 @@ function BookList({ books = [], onEdit, libraryView: libraryViewProp, onLibraryV
           </div>
         ) : (
           <p>No web novels found.</p>
-        )
-      )}
+        ))}
       <div ref={sentinelRef} style={{ height: 1 }} />
     </div>
   );

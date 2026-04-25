@@ -1,6 +1,10 @@
-import { getJson, getOptionalJson, sendForm, sendJson, sendWithoutBody } from "./client";
+import { getJson, getOptionalJson, sendJson, sendWithoutBody } from "./client";
 
-export function buildBookCatalogPath({ q = "", sortBy = "title", sortOrder = "asc" }) {
+export function buildBookCatalogPath({
+  q = "",
+  sortBy = "title",
+  sortOrder = "asc",
+}) {
   const suffix = `sort_by=${encodeURIComponent(sortBy)}&sort_order=${encodeURIComponent(sortOrder)}`;
   if (!q) {
     return `/api/books/catalog?${suffix}`;
@@ -10,53 +14,6 @@ export function buildBookCatalogPath({ q = "", sortBy = "title", sortOrder = "as
 
 export function getBookCatalog(params) {
   return getJson(buildBookCatalogPath(params), "Failed to fetch books");
-}
-
-export function previewMetadataSync(bookIds = null) {
-  return sendJson("/api/metadata/sync-preview", {
-    body: { book_ids: bookIds },
-    fallbackMessage: "Failed to preview metadata sync",
-  });
-}
-
-export function applyMetadataSync(bookIds = null) {
-  return sendJson("/api/metadata/apply", {
-    body: { book_ids: bookIds },
-    fallbackMessage: "Failed to apply metadata sync",
-  });
-}
-
-export function queueMetadataSync(bookIds = null, trigger = "manual") {
-  return sendJson("/api/metadata/jobs", {
-    body: { book_ids: bookIds, trigger },
-    fallbackMessage: "Failed to queue metadata sync",
-  });
-}
-
-export function getLatestMetadataJob() {
-  return getOptionalJson("/api/metadata/jobs/latest");
-}
-
-export function getMetadataInbox() {
-  return getJson("/api/metadata/inbox", "Failed to load metadata inbox");
-}
-
-export function approveMetadataMatch(matchId) {
-  return sendWithoutBody(`/api/metadata/matches/${matchId}/approve`, {
-    fallbackMessage: "Failed to approve metadata match",
-  });
-}
-
-export function rejectMetadataMatch(matchId) {
-  return sendWithoutBody(`/api/metadata/matches/${matchId}/reject`, {
-    fallbackMessage: "Failed to reject metadata match",
-  });
-}
-
-export function dismissMetadataProposal(proposalId) {
-  return sendWithoutBody(`/api/metadata/proposals/${proposalId}/dismiss`, {
-    fallbackMessage: "Failed to dismiss metadata proposal",
-  });
 }
 
 export function getBook(bookId) {
@@ -101,45 +58,15 @@ export function getBookChapters(bookId) {
 }
 
 export function getBookCleanedChapters(bookId) {
-  return getJson(`/api/books/${bookId}/cleaned-chapters`, "Failed to fetch cleaned chapters");
+  return getJson(
+    `/api/books/${bookId}/cleaned-chapters`,
+    "Failed to fetch cleaned chapters",
+  );
 }
 
 export function getBookUpdateHistory(bookId) {
-  return getJson(`/api/books/${bookId}/update-history`, "Failed to fetch update history");
-}
-
-export function getMatchedConfigs(bookId) {
-  return getJson(`/api/books/${bookId}/matched-config`, "Failed to fetch matched config");
-}
-
-export function previewCleaning(bookId, data) {
-  return sendJson(`/api/books/${bookId}/preview-cleaning`, {
-    body: data,
-    fallbackMessage: "Preview failed",
-  });
-}
-
-export function uploadBookCover(bookId, file) {
-  const form = new FormData();
-  form.append("file", file);
-  return sendForm(`/api/books/${bookId}/cover`, form, {
-    fallbackMessage: "Cover upload failed",
-  });
-}
-
-export function retryBookCover(bookId) {
-  return sendWithoutBody(`/api/books/${bookId}/retry-cover`, {
-    fallbackMessage: "Failed to retry cover",
-  });
-}
-
-export function setBookCoverUrl(bookId, url) {
-  return sendJson(`/api/books/${bookId}/cover-url`, {
-    body: { url },
-    fallbackMessage: "Failed to set cover from URL",
-  });
-}
-
-export function getApiCoverUrl(bookId) {
-  return `/api/covers/${bookId}`;
+  return getJson(
+    `/api/books/${bookId}/update-history`,
+    "Failed to fetch update history",
+  );
 }

@@ -9,8 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from difflib import SequenceMatcher
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import requests
 from requests import exceptions as requests_exceptions
@@ -18,6 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..config import GOOGLE_BOOKS_API_KEY
+from .metadata.genres import derive_genre_tags as _derive_genre_tags
+from .metadata.genres import merge_genre_tags as _merge_genre_tags
+from .metadata.scoring import normalize_series as _normalize_series
+from .metadata.scoring import normalize_text as _normalize_text
+from .metadata.scoring import title_similarity as _title_similarity
 from .series import detect_series_from_titles
 
 logger = logging.getLogger(__name__)
@@ -36,47 +40,12 @@ GOOGLE_BOOKS_USER_AGENT = "story-manager/0.1 (+https://developers.google.com/boo
 AUTO_APPROVE_THRESHOLD = 0.92
 PROPOSAL_THRESHOLD = 0.75
 
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-_SEPARATOR_RE = re.compile(r"[\s\-:,_]+")
 _TRAILING_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _TRAILING_SERIES_BOOK_RE = re.compile(r"\s*\([^)]*book\s+\d+[^)]*\)\s*$", re.IGNORECASE)
 _TRAILING_PUNCTUATION_RE = re.compile(r"[\s:;,\-]+$")
 
 _request_lock = threading.Lock()
 _last_open_library_request_at = 0.0
-
-_GENRE_KEYWORDS = (
-    ("progression fantasy", "Progression Fantasy"),
-    ("urban fantasy", "Urban Fantasy"),
-    ("epic fantasy", "Epic Fantasy"),
-    ("science fiction", "Science Fiction"),
-    ("sci-fi", "Science Fiction"),
-    ("historical fiction", "Historical Fiction"),
-    ("young adult", "Young Adult"),
-    ("short stories", "Short Stories"),
-    ("detective", "Detective"),
-    ("thriller", "Thriller"),
-    ("mystery", "Mystery"),
-    ("fantasy", "Fantasy"),
-    ("romance", "Romance"),
-    ("horror", "Horror"),
-    ("adventure", "Adventure"),
-    ("dystopian", "Dystopian"),
-    ("dystopia", "Dystopian"),
-    ("paranormal", "Paranormal"),
-    ("supernatural", "Supernatural"),
-    ("crime", "Crime"),
-    ("literary", "Literary Fiction"),
-    ("humor", "Humor"),
-    ("satire", "Satire"),
-    ("steampunk", "Steampunk"),
-    ("cyberpunk", "Cyberpunk"),
-    ("litrpg", "LitRPG"),
-    ("mythology", "Mythology"),
-    ("war stories", "War"),
-    ("xianxia", "Xianxia"),
-    ("cultivation", "Cultivation"),
-)
 
 
 @dataclass
@@ -120,14 +89,6 @@ class GoogleBooksMatch:
     info_link: Optional[str]
     remote_ids: dict[str, str]
     match_confidence: float
-
-
-def _normalize_text(value: str) -> str:
-    return _NON_ALNUM_RE.sub(" ", value.casefold()).strip()
-
-
-def _normalize_series(value: str) -> str:
-    return _SEPARATOR_RE.sub(" ", value.casefold()).strip()
 
 
 def _respect_open_library_rate_limit() -> None:
@@ -204,16 +165,6 @@ def _request_google_books_json(path: str, *, params: Optional[dict[str, Any]] = 
     return {}
 
 
-def _title_similarity(left: str, right: str) -> float:
-    left_norm = _normalize_text(left)
-    right_norm = _normalize_text(right)
-    if not left_norm or not right_norm:
-        return 0.0
-    if left_norm == right_norm:
-        return 1.0
-    return SequenceMatcher(a=left_norm, b=right_norm).ratio()
-
-
 def _strip_trailing_metadata(value: str) -> str:
     cleaned = _TRAILING_SERIES_BOOK_RE.sub("", value).strip()
     if cleaned != value.strip():
@@ -285,33 +236,6 @@ def _extract_subjects(doc: dict[str, Any], work_data: dict[str, Any]) -> list[st
         seen.add(normalized)
         deduped.append(subject)
     return deduped
-
-
-def _derive_genre_tags(subjects: Iterable[str]) -> list[str]:
-    genres: list[str] = []
-    seen: set[str] = set()
-
-    for subject in subjects:
-        normalized = _normalize_text(subject)
-        for keyword, canonical in _GENRE_KEYWORDS:
-            if keyword in normalized and canonical.casefold() not in seen:
-                seen.add(canonical.casefold())
-                genres.append(canonical)
-
-    return genres
-
-
-def _merge_genre_tags(*groups: Iterable[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for group in groups:
-        for tag in group:
-            folded = tag.casefold()
-            if folded in seen:
-                continue
-            seen.add(folded)
-            merged.append(tag)
-    return merged
 
 
 def _merge_remote_ids(*groups: dict[str, Any]) -> dict[str, Any]:

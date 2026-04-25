@@ -19,7 +19,10 @@ export async function getOptionalJson(path) {
   return response.json();
 }
 
-export async function sendJson(path, { method = "POST", body, fallbackMessage = "Request failed" } = {}) {
+export async function sendJson(
+  path,
+  { method = "POST", body, fallbackMessage = "Request failed" } = {},
+) {
   const response = await fetch(path, {
     method,
     headers: { "Content-Type": "application/json" },
@@ -34,7 +37,11 @@ export async function sendJson(path, { method = "POST", body, fallbackMessage = 
   return response.json();
 }
 
-export async function sendForm(path, body, { method = "POST", fallbackMessage = "Request failed" } = {}) {
+export async function sendForm(
+  path,
+  body,
+  { method = "POST", fallbackMessage = "Request failed" } = {},
+) {
   const response = await fetch(path, {
     method,
     body,
@@ -45,7 +52,10 @@ export async function sendForm(path, body, { method = "POST", fallbackMessage = 
   return response.json();
 }
 
-export async function sendWithoutBody(path, { method = "POST", fallbackMessage = "Request failed" } = {}) {
+export async function sendWithoutBody(
+  path,
+  { method = "POST", fallbackMessage = "Request failed" } = {},
+) {
   const response = await fetch(path, { method });
   if (!response.ok) {
     await parseError(response, fallbackMessage);
