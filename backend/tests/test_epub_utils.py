@@ -1,7 +1,15 @@
 import zipfile
 from pathlib import Path
 
-from backend.app.services.epub_utils import get_and_save_epub_cover, get_epub_genre_tags, get_epub_source_tags
+from bs4 import BeautifulSoup
+
+from backend.app.services.epub_utils import (
+    PROSE_BLOCK_MAX_CHARS,
+    get_and_save_epub_cover,
+    get_epub_genre_tags,
+    get_epub_source_tags,
+    normalize_xhtml_prose_blocks,
+)
 
 
 def write_minimal_epub(epub_path: Path, opf: str, entries: dict[str, bytes] | None = None) -> None:
@@ -21,6 +29,86 @@ def write_minimal_epub(epub_path: Path, opf: str, entries: dict[str, bytes] | No
         archive.writestr("content.opf", opf)
         for name, content in (entries or {}).items():
             archive.writestr(name, content)
+
+
+def _paragraph_texts(content: bytes) -> list[str]:
+    soup = BeautifulSoup(content, "html.parser")
+    return [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+
+
+def test_normalize_xhtml_prose_blocks_leaves_normal_paragraphs_unchanged():
+    html = b"<html><body><p>First paragraph.</p><p><em>Second</em> paragraph.</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html)
+
+    assert changed is False
+    assert normalized == html
+
+
+def test_normalize_xhtml_prose_blocks_splits_double_br_paragraph_breaks():
+    parts = [
+        "First sentence. " * 80,
+        "Second sentence. " * 80,
+        "Third sentence. " * 80,
+    ]
+    html = f"<html><body><p class='chapter'>{'<br/><br/>'.join(parts)}</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html)
+
+    soup = BeautifulSoup(normalized, "html.parser")
+    paragraphs = soup.find_all("p")
+    assert changed is True
+    assert len(paragraphs) == 3
+    assert [p.get("class") for p in paragraphs] == [["chapter"], ["chapter"], ["chapter"]]
+    assert _paragraph_texts(normalized) == [part.strip() for part in parts]
+    assert all(len(text) <= PROSE_BLOCK_MAX_CHARS for text in _paragraph_texts(normalized))
+
+
+def test_normalize_xhtml_prose_blocks_splits_simple_prose_at_sentence_boundaries():
+    text = " ".join(f"This is sentence number {index} with enough words to make the paragraph long." for index in range(180))
+    html = f"<html><body><p>{text}</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html)
+
+    paragraphs = _paragraph_texts(normalized)
+    assert changed is True
+    assert len(paragraphs) > 1
+    assert " ".join(paragraphs) == text
+    assert all(len(text) <= PROSE_BLOCK_MAX_CHARS for text in paragraphs)
+
+
+def test_normalize_xhtml_prose_blocks_preserves_inline_formatting_when_splitting_on_breaks():
+    first = "<em>First emphasized sentence.</em> " + ("More first text. " * 120)
+    second = "<strong>Second bold sentence.</strong> <span>More second text.</span> " + ("Tail text. " * 130)
+    html = f"<html><body><p>{first}<br/><br/>{second}</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html)
+
+    soup = BeautifulSoup(normalized, "html.parser")
+    paragraphs = soup.find_all("p")
+    assert changed is True
+    assert len(paragraphs) == 2
+    assert paragraphs[0].find("em").get_text(strip=True) == "First emphasized sentence."
+    assert paragraphs[1].find("strong").get_text(strip=True) == "Second bold sentence."
+    assert paragraphs[1].find("span").get_text(strip=True) == "More second text."
+
+
+def test_normalize_xhtml_prose_blocks_skips_risky_and_non_prose_structures():
+    long_text = "Risky sentence. " * 260
+    html = f"""<html><body>
+<p>{long_text}<a href="chapter.xhtml">linked text</a><br/><br/>{long_text}</p>
+<p>{long_text}<code>code text</code><br/><br/>{long_text}</p>
+<pre>{long_text}<br/><br/>{long_text}</pre>
+<table><tr><td>{long_text}</td></tr></table>
+</body></html>"""
+
+    normalized, changed = normalize_xhtml_prose_blocks(html)
+
+    soup = BeautifulSoup(normalized, "html.parser")
+    assert changed is False
+    assert len(soup.find_all("p")) == 2
+    assert len(soup.find_all("pre")) == 1
+    assert len(soup.find_all("table")) == 1
 
 
 def test_get_and_save_epub_cover_uses_epub3_cover_image_property(tmp_path, monkeypatch):

@@ -1,14 +1,16 @@
-"""Lightweight EPUB helpers: word/chapter counting and cover extraction."""
+"""Lightweight EPUB helpers: word/chapter counting, cover extraction, and XHTML cleanup."""
 
+import copy
 import logging
 import posixpath
+import re
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.parse import unquote
 
 import ebooklib
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 from ebooklib import epub
 from lxml import etree
 
@@ -31,6 +33,30 @@ IMAGE_EXTENSION_BY_MEDIA_TYPE = {
 }
 SYNTHETIC_SUBJECTS = {"Completed", "In-Progress", "Unknown"}
 SYNTHETIC_SUBJECT_PREFIXES = ("Last Update:", "Last Update Year/Month:")
+PROSE_BLOCK_MAX_CHARS = 2500
+PROSE_BLOCK_TARGET_CHARS = 1500
+RISKY_PROSE_DESCENDANTS = {
+    "a",
+    "audio",
+    "button",
+    "code",
+    "form",
+    "iframe",
+    "img",
+    "input",
+    "math",
+    "object",
+    "pre",
+    "rp",
+    "rt",
+    "ruby",
+    "select",
+    "svg",
+    "table",
+    "textarea",
+    "video",
+}
+SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 # Intentionally duplicated in migration 0015 — migrations must be self-contained.
 SCRIBBLEHUB_GENRES = {
     "Action",
@@ -71,6 +97,177 @@ SCRIBBLEHUB_GENRES = {
     "Yaoi",
     "Yuri",
 }
+
+
+def _prose_text_length(tag: Tag) -> int:
+    return len(tag.get_text(" ", strip=True))
+
+
+def _has_risky_prose_descendant(tag: Tag) -> bool:
+    return tag.find(RISKY_PROSE_DESCENDANTS) is not None
+
+
+def _clone_empty_tag(soup: BeautifulSoup, source: Tag) -> Tag:
+    clone = soup.new_tag(source.name)
+    clone.attrs = copy.deepcopy(source.attrs)
+    return clone
+
+
+def _append_copied_children(target: Tag, children: list) -> None:
+    for child in children:
+        target.append(copy.copy(child) if isinstance(child, NavigableString) else copy.deepcopy(child))
+
+
+def _trim_empty_edge_text(children: list) -> list:
+    trimmed = list(children)
+    while trimmed and isinstance(trimmed[0], NavigableString) and not str(trimmed[0]).strip():
+        trimmed.pop(0)
+    while trimmed and isinstance(trimmed[-1], NavigableString) and not str(trimmed[-1]).strip():
+        trimmed.pop()
+    return trimmed
+
+
+def _split_children_on_double_br(children: list) -> list[list]:
+    chunks: list[list] = []
+    current: list = []
+    index = 0
+
+    while index < len(children):
+        child = children[index]
+        if isinstance(child, Tag) and child.name == "br":
+            run: list = [child]
+            br_count = 1
+            index += 1
+            while index < len(children):
+                next_child = children[index]
+                if isinstance(next_child, Tag) and next_child.name == "br":
+                    run.append(next_child)
+                    br_count += 1
+                    index += 1
+                    continue
+                if isinstance(next_child, NavigableString) and not str(next_child).strip():
+                    run.append(next_child)
+                    index += 1
+                    continue
+                break
+
+            if br_count >= 2:
+                trimmed = _trim_empty_edge_text(current)
+                if trimmed:
+                    chunks.append(trimmed)
+                current = []
+            else:
+                current.extend(run)
+            continue
+
+        current.append(child)
+        index += 1
+
+    trimmed = _trim_empty_edge_text(current)
+    if trimmed:
+        chunks.append(trimmed)
+    return chunks
+
+
+def _split_text_at_sentence_boundaries(text: str) -> list[str]:
+    stripped = text.strip()
+    if len(stripped) <= PROSE_BLOCK_MAX_CHARS:
+        return [stripped] if stripped else []
+
+    sentences = [sentence for sentence in SENTENCE_END_RE.split(stripped) if sentence]
+    if len(sentences) < 2:
+        return [stripped]
+
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        candidate = f"{current} {sentence}".strip() if current else sentence.strip()
+        if current and len(candidate) > PROSE_BLOCK_TARGET_CHARS:
+            chunks.append(current)
+            current = sentence.strip()
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _replace_paragraph_with_chunks(paragraph: Tag, replacements: list[Tag]) -> None:
+    for replacement in replacements:
+        paragraph.insert_before(replacement)
+    paragraph.decompose()
+
+
+def _split_oversized_paragraph(soup: BeautifulSoup, paragraph: Tag) -> bool:
+    if _prose_text_length(paragraph) <= PROSE_BLOCK_MAX_CHARS:
+        return False
+    if _has_risky_prose_descendant(paragraph):
+        return False
+
+    br_chunks = _split_children_on_double_br(list(paragraph.children))
+    if len(br_chunks) > 1:
+        replacements: list[Tag] = []
+        for chunk in br_chunks:
+            replacement = _clone_empty_tag(soup, paragraph)
+            _append_copied_children(replacement, chunk)
+            if _prose_text_length(replacement) > PROSE_BLOCK_MAX_CHARS and not replacement.find(True):
+                for text_chunk in _split_text_at_sentence_boundaries(replacement.get_text(" ", strip=True)):
+                    text_replacement = _clone_empty_tag(soup, paragraph)
+                    text_replacement.string = text_chunk
+                    replacements.append(text_replacement)
+            else:
+                replacements.append(replacement)
+        _replace_paragraph_with_chunks(paragraph, replacements)
+        return True
+
+    if paragraph.find(True):
+        return False
+
+    text_chunks = _split_text_at_sentence_boundaries(paragraph.get_text(" ", strip=True))
+    if len(text_chunks) <= 1:
+        return False
+
+    replacements = []
+    for text_chunk in text_chunks:
+        replacement = _clone_empty_tag(soup, paragraph)
+        replacement.string = text_chunk
+        replacements.append(replacement)
+    _replace_paragraph_with_chunks(paragraph, replacements)
+    return True
+
+
+def normalize_xhtml_prose_blocks(content: str | bytes) -> tuple[bytes, bool]:
+    """Split oversized prose paragraphs into smaller XHTML block elements."""
+    soup = BeautifulSoup(content, "html.parser")
+    changed = False
+
+    for paragraph in list(soup.find_all("p")):
+        if _split_oversized_paragraph(soup, paragraph):
+            changed = True
+
+    return str(soup).encode("utf-8"), changed
+
+
+def normalize_epub_prose_blocks(epub_path: Path) -> bool:
+    """Normalize oversized prose paragraphs in XHTML/HTML entries inside an EPUB."""
+    temp_path = epub_path.with_suffix(f"{epub_path.suffix}.tmp")
+    changed = False
+
+    with zipfile.ZipFile(epub_path) as src, zipfile.ZipFile(temp_path, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename.lower().endswith((".xhtml", ".html", ".htm")):
+                normalized, entry_changed = normalize_xhtml_prose_blocks(data)
+                if entry_changed:
+                    data = normalized
+                    changed = True
+            dst.writestr(info, data)
+
+    if changed:
+        temp_path.replace(epub_path)
+    else:
+        temp_path.unlink(missing_ok=True)
+    return changed
 
 
 def get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:

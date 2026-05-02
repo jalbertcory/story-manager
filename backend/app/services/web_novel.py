@@ -16,7 +16,12 @@ from .. import crud, epub_editor, schemas
 from ..config import LIBRARY_PATH
 from ..database import SessionLocal
 from .cover_collectors import collect_cover
-from .epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
+from .epub_utils import (
+    get_and_save_epub_cover,
+    get_epub_tag_metadata,
+    get_epub_word_and_chapter_count,
+    normalize_epub_prose_blocks,
+)
 from .fanficfare_config import get_fff_config_paths
 from .library_paths import build_book_paths
 from .metadata_jobs import queue_metadata_sync_job
@@ -227,6 +232,7 @@ async def download_web_novel(
             detail="FanFicFare ran but no new or updated EPUB file was found.",
         )
     new_epub_path = updated_epub_path or changed_epubs[0]
+    normalize_epub_prose_blocks(new_epub_path)
 
     try:
         return new_epub_path, _read_epub_metadata(new_epub_path)
