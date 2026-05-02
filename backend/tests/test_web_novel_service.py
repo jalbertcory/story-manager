@@ -87,6 +87,7 @@ async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config
         return 0
 
     mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+    normalize_mock = mocker.patch("backend.app.services.web_novel.normalize_epub_prose_blocks")
 
     result = await web_novel.download_web_novel(
         "https://example.com/story/1",
@@ -106,6 +107,7 @@ async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config
     assert "-U" not in args
     assert str(existing_epub) == args[-1]
     assert repaired_source["value"] == "https://example.com/story/1"
+    normalize_mock.assert_called_once_with(existing_epub)
 
 
 @pytest.mark.asyncio
@@ -124,6 +126,7 @@ async def test_download_web_novel_new_download_uses_story_manager_output_path(tm
         return 0
 
     mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+    normalize_mock = mocker.patch("backend.app.services.web_novel.normalize_epub_prose_blocks")
 
     result = await web_novel.download_web_novel("https://www.royalroad.com/fiction/123")
 
@@ -136,6 +139,7 @@ async def test_download_web_novel_new_download_uses_story_manager_output_path(tm
     output_arg = f"output_filename={library_path.resolve()}/${{title}}-${{siteabbrev}}_${{storyId}}${{formatext}}"
     assert output_arg in args
     assert "https://www.royalroad.com/fiction/123" == args[-1]
+    normalize_mock.assert_called_once_with(expected_output)
 
 
 def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch):

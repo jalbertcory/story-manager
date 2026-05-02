@@ -8,6 +8,9 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
 
+from . import models
+from .services.epub_utils import normalize_xhtml_prose_blocks
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,6 +162,7 @@ def process_epub(
     removed_chapters: list[str],
     content_selectors: list[str],
     chapter_selectors: list[str] = [],
+    normalize_prose_blocks: bool = False,
 ) -> int | None:
     """Process an epub, returning the new word count if changed, or None if unchanged."""
     book = epub.read_epub(immutable_path)
@@ -190,6 +194,9 @@ def process_epub(
                 for selector in content_selectors:
                     for elem in soup.select(selector):
                         elem.decompose()
+                if normalize_prose_blocks:
+                    normalized_content, _ = normalize_xhtml_prose_blocks(str(soup))
+                    soup = BeautifulSoup(normalized_content, "html.parser")
                 item.set_content(str(soup).encode("utf-8"))
             new_book.add_item(item)
 
@@ -265,7 +272,8 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
 
     removed_chapters, content_selectors, chapter_selectors = _merge_cleaning_rules(book, configs)
 
-    has_rules = bool(chapter_selectors or content_selectors or removed_chapters)
+    normalize_prose_blocks = book.source_type == models.SourceType.web
+    has_rules = bool(chapter_selectors or content_selectors or removed_chapters or normalize_prose_blocks)
 
     # Nothing to do — skip the (potentially expensive) epub rewrite
     if not has_rules:
@@ -292,6 +300,7 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
             removed_chapters,
             content_selectors,
             chapter_selectors,
+            normalize_prose_blocks=normalize_prose_blocks,
         )
         if word_count is None:
             if force:
