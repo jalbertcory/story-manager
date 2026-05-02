@@ -40,18 +40,14 @@ def downgrade():
     if not inspector.has_table("book_metadata_matches"):
         return
 
-    conn.execute(
-        sa.text(
-            """
+    conn.execute(sa.text("""
             DELETE FROM book_metadata_matches
             WHERE id NOT IN (
                 SELECT MAX(id)
                 FROM book_metadata_matches
                 GROUP BY book_id
             )
-            """
-        )
-    )
+            """))
 
     if not _book_match_unique_constraints(inspector):
         op.create_unique_constraint(

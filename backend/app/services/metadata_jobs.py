@@ -190,13 +190,17 @@ async def _sync_one_book(
                 await db.flush()
             candidate_matches.append(candidate_match)
 
-    match = candidate_matches[0] if candidate_matches else _upsert_match(
-        existing_match,
-        book_id=book.id,
-        status=match_status,
-        suggestion=suggestion if match_status != "no_match" else None,
-        checked_at=checked_at,
-        preserve_approval=bool(existing_match and existing_match.status in APPROVED_MATCH_STATUSES),
+    match = (
+        candidate_matches[0]
+        if candidate_matches
+        else _upsert_match(
+            existing_match,
+            book_id=book.id,
+            status=match_status,
+            suggestion=suggestion if match_status != "no_match" else None,
+            checked_at=checked_at,
+            preserve_approval=bool(existing_match and existing_match.status in APPROVED_MATCH_STATUSES),
+        )
     )
     if not candidate_matches and existing_match is None:
         db.add(match)
