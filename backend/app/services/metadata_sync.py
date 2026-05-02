@@ -39,6 +39,7 @@ GOOGLE_BOOKS_RETRY_ATTEMPTS = 2
 GOOGLE_BOOKS_USER_AGENT = "story-manager/0.1 (+https://developers.google.com/books)"
 AUTO_APPROVE_THRESHOLD = 0.92
 PROPOSAL_THRESHOLD = 0.75
+DEFAULT_MATCH_CANDIDATE_LIMIT = 5
 
 _TRAILING_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _TRAILING_SERIES_BOOK_RE = re.compile(r"\s*\([^)]*book\s+\d+[^)]*\)\s*$", re.IGNORECASE)
@@ -604,6 +605,69 @@ def _fetch_search_doc(
     return best_doc, best_score, None
 
 
+def _collect_search_doc_candidates(
+    book: models.Book,
+    *,
+    local_books_by_author: dict[str, list[models.Book]],
+    author_work_cache: dict[str, list[dict[str, Any]]],
+    limit: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
+) -> list[tuple[dict[str, Any], float]]:
+    manual_remote_ids = _get_manual_remote_ids(book)
+    preferred_author_keys = _series_peer_author_keys(book, local_books_by_author)
+    manual_author_key = manual_remote_ids.get("open_library_author_key")
+    if manual_author_key:
+        preferred_author_keys.add(manual_author_key)
+
+    search_variants: list[dict[str, Any]] = []
+    if manual_remote_ids.get("isbn_13"):
+        search_variants.append({"isbn": manual_remote_ids["isbn_13"], "limit": 5})
+    if manual_remote_ids.get("isbn_10"):
+        search_variants.append({"isbn": manual_remote_ids["isbn_10"], "limit": 5})
+    for title_variant in _title_search_variants(book):
+        search_variants.append({"title": title_variant, "author": book.author, "limit": 5})
+
+    ranked: list[tuple[dict[str, Any], float, float]] = []
+    seen_searches: set[tuple[tuple[str, Any], ...]] = set()
+    seen_docs: set[str] = set()
+
+    for params in search_variants:
+        key = tuple(sorted(params.items()))
+        if key in seen_searches:
+            continue
+        seen_searches.add(key)
+
+        for doc in _fetch_search_docs(params):
+            doc_key = str(doc.get("key") or doc.get("cover_edition_key") or doc.get("title") or "")
+            if not doc_key or doc_key in seen_docs:
+                continue
+            score = _score_search_doc(book, doc)
+            threshold = 0.68 if preferred_author_keys or manual_remote_ids else 0.72
+            if score < threshold:
+                continue
+
+            ranking_score = score
+            doc_author_keys = doc.get("author_key") or []
+            if isinstance(doc_author_keys, str):
+                doc_author_keys = [doc_author_keys]
+            if preferred_author_keys and any(author_key in preferred_author_keys for author_key in doc_author_keys):
+                ranking_score += 0.08
+            seen_docs.add(doc_key)
+            ranked.append((doc, score, ranking_score))
+
+    series_doc, series_score = _fetch_series_context_doc(
+        book,
+        preferred_author_keys=preferred_author_keys,
+        author_work_cache=author_work_cache,
+    )
+    if series_doc is not None:
+        doc_key = str(series_doc.get("key") or series_doc.get("title") or "")
+        if doc_key and doc_key not in seen_docs:
+            ranked.append((series_doc, series_score, series_score + 0.08))
+
+    ranked.sort(key=lambda item: item[2], reverse=True)
+    return [(doc, score) for doc, score, _ranking_score in ranked[:limit]]
+
+
 def _fetch_google_books_match(book: models.Book) -> tuple[Optional[GoogleBooksMatch], float, Optional[str]]:
     if not _google_books_enabled():
         return None, 0.0, None
@@ -729,58 +793,13 @@ def _fetch_author_work_entries(
     return normalized_entries
 
 
-def _build_suggestion_for_book(
+def _build_open_library_suggestion(
     book: models.Book,
+    doc: dict[str, Any],
+    score: float,
     local_books_by_author: dict[str, list[models.Book]],
     author_work_cache: dict[str, list[dict[str, Any]]],
 ) -> MetadataSuggestion:
-    if not book.title or not book.author or book.author.strip().lower() == "pending":
-        return MetadataSuggestion(book=book, matched=False, note="Book is missing stable title/author metadata.")
-
-    google_match: Optional[GoogleBooksMatch] = None
-    try:
-        doc, score, note = _fetch_search_doc(
-            book,
-            local_books_by_author=local_books_by_author,
-            author_work_cache=author_work_cache,
-        )
-    except requests.RequestException:
-        logger.warning("Metadata sync request failed for %s by %s; continuing.", book.title, book.author)
-        doc, score, note = None, 0.0, "Open Library request failed."
-
-    if doc is None:
-        try:
-            google_match, google_score, google_note = _fetch_google_books_match(book)
-        except requests.RequestException:
-            logger.warning("Google Books metadata request failed for %s by %s; continuing.", book.title, book.author)
-            google_match, google_score, google_note = None, 0.0, "Google Books request failed."
-
-        if google_match is None:
-            return MetadataSuggestion(
-                book=book,
-                matched=False,
-                match_confidence=max(score, google_score),
-                note=google_note or note,
-            )
-
-        google_genre_tags = _derive_genre_tags(google_match.categories)
-        existing_tags = {tag.casefold() for tag in (book.genre_tags or [])}
-        new_tags = [tag for tag in google_genre_tags if tag.casefold() not in existing_tags]
-        return MetadataSuggestion(
-            book=book,
-            matched=True,
-            source="google_books",
-            match_confidence=google_match.match_confidence,
-            remote_title=google_match.title,
-            remote_author=google_match.authors[0] if google_match.authors else None,
-            remote_url=google_match.info_link,
-            genre_tags=google_genre_tags,
-            new_genre_tags=new_tags,
-            possible_missing_series_books=[],
-            remote_ids=google_match.remote_ids,
-            note=None if google_genre_tags else "Matched in Google Books, but no genre tags were found.",
-        )
-
     work_data = _fetch_work_data(doc)
     subjects = _extract_subjects(doc, work_data)
     genre_tags = _derive_genre_tags(subjects)
@@ -834,6 +853,91 @@ def _build_suggestion_for_book(
     )
 
 
+def _build_suggestion_for_book(
+    book: models.Book,
+    local_books_by_author: dict[str, list[models.Book]],
+    author_work_cache: dict[str, list[dict[str, Any]]],
+) -> MetadataSuggestion:
+    if not book.title or not book.author or book.author.strip().lower() == "pending":
+        return MetadataSuggestion(book=book, matched=False, note="Book is missing stable title/author metadata.")
+
+    google_match: Optional[GoogleBooksMatch] = None
+    try:
+        doc, score, note = _fetch_search_doc(
+            book,
+            local_books_by_author=local_books_by_author,
+            author_work_cache=author_work_cache,
+        )
+    except requests.RequestException:
+        logger.warning("Metadata sync request failed for %s by %s; continuing.", book.title, book.author)
+        doc, score, note = None, 0.0, "Open Library request failed."
+
+    if doc is None:
+        try:
+            google_match, google_score, google_note = _fetch_google_books_match(book)
+        except requests.RequestException:
+            logger.warning("Google Books metadata request failed for %s by %s; continuing.", book.title, book.author)
+            google_match, google_score, google_note = None, 0.0, "Google Books request failed."
+
+        if google_match is None:
+            return MetadataSuggestion(
+                book=book,
+                matched=False,
+                match_confidence=max(score, google_score),
+                note=google_note or note,
+            )
+
+        google_genre_tags = _derive_genre_tags(google_match.categories)
+        existing_tags = {tag.casefold() for tag in (book.genre_tags or [])}
+        new_tags = [tag for tag in google_genre_tags if tag.casefold() not in existing_tags]
+        return MetadataSuggestion(
+            book=book,
+            matched=True,
+            source="google_books",
+            match_confidence=google_match.match_confidence,
+            remote_title=google_match.title,
+            remote_author=google_match.authors[0] if google_match.authors else None,
+            remote_url=google_match.info_link,
+            genre_tags=google_genre_tags,
+            new_genre_tags=new_tags,
+            possible_missing_series_books=[],
+            remote_ids=google_match.remote_ids,
+            note=None if google_genre_tags else "Matched in Google Books, but no genre tags were found.",
+        )
+
+    return _build_open_library_suggestion(book, doc, score, local_books_by_author, author_work_cache)
+
+
+def _build_suggestions_for_book(
+    book: models.Book,
+    local_books_by_author: dict[str, list[models.Book]],
+    author_work_cache: dict[str, list[dict[str, Any]]],
+    *,
+    max_candidates: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
+) -> list[MetadataSuggestion]:
+    if not book.title or not book.author or book.author.strip().lower() == "pending":
+        return [MetadataSuggestion(book=book, matched=False, note="Book is missing stable title/author metadata.")]
+
+    try:
+        candidates = _collect_search_doc_candidates(
+            book,
+            local_books_by_author=local_books_by_author,
+            author_work_cache=author_work_cache,
+            limit=max_candidates,
+        )
+    except requests.RequestException:
+        logger.warning("Metadata sync request failed for %s by %s; continuing.", book.title, book.author)
+        candidates = []
+
+    if candidates:
+        return [
+            _build_open_library_suggestion(book, doc, score, local_books_by_author, author_work_cache)
+            for doc, score in candidates
+        ]
+
+    return [_build_suggestion_for_book(book, local_books_by_author, author_work_cache)]
+
+
 async def _generate_suggestions(
     target_books: list[models.Book],
     all_books: list[models.Book],
@@ -849,11 +953,45 @@ async def _generate_suggestions(
     )
 
 
+async def _generate_candidate_suggestions(
+    target_books: list[models.Book],
+    all_books: list[models.Book],
+    *,
+    max_candidates: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
+) -> list[list[MetadataSuggestion]]:
+    local_books_by_author: dict[str, list[models.Book]] = {}
+    for book in all_books:
+        local_books_by_author.setdefault(_normalize_text(book.author or ""), []).append(book)
+
+    author_work_cache: dict[str, list[dict[str, Any]]] = {}
+
+    return await asyncio.to_thread(
+        lambda: [
+            _build_suggestions_for_book(
+                book,
+                local_books_by_author,
+                author_work_cache,
+                max_candidates=max_candidates,
+            )
+            for book in target_books
+        ]
+    )
+
+
 async def generate_suggestions(
     target_books: list[models.Book],
     all_books: list[models.Book],
 ) -> list[MetadataSuggestion]:
     return await _generate_suggestions(target_books, all_books)
+
+
+async def generate_candidate_suggestions(
+    target_books: list[models.Book],
+    all_books: list[models.Book],
+    *,
+    max_candidates: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
+) -> list[list[MetadataSuggestion]]:
+    return await _generate_candidate_suggestions(target_books, all_books, max_candidates=max_candidates)
 
 
 def apply_suggestion_to_book(

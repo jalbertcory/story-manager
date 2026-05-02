@@ -15,16 +15,22 @@ from .metadata_sync import (
     PROPOSAL_THRESHOLD,
     MetadataSuggestion,
     apply_suggestion_to_book,
-    generate_suggestions,
+    generate_candidate_suggestions,
 )
 
 logger = logging.getLogger(__name__)
 
 APPROVED_MATCH_STATUSES = {"approved", "auto_approved"}
+MAX_MATCH_CANDIDATES = 5
+AMBIGUOUS_MATCH_DELTA = 0.03
 
 
 def _match_same_remote(match: models.BookMetadataMatch, suggestion: MetadataSuggestion) -> bool:
     return (match.remote_ids or {}) == (suggestion.remote_ids or {})
+
+
+def _remote_signature_from_suggestion(suggestion: MetadataSuggestion) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((key, str(value)) for key, value in (suggestion.remote_ids or {}).items()))
 
 
 async def create_metadata_sync_job_request(
@@ -113,10 +119,12 @@ async def _sync_one_book(
     all_books: list[models.Book],
     checked_at: datetime,
 ) -> tuple[bool, bool, bool]:
-    suggestions = await generate_suggestions([book], all_books)
+    candidate_groups = await generate_candidate_suggestions([book], all_books, max_candidates=MAX_MATCH_CANDIDATES)
+    suggestions = candidate_groups[0]
     suggestion = suggestions[0]
 
-    existing_match = await crud.get_metadata_match_by_book_id(db, book.id)
+    existing_matches = await crud.get_metadata_matches_by_book_id(db, book.id)
+    existing_match = existing_matches[0] if existing_matches else None
     existing_proposal = await crud.get_metadata_proposal_by_book_id(db, book.id)
 
     matched = suggestion.matched
@@ -133,28 +141,68 @@ async def _sync_one_book(
         await db.commit()
         return False, False, False
 
+    has_close_alternative = any(
+        candidate.matched
+        and candidate.remote_ids != suggestion.remote_ids
+        and candidate.match_confidence >= suggestion.match_confidence - AMBIGUOUS_MATCH_DELTA
+        for candidate in suggestions[1:]
+    )
+
     if existing_match and existing_match.status == "rejected" and _match_same_remote(existing_match, suggestion):
         match_status = "rejected"
     elif (
         existing_match and existing_match.status in APPROVED_MATCH_STATUSES and _match_same_remote(existing_match, suggestion)
     ):
         match_status = existing_match.status
-    elif suggestion.match_confidence >= AUTO_APPROVE_THRESHOLD:
+    elif suggestion.match_confidence >= AUTO_APPROVE_THRESHOLD and not has_close_alternative:
         match_status = "auto_approved"
     elif suggestion.match_confidence >= PROPOSAL_THRESHOLD:
         match_status = "pending"
     else:
         match_status = "no_match"
 
-    match = _upsert_match(
-        existing_match,
-        book_id=book.id,
-        status=match_status,
-        suggestion=suggestion if match_status != "no_match" else None,
-        checked_at=checked_at,
-        preserve_approval=bool(existing_match and existing_match.status in APPROVED_MATCH_STATUSES),
+    candidate_matches: list[models.BookMetadataMatch] = []
+    if match_status in {"pending", *APPROVED_MATCH_STATUSES}:
+        existing_by_signature = {
+            tuple(sorted((key, str(value)) for key, value in (match.remote_ids or {}).items())): match
+            for match in existing_matches
+            if match.remote_ids
+        }
+        for index, candidate in enumerate(suggestions):
+            if not candidate.matched:
+                continue
+            candidate_status = match_status if index == 0 else "pending"
+            if candidate_status == "auto_approved" and index > 0:
+                candidate_status = "pending"
+            candidate_existing = existing_by_signature.get(_remote_signature_from_suggestion(candidate))
+            if candidate_existing and candidate_existing.status in {"approved", "auto_approved", "rejected"}:
+                candidate_status = candidate_existing.status
+            candidate_match = _upsert_match(
+                candidate_existing,
+                book_id=book.id,
+                status=candidate_status,
+                suggestion=candidate,
+                checked_at=checked_at,
+                preserve_approval=bool(candidate_existing and candidate_existing.status in APPROVED_MATCH_STATUSES),
+            )
+            if candidate_existing is None:
+                db.add(candidate_match)
+                await db.flush()
+            candidate_matches.append(candidate_match)
+
+    match = (
+        candidate_matches[0]
+        if candidate_matches
+        else _upsert_match(
+            existing_match,
+            book_id=book.id,
+            status=match_status,
+            suggestion=suggestion if match_status != "no_match" else None,
+            checked_at=checked_at,
+            preserve_approval=bool(existing_match and existing_match.status in APPROVED_MATCH_STATUSES),
+        )
     )
-    if existing_match is None:
+    if not candidate_matches and existing_match is None:
         db.add(match)
         await db.flush()
 
@@ -302,8 +350,18 @@ async def reject_metadata_match(
     match.status = "rejected"
     match.rejected_at = datetime.now(timezone.utc)
     if proposal is not None:
-        proposal.status = "dismissed"
-        proposal.reviewed_at = datetime.now(timezone.utc)
+        remaining_matches = [
+            candidate
+            for candidate in await crud.get_metadata_matches_by_book_id(db, match.book_id)
+            if candidate.id != match.id and candidate.status == "pending"
+        ]
+        if remaining_matches:
+            proposal.status = "open"
+            if proposal.match_id == match.id:
+                proposal.match_id = remaining_matches[0].id
+        else:
+            proposal.status = "dismissed"
+            proposal.reviewed_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(match)
@@ -327,7 +385,10 @@ def build_metadata_proposal_summary(
     proposal: models.MetadataProposal,
     book: models.Book,
     match: Optional[models.BookMetadataMatch],
+    *,
+    candidate_matches: Optional[list[models.BookMetadataMatch]] = None,
 ) -> schemas.MetadataProposalSummary:
+    candidates = candidate_matches or ([match] if match is not None else [])
     return schemas.MetadataProposalSummary(
         id=proposal.id,
         book_id=book.id,
@@ -335,6 +396,7 @@ def build_metadata_proposal_summary(
         book_author=book.author,
         book_series=book.series,
         match=schemas.MetadataMatch.model_validate(match) if match is not None else None,
+        candidate_matches=[schemas.MetadataMatch.model_validate(candidate) for candidate in candidates],
         proposed_genre_tags=list(proposal.proposed_genre_tags or []),
         possible_missing_series_books=list(proposal.possible_missing_series_books or []),
         note=proposal.note,

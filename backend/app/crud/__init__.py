@@ -89,6 +89,7 @@ from .metadata import (  # noqa: F401
     get_metadata_inbox_entries,
     get_metadata_match,
     get_metadata_match_by_book_id,
+    get_metadata_matches_by_book_id,
     get_metadata_proposal,
     get_metadata_proposal_by_book_id,
     get_metadata_sync_job,

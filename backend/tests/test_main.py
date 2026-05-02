@@ -589,7 +589,67 @@ async def test_metadata_inbox_lists_pending_match_proposals(db_session):
     assert len(data) == 1
     assert data[0]["book_title"] == "Inbox Book"
     assert data[0]["match"]["status"] == "pending"
+    assert data[0]["candidate_matches"][0]["id"] == match.id
     assert data[0]["proposed_genre_tags"] == ["Fantasy"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_job_keeps_close_match_candidates_for_human_selection(db_session, mocker):
+    from backend.app.services.metadata_jobs import process_metadata_sync_job
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Dragon Saga 7",
+                author="Alice Smith",
+                series="Dragon Saga",
+                immutable_path="dragon-7-immutable.epub",
+                current_path="dragon-7.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        job = await crud.create_metadata_sync_job(session, trigger="manual", book_ids=[book.id])
+
+    def fake_open_library_get(url, params=None, timeout=None, headers=None):
+        if url == "https://openlibrary.org/search.json":
+            return FakeRequestsResponse(
+                {
+                    "docs": [
+                        {
+                            "key": "/works/OL6W",
+                            "title": "Dragon Saga 6",
+                            "author_name": ["Alice Smith"],
+                            "author_key": ["OLA1A"],
+                        },
+                        {
+                            "key": "/works/OL8W",
+                            "title": "Dragon Saga 8",
+                            "author_name": ["Alice Smith"],
+                            "author_key": ["OLA1A"],
+                        },
+                    ]
+                }
+            )
+        if url in {"https://openlibrary.org/works/OL6W.json", "https://openlibrary.org/works/OL8W.json"}:
+            return FakeRequestsResponse({"subjects": ["Fantasy"]})
+        if url == "https://openlibrary.org/authors/OLA1A/works.json":
+            return FakeRequestsResponse({"entries": [{"title": "Dragon Saga 6"}, {"title": "Dragon Saga 8"}]})
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+
+    async with AsyncTestingSessionLocal() as session:
+        await process_metadata_sync_job(session, job.id)
+
+    response = client.get("/api/metadata/inbox")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    candidate_titles = {candidate["remote_title"] for candidate in data[0]["candidate_matches"]}
+    assert candidate_titles == {"Dragon Saga 6", "Dragon Saga 8"}
+    assert data[0]["match"]["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -640,6 +700,61 @@ async def test_approve_metadata_match_applies_genres_and_resolves_proposal(db_se
         assert stored_book.metadata_sync_source == "open_library"
         assert stored_match.status == "approved"
         assert stored_proposal.status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_reject_metadata_match_keeps_proposal_open_for_other_candidates(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Candidate Book",
+                author="Candidate Author",
+                immutable_path="candidate-immutable.epub",
+                current_path="candidate.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        first_match = models.BookMetadataMatch(
+            book_id=book.id,
+            status="pending",
+            source="open_library",
+            match_confidence=0.9,
+            remote_title="Candidate Book 6",
+            remote_author="Candidate Author",
+            remote_ids={"open_library_work_key": "/works/OL6W"},
+        )
+        second_match = models.BookMetadataMatch(
+            book_id=book.id,
+            status="pending",
+            source="open_library",
+            match_confidence=0.89,
+            remote_title="Candidate Book 8",
+            remote_author="Candidate Author",
+            remote_ids={"open_library_work_key": "/works/OL8W"},
+        )
+        session.add_all([first_match, second_match])
+        await session.flush()
+        session.add(
+            models.MetadataProposal(
+                book_id=book.id,
+                match_id=first_match.id,
+                status="open",
+                proposed_genre_tags=["Fantasy"],
+                possible_missing_series_books=[],
+            )
+        )
+        await session.commit()
+
+    response = client.post(f"/api/metadata/matches/{first_match.id}/reject")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+
+    async with AsyncTestingSessionLocal() as session:
+        stored_proposal = await crud.get_metadata_proposal_by_book_id(session, book.id)
+        assert stored_proposal.status == "open"
+        assert stored_proposal.match_id == second_match.id
 
 
 @pytest.mark.asyncio

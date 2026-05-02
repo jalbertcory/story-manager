@@ -40,7 +40,10 @@ async def get_metadata_inbox(
     db: AsyncSession = Depends(get_db),
 ) -> list[schemas.MetadataProposalSummary]:
     rows = await crud.get_metadata_inbox_entries(db, limit=limit)
-    return [build_metadata_proposal_summary(proposal, book, match) for proposal, book, match in rows]
+    return [
+        build_metadata_proposal_summary(proposal, book, match, candidate_matches=candidates)
+        for proposal, book, match, candidates in rows
+    ]
 
 
 @router.post("/api/metadata/matches/{match_id}/approve", response_model=schemas.MetadataMatch)
@@ -79,9 +82,10 @@ async def dismiss_proposal(
 
     book = await crud.get_book(db, proposal.book_id)
     match = await crud.get_metadata_match_by_book_id(db, proposal.book_id)
+    candidate_matches = await crud.get_metadata_matches_by_book_id(db, proposal.book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
-    return build_metadata_proposal_summary(proposal, book, match)
+    return build_metadata_proposal_summary(proposal, book, match, candidate_matches=candidate_matches)
 
 
 @router.post("/api/metadata/sync-preview", response_model=schemas.MetadataSyncPreviewResponse)

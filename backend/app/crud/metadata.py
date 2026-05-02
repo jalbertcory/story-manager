@@ -111,8 +111,22 @@ async def fail_metadata_sync_job(db: AsyncSession, job: models.MetadataSyncJob, 
 
 
 async def get_metadata_match_by_book_id(db: AsyncSession, book_id: int) -> Optional[models.BookMetadataMatch]:
-    result = await db.execute(select(models.BookMetadataMatch).where(models.BookMetadataMatch.book_id == book_id))
+    result = await db.execute(
+        select(models.BookMetadataMatch)
+        .where(models.BookMetadataMatch.book_id == book_id)
+        .order_by(models.BookMetadataMatch.match_confidence.desc().nullslast(), models.BookMetadataMatch.id.desc())
+        .limit(1)
+    )
     return result.scalars().first()
+
+
+async def get_metadata_matches_by_book_id(db: AsyncSession, book_id: int) -> list[models.BookMetadataMatch]:
+    result = await db.execute(
+        select(models.BookMetadataMatch)
+        .where(models.BookMetadataMatch.book_id == book_id)
+        .order_by(models.BookMetadataMatch.match_confidence.desc().nullslast(), models.BookMetadataMatch.id.desc())
+    )
+    return result.scalars().all()
 
 
 async def get_metadata_match(db: AsyncSession, match_id: int) -> Optional[models.BookMetadataMatch]:
@@ -133,7 +147,7 @@ async def get_metadata_proposal(db: AsyncSession, proposal_id: int) -> Optional[
 async def get_metadata_inbox_entries(
     db: AsyncSession,
     limit: int = 100,
-) -> list[tuple[models.MetadataProposal, models.Book, Optional[models.BookMetadataMatch]]]:
+) -> list[tuple[models.MetadataProposal, models.Book, Optional[models.BookMetadataMatch], list[models.BookMetadataMatch]]]:
     result = await db.execute(
         select(models.MetadataProposal, models.Book, models.BookMetadataMatch)
         .join(models.Book, models.MetadataProposal.book_id == models.Book.id)
@@ -142,7 +156,12 @@ async def get_metadata_inbox_entries(
         .order_by(models.MetadataProposal.created_at.desc(), models.MetadataProposal.id.desc())
         .limit(limit)
     )
-    return result.all()
+    rows = result.all()
+    entries = []
+    for proposal, book, match in rows:
+        candidates = await get_metadata_matches_by_book_id(db, book.id)
+        entries.append((proposal, book, match, candidates))
+    return entries
 
 
 async def get_stale_books_for_metadata_sync(
