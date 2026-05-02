@@ -362,6 +362,7 @@ class MetadataProposalSummary(BaseModel):
     book_author: str
     book_series: Optional[str] = None
     match: Optional[MetadataMatch] = None
+    candidate_matches: List[MetadataMatch] = Field(default_factory=list)
     proposed_genre_tags: List[str] = Field(default_factory=list)
     possible_missing_series_books: List[str] = Field(default_factory=list)
     note: Optional[str] = None

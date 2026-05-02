@@ -191,6 +191,36 @@ describe("Utilities", () => {
                   approved_at: null,
                   rejected_at: null,
                 },
+                candidate_matches: [
+                  {
+                    id: 7,
+                    book_id: 1,
+                    status: "pending",
+                    source: "open_library",
+                    match_confidence: 0.93,
+                    remote_title: "Dragon One",
+                    remote_author: "Author A",
+                    remote_url: "https://openlibrary.org/works/OL1W",
+                    remote_ids: {},
+                    last_checked_at: "2026-03-29T00:00:02Z",
+                    approved_at: null,
+                    rejected_at: null,
+                  },
+                  {
+                    id: 8,
+                    book_id: 1,
+                    status: "pending",
+                    source: "open_library",
+                    match_confidence: 0.91,
+                    remote_title: "Dragon Eight",
+                    remote_author: "Author A",
+                    remote_url: "https://openlibrary.org/works/OL8W",
+                    remote_ids: {},
+                    last_checked_at: "2026-03-29T00:00:02Z",
+                    approved_at: null,
+                    rejected_at: null,
+                  },
+                ],
                 proposed_genre_tags: ["Fantasy"],
                 possible_missing_series_books: ["Dragon Two"],
                 note: null,
@@ -233,6 +263,18 @@ describe("Utilities", () => {
             }),
         });
       }
+      if (url === "/api/metadata/matches/8/approve" && options?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              id: 8,
+              book_id: 1,
+              status: "approved",
+              source: "open_library",
+            }),
+        });
+      }
 
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
     });
@@ -245,6 +287,7 @@ describe("Utilities", () => {
 
     expect(screen.getByText("Proposed genres: Fantasy")).toBeInTheDocument();
     expect(screen.getByText("Possible missing in series: Dragon Two")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Suggested match"), { target: { value: "8" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Queue Library Metadata Sync" }));
 
@@ -259,7 +302,7 @@ describe("Utilities", () => {
     fireEvent.click(screen.getByRole("button", { name: "Approve Match" }));
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/matches/7/approve", {
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/matches/8/approve", {
         method: "POST",
       });
     });

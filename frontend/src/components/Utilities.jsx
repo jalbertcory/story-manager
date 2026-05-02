@@ -76,10 +76,18 @@ function renderMetadataJobSummary(job) {
   return base;
 }
 
+function formatMetadataMatchOption(match) {
+  const title = match.remote_title || "Unknown title";
+  const author = match.remote_author ? ` by ${match.remote_author}` : "";
+  const confidence = match.match_confidence != null ? ` (${Math.round(match.match_confidence * 100)}%)` : "";
+  return `${title}${author}${confidence}`;
+}
+
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
+  const [selectedMatchIds, setSelectedMatchIds] = useState({});
 
   const previewMutation = useMutation({
     mutationFn: () => runCleanup(true),
@@ -312,18 +320,71 @@ function Utilities({ onBack }) {
                     background: "rgba(15, 23, 42, 0.35)",
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "baseline" }}>
-                    <strong>{entry.book_title}</strong>
-                    <span className="hint">
-                      {entry.match?.status || entry.status}
-                    </span>
+                  {(() => {
+                    const candidateMatches = entry.candidate_matches?.length ? entry.candidate_matches : entry.match ? [entry.match] : [];
+                    const selectedMatchId = selectedMatchIds[entry.id] ?? entry.match?.id ?? candidateMatches[0]?.id;
+                    const selectedMatch = candidateMatches.find((match) => match.id === Number(selectedMatchId)) || entry.match;
+
+                    return (
+                      <>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start" }}>
+                    <div>
+                      <strong>{entry.book_title}</strong>
+                      <span className="hint" style={{ marginLeft: "0.5rem" }}>
+                        {selectedMatch?.status || entry.status}
+                      </span>
+                    </div>
+                    <div className="settings-actions" style={{ marginTop: 0, flexShrink: 0 }}>
+                      {selectedMatch?.status === "pending" && selectedMatch?.id ? (
+                        <>
+                          <button
+                            onClick={() => approveMatchMutation.mutate(selectedMatch.id)}
+                            disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
+                          >
+                            {approveMatchMutation.isPending ? "Approving…" : "Approve Match"}
+                          </button>
+                          <button
+                            className="btn-danger"
+                            onClick={() => rejectMatchMutation.mutate(selectedMatch.id)}
+                            disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
+                          >
+                            {rejectMatchMutation.isPending ? "Rejecting…" : "Reject Match"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="btn-text"
+                          onClick={() => dismissProposalMutation.mutate(entry.id)}
+                          disabled={dismissProposalMutation.isPending}
+                        >
+                          {dismissProposalMutation.isPending ? "Dismissing…" : "Dismiss"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="hint" style={{ marginTop: "0.35rem" }}>{entry.book_author}</p>
-                  {entry.match && (
+                  {candidateMatches.length > 1 ? (
+                    <label className="hint" style={{ display: "grid", gap: "0.35rem", marginTop: "0.5rem" }}>
+                      Suggested match
+                      <select
+                        value={selectedMatchId || ""}
+                        onChange={(event) =>
+                          setSelectedMatchIds((current) => ({
+                            ...current,
+                            [entry.id]: Number(event.target.value),
+                          }))
+                        }
+                      >
+                        {candidateMatches.map((match) => (
+                          <option key={match.id} value={match.id}>
+                            {formatMetadataMatchOption(match)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : selectedMatch && (
                     <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Suggested match: {entry.match.remote_title || "Unknown title"}
-                      {entry.match.remote_author ? ` by ${entry.match.remote_author}` : ""}
-                      {entry.match.match_confidence != null ? ` (${Math.round(entry.match.match_confidence * 100)}%)` : ""}
+                      Suggested match: {formatMetadataMatchOption(selectedMatch)}
                     </p>
                   )}
                   {entry.proposed_genre_tags.length > 0 && (
@@ -341,33 +402,9 @@ function Utilities({ onBack }) {
                       {entry.note}
                     </p>
                   )}
-                  <div className="settings-actions" style={{ marginTop: "0.75rem" }}>
-                    {entry.match?.status === "pending" && entry.match?.id ? (
-                      <>
-                        <button
-                          onClick={() => approveMatchMutation.mutate(entry.match.id)}
-                          disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
-                        >
-                          {approveMatchMutation.isPending ? "Approving…" : "Approve Match"}
-                        </button>
-                        <button
-                          className="btn-danger"
-                          onClick={() => rejectMatchMutation.mutate(entry.match.id)}
-                          disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
-                        >
-                          {rejectMatchMutation.isPending ? "Rejecting…" : "Reject Match"}
-                        </button>
                       </>
-                    ) : (
-                      <button
-                        className="btn-text"
-                        onClick={() => dismissProposalMutation.mutate(entry.id)}
-                        disabled={dismissProposalMutation.isPending}
-                      >
-                        {dismissProposalMutation.isPending ? "Dismissing…" : "Dismiss"}
-                      </button>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>

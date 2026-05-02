@@ -101,7 +101,7 @@ class BookMetadataMatch(Base):
     __tablename__ = "book_metadata_matches"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String, nullable=False, default="pending")
     source = Column(String, nullable=True)
     match_confidence = Column(Numeric(5, 4), nullable=True)
