@@ -50,9 +50,15 @@ test("EpubEditor interactions", async ({ page }) => {
     "application/epub+zip",
   );
 
-  await page.getByRole("button", { name: /add book/i }).click();
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes("/api/books/upload_epubs") && r.status() === 200),
+    page.getByRole("button", { name: /add book/i }).click(),
+  ]);
 
   await page.reload();
+
+  // Narrow the library down so "Test Book" is in the first page (list renders 30 items at a time).
+  await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");
 
   // Standalone books now live behind their own tab in the library.
   await page.getByRole("tab", { name: /standalone/i }).click();
@@ -91,6 +97,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await expect(page.getByRole("button", { name: /save & rebuild epub/i })).toBeEnabled();
   await page.getByRole("button", { name: /back/i }).click();
   await expect(page.getByText("Story Manager")).toBeVisible();
+  await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");
   await page.getByRole("tab", { name: /standalone/i }).click();
 
   // Verify the word count has changed

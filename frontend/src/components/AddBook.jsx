@@ -153,8 +153,26 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
     const entries = Array.from(e.dataTransfer.items)
       .map((item) => item.webkitGetAsEntry?.())
       .filter(Boolean);
-    const newFiles = await extractEpubsFromEntries(entries);
-    setFiles((prev) => [...prev, ...newFiles]);
+    if (entries.length > 0) {
+      const newFiles = await extractEpubsFromEntries(entries);
+      setFiles((prev) => [...prev, ...newFiles]);
+    } else {
+      // Fallback for environments where webkitGetAsEntry is unavailable (e.g. synthetic events in tests).
+      // items[n].getAsFile() is more reliable than dataTransfer.files for programmatic DataTransfer objects.
+      const seen = new Set();
+      const newFiles = [
+        ...Array.from(e.dataTransfer.items)
+          .filter((item) => item.kind === "file")
+          .map((item) => item.getAsFile()),
+        ...Array.from(e.dataTransfer.files),
+      ]
+        .filter((f) => f && !seen.has(f.name) && seen.add(f.name))
+        .filter((f) => {
+          const lower = f.name.toLowerCase();
+          return lower.endsWith(".epub") || lower.endsWith(".zip");
+        });
+      setFiles((prev) => [...prev, ...newFiles]);
+    }
   };
 
   const handleSubmit = async (e) => {
