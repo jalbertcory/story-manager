@@ -9,6 +9,7 @@ from typing import List, Optional
 from ebooklib import epub
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, epub_editor, models, schemas
@@ -153,7 +154,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
         # Restore missing files for the existing book record.
         logger.info("Restoring missing files for '%s' by '%s' (id=%s)", title, author, existing.id)
-        immutable_path, current_path = build_book_paths(filename, author)
+        immutable_path, current_path = build_book_paths(f"{title} - {author}.epub", author)
         temp_immutable_path.replace(immutable_path)
         temp_current_path.replace(current_path)
 
@@ -172,7 +173,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         await epub_editor.apply_book_cleaning(existing, db)
         return existing
 
-    immutable_path, current_path = build_book_paths(filename, author)
+    immutable_path, current_path = build_book_paths(f"{title} - {author}.epub", author)
     temp_immutable_path.replace(immutable_path)
     temp_current_path.replace(current_path)
 
@@ -215,7 +216,16 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         current_word_count=master_word_count,
     )
 
-    db_book = await crud.create_book(db=db, book=book_to_create)
+    try:
+        db_book = await crud.create_book(db=db, book=book_to_create)
+    except IntegrityError:
+        await db.rollback()
+        immutable_path.unlink(missing_ok=True)
+        current_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A book with title '{title}' by '{author}' already exists at the target path",
+        )
 
     cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
     if cover_path:
