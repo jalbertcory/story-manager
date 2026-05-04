@@ -314,30 +314,6 @@
 .drop-zone.dragging .drop-zone-empty svg {
   opacity: 0.85;
 }
-.drop-zone-browse {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8rem;
-  margin-top: 0.1rem;
-}
-.browse-link {
-  background: none;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: inherit;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.browse-link:hover {
-  opacity: 0.8;
-}
-.browse-sep {
-  color: var(--text-muted);
-  user-select: none;
-}
 .file-list {
   list-style: none;
   padding: 0;
