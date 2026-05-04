@@ -109,9 +109,12 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     Raises HTTPException on duplicate or parse errors.
     """
     payload = _fix_nested_epub(payload)
+    # Strip any path components from the filename — some browsers (or the FileSystem API)
+    # may send a relative path like "folder/book.epub" instead of just "book.epub".
+    safe_filename = PurePosixPath(filename or "upload.epub").name or "upload.epub"
     LIBRARY_PATH.mkdir(exist_ok=True)
-    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{filename}"
-    temp_current_path = LIBRARY_PATH / f"tmp_{filename}"
+    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{safe_filename}"
+    temp_current_path = LIBRARY_PATH / f"tmp_{safe_filename}"
     with open(temp_immutable_path, "wb+") as f:
         f.write(payload)
 

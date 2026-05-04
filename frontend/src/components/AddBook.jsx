@@ -55,40 +55,52 @@ const formatSkippedMessage = (error) => {
   return message;
 };
 
+const readDirEntries = (reader) =>
+  new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+
+const getFileFromEntry = (fileEntry) =>
+  new Promise((resolve, reject) => fileEntry.file(resolve, reject));
+
 const extractEpubsFromEntries = async (entries) => {
-  const readDir = (dirEntry) =>
-    new Promise((resolve) => {
-      const reader = dirEntry.createReader();
-      const all = [];
-      const batch = () => {
-        reader.readEntries(async (batchEntries) => {
-          if (!batchEntries.length) {
-            resolve(all);
-            return;
-          }
-          for (const entry of batchEntries) {
-            if (entry.isFile) {
-              if (entry.name.toLowerCase().endsWith(".epub")) {
-                all.push(await new Promise((r) => entry.file(r)));
-              }
-            } else if (entry.isDirectory) {
-              all.push(...(await readDir(entry)));
+  const readDir = async (dirEntry) => {
+    const reader = dirEntry.createReader();
+    const files = [];
+    let batch;
+    do {
+      batch = await readDirEntries(reader);
+      for (const entry of batch) {
+        if (entry.isFile) {
+          if (entry.name.toLowerCase().endsWith(".epub")) {
+            try {
+              files.push(await getFileFromEntry(entry));
+            } catch {
+              // skip unreadable files
             }
           }
-          batch();
-        });
-      };
-      batch();
-    });
+        } else if (entry.isDirectory) {
+          files.push(...(await readDir(entry)));
+        }
+      }
+    } while (batch.length > 0);
+    return files;
+  };
 
   const files = [];
   for (const entry of entries) {
     if (entry.isDirectory) {
-      files.push(...(await readDir(entry)));
+      try {
+        files.push(...(await readDir(entry)));
+      } catch {
+        // skip unreadable directories
+      }
     } else if (entry.isFile) {
       const lower = entry.name.toLowerCase();
       if (lower.endsWith(".epub") || lower.endsWith(".zip")) {
-        files.push(await new Promise((r) => entry.file(r)));
+        try {
+          files.push(await getFileFromEntry(entry));
+        } catch {
+          // skip
+        }
       }
     }
   }
@@ -285,7 +297,6 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
             />
             <input
               type="file"
-              accept=".epub"
               multiple
               webkitdirectory=""
               onChange={handleFolderChange}
