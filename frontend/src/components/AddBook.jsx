@@ -115,7 +115,6 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
   const [pending, setPending] = useState(false);
   const [results, setResults] = useState(null);
   const fileInputRef = useRef(null);
-  const folderInputRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     addFilesFromEntries: async (entries) => {
@@ -126,14 +125,6 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
 
   const handleFileChange = (e) => {
     setFiles((prev) => [...prev, ...Array.from(e.target.files)]);
-    e.target.value = "";
-  };
-
-  const handleFolderChange = (e) => {
-    const epubs = Array.from(e.target.files).filter((f) =>
-      f.name.toLowerCase().endsWith(".epub")
-    );
-    setFiles((prev) => [...prev, ...epubs]);
     e.target.value = "";
   };
 
@@ -266,24 +257,7 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
                   <path d="M12 16V6m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round"/>
                   <path d="M20 16.7V19a2 2 0 01-2 2H6a2 2 0 01-2-2v-2.3" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
-                <span>Drop EPUBs, ZIPs, or folders here</span>
-                <div className="drop-zone-browse">
-                  <button
-                    type="button"
-                    className="browse-link"
-                    onClick={(e) => { e.stopPropagation(); fileInputRef.current.click(); }}
-                  >
-                    Browse files
-                  </button>
-                  <span className="browse-sep">·</span>
-                  <button
-                    type="button"
-                    className="browse-link"
-                    onClick={(e) => { e.stopPropagation(); folderInputRef.current.click(); }}
-                  >
-                    Browse folder
-                  </button>
-                </div>
+                <span>Drop EPUBs, ZIPs, or folders here, or click to browse</span>
               </div>
             )}
             <input
@@ -293,14 +267,6 @@ const AddBook = forwardRef(function AddBook(_props, ref) {
               multiple
               onChange={handleFileChange}
               ref={fileInputRef}
-              style={{ display: "none" }}
-            />
-            <input
-              type="file"
-              multiple
-              webkitdirectory=""
-              onChange={handleFolderChange}
-              ref={folderInputRef}
               style={{ display: "none" }}
             />
           </div>
