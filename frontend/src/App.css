@@ -5,6 +5,17 @@
   padding: 1.5rem 1.25rem 3rem;
 }
 
+.app-container.drag-over::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 3px solid var(--accent);
+  border-radius: var(--radius);
+  pointer-events: none;
+  z-index: 1000;
+  background: rgba(98, 114, 234, 0.03);
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -302,6 +313,30 @@
 .drop-zone:hover .drop-zone-empty svg,
 .drop-zone.dragging .drop-zone-empty svg {
   opacity: 0.85;
+}
+.drop-zone-browse {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  margin-top: 0.1rem;
+}
+.browse-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.browse-link:hover {
+  opacity: 0.8;
+}
+.browse-sep {
+  color: var(--text-muted);
+  user-select: none;
 }
 .file-list {
   list-style: none;

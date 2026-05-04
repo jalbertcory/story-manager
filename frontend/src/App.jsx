@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
@@ -27,7 +27,9 @@ function App() {
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
   const [addBookOpen, setAddBookOpen] = useState(false);
+  const [globalDragging, setGlobalDragging] = useState(false);
   const [authStatus, setAuthStatus] = useState(null);
+  const addBookRef = useRef(null);
   const debouncedQuery = useDebouncedValue(q.trim(), 300);
 
   useEffect(() => {
@@ -249,7 +251,7 @@ function App() {
               >
                 Add Books
               </summary>
-              <AddBook />
+              <AddBook ref={addBookRef} />
             </details>
             {isLoading && <p>Loading...</p>}
             {error && <p className="error">{error.message}</p>}
@@ -266,8 +268,43 @@ function App() {
     }
   };
 
+  const handleGlobalDragOver = (e) => {
+    e.preventDefault();
+    setGlobalDragging(true);
+  };
+
+  const handleGlobalDragLeave = (e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setGlobalDragging(false);
+    }
+  };
+
+  const handleGlobalDrop = (e) => {
+    e.preventDefault();
+    setGlobalDragging(false);
+    const entries = Array.from(e.dataTransfer.items)
+      .map((item) => item.webkitGetAsEntry?.())
+      .filter(Boolean);
+    const hasRelevant = entries.some(
+      (entry) =>
+        entry.isDirectory ||
+        entry.name.toLowerCase().endsWith(".epub") ||
+        entry.name.toLowerCase().endsWith(".zip")
+    );
+    if (hasRelevant) {
+      setActiveTab("library");
+      setAddBookOpen(true);
+      addBookRef.current?.addFilesFromEntries(entries);
+    }
+  };
+
   return (
-    <div className="app-container">
+    <div
+      className={`app-container${globalDragging ? " drag-over" : ""}`}
+      onDragOver={handleGlobalDragOver}
+      onDragLeave={handleGlobalDragLeave}
+      onDrop={handleGlobalDrop}
+    >
       <header className="app-header">
         <h1>Story Manager</h1>
         {authStatus.mode === "password" && (
