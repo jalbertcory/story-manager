@@ -1004,8 +1004,9 @@ async def test_upload_epub(db_session):
     epub_filename = "Uploaded Book.epub"
     epub_filepath = library_path / epub_filename
     author_dir = library_path / "Uploader"
-    immutable_filepath = author_dir / f"immutable_{epub_filename}"
-    current_filepath = author_dir / epub_filename
+    stored_filename = "Uploaded Book - Uploader.epub"
+    immutable_filepath = author_dir / f"immutable_{stored_filename}"
+    current_filepath = author_dir / stored_filename
 
     # Create a dummy epub file
     create_dummy_epub(epub_filepath, "Uploaded Book", "Uploader", "Upload Series")
@@ -1024,8 +1025,8 @@ async def test_upload_epub(db_session):
     assert data["title"] == "Uploaded Book"
     assert data["author"] == "Uploader"
     assert data["series"] == "Upload Series"
-    assert data["immutable_path"] == str(Path("library") / "Uploader" / f"immutable_{epub_filename}")
-    assert data["current_path"] == str(Path("library") / "Uploader" / epub_filename)
+    assert data["immutable_path"] == str(Path("library") / "Uploader" / f"immutable_{stored_filename}")
+    assert data["current_path"] == str(Path("library") / "Uploader" / stored_filename)
     assert data["master_word_count"] > 0
     assert data["current_word_count"] == data["master_word_count"]
 
@@ -1075,12 +1076,12 @@ async def test_upload_zip_with_nested_epubs(db_session):
     assert {item["book"]["title"] for item in data} == {"Nested One", "Nested Two"}
     assert all(item["filename"].startswith("batch-upload.zip:collection/") for item in data)
 
-    # Imported books are written into author folders using a flattened version of the nested archive path.
+    # Imported books are written into author folders named by title and author from epub metadata.
     for expected_path in [
-        library_path / "Author One" / "collection_one_Nested One.epub",
-        library_path / "Author One" / "immutable_collection_one_Nested One.epub",
-        library_path / "Author Two" / "collection_two_Nested Two.epub",
-        library_path / "Author Two" / "immutable_collection_two_Nested Two.epub",
+        library_path / "Author One" / "Nested One - Author One.epub",
+        library_path / "Author One" / "immutable_Nested One - Author One.epub",
+        library_path / "Author Two" / "Nested Two - Author Two.epub",
+        library_path / "Author Two" / "immutable_Nested Two - Author Two.epub",
     ]:
         assert expected_path.exists()
         expected_path.unlink(missing_ok=True)
