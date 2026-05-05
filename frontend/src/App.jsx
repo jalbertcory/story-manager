@@ -157,6 +157,45 @@ function App() {
     setAuthStatus(nextStatus);
   };
 
+  useEffect(() => {
+    const onDragOver = (e) => {
+      e.preventDefault();
+      setGlobalDragging(true);
+    };
+    const onDragLeave = (e) => {
+      // Only clear when the drag exits the browser window entirely
+      if (e.relatedTarget === null || !document.documentElement.contains(e.relatedTarget)) {
+        setGlobalDragging(false);
+      }
+    };
+    const onDrop = (e) => {
+      e.preventDefault();
+      setGlobalDragging(false);
+      const entries = Array.from(e.dataTransfer.items)
+        .map((item) => item.webkitGetAsEntry?.())
+        .filter(Boolean);
+      const hasRelevant = entries.some(
+        (entry) =>
+          entry.isDirectory ||
+          entry.name.toLowerCase().endsWith(".epub") ||
+          entry.name.toLowerCase().endsWith(".zip")
+      );
+      if (hasRelevant) {
+        setActiveTab("library");
+        setAddBookOpen(true);
+        addBookRef.current?.addFilesFromEntries(entries);
+      }
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
   if (authStatus === null) {
     return (
       <div className="app-container">
@@ -268,43 +307,8 @@ function App() {
     }
   };
 
-  const handleGlobalDragOver = (e) => {
-    e.preventDefault();
-    setGlobalDragging(true);
-  };
-
-  const handleGlobalDragLeave = (e) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) {
-      setGlobalDragging(false);
-    }
-  };
-
-  const handleGlobalDrop = (e) => {
-    e.preventDefault();
-    setGlobalDragging(false);
-    const entries = Array.from(e.dataTransfer.items)
-      .map((item) => item.webkitGetAsEntry?.())
-      .filter(Boolean);
-    const hasRelevant = entries.some(
-      (entry) =>
-        entry.isDirectory ||
-        entry.name.toLowerCase().endsWith(".epub") ||
-        entry.name.toLowerCase().endsWith(".zip")
-    );
-    if (hasRelevant) {
-      setActiveTab("library");
-      setAddBookOpen(true);
-      addBookRef.current?.addFilesFromEntries(entries);
-    }
-  };
-
   return (
-    <div
-      className={`app-container${globalDragging ? " drag-over" : ""}`}
-      onDragOver={handleGlobalDragOver}
-      onDragLeave={handleGlobalDragLeave}
-      onDrop={handleGlobalDrop}
-    >
+    <div className={`app-container${globalDragging ? " drag-over" : ""}`}>
       <header className="app-header">
         <h1>Story Manager</h1>
         {authStatus.mode === "password" && (
