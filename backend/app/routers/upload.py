@@ -134,7 +134,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         )
 
     existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
-    if existing:
+    if existing and existing.source_type == models.SourceType.epub:
         # Check if the existing book's files are missing — if so, restore them
         # from the upload instead of rejecting as a duplicate.
         files_intact = True

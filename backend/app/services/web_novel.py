@@ -12,7 +12,7 @@ from ebooklib import epub
 from fastapi import HTTPException, status
 from lxml import etree
 
-from .. import crud, epub_editor, schemas
+from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import SessionLocal
 from .cover_collectors import collect_cover
@@ -263,7 +263,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             new_epub_path, metadata = result
 
             existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
-            if existing and existing.id != book_id:
+            if existing and existing.id != book_id and existing.source_type == models.SourceType.web:
                 new_epub_path.unlink(missing_ok=True)
                 db_book.download_status = "error"
                 db_book.title = f"Conflict: '{metadata['title']}' already exists"
