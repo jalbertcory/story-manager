@@ -2608,6 +2608,171 @@ async def test_duplicate_epub_upload(db_session):
 
 
 @pytest.mark.asyncio
+async def test_epub_upload_deduplicates_matching_epub_source(db_session):
+    """Two epub uploads with the same full title and author are blocked → 409."""
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    title = "The Lighthouse at the Edge of Everything"
+    author = "Cordelia Vance-Whitmore"
+    epub_filename = "lighthouse-edge.epub"
+    epub_filepath = library_path / epub_filename
+
+    create_dummy_epub(epub_filepath, title, author)
+    with open(epub_filepath, "rb") as f:
+        first = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+    assert first.status_code == 201
+
+    create_dummy_epub(epub_filepath, title, author)
+    with open(epub_filepath, "rb") as f:
+        second = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+    assert second.status_code == 409
+    assert "already exists" in second.json()["detail"]
+
+    epub_filepath.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_epub_upload_allowed_when_web_novel_has_same_title_and_author(db_session):
+    """An epub upload is allowed even when a web novel with the same title and author already exists."""
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    title = "The Lighthouse at the Edge of Everything"
+    author = "Cordelia Vance-Whitmore"
+
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title=title,
+                author=author,
+                source_url="https://example.com/fiction/999",
+                source_type=models.SourceType.web,
+                immutable_path="library/web-novel-immutable.epub",
+                current_path="library/web-novel-current.epub",
+            ),
+        )
+
+    epub_filename = "lighthouse-edge-upload.epub"
+    epub_filepath = library_path / epub_filename
+    create_dummy_epub(epub_filepath, title, author)
+
+    with open(epub_filepath, "rb") as f:
+        response = client.post("/api/books/upload_epub", files={"file": (epub_filename, f, "application/epub+zip")})
+    assert response.status_code == 201
+
+    epub_filepath.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_finish_web_novel_download_conflicts_with_existing_web_novel(db_session, mocker, tmp_path):
+    """A web novel download is blocked when another web novel with the same title and author already exists."""
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    mocker.patch("backend.app.services.web_novel.LIBRARY_PATH", library_path)
+
+    title = "Sovereign of the Fractured Sky"
+    author = "Rosamund Thielke"
+
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title=title,
+                author=author,
+                source_url="https://example.com/fiction/100",
+                source_type=models.SourceType.web,
+                immutable_path="library/existing-immutable.epub",
+                current_path="library/existing-current.epub",
+            ),
+        )
+        placeholder = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="https://example.com/fiction/200",
+                author="Pending",
+                source_url="https://example.com/fiction/200",
+                source_type=models.SourceType.web,
+                download_status="pending",
+            ),
+        )
+        placeholder_id = placeholder.id
+
+    fake_epub = library_path / "Sovereign-of-the-Fractured-Sky-ex_200.epub"
+    create_dummy_epub(fake_epub, title, author)
+
+    mocker.patch(
+        "backend.app.services.web_novel.download_web_novel",
+        return_value=(fake_epub, {"title": title, "author": author, "series": None}),
+    )
+    mocker.patch("backend.app.services.web_novel.SessionLocal", AsyncTestingSessionLocal)
+
+    await web_novel.finish_web_novel_download(placeholder_id, "https://example.com/fiction/200")
+
+    async with AsyncTestingSessionLocal() as session:
+        updated = await crud.get_book(session, placeholder_id)
+    assert updated.download_status == "error"
+    assert "Conflict" in updated.title
+
+
+@pytest.mark.asyncio
+async def test_finish_web_novel_download_allowed_when_epub_has_same_title_and_author(db_session, mocker, tmp_path):
+    """A web novel download succeeds when only an epub (not a web novel) with the same title and author exists."""
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    mocker.patch("backend.app.services.web_novel.LIBRARY_PATH", library_path)
+    mocker.patch("backend.app.services.library_paths.LIBRARY_PATH", library_path)
+
+    title = "Sovereign of the Fractured Sky"
+    author = "Rosamund Thielke"
+
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title=title,
+                author=author,
+                source_type=models.SourceType.epub,
+                immutable_path="library/existing-epub-immutable.epub",
+                current_path="library/existing-epub-current.epub",
+            ),
+        )
+        placeholder = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="https://example.com/fiction/200",
+                author="Pending",
+                source_url="https://example.com/fiction/200",
+                source_type=models.SourceType.web,
+                download_status="pending",
+            ),
+        )
+        placeholder_id = placeholder.id
+
+    fake_epub = library_path / "Sovereign-of-the-Fractured-Sky-ex_200.epub"
+    create_dummy_epub(fake_epub, title, author)
+
+    mocker.patch(
+        "backend.app.services.web_novel.download_web_novel",
+        return_value=(fake_epub, {"title": title, "author": author, "series": None}),
+    )
+    mocker.patch("backend.app.services.web_novel.SessionLocal", AsyncTestingSessionLocal)
+    mocker.patch("backend.app.services.web_novel.epub_editor.get_word_count", return_value=50000)
+    mocker.patch("backend.app.services.web_novel.get_epub_word_and_chapter_count", return_value=(50000, 42))
+    mocker.patch("backend.app.services.web_novel.get_and_save_epub_cover", return_value=None)
+    mocker.patch("backend.app.services.web_novel.collect_cover", mocker.AsyncMock(return_value=None))
+    mocker.patch("backend.app.services.web_novel.epub_editor.apply_book_cleaning", mocker.AsyncMock(return_value=False))
+    mocker.patch("backend.app.services.web_novel.queue_metadata_sync_job", mocker.AsyncMock())
+
+    await web_novel.finish_web_novel_download(placeholder_id, "https://example.com/fiction/200")
+
+    async with AsyncTestingSessionLocal() as session:
+        updated = await crud.get_book(session, placeholder_id)
+    assert updated.download_status is None
+    assert updated.title == title
+    assert updated.author == author
+
+
+@pytest.mark.asyncio
 async def test_books_count(db_session):
     """
     Test that GET /api/books/count returns the correct total.
