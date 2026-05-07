@@ -31,6 +31,8 @@ class BookBase(BaseModel):
     notes: Optional[str] = None
     download_status: Optional[str] = None
     refresh_status: Optional[str] = None
+    audiobook_enabled: bool = False
+    audiobook_pipeline_status: Optional[str] = None
 
 
 # Pydantic model for creating a new book.
@@ -48,6 +50,7 @@ class BookUpdate(BaseModel):
     user_genre_tags: Optional[List[str]] = None
     source_tags: Optional[List[str]] = None
     metadata_remote_ids: Optional[dict] = None
+    audiobook_enabled: Optional[bool] = None
     removed_chapters: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
     notes: Optional[str] = None
@@ -81,6 +84,8 @@ class BookCatalogEntry(BaseModel):
     updated_at: Optional[datetime] = None
     download_status: Optional[str] = None
     refresh_status: Optional[str] = None
+    audiobook_enabled: bool = False
+    audiobook_pipeline_status: Optional[str] = None
 
 
 # Pydantic model for creating a new book log.

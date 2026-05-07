@@ -117,7 +117,8 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     if not chapters:
         logger.warning("No chapters found for book %s during roster generation.", book_id)
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
+        if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+            await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
         return
 
     # Collect text from up to 5 chapters (keeps prompt size manageable)
@@ -155,7 +156,8 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 
     await crud.audiobook.create_characters_bulk(db, book_id=book_id, characters_data=normalised)
     logger.info("Created %d characters for book %s.", len(normalised), book_id)
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
 
 
 async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
@@ -174,6 +176,10 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     batch_size = 50
 
     while True:
+        if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+            logger.info("Book %s paused during diarization.", book_id)
+            return
+
         batch = await crud.audiobook.get_sentences_pending_diarization(db, book_id, limit=batch_size)
         if not batch:
             break
@@ -209,4 +215,5 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             context_window.append(sentence.original_text)
 
     logger.info("Diarization complete for book %s.", book_id)
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "audio_gen")
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "audio_gen")

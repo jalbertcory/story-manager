@@ -513,4 +513,106 @@ describe("BookSettings", () => {
       });
     });
   });
+
+  it("keeps the audiobook pipeline hidden until the book is enabled", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (
+        url === "/api/books/11/chapters" ||
+        url === "/api/books/11/matched-config" ||
+        url === "/api/series" ||
+        url === "/api/books/11/audiobook/characters" ||
+        url === "/api/books/11/audiobook/chapters"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              pipeline_status: null,
+              sentence_counts: {},
+            }),
+        });
+      }
+      if (url === "/api/books/11" && options?.method === "PUT") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              id: 11,
+              title: "Audio Candidate",
+              author: "Author",
+              series: null,
+              series_index: null,
+              source_type: "epub",
+              source_url: null,
+              immutable_path: "library/original.epub",
+              current_path: "library/current.epub",
+              removed_chapters: [],
+              content_selectors: [],
+              created_at: "2026-03-17T00:00:00Z",
+              content_updated_at: "2026-03-17T00:00:00Z",
+              content_version: 1,
+              audiobook_enabled: true,
+              audiobook_pipeline_status: null,
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(
+      <BookSettings
+        book={{
+          id: 11,
+          title: "Audio Candidate",
+          author: "Author",
+          series: null,
+          series_index: null,
+          source_type: "epub",
+          source_url: null,
+          immutable_path: "library/original.epub",
+          current_path: "library/current.epub",
+          removed_chapters: [],
+          content_selectors: [],
+          created_at: "2026-03-17T00:00:00Z",
+          content_updated_at: "2026-03-17T00:00:00Z",
+          content_version: 1,
+          audiobook_enabled: false,
+        }}
+        onBack={() => {}}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Audiobook Pipeline" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Enable Audiobook Pipeline" }),
+    );
+
+    await waitFor(() => {
+      const enableCall = fetchMock.mock.calls.find(
+        ([url, options]) =>
+          url === "/api/books/11" && options?.method === "PUT",
+      );
+      expect(enableCall).toBeTruthy();
+      expect(JSON.parse(enableCall[1].body)).toEqual({
+        audiobook_enabled: true,
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Audiobook Pipeline" }),
+    ).toBeInTheDocument();
+  });
 });
