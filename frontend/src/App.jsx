@@ -6,6 +6,7 @@ import AdminLogin from "./components/AdminLogin.jsx";
 import BookList from "./components/BookList";
 import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
+import AudiobookSettings from "./components/AudiobookSettings.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
@@ -227,6 +228,8 @@ function App() {
         return <Logs />;
       case "utilities":
         return <Utilities />;
+      case "audio-settings":
+        return <AudiobookSettings />;
       default:
         return (
           <>
