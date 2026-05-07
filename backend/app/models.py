@@ -38,6 +38,9 @@ class Book(Base):
     # Tracks the lifecycle of a "refresh from source" job independently from the
     # initial download state. Values: None (idle), "queued", "processing", "error".
     refresh_status = Column(String, nullable=True)
+    # Audiobook generation is opt-in per book. Keep it disabled by default so
+    # normal library books do not show or run the heavier pipeline.
+    audiobook_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     # Audiobook pipeline state. Values: None (idle), "ingesting", "roster_gen",
     # "diarizing", "audio_gen", "assembling", "complete", "error", "paused".
     audiobook_pipeline_status = Column(String, nullable=True)
@@ -184,6 +187,7 @@ class AudiobookChapter(Base):
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     chapter_number = Column(Integer, nullable=False)
+    content_file_name = Column(String, nullable=True)
     smil_file_path = Column(String, nullable=True)
     audio_file_path = Column(String, nullable=True)
     needs_reassembly = Column(Boolean, nullable=False, server_default="false")
