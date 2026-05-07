@@ -27,8 +27,22 @@ def _ms_to_clock(ms: int) -> str:
     return f"{hours:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
 
-def _build_smil(chapter_num: int, sentences: list, audio_filename: str) -> str:
+def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
+    for index, item in enumerate(toc_items or []):
+        uid = f"{prefix}_{index}"
+        if isinstance(item, epub.Link) and not item.uid:
+            item.uid = uid
+        elif isinstance(item, (tuple, list)) and item:
+            section = item[0]
+            if isinstance(section, epub.Link) and not section.uid:
+                section.uid = uid
+            if len(item) > 1:
+                _ensure_toc_link_ids(item[1], uid)
+
+
+def _build_smil(chapter, sentences: list, audio_filename: str) -> str:
     """Generate EPUB 3 Media Overlay SMIL XML for a chapter."""
+    text_file_name = chapter.content_file_name or f"chapter{chapter.chapter_number:04d}.xhtml"
     root = ET.Element(
         "smil",
         {
@@ -38,7 +52,7 @@ def _build_smil(chapter_num: int, sentences: list, audio_filename: str) -> str:
         },
     )
     body = ET.SubElement(root, "body")
-    seq = ET.SubElement(body, "seq", {"epub:textref": f"chapter{chapter_num:04d}.xhtml", "epub:type": "chapter"})
+    seq = ET.SubElement(body, "seq", {"epub:textref": text_file_name, "epub:type": "chapter"})
 
     cumulative_ms = 0
     for sentence in sentences:
@@ -47,7 +61,7 @@ def _build_smil(chapter_num: int, sentences: list, audio_filename: str) -> str:
         ET.SubElement(
             par,
             "text",
-            {"src": f"chapter{chapter_num:04d}.xhtml#{sentence.html_element_id}"},
+            {"src": f"{text_file_name}#{sentence.html_element_id}"},
         )
         ET.SubElement(
             par,
@@ -74,15 +88,10 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
     combined = AudioSegment.empty()
     for sentence in sentences:
         if not sentence.audio_file_path:
-            logger.warning("Sentence %s missing audio; inserting silence.", sentence.id)
-            duration_ms = sentence.audio_duration_ms or 500
-            combined += AudioSegment.silent(duration=duration_ms)
-            continue
+            raise RuntimeError(f"Sentence {sentence.id} is missing audio path during assembly.")
         snippet_full = LIBRARY_PATH.parent / sentence.audio_file_path
         if not snippet_full.exists():
-            logger.warning("Snippet file missing for sentence %s; inserting silence.", sentence.id)
-            combined += AudioSegment.silent(duration=sentence.audio_duration_ms or 500)
-            continue
+            raise RuntimeError(f"Snippet file missing for sentence {sentence.id}: {snippet_full}")
         combined += AudioSegment.from_mp3(str(snippet_full))
 
     audio_filename = f"ch{chapter.chapter_number:04d}.mp3"
@@ -90,7 +99,7 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
     combined.export(str(audio_path), format="mp3")
     logger.info("Assembled chapter audio: %s (%d ms)", audio_path, len(combined))
 
-    smil_xml = _build_smil(chapter.chapter_number, sentences, audio_filename)
+    smil_xml = _build_smil(chapter, sentences, audio_filename)
     smil_filename = f"ch{chapter.chapter_number:04d}.smil"
     smil_path = output_dir / smil_filename
     smil_path.write_text(smil_xml, encoding="utf-8")
@@ -108,7 +117,19 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    chapters = await crud.audiobook.get_chapters_needing_reassembly(db, book_id)
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+        logger.info("Book %s paused before assembly.", book_id)
+        return
+
+    if await crud.audiobook.has_sentence_status(db, book_id, "error"):
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+        raise RuntimeError(f"Cannot assemble book {book_id}: sentence audio generation has errors.")
+
+    if not await crud.audiobook.all_sentences_audio_generated(db, book_id):
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+        raise RuntimeError(f"Cannot assemble book {book_id}: not all sentences have generated audio.")
+
+    chapters = await crud.audiobook.get_chapters_pending_assembly(db, book_id)
     if not chapters:
         logger.info("No chapters need reassembly for book %s.", book_id)
         await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
@@ -134,6 +155,18 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         smil_full = LIBRARY_PATH.parent / chapter.smil_file_path
         if not smil_full.exists():
             continue
+        audio_full = LIBRARY_PATH.parent / chapter.audio_file_path if chapter.audio_file_path else None
+        if audio_full is None or not audio_full.exists():
+            raise RuntimeError(f"Missing chapter audio for book {book_id}, chapter {chapter.id}.")
+
+        audio_item = epub.EpubItem(
+            uid=f"audio_ch{chapter.chapter_number:04d}",
+            file_name=f"ch{chapter.chapter_number:04d}.mp3",
+            media_type="audio/mpeg",
+            content=audio_full.read_bytes(),
+        )
+        ebook.add_item(audio_item)
+
         smil_item = epub.EpubSMIL(
             uid=f"smil_ch{chapter.chapter_number:04d}",
             file_name=f"ch{chapter.chapter_number:04d}.smil",
@@ -143,15 +176,17 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
 
         # Attach media-overlay to the matching spine item
         for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-            if f"chapter{chapter.chapter_number:04d}" in item.get_name():
+            if item.get_name() == chapter.content_file_name:
                 item.media_overlay = smil_item.id
                 break
 
     audiobook_epub_path = output_dir / "audiobook.epub"
+    _ensure_toc_link_ids(ebook.toc)
     epub.write_epub(str(audiobook_epub_path), ebook)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
     logger.info("Assembly complete for book %s.", book_id)
 
 

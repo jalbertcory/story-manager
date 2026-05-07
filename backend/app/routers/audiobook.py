@@ -74,6 +74,7 @@ class ChapterResponse(BaseModel):
     id: int
     book_id: int
     chapter_number: int
+    content_file_name: Optional[str]
     smil_file_path: Optional[str]
     audio_file_path: Optional[str]
     needs_reassembly: bool
@@ -121,6 +122,13 @@ async def _get_book_or_404(book_id: int, db: AsyncSession) -> Book:
     return book
 
 
+async def _get_audiobook_book_or_404(book_id: int, db: AsyncSession) -> Book:
+    book = await _get_book_or_404(book_id, db)
+    if not book.audiobook_enabled:
+        raise HTTPException(status_code=403, detail="Audiobook pipeline is not enabled for this book")
+    return book
+
+
 def _resolve_path(relative_path: Optional[str]) -> Optional[Path]:
     if not relative_path:
         return None
@@ -134,19 +142,22 @@ def _resolve_path(relative_path: Optional[str]) -> Optional[Path]:
 
 @router.post("/api/books/{book_id}/audiobook/start")
 async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    book = await _get_book_or_404(book_id, db)
+    book = await _get_audiobook_book_or_404(book_id, db)
     status = book.audiobook_pipeline_status
 
     if status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
         # Already running; idempotent
         return {"status": status, "queued": False}
 
-    if status == "complete":
-        # Resume from audio_gen to re-generate only chapters with needs_reassembly
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "audio_gen")
-    elif status != "paused":
-        # Fresh start or reset
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "ingesting")
+    if status == "error" and await crud.audiobook.has_sentence_status(db, book_id, "error"):
+        await crud.audiobook.reset_error_sentences_for_book(db, book_id)
+
+    resume_status = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
+    if resume_status == "complete":
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
+        return {"status": "complete", "queued": False}
+
+    await crud.audiobook.set_book_pipeline_status(db, book_id, resume_status)
 
     queue = get_audiobook_queue()
     queued = await queue.enqueue(book_id)
@@ -156,14 +167,14 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
 @router.post("/api/books/{book_id}/audiobook/pause")
 async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await _get_book_or_404(book_id, db)
+    await _get_audiobook_book_or_404(book_id, db)
     await crud.audiobook.set_book_pipeline_status(db, book_id, "paused")
     return {"status": "paused"}
 
 
 @router.post("/api/books/{book_id}/audiobook/rebuild")
 async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await _get_book_or_404(book_id, db)
+    await _get_audiobook_book_or_404(book_id, db)
     # Delete existing pipeline data so ingestion runs fresh
     await crud.audiobook.delete_chapters_for_book(db, book_id)
     await crud.audiobook.delete_characters_for_book(db, book_id)
@@ -175,7 +186,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
 
 @router.get("/api/books/{book_id}/audiobook/status", response_model=AudiobookStatusResponse)
 async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) -> AudiobookStatusResponse:
-    book = await _get_book_or_404(book_id, db)
+    book = await _get_audiobook_book_or_404(book_id, db)
     counts = await crud.audiobook.count_sentences_by_status(db, book_id)
     return AudiobookStatusResponse(
         pipeline_status=book.audiobook_pipeline_status,
@@ -190,7 +201,7 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
 
 @router.get("/api/books/{book_id}/audiobook/characters", response_model=list[CharacterResponse])
 async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[CharacterResponse]:
-    await _get_book_or_404(book_id, db)
+    await _get_audiobook_book_or_404(book_id, db)
     chars = await crud.audiobook.get_characters_for_book(db, book_id)
     return [CharacterResponse.model_validate(c) for c in chars]
 
@@ -200,9 +211,12 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
     data = body.model_dump(exclude_none=True)
     voice_changed = "voice_design_prompt" in data
 
-    char = await crud.audiobook.update_character(db, char_id, data)
-    if char is None:
+    existing = await crud.audiobook.get_character(db, char_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Character not found")
+    await _get_audiobook_book_or_404(existing.book_id, db)
+
+    char = await crud.audiobook.update_character(db, char_id, data)
 
     if voice_changed:
         await crud.audiobook.cascade_voice_change(db, char_id)
@@ -227,7 +241,7 @@ async def list_sentences(
     chapter_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> SentenceListResponse:
-    await _get_book_or_404(book_id, db)
+    await _get_audiobook_book_or_404(book_id, db)
     sentences, total = await crud.audiobook.get_sentences_paginated(db, book_id, page=page, limit=limit, chapter_id=chapter_id)
     return SentenceListResponse(
         items=[SentenceResponse.model_validate(s) for s in sentences],
@@ -239,17 +253,21 @@ async def list_sentences(
 
 @router.put("/api/audiobook/sentences/{sentence_id}", response_model=SentenceResponse)
 async def update_sentence(sentence_id: int, body: SentenceUpdate, db: AsyncSession = Depends(get_db)) -> SentenceResponse:
+    existing = await db.get(AudiobookSentence, sentence_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Sentence not found")
+    chapter = await db.get(AudiobookChapter, existing.chapter_id)
+    if chapter:
+        await _get_audiobook_book_or_404(chapter.book_id, db)
+
     sentence = await crud.audiobook.update_sentence_speaker(
         db,
         sentence_id=sentence_id,
         character_id=body.character_id,
         tagged_text=body.tagged_text or "",
     )
-    if sentence is None:
-        raise HTTPException(status_code=404, detail="Sentence not found")
 
     # Re-enqueue for TTS
-    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
     if chapter:
         queue = get_audiobook_queue()
         await crud.audiobook.set_book_pipeline_status(db, chapter.book_id, "audio_gen")
@@ -263,6 +281,9 @@ async def get_sentence_audio(sentence_id: int, db: AsyncSession = Depends(get_db
     sentence = await db.get(AudiobookSentence, sentence_id)
     if sentence is None or not sentence.audio_file_path:
         raise HTTPException(status_code=404, detail="Audio not available")
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    if chapter:
+        await _get_audiobook_book_or_404(chapter.book_id, db)
     full_path = _resolve_path(sentence.audio_file_path)
     if not full_path or not full_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found on disk")
@@ -276,7 +297,7 @@ async def get_sentence_audio(sentence_id: int, db: AsyncSession = Depends(get_db
 
 @router.get("/api/books/{book_id}/audiobook/chapters", response_model=list[ChapterResponse])
 async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[ChapterResponse]:
-    await _get_book_or_404(book_id, db)
+    await _get_audiobook_book_or_404(book_id, db)
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     return [ChapterResponse.model_validate(c) for c in chapters]
 
@@ -286,6 +307,7 @@ async def get_chapter_audio(book_id: int, chapter_id: int, db: AsyncSession = De
     chapter = await db.get(AudiobookChapter, chapter_id)
     if chapter is None or chapter.book_id != book_id or not chapter.audio_file_path:
         raise HTTPException(status_code=404, detail="Audio not available")
+    await _get_audiobook_book_or_404(book_id, db)
     full_path = _resolve_path(chapter.audio_file_path)
     if not full_path or not full_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found on disk")

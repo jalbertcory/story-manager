@@ -32,6 +32,7 @@ def upgrade():
         sa.Column("id", sa.Integer, primary_key=True, index=True),
         sa.Column("book_id", sa.Integer, sa.ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True),
         sa.Column("chapter_number", sa.Integer, nullable=False),
+        sa.Column("content_file_name", sa.String, nullable=True),
         sa.Column("smil_file_path", sa.String, nullable=True),
         sa.Column("audio_file_path", sa.String, nullable=True),
         sa.Column("needs_reassembly", sa.Boolean, nullable=False, server_default="false"),
@@ -73,11 +74,16 @@ def upgrade():
     )
     op.create_index("ix_audiobook_sentences_status", "audiobook_sentences", ["status"])
 
+    op.add_column(
+        "books",
+        sa.Column("audiobook_enabled", sa.Boolean, nullable=False, server_default="false"),
+    )
     op.add_column("books", sa.Column("audiobook_pipeline_status", sa.String, nullable=True))
 
 
 def downgrade():
     op.drop_column("books", "audiobook_pipeline_status")
+    op.drop_column("books", "audiobook_enabled")
     op.drop_index("ix_audiobook_sentences_status", table_name="audiobook_sentences")
     op.drop_table("audiobook_sentences")
     op.drop_table("audiobook_characters")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select, update, func
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
@@ -44,7 +44,12 @@ async def set_book_pipeline_status(db: AsyncSession, book_id: int, status: Optio
 
 async def get_in_progress_audiobook_books(db: AsyncSession) -> list[Book]:
     active_statuses = ["ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"]
-    result = await db.execute(select(Book).where(Book.audiobook_pipeline_status.in_(active_statuses)))
+    result = await db.execute(
+        select(Book).where(
+            Book.audiobook_enabled.is_(True),
+            Book.audiobook_pipeline_status.in_(active_statuses),
+        )
+    )
     return list(result.scalars().all())
 
 
@@ -53,8 +58,13 @@ async def get_in_progress_audiobook_books(db: AsyncSession) -> list[Book]:
 # ---------------------------------------------------------------------------
 
 
-async def create_chapter(db: AsyncSession, book_id: int, chapter_number: int) -> AudiobookChapter:
-    chapter = AudiobookChapter(book_id=book_id, chapter_number=chapter_number)
+async def create_chapter(
+    db: AsyncSession,
+    book_id: int,
+    chapter_number: int,
+    content_file_name: Optional[str] = None,
+) -> AudiobookChapter:
+    chapter = AudiobookChapter(book_id=book_id, chapter_number=chapter_number, content_file_name=content_file_name)
     db.add(chapter)
     await db.flush()
     return chapter
@@ -71,6 +81,22 @@ async def get_chapters_needing_reassembly(db: AsyncSession, book_id: int) -> lis
     result = await db.execute(
         select(AudiobookChapter)
         .where(AudiobookChapter.book_id == book_id, AudiobookChapter.needs_reassembly.is_(True))
+        .order_by(AudiobookChapter.chapter_number)
+    )
+    return list(result.scalars().all())
+
+
+async def get_chapters_pending_assembly(db: AsyncSession, book_id: int) -> list[AudiobookChapter]:
+    result = await db.execute(
+        select(AudiobookChapter)
+        .where(
+            AudiobookChapter.book_id == book_id,
+            or_(
+                AudiobookChapter.needs_reassembly.is_(True),
+                AudiobookChapter.audio_file_path.is_(None),
+                AudiobookChapter.smil_file_path.is_(None),
+            ),
+        )
         .order_by(AudiobookChapter.chapter_number)
     )
     return list(result.scalars().all())
@@ -261,6 +287,26 @@ async def update_sentence_audio(db: AsyncSession, sentence_id: int, audio_file_p
     await db.commit()
 
 
+async def mark_sentence_error(db: AsyncSession, sentence_id: int) -> None:
+    await db.execute(update(AudiobookSentence).where(AudiobookSentence.id == sentence_id).values(status="error"))
+    await db.commit()
+
+
+async def reset_error_sentences_for_book(db: AsyncSession, book_id: int) -> int:
+    chapter_ids = select(AudiobookChapter.id).where(AudiobookChapter.book_id == book_id)
+    result = await db.execute(
+        update(AudiobookSentence)
+        .where(
+            AudiobookSentence.chapter_id.in_(chapter_ids),
+            AudiobookSentence.status == "error",
+        )
+        .values(status="ready_for_audio", audio_file_path=None, audio_duration_ms=None)
+    )
+    await db.execute(update(AudiobookChapter).where(AudiobookChapter.book_id == book_id).values(needs_reassembly=True))
+    await db.commit()
+    return result.rowcount or 0
+
+
 async def update_sentence_speaker(
     db: AsyncSession, sentence_id: int, character_id: Optional[int], tagged_text: str
 ) -> Optional[AudiobookSentence]:
@@ -287,6 +333,49 @@ async def count_sentences_by_status(db: AsyncSession, book_id: int) -> dict[str,
         .group_by(AudiobookSentence.status)
     )
     return {row[0]: row[1] for row in result.all()}
+
+
+async def has_sentence_status(db: AsyncSession, book_id: int, statuses: str | list[str]) -> bool:
+    status_values = [statuses] if isinstance(statuses, str) else statuses
+    result = await db.execute(
+        select(func.count())
+        .select_from(AudiobookSentence)
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(
+            AudiobookChapter.book_id == book_id,
+            AudiobookSentence.status.in_(status_values),
+        )
+    )
+    return result.scalar_one() > 0
+
+
+async def get_book_pipeline_status(db: AsyncSession, book_id: int) -> Optional[str]:
+    result = await db.execute(select(Book.audiobook_pipeline_status).where(Book.id == book_id))
+    return result.scalar_one_or_none()
+
+
+async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
+    """Infer the earliest safe phase from durable chapter/sentence state."""
+    chapters = await get_chapters_for_book(db, book_id)
+    if not chapters:
+        return "ingesting"
+
+    characters = await get_characters_for_book(db, book_id)
+    if not characters:
+        return "roster_gen"
+
+    counts = await count_sentences_by_status(db, book_id)
+    if counts.get("pending_diarization", 0) > 0:
+        return "diarizing"
+    if counts.get("ready_for_audio", 0) > 0 or counts.get("error", 0) > 0:
+        return "audio_gen"
+
+    total = sum(counts.values())
+    if total > 0 and counts.get("audio_generated", 0) == total:
+        pending_chapters = await get_chapters_pending_assembly(db, book_id)
+        return "assembling" if pending_chapters else "complete"
+
+    return "ingesting"
 
 
 async def chapter_all_audio_generated(db: AsyncSession, chapter_id: int) -> bool:

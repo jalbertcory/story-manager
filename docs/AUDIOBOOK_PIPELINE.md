@@ -121,6 +121,7 @@ PUT /api/audiobook/sentences/{id}
 | id | Integer PK | |
 | book_id | FK → books CASCADE | |
 | chapter_number | Integer | Spine order |
+| content_file_name | String | Original EPUB spine document path used by SMIL text refs |
 | smil_file_path | String | Relative path to generated `.smil` |
 | audio_file_path | String | Relative path to concatenated chapter MP3 |
 | needs_reassembly | Boolean | Worker polls for `True` |
@@ -149,7 +150,9 @@ PUT /api/audiobook/sentences/{id}
 | audio_duration_ms | Integer | Used for SMIL timestamp calculation |
 | status | String | `pending_diarization` → `ready_for_audio` → `audio_generated` / `error` |
 
-**New column on `books`**: `audiobook_pipeline_status` (String, nullable)
+**New columns on `books`**:
+- `audiobook_enabled` (Boolean, default `false`) — per-book opt-in gate for this pipeline
+- `audiobook_pipeline_status` (String, nullable)
 Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `assembling`, `complete`, `error`, `paused`
 
 ---
@@ -271,6 +274,9 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 - `httpx>=0.27` — HTTP client for LLM and OmniVoice calls (moved from dev)
 - `pydub>=0.25` — MP3 concatenation
 - `mutagen>=1.47` — MP3 duration extraction
+
+**`Dockerfile.base`**:
+- `ffmpeg` — required by `pydub` for MP3 decode/export
 
 **`Dockerfile`** — after `uv pip install`:
 ```dockerfile

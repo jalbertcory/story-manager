@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..models import AudiobookCharacter, AudiobookSentence
+from ..models import AudiobookCharacter
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,21 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
     snippets_dir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
+    failed = 0
     while True:
+        if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+            logger.info("Book %s paused during TTS generation.", book_id)
+            return
+
         batch = await crud.audiobook.get_sentences_ready_for_audio(db, book_id, limit=20)
         if not batch:
             break
 
         for sentence in batch:
+            if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+                logger.info("Book %s paused during TTS generation.", book_id)
+                return
+
             # Resolve voice prompt from the assigned character
             voice_prompt = DEFAULT_VOICE_PROMPT
             if sentence.character_id is not None:
@@ -75,34 +84,49 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
             logger.debug("Generating audio for sentence %s (book %s).", sentence.id, book_id)
             try:
                 audio_bytes = await _call_omnivoice(endpoint, voice_prompt, text_to_speak)
+                out_path = _snippet_path(book_id, sentence.id)
+                out_path.write_bytes(audio_bytes)
+
+                duration_ms = _get_mp3_duration_ms(out_path)
             except httpx.HTTPStatusError as exc:
+                response_text = exc.response.text[:200] if exc.response is not None else ""
                 logger.error(
                     "OmniVoice error for sentence %s: %s %s",
                     sentence.id,
-                    exc.response.status_code,
-                    exc.response.text[:200],
+                    exc.response.status_code if exc.response is not None else "unknown",
+                    response_text,
                 )
-                # Mark as error but continue with remaining sentences
-                from sqlalchemy import update
-                from ..database import SessionLocal
-
-                async with SessionLocal() as err_db:
-                    await err_db.execute(
-                        update(AudiobookSentence).where(AudiobookSentence.id == sentence.id).values(status="error")
-                    )
-                    await err_db.commit()
+                await crud.audiobook.mark_sentence_error(db, sentence.id)
+                failed += 1
+                continue
+            except Exception as exc:
+                logger.exception(
+                    "Unable to generate or inspect audio for sentence %s: %s",
+                    sentence.id,
+                    exc,
+                )
+                await crud.audiobook.mark_sentence_error(db, sentence.id)
+                failed += 1
                 continue
 
-            out_path = _snippet_path(book_id, sentence.id)
-            out_path.write_bytes(audio_bytes)
-
-            duration_ms = _get_mp3_duration_ms(out_path)
             await crud.audiobook.update_sentence_audio(db, sentence.id, _relative_path(out_path), duration_ms)
             processed += 1
 
             # Flag chapter for reassembly if all its sentences are done
             if await crud.audiobook.chapter_all_audio_generated(db, sentence.chapter_id):
                 await crud.audiobook.flag_chapter_for_reassembly(db, sentence.chapter_id)
+
+    if failed or await crud.audiobook.has_sentence_status(db, book_id, "error"):
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+        raise RuntimeError(f"TTS failed for {failed} sentence(s) in book {book_id}.")
+
+    if not await crud.audiobook.all_sentences_audio_generated(db, book_id):
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+        raise RuntimeError(f"TTS finished before all sentences had audio for book {book_id}.")
+
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+        logger.info("Book %s paused after TTS generation.", book_id)
+        return
 
     logger.info("TTS complete for book %s: %d sentences generated.", book_id, processed)
     await crud.audiobook.set_book_pipeline_status(db, book_id, "assembling")

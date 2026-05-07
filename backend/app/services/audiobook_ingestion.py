@@ -16,6 +16,7 @@ from ..models import Book
 logger = logging.getLogger(__name__)
 
 _NLP = None  # lazy-load spaCy model to avoid startup cost
+_SKIP_TEXT_ANCESTORS = {"script", "style", "head", "title", "svg", "math", "audio", "video"}
 
 
 def _get_nlp():
@@ -34,31 +35,72 @@ def _tokenize_text(text: str) -> list[str]:
     return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
 
-def _inject_spans_into_element(element, chapter_num: int, start_seq: int) -> tuple[int, list[dict]]:
-    """Replace the text content of block elements with span-wrapped sentences.
+def _span_for_sentence(span_id: str, text: str):
+    span = BeautifulSoup(f'<span id="{span_id}"></span>', "html.parser").find("span")
+    span.string = text
+    return span
+
+
+def _replace_text_node(text_node: NavigableString, replacement_nodes: list) -> None:
+    first, *rest = replacement_nodes
+    text_node.replace_with(first)
+    previous = first
+    for node in rest:
+        previous.insert_after(node)
+        previous = node
+
+
+def _should_skip_text_node(text_node: NavigableString) -> bool:
+    for parent in text_node.parents:
+        if parent.name in _SKIP_TEXT_ANCESTORS:
+            return True
+        if parent.name == "span" and parent.get("id"):
+            return True
+    return False
+
+
+def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
+    for index, item in enumerate(toc_items or []):
+        uid = f"{prefix}_{index}"
+        if isinstance(item, epub.Link) and not item.uid:
+            item.uid = uid
+        elif isinstance(item, (tuple, list)) and item:
+            section = item[0]
+            if isinstance(section, epub.Link) and not section.uid:
+                section.uid = uid
+            if len(item) > 1:
+                _ensure_toc_link_ids(item[1], uid)
+
+
+def _inject_spans_into_text_node(text_node: NavigableString, chapter_num: int, start_seq: int) -> tuple[int, list[dict]]:
+    """Wrap one text node's sentences without disturbing surrounding markup.
 
     Returns (next_sequence_number, list_of_sentence_dicts).
     """
     sentences_data = []
     seq = start_seq
 
-    # Collect all text nodes that are direct or shallow children
-    raw_text = element.get_text(separator=" ", strip=True)
-    if not raw_text:
+    raw_text = str(text_node)
+    stripped = raw_text.strip()
+    if not stripped or _should_skip_text_node(text_node):
         return seq, sentences_data
 
-    sentences = _tokenize_text(raw_text)
+    sentences = _tokenize_text(stripped)
     if not sentences:
         return seq, sentences_data
 
-    # Clear existing children and re-build with span-wrapped sentences
-    element.clear()
-    for sent_text in sentences:
+    leading_whitespace = raw_text[: len(raw_text) - len(raw_text.lstrip())]
+    trailing_start = len(raw_text.rstrip())
+    trailing_whitespace = raw_text[trailing_start:]
+    replacement_nodes: list = []
+    if leading_whitespace:
+        replacement_nodes.append(NavigableString(leading_whitespace))
+
+    for index, sent_text in enumerate(sentences):
+        if index > 0:
+            replacement_nodes.append(NavigableString(" "))
         span_id = f"ch{chapter_num}_s{seq}"
-        span = BeautifulSoup(f'<span id="{span_id}"></span>', "html.parser").find("span")
-        span.string = sent_text
-        element.append(span)
-        element.append(NavigableString(" "))
+        replacement_nodes.append(_span_for_sentence(span_id, sent_text))
 
         sentences_data.append(
             {
@@ -71,6 +113,10 @@ def _inject_spans_into_element(element, chapter_num: int, start_seq: int) -> tup
         )
         seq += 1
 
+    if trailing_whitespace:
+        replacement_nodes.append(NavigableString(trailing_whitespace))
+
+    _replace_text_node(text_node, replacement_nodes)
     return seq, sentences_data
 
 
@@ -89,12 +135,14 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     snippets_dir.mkdir(exist_ok=True)
 
     ebook = epub.read_epub(str(epub_path))
+    await crud.audiobook.delete_chapters_for_book(db, book_id)
+    await crud.audiobook.delete_characters_for_book(db, book_id)
 
     # Collect spine items in order
     spine_items = []
     for item_id, _linear in ebook.spine:
         item = ebook.get_item_with_id(item_id)
-        if item and item.get_type() == ebooklib.ITEM_DOCUMENT:
+        if item and item.get_type() == ebooklib.ITEM_DOCUMENT and not isinstance(item, epub.EpubNav):
             spine_items.append(item)
 
     all_chapter_records = []
@@ -106,15 +154,11 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         chapter_sentences: list[dict] = []
         seq = 0
 
-        # Process block-level text elements
-        for tag in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]):
-            # Skip elements with no direct text (only child elements)
-            if not tag.get_text(strip=True):
-                continue
-            # Skip if already contains span children from a previous run
-            if tag.find("span", id=True):
-                continue
-            seq, new_sentences = _inject_spans_into_element(tag, chapter_num, seq)
+        # Process text nodes in document order. This preserves existing block and
+        # inline structure while adding stable sentence-level anchors.
+        container = soup.body or soup
+        for text_node in list(container.find_all(string=True)):
+            seq, new_sentences = _inject_spans_into_text_node(text_node, chapter_num, seq)
             chapter_sentences.extend(new_sentences)
 
         # Save modified XHTML back into the ebook item
@@ -123,16 +167,23 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
 
     # Write modified EPUB to working copy
     working_epub_path = output_dir / "working.epub"
+    _ensure_toc_link_ids(ebook.toc)
     epub.write_epub(str(working_epub_path), ebook)
     logger.info("Wrote span-injected EPUB to %s", working_epub_path)
 
     # Persist to database
-    for chapter_num, _item, chapter_sentences in all_chapter_records:
+    for chapter_num, item, chapter_sentences in all_chapter_records:
         if not chapter_sentences:
             continue
-        chapter = await crud.audiobook.create_chapter(db, book_id=book_id, chapter_number=chapter_num)
+        chapter = await crud.audiobook.create_chapter(
+            db,
+            book_id=book_id,
+            chapter_number=chapter_num,
+            content_file_name=item.get_name(),
+        )
         await crud.audiobook.create_sentences_bulk(db, chapter_id=chapter.id, sentences_data=chapter_sentences)
 
     await db.commit()
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "roster_gen")
+    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "roster_gen")
     logger.info("Ingestion complete for book %s: %d chapters processed", book_id, len(all_chapter_records))
