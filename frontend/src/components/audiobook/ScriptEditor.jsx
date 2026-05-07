@@ -102,7 +102,7 @@ function SentenceRow({ sentence, characters, bookId }) {
 
 function ScriptEditor({ bookId, characters }) {
   const [page, setPage] = useState(1);
-  const [chapterFilter, setChapterFilter] = useState("");
+  const [chapterFilter, _setChapterFilter] = useState("");
   const limit = 50;
 
   const { data, isLoading, isError, error } = useQuery({

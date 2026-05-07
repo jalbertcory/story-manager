@@ -19,7 +19,20 @@ from .errors import install_error_handlers
 from .middleware import RequestIdMiddleware
 from .database import SessionLocal, get_db
 from .logging_config import setup_logging
-from .routers import api_keys, auth, audiobook, books, cleaning, covers, metadata, reader, scheduler, storage, upload, web_novels
+from .routers import (
+    api_keys,
+    auth,
+    audiobook,
+    books,
+    cleaning,
+    covers,
+    metadata,
+    reader,
+    scheduler,
+    storage,
+    upload,
+    web_novels,
+)
 from .services.audiobook_queue import get_audiobook_queue
 from .services.metadata_sync_queue import get_metadata_sync_queue
 from .services.refresh_queue import get_refresh_queue

@@ -196,9 +196,7 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
 
 
 @router.put("/api/audiobook/characters/{char_id}", response_model=CharacterResponse)
-async def update_character(
-    char_id: int, body: CharacterUpdate, db: AsyncSession = Depends(get_db)
-) -> CharacterResponse:
+async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession = Depends(get_db)) -> CharacterResponse:
     data = body.model_dump(exclude_none=True)
     voice_changed = "voice_design_prompt" in data
 
@@ -240,9 +238,7 @@ async def list_sentences(
 
 
 @router.put("/api/audiobook/sentences/{sentence_id}", response_model=SentenceResponse)
-async def update_sentence(
-    sentence_id: int, body: SentenceUpdate, db: AsyncSession = Depends(get_db)
-) -> SentenceResponse:
+async def update_sentence(sentence_id: int, body: SentenceUpdate, db: AsyncSession = Depends(get_db)) -> SentenceResponse:
     sentence = await crud.audiobook.update_sentence_speaker(
         db,
         sentence_id=sentence_id,

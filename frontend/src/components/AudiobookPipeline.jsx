@@ -69,7 +69,7 @@ function AudiobookPipeline({ book }) {
   const { data: chapters = [] } = useQuery({
     queryKey: ["audiobook-chapters", bookId],
     queryFn: () => getAudiobookChapters(bookId),
-    refetchInterval: ({ state: queryState }) => {
+    refetchInterval: () => {
       const s = statusData?.pipeline_status;
       return s && isActive(s) ? 5000 : false;
     },

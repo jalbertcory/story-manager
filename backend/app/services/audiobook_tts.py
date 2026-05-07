@@ -27,6 +27,7 @@ def _relative_path(full_path: Path) -> str:
 
 def _get_mp3_duration_ms(path: Path) -> int:
     from mutagen.mp3 import MP3
+
     audio = MP3(str(path))
     return int(audio.info.length * 1000)
 
@@ -84,11 +85,10 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
                 # Mark as error but continue with remaining sentences
                 from sqlalchemy import update
                 from ..database import SessionLocal
+
                 async with SessionLocal() as err_db:
                     await err_db.execute(
-                        update(AudiobookSentence)
-                        .where(AudiobookSentence.id == sentence.id)
-                        .values(status="error")
+                        update(AudiobookSentence).where(AudiobookSentence.id == sentence.id).values(status="error")
                     )
                     await err_db.commit()
                 continue
@@ -97,9 +97,7 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
             out_path.write_bytes(audio_bytes)
 
             duration_ms = _get_mp3_duration_ms(out_path)
-            await crud.audiobook.update_sentence_audio(
-                db, sentence.id, _relative_path(out_path), duration_ms
-            )
+            await crud.audiobook.update_sentence_audio(db, sentence.id, _relative_path(out_path), duration_ms)
             processed += 1
 
             # Flag chapter for reassembly if all its sentences are done
