@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, JSON, Numeric
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Enum, JSON, Numeric, Text
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -38,6 +38,9 @@ class Book(Base):
     # Tracks the lifecycle of a "refresh from source" job independently from the
     # initial download state. Values: None (idle), "queued", "processing", "error".
     refresh_status = Column(String, nullable=True)
+    # Audiobook pipeline state. Values: None (idle), "ingesting", "roster_gen",
+    # "diarizing", "audio_gen", "assembling", "complete", "error", "paused".
+    audiobook_pipeline_status = Column(String, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -160,3 +163,54 @@ class ApiKey(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AudiobookSettings(Base):
+    __tablename__ = "audiobook_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    llm_provider = Column(String, nullable=True)
+    llm_api_key = Column(String, nullable=True)
+    llm_base_url = Column(String, nullable=True)
+    llm_model = Column(String, nullable=True)
+    omnivoice_endpoint = Column(String, nullable=True)
+    roster_prompt_template = Column(Text, nullable=True)
+    diarization_prompt_template = Column(Text, nullable=True)
+
+
+class AudiobookChapter(Base):
+    __tablename__ = "audiobook_chapters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    chapter_number = Column(Integer, nullable=False)
+    smil_file_path = Column(String, nullable=True)
+    audio_file_path = Column(String, nullable=True)
+    needs_reassembly = Column(Boolean, nullable=False, server_default="false")
+
+
+class AudiobookCharacter(Base):
+    __tablename__ = "audiobook_characters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    voice_design_prompt = Column(String, nullable=True)
+    is_narrator = Column(Boolean, nullable=False, server_default="false")
+
+
+class AudiobookSentence(Base):
+    __tablename__ = "audiobook_sentences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    chapter_id = Column(Integer, ForeignKey("audiobook_chapters.id", ondelete="CASCADE"), nullable=False, index=True)
+    character_id = Column(Integer, ForeignKey("audiobook_characters.id", ondelete="SET NULL"), nullable=True)
+    html_element_id = Column(String, nullable=False)
+    sequence_order = Column(Integer, nullable=False)
+    original_text = Column(Text, nullable=False)
+    tagged_text = Column(Text, nullable=True)
+    audio_file_path = Column(String, nullable=True)
+    audio_duration_ms = Column(Integer, nullable=True)
+    # Status values: pending_diarization, ready_for_audio, audio_generated, error
+    status = Column(String, nullable=False, server_default="pending_diarization")

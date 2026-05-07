@@ -1,5 +1,7 @@
 """CRUD operations package — re-exports all functions for backward compatibility."""
 
+from . import audiobook  # noqa: F401
+
 from .books import (  # noqa: F401
     count_books,
     create_book,

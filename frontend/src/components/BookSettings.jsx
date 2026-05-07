@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import AudiobookPipeline from "./AudiobookPipeline";
 
 import {
   deleteBook,
@@ -135,6 +136,7 @@ function BookSettings({ book: initialBook, onBack }) {
     getUpdatedFields,
   } = useBookSettingsForm(initialBook);
   const [previewedChapter, setPreviewedChapter] = useState(null);
+  const [bookTab, setBookTab] = useState("details");
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
@@ -345,6 +347,25 @@ function BookSettings({ book: initialBook, onBack }) {
         <h2>{book.title}</h2>
       </div>
 
+      <nav className="book-settings-tabs">
+        <button
+          className={`book-settings-tab${bookTab === "details" ? " book-settings-tab--active" : ""}`}
+          onClick={() => setBookTab("details")}
+        >
+          Details
+        </button>
+        <button
+          className={`book-settings-tab${bookTab === "audiobook" ? " book-settings-tab--active" : ""}`}
+          onClick={() => setBookTab("audiobook")}
+        >
+          Audiobook Pipeline
+        </button>
+      </nav>
+
+      {bookTab === "audiobook" && <AudiobookPipeline book={book} />}
+
+      {bookTab === "details" && (
+      <>
       {isRefreshing && (
         <div className="hint" role="status" style={{ marginBottom: "0.75rem" }}>
           {book.refresh_status === "queued"
@@ -770,6 +791,8 @@ function BookSettings({ book: initialBook, onBack }) {
       )}
       {deleteMutation.isError && (
         <p className="error">Delete failed: {deleteMutation.error.message}</p>
+      )}
+      </>
       )}
     </div>
   );
