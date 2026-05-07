@@ -23,6 +23,7 @@ def _get_nlp():
     global _NLP
     if _NLP is None:
         import spacy
+
         _NLP = spacy.load("en_core_web_sm", disable=["ner", "parser"])
         _NLP.add_pipe("sentencizer")
     return _NLP

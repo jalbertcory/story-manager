@@ -84,6 +84,7 @@ class AudiobookQueue:
         """Run the pipeline from the book's current status to completion."""
         async with SessionLocal() as db:
             from ..models import Book
+
             book = await db.get(Book, book_id)
             if book is None:
                 logger.warning("Book %s not found; skipping pipeline.", book_id)
@@ -119,6 +120,7 @@ class AudiobookQueue:
             # Check if the book was paused mid-pipeline
             async with SessionLocal() as db:
                 from ..models import Book
+
                 book = await db.get(Book, book_id)
                 if book and book.audiobook_pipeline_status == "paused":
                     logger.info("Book %s paused after phase '%s'.", book_id, phase)

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
 
-
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -63,9 +62,7 @@ async def create_chapter(db: AsyncSession, book_id: int, chapter_number: int) ->
 
 async def get_chapters_for_book(db: AsyncSession, book_id: int) -> list[AudiobookChapter]:
     result = await db.execute(
-        select(AudiobookChapter)
-        .where(AudiobookChapter.book_id == book_id)
-        .order_by(AudiobookChapter.chapter_number)
+        select(AudiobookChapter).where(AudiobookChapter.book_id == book_id).order_by(AudiobookChapter.chapter_number)
     )
     return list(result.scalars().all())
 
@@ -94,9 +91,7 @@ async def update_chapter_assembly(
 
 
 async def flag_chapter_for_reassembly(db: AsyncSession, chapter_id: int) -> None:
-    await db.execute(
-        update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(needs_reassembly=True)
-    )
+    await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(needs_reassembly=True))
     await db.commit()
 
 
@@ -152,18 +147,10 @@ async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
         .where(AudiobookSentence.character_id == char_id)
         .values(status="ready_for_audio", audio_file_path=None, audio_duration_ms=None)
     )
-    result = await db.execute(
-        select(AudiobookSentence.chapter_id)
-        .where(AudiobookSentence.character_id == char_id)
-        .distinct()
-    )
+    result = await db.execute(select(AudiobookSentence.chapter_id).where(AudiobookSentence.character_id == char_id).distinct())
     chapter_ids = [row[0] for row in result.all()]
     if chapter_ids:
-        await db.execute(
-            update(AudiobookChapter)
-            .where(AudiobookChapter.id.in_(chapter_ids))
-            .values(needs_reassembly=True)
-        )
+        await db.execute(update(AudiobookChapter).where(AudiobookChapter.id.in_(chapter_ids)).values(needs_reassembly=True))
     await db.commit()
 
 
@@ -188,9 +175,7 @@ async def create_sentences_bulk(db: AsyncSession, chapter_id: int, sentences_dat
 
 async def get_sentences_for_chapter(db: AsyncSession, chapter_id: int) -> list[AudiobookSentence]:
     result = await db.execute(
-        select(AudiobookSentence)
-        .where(AudiobookSentence.chapter_id == chapter_id)
-        .order_by(AudiobookSentence.sequence_order)
+        select(AudiobookSentence).where(AudiobookSentence.chapter_id == chapter_id).order_by(AudiobookSentence.sequence_order)
     )
     return list(result.scalars().all())
 
@@ -221,17 +206,14 @@ async def get_sentences_paginated(
     total = total_result.scalar_one()
 
     result = await db.execute(
-        base_query
-        .order_by(AudiobookChapter.chapter_number, AudiobookSentence.sequence_order)
+        base_query.order_by(AudiobookChapter.chapter_number, AudiobookSentence.sequence_order)
         .offset((page - 1) * limit)
         .limit(limit)
     )
     return list(result.scalars().all()), total
 
 
-async def get_sentences_pending_diarization(
-    db: AsyncSession, book_id: int, limit: int = 50
-) -> list[AudiobookSentence]:
+async def get_sentences_pending_diarization(db: AsyncSession, book_id: int, limit: int = 50) -> list[AudiobookSentence]:
     result = await db.execute(
         select(AudiobookSentence)
         .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
@@ -245,9 +227,7 @@ async def get_sentences_pending_diarization(
     return list(result.scalars().all())
 
 
-async def get_sentences_ready_for_audio(
-    db: AsyncSession, book_id: int, limit: int = 20
-) -> list[AudiobookSentence]:
+async def get_sentences_ready_for_audio(db: AsyncSession, book_id: int, limit: int = 20) -> list[AudiobookSentence]:
     result = await db.execute(
         select(AudiobookSentence)
         .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
@@ -272,9 +252,7 @@ async def update_sentence_diarization(
     await db.commit()
 
 
-async def update_sentence_audio(
-    db: AsyncSession, sentence_id: int, audio_file_path: str, audio_duration_ms: int
-) -> None:
+async def update_sentence_audio(db: AsyncSession, sentence_id: int, audio_file_path: str, audio_duration_ms: int) -> None:
     await db.execute(
         update(AudiobookSentence)
         .where(AudiobookSentence.id == sentence_id)
@@ -295,11 +273,7 @@ async def update_sentence_speaker(
     sentence.status = "ready_for_audio"
     sentence.audio_file_path = None
     sentence.audio_duration_ms = None
-    await db.execute(
-        update(AudiobookChapter)
-        .where(AudiobookChapter.id == sentence.chapter_id)
-        .values(needs_reassembly=True)
-    )
+    await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == sentence.chapter_id).values(needs_reassembly=True))
     await db.commit()
     await db.refresh(sentence)
     return sentence
