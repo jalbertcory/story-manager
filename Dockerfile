@@ -13,6 +13,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && /root/.local/bin/uv pip install --system --no-cache -r /tmp/requirements.txt \
     && /root/.local/bin/uv pip install --system --no-cache --no-deps .
 
+RUN python -m spacy download en_core_web_sm
+
 RUN npm --prefix frontend ci && npm --prefix frontend run build
 
 EXPOSE 8000
