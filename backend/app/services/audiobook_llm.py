@@ -166,10 +166,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
 
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
     roster_json = json.dumps(
-        [
-            {"id": c.id, "name": c.name, "description": c.description, "is_narrator": c.is_narrator}
-            for c in characters
-        ],
+        [{"id": c.id, "name": c.name, "description": c.description, "is_narrator": c.is_narrator} for c in characters],
         ensure_ascii=False,
     )
 
