@@ -57,6 +57,8 @@ RISKY_PROSE_DESCENDANTS = {
     "video",
 }
 SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+CSS_CLASS_SELECTOR_RE = re.compile(r"(?<![\w-])\.(-?[_a-zA-Z][\w-]*)")
 # Intentionally duplicated in migration 0015 — migrations must be self-contained.
 SCRIBBLEHUB_GENRES = {
     "Action",
@@ -111,6 +113,25 @@ def _clone_empty_tag(soup: BeautifulSoup, source: Tag) -> Tag:
     clone = soup.new_tag(source.name)
     clone.attrs = copy.deepcopy(source.attrs)
     return clone
+
+
+def _strip_unstyled_classes(tag: Tag, styled_classes: set[str] | None) -> bool:
+    if styled_classes is None:
+        return False
+
+    classes = tag.get("class") or []
+    if not classes:
+        return False
+
+    kept_classes = [class_name for class_name in classes if class_name in styled_classes]
+    if kept_classes == classes:
+        return False
+
+    if kept_classes:
+        tag["class"] = kept_classes
+    else:
+        del tag["class"]
+    return True
 
 
 def _append_copied_children(target: Tag, children: list) -> None:
@@ -236,12 +257,49 @@ def _split_oversized_paragraph(soup: BeautifulSoup, paragraph: Tag) -> bool:
     return True
 
 
-def normalize_xhtml_prose_blocks(content: str | bytes) -> tuple[bytes, bool]:
+def _styled_classes_from_css(css: str | bytes) -> set[str]:
+    css_text = css.decode("utf-8", "ignore") if isinstance(css, bytes) else css
+    css_text = CSS_COMMENT_RE.sub("", css_text)
+    return set(CSS_CLASS_SELECTOR_RE.findall(css_text))
+
+
+def _styled_classes_from_style_tags(content: str | bytes) -> set[str]:
+    soup = BeautifulSoup(content, "html.parser")
+    return set().union(*(_styled_classes_from_css(style.get_text()) for style in soup.find_all("style")))
+
+
+def _collect_zip_styled_classes(src: zipfile.ZipFile) -> set[str]:
+    styled_classes: set[str] = set()
+    for info in src.infolist():
+        filename = info.filename.lower()
+        if filename.endswith(".css"):
+            styled_classes.update(_styled_classes_from_css(src.read(info.filename)))
+        elif filename.endswith((".xhtml", ".html", ".htm")):
+            styled_classes.update(_styled_classes_from_style_tags(src.read(info.filename)))
+    return styled_classes
+
+
+def collect_epub_book_styled_classes(book: epub.EpubBook) -> set[str]:
+    styled_classes: set[str] = set()
+    for item in book.items:
+        if item is None:
+            continue
+        name = item.get_name().lower()
+        if name.endswith(".css") or getattr(item, "media_type", None) == "text/css":
+            styled_classes.update(_styled_classes_from_css(item.get_content()))
+        elif item.get_type() == ebooklib.ITEM_DOCUMENT:
+            styled_classes.update(_styled_classes_from_style_tags(item.get_content()))
+    return styled_classes
+
+
+def normalize_xhtml_prose_blocks(content: str | bytes, styled_classes: set[str] | None = None) -> tuple[bytes, bool]:
     """Split oversized prose paragraphs into smaller XHTML block elements."""
     soup = BeautifulSoup(content, "html.parser")
     changed = False
 
     for paragraph in list(soup.find_all("p")):
+        if _strip_unstyled_classes(paragraph, styled_classes):
+            changed = True
         if _split_oversized_paragraph(soup, paragraph):
             changed = True
 
@@ -254,10 +312,11 @@ def normalize_epub_prose_blocks(epub_path: Path) -> bool:
     changed = False
 
     with zipfile.ZipFile(epub_path) as src, zipfile.ZipFile(temp_path, "w") as dst:
+        styled_classes = _collect_zip_styled_classes(src)
         for info in src.infolist():
             data = src.read(info.filename)
             if info.filename.lower().endswith((".xhtml", ".html", ".htm")):
-                normalized, entry_changed = normalize_xhtml_prose_blocks(data)
+                normalized, entry_changed = normalize_xhtml_prose_blocks(data, styled_classes=styled_classes)
                 if entry_changed:
                     data = normalized
                     changed = True
