@@ -8,6 +8,7 @@ from backend.app.services.epub_utils import (
     get_and_save_epub_cover,
     get_epub_genre_tags,
     get_epub_source_tags,
+    normalize_epub_prose_blocks,
     normalize_xhtml_prose_blocks,
 )
 
@@ -64,6 +65,35 @@ def test_normalize_xhtml_prose_blocks_splits_double_br_paragraph_breaks():
     assert all(len(text) <= PROSE_BLOCK_MAX_CHARS for text in _paragraph_texts(normalized))
 
 
+def test_normalize_xhtml_prose_blocks_does_not_copy_unstyled_classes_to_split_paragraphs():
+    parts = [
+        "First sentence. " * 80,
+        "Second sentence. " * 80,
+        "Third sentence. " * 80,
+    ]
+    html = f"<html><body><p class='web-hash'>{'<br/><br/>'.join(parts)}</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html, styled_classes=set())
+
+    soup = BeautifulSoup(normalized, "html.parser")
+    paragraphs = soup.find_all("p")
+    assert changed is True
+    assert len(paragraphs) == 3
+    assert all(p.get("class") is None for p in paragraphs)
+
+
+def test_normalize_xhtml_prose_blocks_preserves_styled_paragraph_classes():
+    html = b"<html><body><p class='web-hash keep'>Styled paragraph.</p><p class='web-hash'>Plain paragraph.</p></body></html>"
+
+    normalized, changed = normalize_xhtml_prose_blocks(html, styled_classes={"keep"})
+
+    soup = BeautifulSoup(normalized, "html.parser")
+    paragraphs = soup.find_all("p")
+    assert changed is True
+    assert paragraphs[0].get("class") == ["keep"]
+    assert paragraphs[1].get("class") is None
+
+
 def test_normalize_xhtml_prose_blocks_splits_simple_prose_at_sentence_boundaries():
     text = " ".join(f"This is sentence number {index} with enough words to make the paragraph long." for index in range(180))
     html = f"<html><body><p>{text}</p></body></html>"
@@ -109,6 +139,40 @@ def test_normalize_xhtml_prose_blocks_skips_risky_and_non_prose_structures():
     assert len(soup.find_all("p")) == 2
     assert len(soup.find_all("pre")) == 1
     assert len(soup.find_all("table")) == 1
+
+
+def test_normalize_epub_prose_blocks_strips_unstyled_paragraph_classes_from_stylesheet_context(tmp_path):
+    epub_path = tmp_path / "web-classes.epub"
+    write_minimal_epub(
+        epub_path,
+        """<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Web Classes</dc:title>
+  </metadata>
+</package>
+""",
+        {
+            "EPUB/OEBPS/stylesheet.css": b".keep { text-align: center; }",
+            "EPUB/OEBPS/chapter.xhtml": (
+                b"<html><body>"
+                b"<p class='web-hash keep'>Styled paragraph.</p>"
+                b"<p class='web-hash'>Plain paragraph.</p>"
+                b"<h3 class='web-hash'>Heading class is not prose.</h3>"
+                b"</body></html>"
+            ),
+        },
+    )
+
+    changed = normalize_epub_prose_blocks(epub_path)
+
+    with zipfile.ZipFile(epub_path) as archive:
+        soup = BeautifulSoup(archive.read("EPUB/OEBPS/chapter.xhtml"), "html.parser")
+    paragraphs = soup.find_all("p")
+    assert changed is True
+    assert paragraphs[0].get("class") == ["keep"]
+    assert paragraphs[1].get("class") is None
+    assert soup.find("h3").get("class") == ["web-hash"]
 
 
 def test_get_and_save_epub_cover_uses_epub3_cover_image_property(tmp_path, monkeypatch):

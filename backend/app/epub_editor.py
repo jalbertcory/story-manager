@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 import re
 
 from . import models
-from .services.epub_utils import normalize_xhtml_prose_blocks
+from .services.epub_utils import collect_epub_book_styled_classes, normalize_xhtml_prose_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,7 @@ def process_epub(
     """Process an epub, returning the new word count if changed, or None if unchanged."""
     book = epub.read_epub(immutable_path)
     new_book = epub.EpubBook()
+    styled_classes = collect_epub_book_styled_classes(book) if normalize_prose_blocks else None
 
     # Copy metadata, filtering out Calibre custom columns (e.g. "user_metadata:#sort")
     # that cause ValueError in ebooklib when serialising to XML.
@@ -195,7 +196,7 @@ def process_epub(
                     for elem in soup.select(selector):
                         elem.decompose()
                 if normalize_prose_blocks:
-                    normalized_content, _ = normalize_xhtml_prose_blocks(str(soup))
+                    normalized_content, _ = normalize_xhtml_prose_blocks(str(soup), styled_classes=styled_classes)
                     soup = BeautifulSoup(normalized_content, "html.parser")
                 item.set_content(str(soup).encode("utf-8"))
             new_book.add_item(item)
