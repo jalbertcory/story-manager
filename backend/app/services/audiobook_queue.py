@@ -31,6 +31,10 @@ class AudiobookQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[Optional[int]] = asyncio.Queue()
         self._queued_book_ids: set[int] = set()
+        # A pipeline mutation may arrive while a book is already running. Keep
+        # one follow-up job so the mutation is not lost when the current worker
+        # finishes.
+        self._rerun_book_ids: set[int] = set()
         self._worker_task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
@@ -45,9 +49,11 @@ class AudiobookQueue:
         await self._worker_task
         self._worker_task = None
         self._queued_book_ids.clear()
+        self._rerun_book_ids.clear()
 
     async def enqueue(self, book_id: int) -> bool:
         if book_id in self._queued_book_ids:
+            self._rerun_book_ids.add(book_id)
             return False
         self._queued_book_ids.add(book_id)
         await self._queue.put(book_id)
@@ -77,6 +83,9 @@ class AudiobookQueue:
                         await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
                 finally:
                     self._queued_book_ids.discard(book_id)
+                    if book_id in self._rerun_book_ids:
+                        self._rerun_book_ids.discard(book_id)
+                        await self.enqueue(book_id)
             finally:
                 self._queue.task_done()
 

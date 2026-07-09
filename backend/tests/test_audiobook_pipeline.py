@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -8,6 +9,7 @@ from ebooklib import epub
 from backend.app import crud, models
 from backend.app.routers import audiobook as audiobook_router
 from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_tts
+from backend.app.services.audiobook_queue import AudiobookQueue
 
 
 async def _make_book(db, **overrides):
@@ -72,6 +74,35 @@ class _FakeQueue:
     async def enqueue(self, book_id: int) -> bool:
         self.enqueued.append(book_id)
         return True
+
+
+@pytest.mark.asyncio
+async def test_queue_schedules_one_rerun_for_changes_during_processing(monkeypatch):
+    queue = AudiobookQueue()
+    processed: list[int] = []
+    first_run_started = asyncio.Event()
+    release_first_run = asyncio.Event()
+
+    async def process(book_id: int) -> None:
+        processed.append(book_id)
+        if len(processed) == 1:
+            first_run_started.set()
+            await release_first_run.wait()
+
+    monkeypatch.setattr(queue, "_process", process)
+    await queue.start()
+    try:
+        assert await queue.enqueue(42) is True
+        await first_run_started.wait()
+
+        assert await queue.enqueue(42) is False
+        assert await queue.enqueue(42) is False
+        release_first_run.set()
+        await queue._queue.join()
+
+        assert processed == [42, 42]
+    finally:
+        await queue.stop()
 
 
 @pytest.mark.asyncio
