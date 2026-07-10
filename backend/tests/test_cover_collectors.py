@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.app.services.cover_collectors import collect_cover
+from backend.app.services.cover_images import looks_like_image, request_remote_cover, validate_remote_cover_url
 
 
 @pytest.mark.asyncio
@@ -65,6 +66,7 @@ async def test_collect_cover_uses_flaresolverr_for_scribblehub_when_configured(t
     }
     mocker.patch("backend.app.services.cover_collectors.scribblehub.get_fff_site_config", return_value=site_config)
     mocker.patch("backend.app.services.cover_images.LIBRARY_PATH", tmp_path / "library")
+    mocker.patch("backend.app.services.cover_images.validate_remote_cover_url")
 
     page_response = SimpleNamespace(
         raise_for_status=lambda: None,
@@ -125,6 +127,7 @@ async def test_collect_cover_uses_flaresolverr_for_scribblehub_when_configured(t
         timeout=30,
         headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.scribblehub.com/series/123/example/"},
         stream=True,
+        allow_redirects=False,
     )
     get_mock.assert_any_call(
         "https://cdn.example.test/cover.webp",
@@ -135,6 +138,7 @@ async def test_collect_cover_uses_flaresolverr_for_scribblehub_when_configured(t
             "Cookie": "cf_clearance=token",
         },
         stream=True,
+        allow_redirects=False,
     )
     assert post_mock.call_count == 2
     post_mock.assert_any_call(
@@ -158,3 +162,36 @@ async def test_collect_cover_uses_flaresolverr_for_scribblehub_when_configured(t
             "download": True,
         },
     )
+
+
+def test_remote_cover_url_rejects_loopback():
+    with pytest.raises(ValueError, match="private or non-routable"):
+        validate_remote_cover_url("http://127.0.0.1/internal-cover.jpg")
+
+
+def test_remote_cover_url_rejects_credentials():
+    with pytest.raises(ValueError, match="credentials"):
+        validate_remote_cover_url("https://user:secret@example.com/cover.jpg")
+
+
+def test_svg_is_not_treated_as_a_cover_image():
+    assert looks_like_image("image/svg+xml", b"<svg><script>alert(1)</script></svg>") is False
+
+
+def test_remote_cover_redirects_are_revalidated(mocker):
+    response = SimpleNamespace(
+        status_code=302,
+        headers={"Location": "http://127.0.0.1/private.jpg"},
+        close=mocker.Mock(),
+    )
+    get_mock = mocker.patch("backend.app.services.cover_images.http_requests.get", return_value=response)
+    validate_mock = mocker.patch(
+        "backend.app.services.cover_images.validate_remote_cover_url",
+        side_effect=[None, ValueError("private destination")],
+    )
+
+    with pytest.raises(ValueError, match="private destination"):
+        request_remote_cover("https://covers.example.com/cover.jpg", headers={})
+
+    assert validate_mock.call_count == 2
+    get_mock.assert_called_once()

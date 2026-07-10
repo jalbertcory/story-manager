@@ -1,7 +1,6 @@
 """Cover image endpoints: serve, upload, and set from URL."""
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -14,7 +13,7 @@ from ..database import get_db
 from ..services.cover_collectors import collect_cover
 from ..services.cover_images import save_cover_from_url
 from ..services.epub_utils import get_and_save_epub_cover
-from ..upload_validation import validate_image_upload
+from ..upload_validation import MAX_IMAGE_BYTES, detect_image_extension, read_upload_limited, validate_image_upload
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,13 @@ async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)):
     if not cover_path.is_file():
         raise HTTPException(status_code=404, detail="Cover file not found")
 
-    return FileResponse(cover_path)
+    return FileResponse(
+        cover_path,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
 
 
 @router.post("/api/books/{book_id}/cover", response_model=schemas.Book)
@@ -45,12 +50,14 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    payload = await file.read()
+    payload = await read_upload_limited(file, MAX_IMAGE_BYTES, file.filename or "cover")
     validate_image_upload(payload, file.filename or "cover")
 
     covers_path = (LIBRARY_PATH / "covers").resolve()
     covers_path.mkdir(exist_ok=True)
-    ext = Path(file.filename).suffix or ".jpg"
+    ext = detect_image_extension(payload)
+    if ext is None:  # validate_image_upload already guards this path
+        raise HTTPException(status_code=400, detail="Unsupported cover image format")
     save_path = covers_path / f"{book_id}{ext}"
     with open(save_path, "wb") as f:
         f.write(payload)

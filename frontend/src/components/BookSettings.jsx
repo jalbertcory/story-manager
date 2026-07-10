@@ -23,6 +23,7 @@ import { queueMetadataSync } from "../api/metadata";
 import { getSeries } from "../api/series";
 import BookSettingsChapters from "./BookSettingsChapters";
 import {
+  BookIdentifiersSection,
   ChapterUpdateHistory,
   SelectorPills,
   SourceTagList,
@@ -580,106 +581,25 @@ function BookSettings({ book: initialBook, onBack }) {
         />
       )}
 
-      <section className="settings-section">
-        <button
-          type="button"
-          className="collapsible-header"
-          onClick={() => setIdentifiersExpanded((e) => !e)}
-          aria-expanded={identifiersExpanded}
-          aria-controls="book-identifiers"
-        >
-          <h3>
-            Identifiers
-            {(isbn10 ||
-              isbn13 ||
-              googleBooksVolumeId ||
-              openLibraryWorkKey) && (
-              <span className="field-count">
-                {
-                  [
-                    isbn10,
-                    isbn13,
-                    googleBooksVolumeId,
-                    openLibraryWorkKey,
-                    openLibraryEditionKey,
-                    openLibraryAuthorKey,
-                  ].filter(Boolean).length
-                }{" "}
-                set
-              </span>
-            )}
-          </h3>
-          <span className="collapse-toggle">
-            {identifiersExpanded ? "▲" : "▼"}
-          </span>
-        </button>
-        {identifiersExpanded && (
-          <div id="book-identifiers" className="collapsible-body">
-            <div className="field-row">
-              <label className="field-row-equal">
-                ISBN-10
-                <input
-                  value={isbn10}
-                  onChange={(e) => setIsbn10(e.target.value)}
-                  placeholder="Manual ISBN-10"
-                />
-              </label>
-              <label className="field-row-equal">
-                ISBN-13
-                <input
-                  value={isbn13}
-                  onChange={(e) => setIsbn13(e.target.value)}
-                  placeholder="Manual ISBN-13"
-                />
-              </label>
-            </div>
-            <label>
-              Google Books Volume ID
-              <input
-                value={googleBooksVolumeId}
-                onChange={(e) => setGoogleBooksVolumeId(e.target.value)}
-                placeholder="zyTCAlFPjgYC"
-              />
-            </label>
-            <label>
-              Open Library Work Key
-              <input
-                value={openLibraryWorkKey}
-                onChange={(e) => setOpenLibraryWorkKey(e.target.value)}
-                placeholder="/works/OL123W"
-              />
-            </label>
-            <div className="field-row">
-              <label className="field-row-equal">
-                OL Edition Key
-                <input
-                  value={openLibraryEditionKey}
-                  onChange={(e) => setOpenLibraryEditionKey(e.target.value)}
-                  placeholder="OL123M"
-                />
-              </label>
-              <label className="field-row-equal">
-                OL Author Key
-                <input
-                  value={openLibraryAuthorKey}
-                  onChange={(e) => setOpenLibraryAuthorKey(e.target.value)}
-                  placeholder="OL123A"
-                />
-              </label>
-            </div>
-            <label>
-              Other Identifiers (JSON)
-              <textarea
-                value={otherRemoteIdsJson}
-                onChange={(e) => setOtherRemoteIdsJson(e.target.value)}
-                placeholder={'{\n  "goodreads_id": "12345"\n}'}
-                rows={3}
-              />
-            </label>
-            {identifierError && <p className="error">{identifierError}</p>}
-          </div>
-        )}
-      </section>
+      <BookIdentifiersSection
+        identifiersExpanded={identifiersExpanded}
+        setIdentifiersExpanded={setIdentifiersExpanded}
+        isbn10={isbn10}
+        setIsbn10={setIsbn10}
+        isbn13={isbn13}
+        setIsbn13={setIsbn13}
+        googleBooksVolumeId={googleBooksVolumeId}
+        setGoogleBooksVolumeId={setGoogleBooksVolumeId}
+        openLibraryWorkKey={openLibraryWorkKey}
+        setOpenLibraryWorkKey={setOpenLibraryWorkKey}
+        openLibraryEditionKey={openLibraryEditionKey}
+        setOpenLibraryEditionKey={setOpenLibraryEditionKey}
+        openLibraryAuthorKey={openLibraryAuthorKey}
+        setOpenLibraryAuthorKey={setOpenLibraryAuthorKey}
+        otherRemoteIdsJson={otherRemoteIdsJson}
+        setOtherRemoteIdsJson={setOtherRemoteIdsJson}
+        identifierError={identifierError}
+      />
 
       {matchedConfigs.map((cfg) => (
         <section key={cfg.id} className="settings-section">
@@ -771,10 +691,15 @@ function BookSettings({ book: initialBook, onBack }) {
         toggleChapterPreview={toggleChapterPreview}
       />
 
-      <section className="settings-section actions-bar" aria-label="Book actions">
+      <section
+        className="settings-section actions-bar"
+        aria-label="Book actions"
+      >
         <div className="actions-heading">
           <h3>Book actions</h3>
-          <span className="hint">Save edits before rebuilding or refreshing.</span>
+          <span className="hint">
+            Save edits before rebuilding or refreshing.
+          </span>
         </div>
         <div className="actions-primary">
           <button
@@ -807,9 +732,9 @@ function BookSettings({ book: initialBook, onBack }) {
         </div>
         <p className="hint actions-hint">
           <strong>Save Metadata</strong> updates the database only.{" "}
-          <strong>Rebuild EPUB</strong> saves edits and regenerates the file with
-          your cleaning rules. Refreshing checks the original web source for new
-          chapters.
+          <strong>Rebuild EPUB</strong> saves edits and regenerates the file
+          with your cleaning rules. Refreshing checks the original web source
+          for new chapters.
         </p>
         <div className="actions-secondary">
           <a

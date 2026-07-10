@@ -4,6 +4,7 @@ import logging
 from io import BytesIO
 import zipfile
 from pathlib import PurePosixPath
+from collections.abc import Iterator
 from typing import List, Optional
 
 from ebooklib import epub
@@ -19,7 +20,7 @@ from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata
 from ..services.library_paths import build_book_paths
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import SeriesBook, detect_series_from_books
-from ..upload_validation import read_and_validate_upload, validate_upload
+from ..upload_validation import MAX_UPLOAD_BYTES, read_and_validate_upload, read_upload_limited, validate_upload
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,8 @@ def _safe_batch_filename(name: str) -> str:
     return safe_name.replace("/", "_").replace("\\", "_")
 
 
-def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> List[tuple[str, bytes, str]]:
-    epub_entries: List[tuple[str, bytes, str]] = []
-
+def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> Iterator[tuple[str, bytes, str]]:
+    """Yield one validated EPUB at a time to avoid retaining a whole expanded batch."""
     try:
         with zipfile.ZipFile(file=BytesIO(payload)) as archive:
             for entry in archive.infolist():
@@ -92,14 +92,19 @@ def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> List[tuple[str, by
 
                 relative_name = _safe_batch_filename(entry_name)
                 display_name = f"{zip_name}:{entry_name}"
-                epub_entries.append((display_name, archive.read(entry), relative_name))
+                if entry.file_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"EPUB '{display_name}' exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+                    )
+                epub_payload = archive.read(entry)
+                validate_upload(epub_payload, display_name)
+                yield display_name, epub_payload, relative_name
     except zipfile.BadZipFile as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to read ZIP file '{zip_name}': {e}",
         ) from e
-
-    return epub_entries
 
 
 async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) -> models.Book:
@@ -281,20 +286,12 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
         try:
             if _is_zip_upload(file):
                 archive_name = file.filename or "upload.zip"
-                zip_payload = await file.read()
+                zip_payload = await read_upload_limited(file, MAX_UPLOAD_BYTES, archive_name)
                 validate_upload(zip_payload, archive_name)
                 epub_entries = _extract_epubs_from_zip(archive_name, zip_payload)
-                if not epub_entries:
-                    results.append(
-                        EpubUploadResult(
-                            filename=archive_name,
-                            status="skipped",
-                            error="No EPUB files found in ZIP archive",
-                        )
-                    )
-                    continue
-
+                found_epub = False
                 for display_name, payload, safe_name in epub_entries:
+                    found_epub = True
                     try:
                         db_book = await _upload_epub_bytes(safe_name, payload, db)
                         results.append(EpubUploadResult(filename=display_name, status="success", book=db_book))
@@ -304,6 +301,15 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
                         results.append(EpubUploadResult(filename=display_name, status=status_str, error=e.detail))
                     except Exception as e:
                         results.append(EpubUploadResult(filename=display_name, status="error", error=str(e)))
+
+                if not found_epub:
+                    results.append(
+                        EpubUploadResult(
+                            filename=archive_name,
+                            status="skipped",
+                            error="No EPUB files found in ZIP archive",
+                        )
+                    )
                 continue
 
             db_book = await _upload_epub_file(file, db)

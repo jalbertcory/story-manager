@@ -82,6 +82,21 @@ test-migrations:
 	done; \
 	echo " Postgres is ready."; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0016; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "INSERT INTO books (title, author, source_type) VALUES ('Migration Test', 'Story Manager', 'epub');" \
+		-c "INSERT INTO book_metadata_matches (book_id, status) SELECT id, 'pending' FROM books WHERE title = 'Migration Test';"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "INSERT INTO book_metadata_matches (book_id, status) SELECT id, 'pending' FROM books WHERE title = 'Migration Test';"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0016; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM book_metadata_matches) <> 1 THEN RAISE EXCEPTION 'downgrade did not preserve exactly one match'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
 
 e2e:

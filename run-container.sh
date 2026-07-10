@@ -46,10 +46,12 @@ export DATABASE_URL="postgresql+psycopg://postgres@localhost:5432/story_manager?
 PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
 echo "--- Database migrations complete ---"
 
-# Determine worker count: use WEB_CONCURRENCY env var, or default to 2
-# Note: APScheduler and the web import queue are designed for single-process use,
-# so we use 1 worker by default. Set WEB_CONCURRENCY=1 explicitly if needed.
+# APScheduler and the in-process queues require a single application process.
 WORKERS=${WEB_CONCURRENCY:-1}
+if [ "$WORKERS" != "1" ]; then
+  echo "ERROR: WEB_CONCURRENCY must be 1 until background jobs support distributed coordination." >&2
+  exit 1
+fi
 
 # Start uvicorn serving both the API and the pre-built frontend
 echo "--- Starting application (workers=$WORKERS) ---"

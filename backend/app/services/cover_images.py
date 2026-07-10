@@ -2,8 +2,11 @@
 
 import asyncio
 import base64
+import ipaddress
 import logging
+import os
 from pathlib import Path
+import socket
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -11,28 +14,76 @@ import requests as http_requests
 from bs4 import BeautifulSoup
 
 from ..config import LIBRARY_PATH
+from ..upload_validation import detect_image_extension
 from .fanficfare_config import is_enabled_config_value
 
 logger = logging.getLogger(__name__)
 
-IMAGE_SIGNATURES = (
-    b"\xff\xd8\xff",
-    b"\x89PNG\r\n\x1a\n",
-    b"GIF87a",
-    b"GIF89a",
-    b"RIFF",
-    b"<svg",
-    b"<?xml",
-)
+MAX_REDIRECTS = 5
+
+
+def _private_cover_urls_enabled() -> bool:
+    return os.getenv("STORY_MANAGER_ALLOW_PRIVATE_COVER_URLS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def validate_remote_cover_url(url: str) -> None:
+    """Reject non-HTTP and non-public destinations to prevent server-side request forgery."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Cover URL must use http or https and include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("Cover URLs must not contain credentials")
+    if _private_cover_urls_enabled():
+        return
+
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)}
+    except (OSError, ValueError) as exc:
+        raise ValueError("Cover URL hostname could not be resolved") from exc
+
+    if not addresses:
+        raise ValueError("Cover URL hostname did not resolve to an address")
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise ValueError("Cover URL resolves to a private or non-routable address")
+
+
+def request_remote_cover(url: str, *, headers: dict[str, str], stream: bool = False):
+    """Fetch a public URL while validating every redirect target."""
+    current_url = url
+    for _ in range(MAX_REDIRECTS + 1):
+        validate_remote_cover_url(current_url)
+        response = http_requests.get(
+            current_url,
+            timeout=30,
+            headers=headers,
+            stream=stream,
+            allow_redirects=False,
+        )
+        if getattr(response, "status_code", 200) not in {301, 302, 303, 307, 308}:
+            return response
+        location = response.headers.get("Location")
+        response.close()
+        if not location:
+            raise ValueError("Cover URL redirect did not include a destination")
+        current_url = urljoin(current_url, location)
+    raise ValueError(f"Cover URL exceeded the {MAX_REDIRECTS}-redirect limit")
 
 
 def fetch_page_direct(url: str) -> str:
-    response = http_requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    response = request_remote_cover(url, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
     return response.text
 
 
 def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download: bool = False) -> dict[str, Any]:
+    validate_remote_cover_url(url)
     proxy_url = (
         f"{site_config.get('flaresolverr_proxy_protocol', 'http')}://"
         f"{site_config.get('flaresolverr_proxy_address', 'localhost')}:"
@@ -89,13 +140,8 @@ def fetch_binary_via_flaresolverr(url: str, site_config: dict[str, str]) -> tupl
 
 
 def looks_like_image(content_type: str | None, data: bytes) -> bool:
-    stripped = data.lstrip()
-    if stripped[:20].lower().startswith((b"<!doctype html", b"<html")):
-        return False
-    normalized_type = (content_type or "").split(";")[0].strip().casefold()
-    if normalized_type.startswith("image/"):
-        return True
-    return any(stripped.startswith(signature) for signature in IMAGE_SIGNATURES)
+    del content_type  # File signatures are authoritative; remote Content-Type is not.
+    return detect_image_extension(data.lstrip()) is not None
 
 
 def cookie_header_from_solution(solution: dict[str, Any], target_url: str) -> str | None:
@@ -131,7 +177,7 @@ def fetch_image_from_flaresolverr_context(
     if cookie_header:
         headers["Cookie"] = cookie_header
 
-    response = http_requests.get(image_url, timeout=30, headers=headers, stream=True)
+    response = request_remote_cover(image_url, headers=headers, stream=True)
     response.raise_for_status()
     data = b""
     for chunk in response.iter_content(8192):
@@ -160,7 +206,7 @@ async def save_cover_from_url(
         headers = {"User-Agent": "Mozilla/5.0"}
         if referer:
             headers["Referer"] = referer
-        r = http_requests.get(url, timeout=30, headers=headers, stream=True)
+        r = request_remote_cover(url, headers=headers, stream=True)
         r.raise_for_status()
         data = b""
         for chunk in r.iter_content(8192):
@@ -187,13 +233,9 @@ async def save_cover_from_url(
                 raise ValueError("Image exceeds 10 MB limit")
         if not looks_like_image(content_type, image_bytes):
             raise ValueError("Downloaded cover payload was not an image")
-        ext_map = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-        }
-        ext = ext_map.get(content_type.split(";")[0].strip()) or Path(url.split("?")[0]).suffix or ".jpg"
+        ext = detect_image_extension(image_bytes)
+        if ext is None:
+            raise ValueError("Downloaded cover payload was not a supported raster image")
         save_path = covers_path / f"{book_id}{ext}"
         with open(save_path, "wb") as f:
             f.write(image_bytes)

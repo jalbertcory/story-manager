@@ -27,6 +27,8 @@ ADMIN_AUTH_COOKIE = "story_manager_admin"
 ADMIN_AUTH_DISABLED = "disabled"
 ADMIN_AUTH_PASSWORD = "password"
 ADMIN_SESSION_SECONDS = 60 * 60 * 24 * 14
+ADMIN_AUTH_MODES = {ADMIN_AUTH_DISABLED, ADMIN_AUTH_PASSWORD}
+ADMIN_COOKIE_SECURE_AUTO = "auto"
 
 
 def _now_utc() -> datetime:
@@ -39,13 +41,36 @@ def hash_token(token: str) -> str:
 
 def get_admin_auth_mode() -> str:
     configured_mode = os.getenv("STORY_MANAGER_AUTH_MODE", "").strip().lower()
-    if configured_mode:
-        return configured_mode
-    return ADMIN_AUTH_PASSWORD if os.getenv("STORY_MANAGER_ADMIN_PASSWORD") else ADMIN_AUTH_DISABLED
+    mode = configured_mode or (ADMIN_AUTH_PASSWORD if os.getenv("STORY_MANAGER_ADMIN_PASSWORD") else ADMIN_AUTH_DISABLED)
+    if mode not in ADMIN_AUTH_MODES:
+        allowed = ", ".join(sorted(ADMIN_AUTH_MODES))
+        raise RuntimeError(f"Invalid STORY_MANAGER_AUTH_MODE={mode!r}; expected one of: {allowed}")
+    if mode == ADMIN_AUTH_PASSWORD and not _admin_password():
+        raise RuntimeError("STORY_MANAGER_AUTH_MODE=password requires STORY_MANAGER_ADMIN_PASSWORD")
+    return mode
 
 
 def is_admin_auth_enabled() -> bool:
     return get_admin_auth_mode() == ADMIN_AUTH_PASSWORD
+
+
+def is_admin_cookie_secure(request: Request) -> bool:
+    configured = os.getenv("STORY_MANAGER_ADMIN_COOKIE_SECURE", ADMIN_COOKIE_SECURE_AUTO).strip().lower()
+    if configured == ADMIN_COOKIE_SECURE_AUTO:
+        return request.scope.get("scheme") == "https"
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError("Invalid STORY_MANAGER_ADMIN_COOKIE_SECURE value; expected auto, true, or false")
+
+
+def validate_admin_auth_configuration() -> None:
+    """Fail startup when authentication or cookie settings are invalid."""
+    get_admin_auth_mode()
+    configured = os.getenv("STORY_MANAGER_ADMIN_COOKIE_SECURE", ADMIN_COOKIE_SECURE_AUTO).strip().lower()
+    if configured not in {ADMIN_COOKIE_SECURE_AUTO, "1", "true", "yes", "on", "0", "false", "no", "off"}:
+        raise RuntimeError("Invalid STORY_MANAGER_ADMIN_COOKIE_SECURE value; expected auto, true, or false")
 
 
 def _admin_password() -> Optional[str]:

@@ -201,7 +201,7 @@ async def test_metadata_sync_preview_returns_genres_and_possible_missing_series_
             )
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_open_library_get)
 
     response = client.post("/api/metadata/sync-preview", json={})
 
@@ -253,7 +253,7 @@ async def test_metadata_sync_apply_persists_genres_and_provenance(db_session, mo
             return FakeRequestsResponse({"entries": [{"title": "Dragon Saga 1"}]})
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_open_library_get)
 
     response = client.post("/api/metadata/apply", json={"book_ids": [book.id]})
 
@@ -317,7 +317,7 @@ async def test_metadata_sync_uses_manual_isbn_identifier(db_session, mocker):
             return FakeRequestsResponse({"entries": [{"title": "Manual ID Book"}]})
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_open_library_get)
 
     response = client.post("/api/metadata/sync-preview", json={})
 
@@ -364,8 +364,8 @@ async def test_metadata_sync_falls_back_to_google_books_when_open_library_has_no
             )
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.GOOGLE_BOOKS_API_KEY", "test-key")
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_requests_get)
+    mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_API_KEY", "test-key")
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_requests_get)
 
     response = client.post("/api/metadata/apply", json={"book_ids": [book.id]})
 
@@ -440,8 +440,8 @@ async def test_metadata_sync_supplements_open_library_match_with_google_books_ca
             )
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.GOOGLE_BOOKS_API_KEY", "test-key")
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_requests_get)
+    mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_API_KEY", "test-key")
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_requests_get)
 
     response = client.post("/api/metadata/apply", json={"book_ids": [book.id]})
 
@@ -510,7 +510,7 @@ async def test_metadata_sync_uses_same_series_open_library_author_key_for_relate
             return FakeRequestsResponse({"subjects": ["Fantasy"]})
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_open_library_get)
 
     response = client.post("/api/metadata/sync-preview", json={"book_ids": [sequel.id]})
 
@@ -637,7 +637,7 @@ async def test_metadata_job_keeps_close_match_candidates_for_human_selection(db_
             return FakeRequestsResponse({"entries": [{"title": "Dragon Saga 6"}, {"title": "Dragon Saga 8"}]})
         raise AssertionError(f"Unexpected URL: {url}")
 
-    mocker.patch("backend.app.services.metadata_sync.requests.get", side_effect=fake_open_library_get)
+    mocker.patch("backend.app.services.metadata.clients.requests.get", side_effect=fake_open_library_get)
 
     async with AsyncTestingSessionLocal() as session:
         await process_metadata_sync_job(session, job.id)
@@ -822,6 +822,21 @@ async def test_static_cover_files_are_served_without_cover_lookup(db_session):
 
     assert response.status_code == 200
     assert response.content == b"cover-bytes"
+
+
+@pytest.mark.asyncio
+async def test_static_cover_files_reject_active_formats(db_session):
+    library_path = Path("./library").resolve()
+    cover_path = library_path / "covers" / "unsafe.svg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    cover_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+
+    try:
+        response = client.get("/library/covers/unsafe.svg")
+    finally:
+        cover_path.unlink(missing_ok=True)
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

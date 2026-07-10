@@ -5,18 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import requests
-from requests import exceptions as requests_exceptions
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
-from ..config import GOOGLE_BOOKS_API_KEY
+from .metadata.clients import OPEN_LIBRARY_BASE_URL
+from .metadata.clients import google_books_enabled as _google_books_enabled
+from .metadata.clients import request_google_books_json as _request_google_books_json
+from .metadata.clients import request_open_library_json as _request_json
 from .metadata.genres import derive_genre_tags as _derive_genre_tags
 from .metadata.genres import merge_genre_tags as _merge_genre_tags
 from .metadata.scoring import normalize_series as _normalize_series
@@ -26,17 +26,6 @@ from .series import detect_series_from_titles
 
 logger = logging.getLogger(__name__)
 
-OPEN_LIBRARY_BASE_URL = "https://openlibrary.org"
-OPEN_LIBRARY_CONNECT_TIMEOUT_SECONDS = 3
-OPEN_LIBRARY_READ_TIMEOUT_SECONDS = 10
-OPEN_LIBRARY_RETRY_ATTEMPTS = 2
-OPEN_LIBRARY_MIN_REQUEST_INTERVAL_SECONDS = 0.4
-OPEN_LIBRARY_USER_AGENT = "story-manager/0.1 (+https://openlibrary.org)"
-GOOGLE_BOOKS_BASE_URL = "https://www.googleapis.com/books/v1"
-GOOGLE_BOOKS_CONNECT_TIMEOUT_SECONDS = 3
-GOOGLE_BOOKS_READ_TIMEOUT_SECONDS = 10
-GOOGLE_BOOKS_RETRY_ATTEMPTS = 2
-GOOGLE_BOOKS_USER_AGENT = "story-manager/0.1 (+https://developers.google.com/books)"
 AUTO_APPROVE_THRESHOLD = 0.92
 PROPOSAL_THRESHOLD = 0.75
 DEFAULT_MATCH_CANDIDATE_LIMIT = 5
@@ -44,9 +33,6 @@ DEFAULT_MATCH_CANDIDATE_LIMIT = 5
 _TRAILING_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _TRAILING_SERIES_BOOK_RE = re.compile(r"\s*\([^)]*book\s+\d+[^)]*\)\s*$", re.IGNORECASE)
 _TRAILING_PUNCTUATION_RE = re.compile(r"[\s:;,\-]+$")
-
-_request_lock = threading.Lock()
-_last_open_library_request_at = 0.0
 
 
 @dataclass
@@ -90,80 +76,6 @@ class GoogleBooksMatch:
     info_link: Optional[str]
     remote_ids: dict[str, str]
     match_confidence: float
-
-
-def _respect_open_library_rate_limit() -> None:
-    global _last_open_library_request_at
-
-    with _request_lock:
-        now = time.monotonic()
-        wait_seconds = OPEN_LIBRARY_MIN_REQUEST_INTERVAL_SECONDS - (now - _last_open_library_request_at)
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
-        _last_open_library_request_at = time.monotonic()
-
-
-def _request_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, OPEN_LIBRARY_RETRY_ATTEMPTS + 1):
-        try:
-            _respect_open_library_rate_limit()
-            response = requests.get(
-                f"{OPEN_LIBRARY_BASE_URL}{path}",
-                params=params,
-                timeout=(OPEN_LIBRARY_CONNECT_TIMEOUT_SECONDS, OPEN_LIBRARY_READ_TIMEOUT_SECONDS),
-                headers={"User-Agent": OPEN_LIBRARY_USER_AGENT},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, dict) else {}
-        except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
-            last_error = exc
-            if attempt < OPEN_LIBRARY_RETRY_ATTEMPTS:
-                time.sleep(0.5 * attempt)
-                continue
-            raise
-
-    if last_error is not None:
-        raise last_error
-    return {}
-
-
-def _google_books_enabled() -> bool:
-    return bool(GOOGLE_BOOKS_API_KEY)
-
-
-def _request_google_books_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    if not _google_books_enabled():
-        return {}
-
-    request_params = {"key": GOOGLE_BOOKS_API_KEY}
-    if params:
-        request_params.update(params)
-
-    last_error: Optional[Exception] = None
-    for attempt in range(1, GOOGLE_BOOKS_RETRY_ATTEMPTS + 1):
-        try:
-            response = requests.get(
-                f"{GOOGLE_BOOKS_BASE_URL}{path}",
-                params=request_params,
-                timeout=(GOOGLE_BOOKS_CONNECT_TIMEOUT_SECONDS, GOOGLE_BOOKS_READ_TIMEOUT_SECONDS),
-                headers={"User-Agent": GOOGLE_BOOKS_USER_AGENT},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, dict) else {}
-        except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
-            last_error = exc
-            if attempt < GOOGLE_BOOKS_RETRY_ATTEMPTS:
-                time.sleep(0.5 * attempt)
-                continue
-            raise
-
-    if last_error is not None:
-        raise last_error
-    return {}
 
 
 def _strip_trailing_metadata(value: str) -> str:
