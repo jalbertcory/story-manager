@@ -90,11 +90,15 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByPlaceholder("Add CSS selector, e.g. div.note").fill("p");
   await page.getByRole("button", { name: "Add" }).click();
 
-  // Click Save & Re-process
-  await page.getByRole("button", { name: /save & rebuild epub/i }).click();
+  // Save edits and rebuild the generated EPUB.
+  await page
+    .getByRole("button", { name: /rebuild epub from saved edits/i })
+    .click();
 
   // Wait for rebuild to finish, then go back to the book list
-  await expect(page.getByRole("button", { name: /save & rebuild epub/i })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: /rebuild epub from saved edits/i }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: /back/i }).click();
   await expect(page.getByText("Story Manager")).toBeVisible();
   await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");

@@ -92,7 +92,7 @@ describe("BookSettings", () => {
       await screen.findByText("https://example.com/story"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove Web Marker" }));
+    fireEvent.click(screen.getByRole("button", { name: "Convert to EPUB-only" }));
 
     expect(confirmSpy).toHaveBeenCalledWith(
       'Remove the web marker from "Imported Story"? This will keep the EPUB files but stop treating it as a web novel.',
@@ -192,7 +192,7 @@ describe("BookSettings", () => {
     ).toBeInTheDocument();
 
     const removeButton = screen.getByRole("button", {
-      name: "Remove Web Marker",
+      name: "Convert to EPUB-only",
     });
     expect(removeButton).toBeEnabled();
     fireEvent.click(removeButton);

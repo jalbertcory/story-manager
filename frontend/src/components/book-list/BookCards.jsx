@@ -53,17 +53,14 @@ export function BookCard({ book, onEdit }) {
     );
   } else if (book.cover_path) {
     coverContent = (
-      <div className="book-cover-container">
-        <img
-          src={getCoverUrl(book)}
-          alt={`${book.title} cover`}
-          className="book-cover"
-          loading="lazy"
-          decoding="async"
-          onError={handleCoverError}
-        />
-        <div className="book-cover-title-overlay">{book.title}</div>
-      </div>
+      <img
+        src={getCoverUrl(book)}
+        alt={`${book.title} cover`}
+        className="book-cover"
+        loading="lazy"
+        decoding="async"
+        onError={handleCoverError}
+      />
     );
   } else {
     coverContent = (
@@ -130,7 +127,13 @@ export function BookCard({ book, onEdit }) {
   );
 }
 
-export function BookRow({ book, onEdit, actions = null, subtitle = null }) {
+export function BookRow({
+  book,
+  onEdit,
+  actions = null,
+  subtitle = null,
+  status = null,
+}) {
   const genreTags = getEffectiveGenreTags(book);
 
   const handleClick = (e) => {
@@ -173,6 +176,11 @@ export function BookRow({ book, onEdit, actions = null, subtitle = null }) {
             )}
           </div>
           {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
+          {status && (
+            <div className={`book-row-status book-row-status--${status.tone}`}>
+              {status.label}
+            </div>
+          )}
           <GenreTagList tags={genreTags} className="book-row-genres" />
         </div>
       </a>
