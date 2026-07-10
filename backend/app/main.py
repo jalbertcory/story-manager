@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
 from .admin_auth_middleware import AdminAuthMiddleware
+from .auth import validate_admin_auth_configuration
 from .config import LIBRARY_PATH
 from .errors import install_error_handlers
 from .middleware import RequestIdMiddleware
@@ -27,6 +28,21 @@ from .services.web_import_queue import get_web_import_queue
 
 logger = logging.getLogger(__name__)
 
+RASTER_COVER_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+
+class RasterCoverStaticFiles(StaticFiles):
+    """Serve only passive raster cover formats from the public cover directory."""
+
+    async def get_response(self, path: str, scope):
+        if Path(path).suffix.lower() not in RASTER_COVER_EXTENSIONS:
+            return JSONResponse(status_code=404, content={"detail": "Cover not found"})
+        response = await super().get_response(path, scope)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        return response
+
+
 _console_handler, _mem_handler = setup_logging()
 _scheduler = get_scheduler()
 _web_import_queue = get_web_import_queue()
@@ -37,6 +53,7 @@ _metadata_sync_queue = get_metadata_sync_queue()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     is_test_app = bool(app.dependency_overrides)
+    validate_admin_auth_configuration()
     # Re-attach handlers after uvicorn resets logging config on startup
     root_logger = logging.getLogger()
     if _console_handler not in root_logger.handlers:
@@ -80,7 +97,7 @@ app.add_middleware(RequestIdMiddleware)
 app.add_middleware(AdminAuthMiddleware)
 app.mount(
     "/library/covers",
-    StaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
+    RasterCoverStaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
     name="cover-files",
 )
 
@@ -103,10 +120,11 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
-    except Exception as e:
+    except Exception:
+        logger.exception("Database health check failed")
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "database": str(e)},
+            content={"status": "unhealthy", "database": "unavailable"},
         )
 
 

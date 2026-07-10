@@ -182,6 +182,7 @@ pgdata/
 test-results
 frontend/playwright-report
 frontend/test-results
+frontend/frontend_verification.png
 frontend.log
 backend.log
 

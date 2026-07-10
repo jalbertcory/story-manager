@@ -41,6 +41,126 @@ export function SelectorPills({ selectors, onChange }) {
   );
 }
 
+export function BookIdentifiersSection({
+  identifiersExpanded,
+  setIdentifiersExpanded,
+  isbn10,
+  setIsbn10,
+  isbn13,
+  setIsbn13,
+  googleBooksVolumeId,
+  setGoogleBooksVolumeId,
+  openLibraryWorkKey,
+  setOpenLibraryWorkKey,
+  openLibraryEditionKey,
+  setOpenLibraryEditionKey,
+  openLibraryAuthorKey,
+  setOpenLibraryAuthorKey,
+  otherRemoteIdsJson,
+  setOtherRemoteIdsJson,
+  identifierError,
+}) {
+  return (
+    <section className="settings-section">
+      <button
+        type="button"
+        className="collapsible-header"
+        onClick={() => setIdentifiersExpanded((e) => !e)}
+        aria-expanded={identifiersExpanded}
+        aria-controls="book-identifiers"
+      >
+        <h3>
+          Identifiers
+          {(isbn10 || isbn13 || googleBooksVolumeId || openLibraryWorkKey) && (
+            <span className="field-count">
+              {
+                [
+                  isbn10,
+                  isbn13,
+                  googleBooksVolumeId,
+                  openLibraryWorkKey,
+                  openLibraryEditionKey,
+                  openLibraryAuthorKey,
+                ].filter(Boolean).length
+              }{" "}
+              set
+            </span>
+          )}
+        </h3>
+        <span className="collapse-toggle">
+          {identifiersExpanded ? "▲" : "▼"}
+        </span>
+      </button>
+      {identifiersExpanded && (
+        <div id="book-identifiers" className="collapsible-body">
+          <div className="field-row">
+            <label className="field-row-equal">
+              ISBN-10
+              <input
+                value={isbn10}
+                onChange={(e) => setIsbn10(e.target.value)}
+                placeholder="Manual ISBN-10"
+              />
+            </label>
+            <label className="field-row-equal">
+              ISBN-13
+              <input
+                value={isbn13}
+                onChange={(e) => setIsbn13(e.target.value)}
+                placeholder="Manual ISBN-13"
+              />
+            </label>
+          </div>
+          <label>
+            Google Books Volume ID
+            <input
+              value={googleBooksVolumeId}
+              onChange={(e) => setGoogleBooksVolumeId(e.target.value)}
+              placeholder="zyTCAlFPjgYC"
+            />
+          </label>
+          <label>
+            Open Library Work Key
+            <input
+              value={openLibraryWorkKey}
+              onChange={(e) => setOpenLibraryWorkKey(e.target.value)}
+              placeholder="/works/OL123W"
+            />
+          </label>
+          <div className="field-row">
+            <label className="field-row-equal">
+              OL Edition Key
+              <input
+                value={openLibraryEditionKey}
+                onChange={(e) => setOpenLibraryEditionKey(e.target.value)}
+                placeholder="OL123M"
+              />
+            </label>
+            <label className="field-row-equal">
+              OL Author Key
+              <input
+                value={openLibraryAuthorKey}
+                onChange={(e) => setOpenLibraryAuthorKey(e.target.value)}
+                placeholder="OL123A"
+              />
+            </label>
+          </div>
+          <label>
+            Other Identifiers (JSON)
+            <textarea
+              value={otherRemoteIdsJson}
+              onChange={(e) => setOtherRemoteIdsJson(e.target.value)}
+              placeholder={'{\n  "goodreads_id": "12345"\n}'}
+              rows={3}
+            />
+          </label>
+          {identifierError && <p className="error">{identifierError}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SourceTagList({ tags }) {
   if (!tags?.length) return null;
 

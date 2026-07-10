@@ -18,6 +18,8 @@ The default `docker-compose.yml` stores persistent data under `./config`:
 
 The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container.
 
+Story Manager currently requires one application worker because its scheduler and background queues run in process. `WEB_CONCURRENCY` must remain `1` until distributed job coordination is implemented.
+
 ## Admin Authentication
 
 By default, Story Manager preserves the historical local-network behavior: if no admin password is configured, the admin UI and `/api/*` routes do not require built-in login.
@@ -35,11 +37,15 @@ The app stores a signed, HTTP-only session cookie after login. To keep sessions 
 STORY_MANAGER_ADMIN_SESSION_SECRET=long-random-value
 ```
 
+Admin cookies automatically use the `Secure` flag when the request is HTTPS. Set `STORY_MANAGER_ADMIN_COOKIE_SECURE=true` to require secure cookies explicitly, or `false` only for a trusted HTTP-only local deployment.
+
 If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 Proxy, or Cloudflare Access, disable built-in auth explicitly:
 
 ```bash
 STORY_MANAGER_AUTH_MODE=disabled
 ```
+
+Invalid authentication modes and password mode without a password stop the application at startup instead of disabling protection.
 
 ## FanFicFare Overrides
 
@@ -57,6 +63,8 @@ Story Manager loads configs in this order:
 2. Optional mounted `config/fanficfare/personal.ini`
 
 Later FanFicFare configs override earlier values. To use a different path, set `FFF_USER_CONFIG_PATH`.
+
+Remote cover downloads reject loopback, private, link-local, and otherwise non-public destinations. A trusted private-network deployment can opt in to private cover URLs with `STORY_MANAGER_ALLOW_PRIVATE_COVER_URLS=true`.
 
 ## Reverse Proxy Hosts
 

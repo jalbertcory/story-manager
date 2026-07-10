@@ -1,6 +1,9 @@
 """Tests for structured error responses and the health check endpoint."""
 
 import pytest
+from unittest.mock import AsyncMock
+
+from backend.app.main import health_check
 
 
 class TestStructuredErrors:
@@ -31,6 +34,18 @@ class TestHealthCheck:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["database"] == "connected"
+
+    @pytest.mark.asyncio
+    async def test_health_check_does_not_expose_database_error(self):
+        db = AsyncMock()
+        db.execute.side_effect = RuntimeError("postgresql://user:secret@private-host/database")
+
+        response = await health_check(db)
+
+        assert response.status_code == 503
+        assert b"secret" not in response.body
+        assert b"private-host" not in response.body
+        assert b"unavailable" in response.body
 
 
 class TestAdminApiAuth:

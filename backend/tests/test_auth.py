@@ -1,12 +1,17 @@
 """Tests for authentication: token generation, hashing, prefix extraction."""
 
+import pytest
+from starlette.requests import Request
+
 from backend.app.auth import (
+    _extract_prefix,
     create_admin_session_token,
     generate_reader_token,
+    get_admin_auth_mode,
     hash_token,
+    is_admin_cookie_secure,
     validate_admin_session_token,
     verify_admin_password,
-    _extract_prefix,
 )
 
 
@@ -84,3 +89,25 @@ class TestAdminAuth:
         tampered = token.replace(".", "x.", 1)
 
         assert validate_admin_session_token(tampered, now=101) is False
+
+    def test_invalid_auth_mode_fails_closed(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_AUTH_MODE", "pasword")
+        with pytest.raises(RuntimeError, match="Invalid STORY_MANAGER_AUTH_MODE"):
+            get_admin_auth_mode()
+
+    def test_password_mode_requires_password(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_AUTH_MODE", "password")
+        monkeypatch.delenv("STORY_MANAGER_ADMIN_PASSWORD", raising=False)
+        with pytest.raises(RuntimeError, match="requires STORY_MANAGER_ADMIN_PASSWORD"):
+            get_admin_auth_mode()
+
+    def test_secure_cookie_auto_detects_https(self, monkeypatch):
+        monkeypatch.delenv("STORY_MANAGER_ADMIN_COOKIE_SECURE", raising=False)
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "scheme": "https"})
+        assert is_admin_cookie_secure(request) is True
+
+    def test_secure_cookie_setting_is_validated(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_ADMIN_COOKIE_SECURE", "sometimes")
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "scheme": "http"})
+        with pytest.raises(RuntimeError, match="Invalid STORY_MANAGER_ADMIN_COOKIE_SECURE"):
+            is_admin_cookie_secure(request)

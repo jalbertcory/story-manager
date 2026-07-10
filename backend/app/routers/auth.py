@@ -9,6 +9,7 @@ from ..auth import (
     ADMIN_SESSION_SECONDS,
     create_admin_session_token,
     get_admin_auth_mode,
+    is_admin_cookie_secure,
     is_admin_auth_enabled,
     validate_admin_session_token,
     verify_admin_password,
@@ -36,11 +37,11 @@ async def auth_status(request: Request) -> AdminAuthStatus:
 
 
 @router.post("/api/auth/login", response_model=AdminAuthStatus)
-async def login(request: AdminLoginRequest, response: Response) -> AdminAuthStatus:
+async def login(payload: AdminLoginRequest, request: Request, response: Response) -> AdminAuthStatus:
     if not is_admin_auth_enabled():
         return AdminAuthStatus(mode=ADMIN_AUTH_DISABLED, authenticated=True)
 
-    if not verify_admin_password(request.password):
+    if not verify_admin_password(payload.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
 
     response.set_cookie(
@@ -49,12 +50,12 @@ async def login(request: AdminLoginRequest, response: Response) -> AdminAuthStat
         max_age=ADMIN_SESSION_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=is_admin_cookie_secure(request),
     )
     return AdminAuthStatus(mode=get_admin_auth_mode(), authenticated=True)
 
 
 @router.post("/api/auth/logout", response_model=AdminAuthStatus)
-async def logout(response: Response) -> AdminAuthStatus:
-    response.delete_cookie(ADMIN_AUTH_COOKIE, samesite="lax", secure=False)
+async def logout(request: Request, response: Response) -> AdminAuthStatus:
+    response.delete_cookie(ADMIN_AUTH_COOKIE, samesite="lax", secure=is_admin_cookie_secure(request))
     return AdminAuthStatus(mode=get_admin_auth_mode(), authenticated=not is_admin_auth_enabled())
