@@ -323,6 +323,7 @@ function App() {
             key={tab.key}
             className={`main-tab${activeTab === tab.key ? " main-tab--active" : ""}`}
             onClick={() => navigate(tab.key)}
+            aria-current={activeTab === tab.key ? "page" : undefined}
           >
             {tab.label}
           </button>

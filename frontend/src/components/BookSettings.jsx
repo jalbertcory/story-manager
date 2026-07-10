@@ -555,8 +555,8 @@ function BookSettings({ book: initialBook, onBack }) {
                 disabled={isBusy || !canDetachWebMarker}
               >
                 {detachSourceMutation.isPending
-                  ? "Removing…"
-                  : "Remove Web Marker"}
+                  ? "Converting…"
+                  : "Convert to EPUB-only"}
               </button>
               {!canDetachWebMarker && (
                 <span
@@ -581,9 +581,12 @@ function BookSettings({ book: initialBook, onBack }) {
       )}
 
       <section className="settings-section">
-        <div
+        <button
+          type="button"
           className="collapsible-header"
           onClick={() => setIdentifiersExpanded((e) => !e)}
+          aria-expanded={identifiersExpanded}
+          aria-controls="book-identifiers"
         >
           <h3>
             Identifiers
@@ -609,9 +612,9 @@ function BookSettings({ book: initialBook, onBack }) {
           <span className="collapse-toggle">
             {identifiersExpanded ? "▲" : "▼"}
           </span>
-        </div>
+        </button>
         {identifiersExpanded && (
-          <div className="collapsible-body">
+          <div id="book-identifiers" className="collapsible-body">
             <div className="field-row">
               <label className="field-row-equal">
                 ISBN-10
@@ -768,7 +771,11 @@ function BookSettings({ book: initialBook, onBack }) {
         toggleChapterPreview={toggleChapterPreview}
       />
 
-      <section className="settings-section actions-bar">
+      <section className="settings-section actions-bar" aria-label="Book actions">
+        <div className="actions-heading">
+          <h3>Book actions</h3>
+          <span className="hint">Save edits before rebuilding or refreshing.</span>
+        </div>
         <div className="actions-primary">
           <button
             className="btn-primary"
@@ -784,7 +791,7 @@ function BookSettings({ book: initialBook, onBack }) {
           >
             {processMutation.isPending
               ? "Rebuilding..."
-              : "Save & Rebuild EPUB"}
+              : "Rebuild EPUB from saved edits"}
           </button>
           {book.source_type === "web" && (
             <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
@@ -794,14 +801,15 @@ function BookSettings({ book: initialBook, onBack }) {
                   ? "Queued for refresh…"
                   : book.refresh_status === "processing"
                     ? "Refreshing from source…"
-                    : "Refresh from Source"}
+                    : "Refresh latest chapters"}
             </button>
           )}
         </div>
         <p className="hint actions-hint">
           <strong>Save Metadata</strong> updates the database only.{" "}
-          <strong>Save & Rebuild EPUB</strong> also regenerates the downloadable
-          file with your cleaning rules applied.
+          <strong>Rebuild EPUB</strong> saves edits and regenerates the file with
+          your cleaning rules. Refreshing checks the original web source for new
+          chapters.
         </p>
         <div className="actions-secondary">
           <a
@@ -832,7 +840,7 @@ function BookSettings({ book: initialBook, onBack }) {
       )}
       {detachSourceMutation.isError && (
         <p className="error">
-          Remove web marker failed: {detachSourceMutation.error.message}
+          Convert to EPUB-only failed: {detachSourceMutation.error.message}
         </p>
       )}
       {deleteMutation.isError && (

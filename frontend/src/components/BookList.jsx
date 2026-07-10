@@ -152,7 +152,13 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
 
   return (
     <div className={`series-group${expanded ? " series-group--expanded" : ""}`}>
-      <div className="series-header" onClick={toggleExpanded}>
+      <button
+        type="button"
+        className="series-header"
+        onClick={toggleExpanded}
+        aria-expanded={expanded}
+        aria-controls={`series-books-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+      >
         <div className="series-cover-stack">
           {summary.coverBooks.length > 1 ? (
             summary.coverBooks
@@ -227,9 +233,12 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
           className={`series-toggle${expanded ? " series-toggle--open" : ""}`}
           aria-hidden="true"
         />
-      </div>
+      </button>
       {expanded && (
-        <div className="series-expanded">
+        <div
+          id={`series-books-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+          className="series-expanded"
+        >
           <div className="series-toolbar">
             <div className="series-actions">
               <button
@@ -428,7 +437,10 @@ function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
                   setDragOverBookId(null);
                 }}
               >
-                <div className="series-book-order">
+                <div
+                  className="series-book-order"
+                  title="Drag to change the series order"
+                >
                   {book.series_index != null ? `#${book.series_index}` : "⋮⋮"}
                 </div>
                 <BookCard book={book} onEdit={onEdit} />
@@ -467,6 +479,47 @@ function LibraryViewTabs({ view, onChange, counts }) {
           <span className="library-view-tab-count">{tab.count}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+function getWebNovelStatus(book) {
+  if (book.refresh_status === "processing") {
+    return { label: "Refreshing now", tone: "progress" };
+  }
+  if (book.refresh_status === "queued") {
+    return { label: "Refresh queued", tone: "progress" };
+  }
+  if (book.refresh_status === "error") {
+    return { label: "Refresh needs attention", tone: "error" };
+  }
+  if (!book.updated_at) {
+    return { label: "No library update recorded", tone: "muted" };
+  }
+  return {
+    label: `Library updated ${new Date(book.updated_at).toLocaleDateString()}`,
+    tone: "muted",
+  };
+}
+
+function LibraryFilters({
+  reviewFilter,
+  onReviewFilterChange,
+}) {
+  return (
+    <div className="library-filters" aria-label="Library filters">
+      <label>
+        Review
+        <select
+          value={reviewFilter}
+          onChange={(event) => onReviewFilterChange(event.target.value)}
+        >
+          <option value="">Everything</option>
+          <option value="missing-series">Missing series</option>
+          <option value="refreshing">Refreshing or queued</option>
+          <option value="refresh-error">Refresh needs attention</option>
+        </select>
+      </label>
     </div>
   );
 }
@@ -542,6 +595,7 @@ function BookList({
   const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
   const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] =
     useState(false);
+  const [reviewFilter, setReviewFilter] = useState("");
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -555,10 +609,36 @@ function BookList({
     setTabVisibleCount(TAB_PAGE_SIZE);
   };
 
+  const handleReviewFilterChange = (value) => {
+    setReviewFilter(value);
+    if (value === "missing-series") {
+      handleTabChange("standalone");
+    } else if (value === "refreshing" || value === "refresh-error") {
+      handleTabChange("web");
+    }
+  };
+
+  const filteredBooks = useMemo(
+    () =>
+      books.filter((book) => {
+        if (reviewFilter === "missing-series") {
+          return !book.series && book.source_type !== "web" && !book.download_status;
+        }
+        if (reviewFilter === "refreshing") {
+          return ["queued", "processing"].includes(book.refresh_status);
+        }
+        if (reviewFilter === "refresh-error") {
+          return book.refresh_status === "error";
+        }
+        return true;
+      }),
+    [books, reviewFilter],
+  );
+
   const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } =
     useMemo(
-      () => buildCatalogGroups(books, sortBy, sortOrder),
-      [books, sortBy, sortOrder],
+      () => buildCatalogGroups(filteredBooks, sortBy, sortOrder),
+      [filteredBooks, sortBy, sortOrder],
     );
 
   const tabItems =
@@ -589,6 +669,13 @@ function BookList({
 
   return (
     <div className="book-list">
+      <LibraryFilters
+        reviewFilter={reviewFilter}
+        onReviewFilterChange={handleReviewFilterChange}
+      />
+      <div className="library-results-summary" role="status">
+        Showing {filteredBooks.length} of {books.length} books
+      </div>
       <LibraryViewTabs
         view={libraryView}
         onChange={handleTabChange}
@@ -614,12 +701,16 @@ function BookList({
         (standaloneBooks.length ? (
           <>
             <div className="standalone-header">
+              <p>
+                {standaloneBooks.length} book
+                {standaloneBooks.length === 1 ? "" : "s"} without a series.
+              </p>
               <button
                 type="button"
                 className={`btn btn-sm${showStandaloneSeriesEdit ? " btn-active" : ""}`}
                 onClick={() => setShowStandaloneSeriesEdit((v) => !v)}
               >
-                {showStandaloneSeriesEdit ? "Hide Series Edit" : "Edit Series"}
+                {showStandaloneSeriesEdit ? "Done assigning" : "Assign series"}
               </button>
             </div>
             <div className="book-rows">
@@ -658,7 +749,8 @@ function BookList({
                 key={book.id}
                 book={book}
                 onEdit={onEdit}
-                subtitle={book.series ? `Series: ${book.series}` : "Web novel"}
+                subtitle={book.series ? `Series: ${book.series}` : null}
+                status={getWebNovelStatus(book)}
               />
             ))}
           </div>
