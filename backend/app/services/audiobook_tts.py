@@ -93,7 +93,7 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
     processed = 0
     failed = 0
     while True:
-        if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+        if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
             logger.info("Book %s paused during TTS generation.", book_id)
             return
 
@@ -102,7 +102,7 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
             break
 
         for sentence in batch:
-            if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+            if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
                 logger.info("Book %s paused during TTS generation.", book_id)
                 return
 
@@ -158,7 +158,7 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
         await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
         raise RuntimeError(f"TTS finished before all sentences had audio for book {book_id}.")
 
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+    if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         logger.info("Book %s paused after TTS generation.", book_id)
         return
 

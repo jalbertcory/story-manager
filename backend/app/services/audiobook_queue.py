@@ -77,10 +77,10 @@ class AudiobookQueue:
                 book_id = item
                 try:
                     await self._process(book_id)
-                except Exception:
+                except Exception as exc:
                     logger.exception("Unhandled exception in audiobook pipeline for book %s.", book_id)
                     async with SessionLocal() as db:
-                        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+                        await crud.audiobook.set_book_pipeline_error(db, book_id, str(exc))
                 finally:
                     self._queued_book_ids.discard(book_id)
                     if book_id in self._rerun_book_ids:
@@ -126,13 +126,20 @@ class AudiobookQueue:
                 elif phase == "assembling":
                     await assemble_book(book_id, db)
 
-            # Check if the book was paused mid-pipeline
+            # Stop only at durable boundaries. Mid-phase services also check
+            # cooperative pause requests between batches/items.
             async with SessionLocal() as db:
                 from ..models import Book
 
                 book = await db.get(Book, book_id)
                 if book and book.audiobook_pipeline_status == "paused":
                     logger.info("Book %s paused after phase '%s'.", book_id, phase)
+                    return
+                if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+                    logger.info("Book %s acknowledged pause after phase '%s'.", book_id, phase)
+                    return
+                if await crud.audiobook.pause_book_pipeline_after_phase(db, book_id, phase):
+                    logger.info("Book %s stopped for review after phase '%s'.", book_id, phase)
                     return
 
         logger.info("Audiobook pipeline complete for book %s.", book_id)

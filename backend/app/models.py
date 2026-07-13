@@ -44,6 +44,11 @@ class Book(Base):
     # Audiobook pipeline state. Values: None (idle), "ingesting", "roster_gen",
     # "diarizing", "audio_gen", "assembling", "complete", "error", "paused".
     audiobook_pipeline_status = Column(String, nullable=True)
+    # Cooperative control state is persisted so a restart cannot turn a
+    # single-stage/debug run into an unattended full-book run.
+    audiobook_stop_after_phase = Column(String, nullable=True)
+    audiobook_pause_requested = Column(Boolean, nullable=False, default=False, server_default="false")
+    audiobook_last_error = Column(Text, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

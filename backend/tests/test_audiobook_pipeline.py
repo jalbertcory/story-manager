@@ -11,6 +11,7 @@ from ebooklib import epub
 from backend.app import crud, models
 from backend.app.routers import audiobook as audiobook_router
 from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_llm, audiobook_tts
+from backend.app.services import audiobook_queue
 from backend.app.services.audiobook_queue import AudiobookQueue
 
 
@@ -108,6 +109,32 @@ async def test_queue_schedules_one_rerun_for_changes_during_processing(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_queue_persists_actionable_pipeline_error(db, sqlite_sessionmaker, monkeypatch):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="ingesting",
+    )
+    queue = AudiobookQueue()
+
+    async def fail(_book_id):
+        raise RuntimeError("EPUB contains no narratable text")
+
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(queue, "_process", fail)
+    await queue.start()
+    try:
+        await queue.enqueue(book.id)
+        await queue._queue.join()
+    finally:
+        await queue.stop()
+
+    await db.refresh(book)
+    assert book.audiobook_pipeline_status == "error"
+    assert book.audiobook_last_error == "EPUB contains no narratable text"
+
+
+@pytest.mark.asyncio
 async def test_books_default_audiobook_pipeline_disabled(db, monkeypatch):
     book = await _make_book(db)
     queue = _FakeQueue()
@@ -176,6 +203,80 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     assert sentence.status == "ready_for_audio"
     assert sentence.audio_file_path is None
     assert chapter.needs_reassembly is True
+
+
+@pytest.mark.asyncio
+async def test_step_pipeline_runs_only_next_recoverable_phase(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    response = await audiobook_router.step_pipeline(book.id, db)
+
+    await db.refresh(book)
+    assert response == {
+        "status": "ingesting",
+        "queued": True,
+        "stop_after_phase": "ingesting",
+    }
+    assert book.audiobook_pipeline_status == "ingesting"
+    assert book.audiobook_stop_after_phase == "ingesting"
+    assert book.audiobook_last_error is None
+    assert queue.enqueued == [book.id]
+
+
+@pytest.mark.asyncio
+async def test_queue_stops_for_review_after_requested_phase(db, sqlite_sessionmaker, monkeypatch):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="ingesting",
+        audiobook_stop_after_phase="ingesting",
+    )
+    phases: list[str] = []
+
+    async def ingest(book_id, phase_db):
+        phases.append("ingesting")
+        await crud.audiobook.set_book_pipeline_status(phase_db, book_id, "roster_gen")
+
+    async def unexpected(*_args):
+        phases.append("unexpected")
+
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(audiobook_queue, "ingest_epub", ingest)
+    monkeypatch.setattr(audiobook_queue, "generate_character_roster", unexpected)
+
+    await AudiobookQueue()._process(book.id)
+
+    await db.refresh(book)
+    assert phases == ["ingesting"]
+    assert book.audiobook_pipeline_status == "paused"
+    assert book.audiobook_stop_after_phase is None
+
+
+@pytest.mark.asyncio
+async def test_pause_is_cooperative_and_status_exposes_error_context(db):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_last_error="Previous failure",
+    )
+
+    response = await audiobook_router.pause_pipeline(book.id, db)
+    await db.refresh(book)
+
+    assert response == {"status": "audio_gen", "pause_requested": True}
+    assert book.audiobook_pipeline_status == "audio_gen"
+    assert book.audiobook_pause_requested is True
+
+    await crud.audiobook.pause_book_pipeline_if_requested(db, book.id)
+    status = await audiobook_router.get_pipeline_status(book.id, db)
+
+    assert status.pipeline_status == "paused"
+    assert status.pause_requested is False
+    assert status.next_phase == "ingesting"
+    assert status.last_error == "Previous failure"
 
 
 @pytest.mark.asyncio

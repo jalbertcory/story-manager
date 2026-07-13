@@ -193,6 +193,6 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     await db.commit()
     if persisted_chapters == 0:
         raise RuntimeError(f"EPUB for book {book_id} contains no narratable text.")
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+    if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "roster_gen")
     logger.info("Ingestion complete for book %s: %d chapters processed", book_id, persisted_chapters)
