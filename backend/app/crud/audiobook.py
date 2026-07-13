@@ -380,24 +380,20 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
 
 async def chapter_all_audio_generated(db: AsyncSession, chapter_id: int) -> bool:
     result = await db.execute(
-        select(func.count())
+        select(func.count(), func.count().filter(AudiobookSentence.status != "audio_generated"))
         .select_from(AudiobookSentence)
-        .where(
-            AudiobookSentence.chapter_id == chapter_id,
-            AudiobookSentence.status != "audio_generated",
-        )
+        .where(AudiobookSentence.chapter_id == chapter_id)
     )
-    return result.scalar_one() == 0
+    total, pending = result.one()
+    return total > 0 and pending == 0
 
 
 async def all_sentences_audio_generated(db: AsyncSession, book_id: int) -> bool:
     result = await db.execute(
-        select(func.count())
+        select(func.count(), func.count().filter(AudiobookSentence.status != "audio_generated"))
         .select_from(AudiobookSentence)
         .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
-        .where(
-            AudiobookChapter.book_id == book_id,
-            AudiobookSentence.status != "audio_generated",
-        )
+        .where(AudiobookChapter.book_id == book_id)
     )
-    return result.scalar_one() == 0
+    total, pending = result.one()
+    return total > 0 and pending == 0

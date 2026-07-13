@@ -7,6 +7,7 @@ import {
   startPipeline,
   pausePipeline,
   rebuildPipeline,
+  getAudiobookDownloadUrl,
 } from "../api/audiobook";
 import CharacterRoster from "./audiobook/CharacterRoster";
 import ScriptEditor from "./audiobook/ScriptEditor";
@@ -124,6 +125,11 @@ function AudiobookPipeline({ book }) {
         </div>
 
         <div className="pipeline-controls">
+          {pipelineStatus === "complete" && (
+            <a className="btn btn-primary" href={getAudiobookDownloadUrl(bookId)} download>
+              Download Audiobook EPUB
+            </a>
+          )}
           {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
             <button
               onClick={() => startMutation.mutate()}

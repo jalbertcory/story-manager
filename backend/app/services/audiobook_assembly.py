@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
+import shutil
+import tempfile
 from xml.etree import ElementTree as ET
 
 from ebooklib import epub
@@ -79,25 +82,54 @@ def _build_smil(chapter, sentences: list, audio_filename: str) -> str:
 
 
 async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: Path, db: AsyncSession) -> None:
-    from pydub import AudioSegment
-
     if not sentences:
         logger.warning("Chapter %s has no sentences with audio; skipping assembly.", chapter.id)
         return
 
-    combined = AudioSegment.empty()
+    snippet_paths: list[Path] = []
     for sentence in sentences:
         if not sentence.audio_file_path:
             raise RuntimeError(f"Sentence {sentence.id} is missing audio path during assembly.")
         snippet_full = LIBRARY_PATH.parent / sentence.audio_file_path
         if not snippet_full.exists():
             raise RuntimeError(f"Snippet file missing for sentence {sentence.id}: {snippet_full}")
-        combined += AudioSegment.from_mp3(str(snippet_full))
+        snippet_paths.append(snippet_full)
 
     audio_filename = f"ch{chapter.chapter_number:04d}.mp3"
     audio_path = output_dir / audio_filename
-    combined.export(str(audio_path), format="mp3")
-    logger.info("Assembled chapter audio: %s (%d ms)", audio_path, len(combined))
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to assemble audiobook chapters.")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", dir=output_dir, encoding="utf-8") as manifest:
+        for snippet_path in snippet_paths:
+            escaped_path = str(snippet_path).replace("'", "'\\''")
+            manifest.write(f"file '{escaped_path}'\n")
+        manifest.flush()
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            manifest.name,
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "64k",
+            "-y",
+            str(audio_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode:
+            message = stderr.decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
+    total_duration_ms = sum(sentence.audio_duration_ms or 0 for sentence in sentences)
+    logger.info("Assembled chapter audio: %s (%d ms)", audio_path, total_duration_ms)
 
     smil_xml = _build_smil(chapter, sentences, audio_filename)
     smil_filename = f"ch{chapter.chapter_number:04d}.smil"

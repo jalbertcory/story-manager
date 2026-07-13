@@ -14,6 +14,8 @@ from ..models import AudiobookSettings
 
 logger = logging.getLogger(__name__)
 
+STUB_PROVIDER = "stub"
+
 DEFAULT_ROSTER_PROMPT = """\
 You are a literary analyst. Analyze the following text excerpt from a book and extract a list of all named \
 characters (including the narrator if the text uses first person).
@@ -111,15 +113,11 @@ def _extract_json(raw: str) -> Any:
 async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     """Phase 2: extract characters from book text and persist to audiobook_characters."""
     settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None:
-        raise RuntimeError("Audiobook settings not found.")
+    provider = (settings.llm_provider or STUB_PROVIDER).lower() if settings else STUB_PROVIDER
 
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     if not chapters:
-        logger.warning("No chapters found for book %s during roster generation.", book_id)
-        if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
-            await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
-        return
+        raise RuntimeError(f"No narratable chapters found for book {book_id} during roster generation.")
 
     # Collect text from up to 5 chapters (keeps prompt size manageable)
     text_chunks: list[str] = []
@@ -128,16 +126,24 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         text_chunks.append(" ".join(s.original_text for s in sentences))
     combined_text = "\n\n".join(text_chunks)[:12000]  # ~10k tokens safety cap
 
-    prompt_template = settings.roster_prompt_template or DEFAULT_ROSTER_PROMPT
-    prompt = prompt_template.format(text=combined_text)
-
-    logger.info("Calling LLM for character roster (book %s).", book_id)
-    raw = await _call_llm(settings, [{"role": "user", "content": prompt}])
-
-    try:
-        characters_data = _extract_json(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"LLM returned invalid JSON for roster: {exc}\nRaw: {raw[:500]}") from exc
+    if provider == STUB_PROVIDER:
+        characters_data = [
+            {
+                "name": "Narrator",
+                "description": "Deterministic local harness narrator.",
+                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "is_narrator": True,
+            }
+        ]
+    else:
+        prompt_template = settings.roster_prompt_template or DEFAULT_ROSTER_PROMPT
+        prompt = prompt_template.format(text=combined_text)
+        logger.info("Calling LLM for character roster (book %s).", book_id)
+        raw = await _call_llm(settings, [{"role": "user", "content": prompt}])
+        try:
+            characters_data = _extract_json(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"LLM returned invalid JSON for roster: {exc}\nRaw: {raw[:500]}") from exc
 
     if not isinstance(characters_data, list):
         raise RuntimeError(f"Expected a JSON array from LLM, got: {type(characters_data)}")
@@ -145,6 +151,8 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     # Normalise keys to match our model
     normalised: list[dict] = []
     for c in characters_data:
+        if not isinstance(c, dict):
+            continue
         normalised.append(
             {
                 "name": str(c.get("name", "Unknown")),
@@ -152,6 +160,18 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "voice_design_prompt": c.get("voice_design_prompt"),
                 "is_narrator": bool(c.get("is_narrator", False)),
             }
+        )
+    if not normalised:
+        raise RuntimeError("LLM returned an empty character roster.")
+    if not any(character["is_narrator"] for character in normalised):
+        normalised.insert(
+            0,
+            {
+                "name": "Narrator",
+                "description": "Primary narrative voice.",
+                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "is_narrator": True,
+            },
         )
 
     await crud.audiobook.create_characters_bulk(db, book_id=book_id, characters_data=normalised)
@@ -163,10 +183,11 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     """Phase 3: batch-assign speakers and expression tags to all pending sentences."""
     settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None:
-        raise RuntimeError("Audiobook settings not found.")
+    provider = (settings.llm_provider or STUB_PROVIDER).lower() if settings else STUB_PROVIDER
 
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
+    character_ids = {character.id for character in characters}
+    narrator_id = next((character.id for character in characters if character.is_narrator), None)
     roster_json = json.dumps(
         [{"id": c.id, "name": c.name, "description": c.description, "is_narrator": c.is_narrator} for c in characters],
         ensure_ascii=False,
@@ -190,26 +211,34 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
         )
         context_str = "\n".join(context_window[-5:]) if context_window else "(none)"
 
-        prompt_template = settings.diarization_prompt_template or DEFAULT_DIARIZATION_PROMPT
-        prompt = prompt_template.format(
-            roster_json=roster_json,
-            context=context_str,
-            sentences_json=sentences_json,
-        )
+        if provider == STUB_PROVIDER:
+            results = [
+                {"id": sentence.id, "character_id": narrator_id, "tagged_text": sentence.original_text} for sentence in batch
+            ]
+        else:
+            prompt_template = settings.diarization_prompt_template or DEFAULT_DIARIZATION_PROMPT
+            prompt = prompt_template.format(
+                roster_json=roster_json,
+                context=context_str,
+                sentences_json=sentences_json,
+            )
+            logger.debug("Diarizing %d sentences for book %s.", len(batch), book_id)
+            raw = await _call_llm(settings, [{"role": "user", "content": prompt}])
+            try:
+                results = _extract_json(raw)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"LLM returned invalid JSON for diarization: {exc}\nRaw: {raw[:500]}") from exc
 
-        logger.debug("Diarizing %d sentences for book %s.", len(batch), book_id)
-        raw = await _call_llm(settings, [{"role": "user", "content": prompt}])
+        if not isinstance(results, list):
+            raise RuntimeError(f"Expected a JSON array from diarization, got: {type(results)}")
 
-        try:
-            results = _extract_json(raw)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"LLM returned invalid JSON for diarization: {exc}\nRaw: {raw[:500]}") from exc
-
-        result_map = {r["id"]: r for r in results if isinstance(r, dict)}
+        result_map = {r["id"]: r for r in results if isinstance(r, dict) and isinstance(r.get("id"), int)}
 
         for sentence in batch:
             result = result_map.get(sentence.id, {})
             char_id = result.get("character_id")
+            if char_id not in character_ids:
+                char_id = narrator_id
             tagged = result.get("tagged_text") or sentence.original_text
             await crud.audiobook.update_sentence_diarization(db, sentence.id, char_id, tagged)
             context_window.append(sentence.original_text)

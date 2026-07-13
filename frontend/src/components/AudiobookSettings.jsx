@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getAudiobookSettings, updateAudiobookSettings } from "../api/audiobook";
 
@@ -22,15 +22,17 @@ function AudiobookSettings() {
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [initialised, setInitialised] = useState(false);
 
-  if (settings && !initialised) {
-    setLlmProvider(settings.llm_provider || "openai");
-    setLlmBaseUrl(settings.llm_base_url || "");
-    setLlmModel(settings.llm_model || "");
-    setOmnivoiceEndpoint(settings.omnivoice_endpoint || "");
-    setRosterPrompt(settings.roster_prompt_template || "");
-    setDiarizationPrompt(settings.diarization_prompt_template || "");
-    setInitialised(true);
-  }
+  useEffect(() => {
+    if (settings && !initialised) {
+      setLlmProvider(settings.llm_provider || "stub");
+      setLlmBaseUrl(settings.llm_base_url || "");
+      setLlmModel(settings.llm_model || "");
+      setOmnivoiceEndpoint(settings.omnivoice_endpoint || "");
+      setRosterPrompt(settings.roster_prompt_template || "");
+      setDiarizationPrompt(settings.diarization_prompt_template || "");
+      setInitialised(true);
+    }
+  }, [initialised, settings]);
 
   const saveMutation = useMutation({
     mutationFn: (data) => updateAudiobookSettings(data),
@@ -69,6 +71,7 @@ function AudiobookSettings() {
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="custom">Custom / Local</option>
+              <option value="stub">Deterministic local harness</option>
             </select>
           </label>
           <label>
@@ -115,6 +118,10 @@ function AudiobookSettings() {
             OmniVoice receives <code>POST /generate</code> with{" "}
             <code>{"{ \"voice\": \"[gender-male][pitch-low]\", \"text\": \"...\" }"}</code> and
             returns raw MP3 bytes.
+          </p>
+          <p className="settings-hint">
+            For offline validation, choose the deterministic local harness and leave this blank.
+            It generates silent placeholder MP3s with realistic timing.
           </p>
         </section>
 
