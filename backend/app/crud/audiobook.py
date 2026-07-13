@@ -96,9 +96,7 @@ async def pause_book_pipeline_after_phase(db: AsyncSession, book_id: int, phase:
     if row is None or row.audiobook_stop_after_phase != phase or row.audiobook_pipeline_status == "complete":
         return False
     await db.execute(
-        update(Book)
-        .where(Book.id == book_id)
-        .values(audiobook_pipeline_status="paused", audiobook_stop_after_phase=None)
+        update(Book).where(Book.id == book_id).values(audiobook_pipeline_status="paused", audiobook_stop_after_phase=None)
     )
     await db.commit()
     return True

@@ -159,14 +159,10 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
     resume_status = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     if resume_status == "complete":
-        await crud.audiobook.configure_book_pipeline_run(
-            db, book_id, status="complete", stop_after_phase=None
-        )
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
         return {"status": "complete", "queued": False}
 
-    await crud.audiobook.configure_book_pipeline_run(
-        db, book_id, status=resume_status, stop_after_phase=None
-    )
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status=resume_status, stop_after_phase=None)
 
     queue = get_audiobook_queue()
     queued = await queue.enqueue(book_id)
@@ -186,14 +182,10 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dic
 
     next_phase = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     if next_phase == "complete":
-        await crud.audiobook.configure_book_pipeline_run(
-            db, book_id, status="complete", stop_after_phase=None
-        )
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
         return {"status": "complete", "queued": False}
 
-    await crud.audiobook.configure_book_pipeline_run(
-        db, book_id, status=next_phase, stop_after_phase=next_phase
-    )
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status=next_phase, stop_after_phase=next_phase)
     queued = await get_audiobook_queue().enqueue(book_id)
     return {"status": next_phase, "queued": queued, "stop_after_phase": next_phase}
 
@@ -224,9 +216,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
     # Delete existing pipeline data so ingestion runs fresh
     await crud.audiobook.delete_chapters_for_book(db, book_id)
     await crud.audiobook.delete_characters_for_book(db, book_id)
-    await crud.audiobook.configure_book_pipeline_run(
-        db, book_id, status="ingesting", stop_after_phase=None
-    )
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status="ingesting", stop_after_phase=None)
     await queue.enqueue(book_id)
     return {"status": "ingesting", "queued": True}
 
