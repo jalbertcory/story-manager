@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookStatus,
   getCharacters,
   getAudiobookChapters,
   startPipeline,
+  stepPipeline,
   pausePipeline,
   rebuildPipeline,
   getAudiobookDownloadUrl,
@@ -22,7 +23,13 @@ const PIPELINE_STEPS = [
   { status: "complete", label: "Complete" },
 ];
 
-const ACTIVE_STATUSES = new Set(["ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"]);
+const ACTIVE_STATUSES = new Set([
+  "ingesting",
+  "roster_gen",
+  "diarizing",
+  "audio_gen",
+  "assembling",
+]);
 
 function PipelineProgress({ status }) {
   const currentIdx = PIPELINE_STEPS.findIndex((s) => s.status === status);
@@ -78,12 +85,19 @@ function AudiobookPipeline({ book }) {
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
-    queryClient.invalidateQueries({ queryKey: ["audiobook-characters", bookId] });
+    queryClient.invalidateQueries({
+      queryKey: ["audiobook-characters", bookId],
+    });
     queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
   };
 
   const startMutation = useMutation({
     mutationFn: () => startPipeline(bookId),
+    onSuccess: invalidateAll,
+  });
+
+  const stepMutation = useMutation({
+    mutationFn: () => stepPipeline(bookId),
     onSuccess: invalidateAll,
   });
 
@@ -101,14 +115,40 @@ function AudiobookPipeline({ book }) {
   });
 
   const pipelineStatus = statusData?.pipeline_status ?? null;
+  const nextPhase = statusData?.next_phase ?? "ingesting";
+  const pauseRequested = statusData?.pause_requested ?? false;
+  const progressStatus =
+    isActive(pipelineStatus) || pipelineStatus === "complete"
+      ? pipelineStatus
+      : nextPhase;
+  const nextPhaseLabel =
+    PIPELINE_STEPS.find((step) => step.status === nextPhase)?.label ??
+    nextPhase;
   const sentenceCounts = statusData?.sentence_counts ?? {};
-  const totalSentences = Object.values(sentenceCounts).reduce((a, b) => a + b, 0);
+  const totalSentences = Object.values(sentenceCounts).reduce(
+    (a, b) => a + b,
+    0,
+  );
   const doneCount = sentenceCounts["audio_generated"] ?? 0;
+
+  // A fast local/stub phase can finish before the slower data queries poll.
+  // Refresh editor data whenever the durable pipeline state advances so the
+  // review screen always reflects the checkpoint that was just reached.
+  useEffect(() => {
+    if (pipelineStatus !== undefined) {
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-characters", bookId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-chapters", bookId],
+      });
+    }
+  }, [bookId, pipelineStatus, queryClient]);
 
   return (
     <div className="audiobook-pipeline">
       <div className="pipeline-header">
-        <PipelineProgress status={pipelineStatus} />
+        <PipelineProgress status={progressStatus} />
 
         <div className="pipeline-meta">
           {totalSentences > 0 && (
@@ -117,39 +157,62 @@ function AudiobookPipeline({ book }) {
             </span>
           )}
           {pipelineStatus === "error" && (
-            <span className="badge badge--error">Pipeline error — check logs</span>
+            <span className="badge badge--error">Pipeline error</span>
           )}
           {pipelineStatus === "paused" && (
-            <span className="badge badge--warning">Paused</span>
+            <span className="badge badge--warning">
+              Paused — next: {nextPhaseLabel}
+            </span>
+          )}
+          {pauseRequested && (
+            <span className="badge badge--warning">Pause requested…</span>
+          )}
+          {statusData?.last_error && (
+            <p className="error">{statusData.last_error}</p>
           )}
         </div>
 
         <div className="pipeline-controls">
           {pipelineStatus === "complete" && (
-            <a className="btn btn-primary" href={getAudiobookDownloadUrl(bookId)} download>
+            <a
+              className="btn btn-primary"
+              href={getAudiobookDownloadUrl(bookId)}
+              download
+            >
               Download Audiobook EPUB
             </a>
           )}
           {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
-            <button
-              onClick={() => startMutation.mutate()}
-              disabled={startMutation.isPending}
-              className="btn-primary"
-            >
-              {pipelineStatus ? "Resume Pipeline" : "Start Pipeline"}
-            </button>
+            <>
+              <button
+                onClick={() => stepMutation.mutate()}
+                disabled={stepMutation.isPending || startMutation.isPending}
+              >
+                Run Next Stage: {nextPhaseLabel}
+              </button>
+              <button
+                onClick={() => startMutation.mutate()}
+                disabled={startMutation.isPending || stepMutation.isPending}
+                className="btn-primary"
+              >
+                Run to Completion
+              </button>
+            </>
           )}
           {isActive(pipelineStatus) && (
             <button
               onClick={() => pauseMutation.mutate()}
-              disabled={pauseMutation.isPending}
+              disabled={pauseMutation.isPending || pauseRequested}
             >
-              Pause Workers
+              {pauseRequested ? "Pause Requested…" : "Pause Safely"}
             </button>
           )}
           {!isActive(pipelineStatus) &&
             (!confirmRebuild ? (
-              <button className="btn-danger" onClick={() => setConfirmRebuild(true)}>
+              <button
+                className="btn-danger"
+                onClick={() => setConfirmRebuild(true)}
+              >
                 Force Full Rebuild
               </button>
             ) : (
@@ -162,17 +225,27 @@ function AudiobookPipeline({ book }) {
                 >
                   {rebuildMutation.isPending ? "Rebuilding…" : "Yes, rebuild"}
                 </button>{" "}
-                <button className="btn-text" onClick={() => setConfirmRebuild(false)}>
+                <button
+                  className="btn-text"
+                  onClick={() => setConfirmRebuild(false)}
+                >
                   Cancel
                 </button>
               </span>
             ))}
         </div>
 
-        {(startMutation.isError || pauseMutation.isError || rebuildMutation.isError) && (
+        {(startMutation.isError ||
+          stepMutation.isError ||
+          pauseMutation.isError ||
+          rebuildMutation.isError) && (
           <p className="error">
-            {(startMutation.error || pauseMutation.error || rebuildMutation.error)?.message ||
-              "Action failed"}
+            {(
+              startMutation.error ||
+              stepMutation.error ||
+              pauseMutation.error ||
+              rebuildMutation.error
+            )?.message || "Action failed"}
           </p>
         )}
       </div>

@@ -2,13 +2,23 @@ import { getJson, sendJson, sendWithoutBody } from "./client";
 
 // Pipeline control
 export function getAudiobookStatus(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/status`, "Failed to fetch audiobook status");
+  return getJson(
+    `/api/books/${bookId}/audiobook/status`,
+    "Failed to fetch audiobook status",
+  );
 }
 
 export function startPipeline(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/start`, {
     method: "POST",
     fallbackMessage: "Failed to start pipeline",
+  });
+}
+
+export function stepPipeline(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/step`, {
+    method: "POST",
+    fallbackMessage: "Failed to run the next pipeline stage",
   });
 }
 
@@ -28,7 +38,10 @@ export function rebuildPipeline(bookId) {
 
 // Characters
 export function getCharacters(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/characters`, "Failed to fetch characters");
+  return getJson(
+    `/api/books/${bookId}/audiobook/characters`,
+    "Failed to fetch characters",
+  );
 }
 
 export function updateCharacter(charId, data) {
@@ -43,7 +56,10 @@ export function updateCharacter(charId, data) {
 export function getSentences(bookId, { page = 1, limit = 50, chapterId } = {}) {
   const params = new URLSearchParams({ page, limit });
   if (chapterId != null) params.set("chapter_id", chapterId);
-  return getJson(`/api/books/${bookId}/audiobook/sentences?${params}`, "Failed to fetch sentences");
+  return getJson(
+    `/api/books/${bookId}/audiobook/sentences?${params}`,
+    "Failed to fetch sentences",
+  );
 }
 
 export function updateSentence(sentenceId, data) {
@@ -60,7 +76,10 @@ export function getSentenceAudioUrl(sentenceId) {
 
 // Chapters
 export function getAudiobookChapters(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/chapters`, "Failed to fetch chapters");
+  return getJson(
+    `/api/books/${bookId}/audiobook/chapters`,
+    "Failed to fetch chapters",
+  );
 }
 
 export function getChapterAudioUrl(bookId, chapterId) {
@@ -73,7 +92,10 @@ export function getAudiobookDownloadUrl(bookId) {
 
 // Settings
 export function getAudiobookSettings() {
-  return getJson("/api/audiobook/settings", "Failed to fetch audiobook settings");
+  return getJson(
+    "/api/audiobook/settings",
+    "Failed to fetch audiobook settings",
+  );
 }
 
 export function updateAudiobookSettings(data) {

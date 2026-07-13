@@ -43,6 +43,81 @@ async def set_book_pipeline_status(db: AsyncSession, book_id: int, status: Optio
     await db.commit()
 
 
+async def configure_book_pipeline_run(
+    db: AsyncSession,
+    book_id: int,
+    *,
+    status: str,
+    stop_after_phase: Optional[str],
+) -> None:
+    """Start or resume a run and clear stale pause/error state atomically."""
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(
+            audiobook_pipeline_status=status,
+            audiobook_stop_after_phase=stop_after_phase,
+            audiobook_pause_requested=False,
+            audiobook_last_error=None,
+        )
+    )
+    await db.commit()
+
+
+async def request_book_pipeline_pause(db: AsyncSession, book_id: int) -> None:
+    await db.execute(update(Book).where(Book.id == book_id).values(audiobook_pause_requested=True))
+    await db.commit()
+
+
+async def pause_book_pipeline_if_requested(db: AsyncSession, book_id: int) -> bool:
+    """Acknowledge a cooperative pause request at a durable work boundary."""
+    result = await db.execute(select(Book.audiobook_pause_requested).where(Book.id == book_id))
+    if not result.scalar_one_or_none():
+        return False
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(
+            audiobook_pipeline_status="paused",
+            audiobook_pause_requested=False,
+            audiobook_stop_after_phase=None,
+        )
+    )
+    await db.commit()
+    return True
+
+
+async def pause_book_pipeline_after_phase(db: AsyncSession, book_id: int, phase: str) -> bool:
+    """Stop a single-stage run once its requested phase has committed."""
+    result = await db.execute(
+        select(Book.audiobook_stop_after_phase, Book.audiobook_pipeline_status).where(Book.id == book_id)
+    )
+    row = result.one_or_none()
+    if row is None or row.audiobook_stop_after_phase != phase or row.audiobook_pipeline_status == "complete":
+        return False
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(audiobook_pipeline_status="paused", audiobook_stop_after_phase=None)
+    )
+    await db.commit()
+    return True
+
+
+async def set_book_pipeline_error(db: AsyncSession, book_id: int, message: str) -> None:
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(
+            audiobook_pipeline_status="error",
+            audiobook_pause_requested=False,
+            audiobook_stop_after_phase=None,
+            audiobook_last_error=message,
+        )
+    )
+    await db.commit()
+
+
 async def get_in_progress_audiobook_books(db: AsyncSession) -> list[Book]:
     active_statuses = ["ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"]
     result = await db.execute(

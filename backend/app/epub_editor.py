@@ -259,8 +259,9 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
     selectors with the book's own settings, then rewrites current_path from
     immutable_path and updates current_word_count in the DB.
 
-    Books with no applicable rules are always skipped. If force=True, rewrites
-    even when the output would match the current file.
+    Books with no applicable rules are skipped unless force=True. A forced
+    rebuild must still restore current_path from immutable_path after the last
+    cleaning rule is removed.
     """
     from . import crud
 
@@ -276,8 +277,9 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
     normalize_prose_blocks = book.source_type == models.SourceType.web
     has_rules = bool(chapter_selectors or content_selectors or removed_chapters or normalize_prose_blocks)
 
-    # Nothing to do — skip the (potentially expensive) epub rewrite
-    if not has_rules:
+    # Nothing to do — skip the (potentially expensive) epub rewrite unless a
+    # forced rebuild needs to restore a stale current copy.
+    if not has_rules and not force:
         return False
 
     if not book.immutable_path or not book.current_path:
@@ -293,6 +295,9 @@ async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: l
     library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path
+
+    if not has_rules and _files_match(immutable_path, current_path):
+        return False
 
     try:
         word_count = process_epub(

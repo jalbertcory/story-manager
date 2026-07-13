@@ -176,7 +176,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 
     await crud.audiobook.create_characters_bulk(db, book_id=book_id, characters_data=normalised)
     logger.info("Created %d characters for book %s.", len(normalised), book_id)
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+    if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
 
 
@@ -197,7 +197,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     batch_size = 50
 
     while True:
-        if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+        if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
             logger.info("Book %s paused during diarization.", book_id)
             return
 
@@ -244,5 +244,5 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             context_window.append(sentence.original_text)
 
     logger.info("Diarization complete for book %s.", book_id)
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+    if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "audio_gen")

@@ -154,6 +154,9 @@ PUT /api/audiobook/sentences/{id}
 - `audiobook_enabled` (Boolean, default `false`) — per-book opt-in gate for this pipeline
 - `audiobook_pipeline_status` (String, nullable)
 Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `assembling`, `complete`, `error`, `paused`
+- `audiobook_stop_after_phase` (String, nullable) — persisted checkpoint for a single-stage run
+- `audiobook_pause_requested` (Boolean, default `false`) — cooperative pause request acknowledged at a durable boundary
+- `audiobook_last_error` (Text, nullable) — actionable worker error shown in the book UI
 
 ---
 
@@ -205,6 +208,18 @@ Choose **Deterministic local harness** in Audio Settings to make this mode expli
 choose an LLM provider and configure an OmniVoice-compatible endpoint. The harness is intentionally deterministic;
 it is a validation and UI-development path, not synthetic speech.
 
+## Review and Recovery Controls
+
+The book UI offers **Run Next Stage** for debugging or reviewing intermediate artifacts and **Run to Completion**
+for unattended processing. A single-stage run persists its target phase and moves to `paused` only after that phase
+has committed. **Pause Safely** is cooperative: diarization pauses between batches, TTS between sentences, and
+assembly between chapters. Roster LLM requests and individual external TTS calls finish before the pause is
+acknowledged. Starting or stepping again infers the next safe phase from durable chapter/sentence state, so an app
+restart does not require restarting the entire book.
+
+Worker exceptions are stored in `audiobook_last_error` and returned by the status endpoint. Retrying clears the
+stale message; failed sentence audio is reset to `ready_for_audio` before TTS resumes.
+
 ---
 
 ## File Storage Layout
@@ -232,9 +247,10 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/books/{id}/audiobook/start` | Start or resume pipeline |
-| POST | `/api/books/{id}/audiobook/pause` | Pause workers (set status=paused) |
+| POST | `/api/books/{id}/audiobook/step` | Run only the next recoverable phase, then pause for review |
+| POST | `/api/books/{id}/audiobook/pause` | Request a cooperative pause at the next durable boundary |
 | POST | `/api/books/{id}/audiobook/rebuild` | Force full rebuild |
-| GET | `/api/books/{id}/audiobook/status` | Pipeline status + sentence counts by status |
+| GET | `/api/books/{id}/audiobook/status` | Status, next phase, controls, last error, and sentence counts |
 | GET | `/api/books/{id}/audiobook/characters` | List characters |
 | PUT | `/api/audiobook/characters/{char_id}` | Update voice profile (triggers cascade) |
 | GET | `/api/books/{id}/audiobook/sentences` | Paginated sentence list (`?page=&limit=&chapter_id=`) |
@@ -252,8 +268,9 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 
 | File | Purpose |
 |---|---|
-| `backend/app/models.py` | +4 new models, +1 Book column |
-| `backend/alembic/versions/0018_audiobook_pipeline.py` | Schema migration |
+| `backend/app/models.py` | Audiobook models and per-book pipeline/control state |
+| `backend/alembic/versions/0018_audiobook_pipeline.py` | Core audiobook schema migration |
+| `backend/alembic/versions/0019_audiobook_pipeline_controls.py` | Review, pause, and error-state migration |
 | `backend/app/crud/audiobook.py` | DB queries for all new tables |
 | `backend/app/services/audiobook_ingestion.py` | Phase 1: EPUB parse + span injection |
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |
