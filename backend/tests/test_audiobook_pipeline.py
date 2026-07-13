@@ -1,4 +1,6 @@
 import asyncio
+import shutil
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -8,7 +10,7 @@ from ebooklib import epub
 
 from backend.app import crud, models
 from backend.app.routers import audiobook as audiobook_router
-from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_tts
+from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_llm, audiobook_tts
 from backend.app.services.audiobook_queue import AudiobookQueue
 
 
@@ -131,6 +133,13 @@ async def test_requeue_candidates_only_include_enabled_audiobooks(db):
     pending = await crud.audiobook.get_in_progress_audiobook_books(db)
 
     assert [book.id for book in pending] == [enabled.id]
+
+
+@pytest.mark.asyncio
+async def test_empty_audio_state_is_not_considered_complete(db):
+    book = await _make_book(db, audiobook_enabled=True)
+
+    assert await crud.audiobook.all_sentences_audio_generated(db, book.id) is False
 
 
 @pytest.mark.asyncio
@@ -283,3 +292,49 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
     assert soup.find("a", href="next.xhtml") is not None
     assert soup.find("span", id="ch1_s0") is not None
     assert soup.find("span", id="ch1_s1") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for MP3 assembly")
+async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "offline.epub"
+    _write_nested_epub(epub_path)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    for module in (audiobook_ingestion, audiobook_tts, audiobook_assembly):
+        monkeypatch.setattr(module, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    await audiobook_llm.generate_character_roster(book.id, db)
+    await audiobook_llm.diarize_sentences(book.id, db)
+    await audiobook_tts.generate_audio_for_book(book.id, db)
+    await audiobook_assembly.assemble_book(book.id, db)
+
+    await db.refresh(book)
+    characters = await crud.audiobook.get_characters_for_book(db, book.id)
+    counts = await crud.audiobook.count_sentences_by_status(db, book.id)
+    output_path = library_path / "audiobooks" / str(book.id) / "audiobook.epub"
+
+    assert book.audiobook_pipeline_status == "complete"
+    assert [(character.name, character.is_narrator) for character in characters] == [("Narrator", True)]
+    assert counts == {"audio_generated": 5}
+    assert output_path.exists()
+    with zipfile.ZipFile(output_path) as archive:
+        names = archive.namelist()
+        assert "EPUB/ch0001.mp3" in names
+        assert "EPUB/ch0001.smil" in names
+        package = archive.read("EPUB/content.opf").decode("utf-8")
+        assert 'media-type="application/smil+xml"' in package
+        assert 'media-overlay="smil_ch0001"' in package
+
+    monkeypatch.setattr(audiobook_router, "LIBRARY_PATH", library_path)
+    response = await audiobook_router.download_audiobook(book.id, db)
+    assert Path(response.path) == output_path
+    assert response.media_type == "application/epub+zip"

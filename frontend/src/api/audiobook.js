@@ -67,6 +67,10 @@ export function getChapterAudioUrl(bookId, chapterId) {
   return `/api/books/${bookId}/audiobook/chapters/${chapterId}/audio`;
 }
 
+export function getAudiobookDownloadUrl(bookId) {
+  return `/api/books/${bookId}/audiobook/download`;
+}
+
 // Settings
 export function getAudiobookSettings() {
   return getJson("/api/audiobook/settings", "Failed to fetch audiobook settings");

@@ -64,7 +64,7 @@ AudiobookQueue.enqueue(book_id)
 │  Phase 5 – Assembly (status="assembling")                │
 │    audiobook_assembly.assemble_book(book_id)             │
 │    • for each chapter where needs_reassembly=True:       │
-│      concat snippets → ch{N}.mp3 (pydub)                │
+│      concat snippets → ch{N}.mp3 (ffmpeg)               │
 │      generate .smil from html_element_id + timestamps   │
 │      chapter.needs_reassembly = False                    │
 │    • patch content.opf media-overlay attributes          │
@@ -107,7 +107,7 @@ PUT /api/audiobook/sentences/{id}
 | Column | Type | Notes |
 |---|---|---|
 | id | Integer PK | |
-| llm_provider | String | `"openai"`, `"anthropic"`, `"custom"` |
+| llm_provider | String | `"stub"`, `"openai"`, `"anthropic"`, `"custom"` |
 | llm_api_key | String | Stored plaintext; masked on GET |
 | llm_base_url | String | Override for custom/local LLMs |
 | llm_model | String | e.g. `"gpt-4o"`, `"claude-opus-4-7"` |
@@ -194,6 +194,17 @@ Examples:
 
 Users can manually edit these values in the Character Roster UI.
 
+## Deterministic Local Harness
+
+The pipeline works without API keys or network services. When no settings row exists—or when the LLM provider is
+`stub`—it creates a single Narrator, assigns every sentence to that narrator, and generates timed silent placeholder
+MP3s through the installed `ffmpeg` binary. This exercises ingestion, durable state transitions, surgical rebuilds,
+chapter assembly, SMIL generation, and final EPUB packaging end to end.
+
+Choose **Deterministic local harness** in Audio Settings to make this mode explicit. To switch to real generation,
+choose an LLM provider and configure an OmniVoice-compatible endpoint. The harness is intentionally deterministic;
+it is a validation and UI-development path, not synthetic speech.
+
 ---
 
 ## File Storage Layout
@@ -231,6 +242,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | GET | `/api/audiobook/sentences/{id}/audio` | Stream sentence snippet MP3 |
 | GET | `/api/books/{id}/audiobook/chapters` | Chapter list with assembly status |
 | GET | `/api/books/{id}/audiobook/chapters/{cid}/audio` | Stream chapter MP3 |
+| GET | `/api/books/{id}/audiobook/download` | Download the completed EPUB 3 Media Overlay audiobook |
 | GET | `/api/audiobook/settings` | Get LLM/TTS config (API key masked) |
 | PUT | `/api/audiobook/settings` | Upsert LLM/TTS config |
 
@@ -271,14 +283,13 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 
 **`pyproject.toml`** (core):
 - `spacy>=3.7,<4` — sentence tokenization
-- `httpx>=0.27` — HTTP client for LLM and OmniVoice calls (moved from dev)
-- `pydub>=0.25` — MP3 concatenation
+- `httpx2==2.5.0` — HTTP client for LLM and OmniVoice calls (exports the `httpx` module)
 - `mutagen>=1.47` — MP3 duration extraction
 
-**`Dockerfile.base`**:
-- `ffmpeg` — required by `pydub` for MP3 decode/export
+**`Dockerfile`**:
+- `ffmpeg` — placeholder MP3 generation and chapter concatenation
 
-**`Dockerfile`** — after `uv pip install`:
+The application image also downloads the optional higher-quality spaCy English model after installing Python dependencies:
 ```dockerfile
 RUN python -m spacy download en_core_web_sm
 ```

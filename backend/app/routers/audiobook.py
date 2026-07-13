@@ -132,7 +132,8 @@ async def _get_audiobook_book_or_404(book_id: int, db: AsyncSession) -> Book:
 def _resolve_path(relative_path: Optional[str]) -> Optional[Path]:
     if not relative_path:
         return None
-    return (LIBRARY_PATH.parent / relative_path).resolve()
+    path = (LIBRARY_PATH.parent / relative_path).resolve()
+    return path if path.is_relative_to(LIBRARY_PATH.resolve()) else None
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +313,18 @@ async def get_chapter_audio(book_id: int, chapter_id: int, db: AsyncSession = De
     if not full_path or not full_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found on disk")
     return FileResponse(str(full_path), media_type="audio/mpeg")
+
+
+@router.get("/api/books/{book_id}/audiobook/download")
+async def download_audiobook(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if book.audiobook_pipeline_status != "complete":
+        raise HTTPException(status_code=409, detail="Audiobook generation is not complete")
+    full_path = (LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub").resolve()
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="Audiobook EPUB not found on disk")
+    filename = f"{book.title or 'audiobook'}-audiobook.epub"
+    return FileResponse(str(full_path), media_type="application/epub+zip", filename=filename)
 
 
 # ---------------------------------------------------------------------------

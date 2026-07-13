@@ -24,8 +24,13 @@ def _get_nlp():
     if _NLP is None:
         import spacy
 
-        _NLP = spacy.load("en_core_web_sm", disable=["ner", "parser"])
-        _NLP.add_pipe("sentencizer")
+        try:
+            _NLP = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+        except OSError:
+            logger.warning("spaCy model en_core_web_sm is unavailable; using the built-in English tokenizer.")
+            _NLP = spacy.blank("en")
+        if "sentencizer" not in _NLP.pipe_names:
+            _NLP.add_pipe("sentencizer")
     return _NLP
 
 
@@ -172,6 +177,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     logger.info("Wrote span-injected EPUB to %s", working_epub_path)
 
     # Persist to database
+    persisted_chapters = 0
     for chapter_num, item, chapter_sentences in all_chapter_records:
         if not chapter_sentences:
             continue
@@ -182,8 +188,11 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
             content_file_name=item.get_name(),
         )
         await crud.audiobook.create_sentences_bulk(db, chapter_id=chapter.id, sentences_data=chapter_sentences)
+        persisted_chapters += 1
 
     await db.commit()
+    if persisted_chapters == 0:
+        raise RuntimeError(f"EPUB for book {book_id} contains no narratable text.")
     if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
         await crud.audiobook.set_book_pipeline_status(db, book_id, "roster_gen")
-    logger.info("Ingestion complete for book %s: %d chapters processed", book_id, len(all_chapter_records))
+    logger.info("Ingestion complete for book %s: %d chapters processed", book_id, persisted_chapters)

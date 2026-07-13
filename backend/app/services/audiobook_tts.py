@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
+import shutil
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,37 @@ def _get_mp3_duration_ms(path: Path) -> int:
 
 
 async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) -> bytes:
+    if endpoint.startswith("stub://"):
+        duration_ms = max(350, min(5000, len(tagged_text.split()) * 260))
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg is required by the local audiobook TTS harness.")
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=22050:cl=mono",
+            "-t",
+            f"{duration_ms / 1000:.3f}",
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "64k",
+            "-f",
+            "mp3",
+            "pipe:1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode:
+            message = stderr.decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"Local TTS harness failed: {message}")
+        return stdout
+
     url = endpoint.rstrip("/") + "/generate"
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
@@ -47,10 +80,11 @@ async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) ->
 async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
     """Phase 4: iterate ready_for_audio sentences and call OmniVoice for each."""
     settings = await crud.audiobook.get_audiobook_settings(db)
-    if not settings or not settings.omnivoice_endpoint:
+    endpoint = settings.omnivoice_endpoint if settings else None
+    if not endpoint and (settings is None or (settings.llm_provider or "stub").lower() == "stub"):
+        endpoint = "stub://local"
+    if not endpoint:
         raise RuntimeError("OmniVoice endpoint not configured. Set it in Audio Settings.")
-
-    endpoint = settings.omnivoice_endpoint
 
     # Ensure snippets directory exists
     snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
