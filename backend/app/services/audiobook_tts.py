@@ -67,7 +67,10 @@ async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) ->
         return stdout
 
     url = endpoint.rstrip("/") + "/generate"
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    # Local neural TTS can take longer on the first MPS/CPU request while
+    # kernels warm up. Keep connection failures fast but allow inference time.
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             url,
             json={"voice": voice_prompt, "text": tagged_text},
