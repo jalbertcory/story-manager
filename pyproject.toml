@@ -14,7 +14,7 @@ dependencies = [
     "certifi==2026.2.25",
     "chardet==7.4.3",
     "charset-normalizer==3.4.7",
-    "click==8.3.2",
+    "click==8.3.3",
     "cloudscraper==1.2.71",
     "ebooklib==0.20",
     "fanficfare==4.56.0",
