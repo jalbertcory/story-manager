@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Enum, JSON, Numeric, Text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Float, ForeignKey, Enum, JSON, Numeric, Text
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -49,6 +49,14 @@ class Book(Base):
     audiobook_stop_after_phase = Column(String, nullable=True)
     audiobook_pause_requested = Column(Boolean, nullable=False, default=False, server_default="false")
     audiobook_last_error = Column(Text, nullable=True)
+    audiobook_summary = Column(Text, nullable=True)
+    audiobook_progress_current = Column(Integer, nullable=False, default=0, server_default="0")
+    audiobook_progress_total = Column(Integer, nullable=False, default=0, server_default="0")
+    audiobook_progress_detail = Column(String, nullable=True)
+    audiobook_pipeline_started_at = Column(DateTime(timezone=True), nullable=True)
+    audiobook_pipeline_updated_at = Column(DateTime(timezone=True), nullable=True)
+    audiobook_batch_limit = Column(Integer, nullable=True)
+    audiobook_llm_requests = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -196,6 +204,8 @@ class AudiobookChapter(Base):
     smil_file_path = Column(String, nullable=True)
     audio_file_path = Column(String, nullable=True)
     needs_reassembly = Column(Boolean, nullable=False, server_default="false")
+    summary = Column(Text, nullable=True)
+    summary_updated_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class AudiobookCharacter(Base):
@@ -207,6 +217,8 @@ class AudiobookCharacter(Base):
     description = Column(Text, nullable=True)
     voice_design_prompt = Column(String, nullable=True)
     is_narrator = Column(Boolean, nullable=False, server_default="false")
+    aliases = Column(JSON, nullable=True)
+    evidence = Column(JSON, nullable=True)
 
 
 class AudiobookSentence(Base):
@@ -221,5 +233,7 @@ class AudiobookSentence(Base):
     tagged_text = Column(Text, nullable=True)
     audio_file_path = Column(String, nullable=True)
     audio_duration_ms = Column(Integer, nullable=True)
+    speaker_confidence = Column(Float, nullable=True)
+    speaker_reason = Column(Text, nullable=True)
     # Status values: pending_diarization, ready_for_audio, audio_generated, error
     status = Column(String, nullable=False, server_default="pending_diarization")

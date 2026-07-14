@@ -39,15 +39,15 @@ AudiobookQueue.enqueue(book_id)
 │                                                          │
 │  Phase 2 – Roster Gen (status="roster_gen")              │
 │    audiobook_llm.generate_character_roster(book_id)      │
-│    • chunk chapter text → LLM (provider from settings)   │
+│    • sample story chapters across the book → LLM         │
 │    • parse characters + voice params                     │
 │    • INSERT audiobook_characters (incl. Narrator)        │
 │    • set status = "diarizing"                            │
 │                                                          │
 │  Phase 3 – Diarization (status="diarizing")              │
 │    audiobook_llm.diarize_sentences(book_id)              │
-│    • batch 50 sentences + 5-sentence context window      │
-│    • LLM assigns character_id + tagged_text              │
+│    • batch 40 sentences + 8-sentence context window      │
+│    • LLM assigns speaker, confidence, rationale + tags   │
 │    • UPDATE sentence status → "ready_for_audio"          │
 │    • set status = "audio_gen" when all done              │
 │                                                          │
@@ -107,7 +107,7 @@ PUT /api/audiobook/sentences/{id}
 | Column | Type | Notes |
 |---|---|---|
 | id | Integer PK | |
-| llm_provider | String | `"stub"`, `"openai"`, `"anthropic"`, `"custom"` |
+| llm_provider | String | `"stub"`, `"ollama"`, `"openai"`, `"anthropic"`, `"custom"` |
 | llm_api_key | String | Stored plaintext; masked on GET |
 | llm_base_url | String | Override for custom/local LLMs |
 | llm_model | String | e.g. `"gpt-4o"`, `"claude-opus-4-7"` |
@@ -149,6 +149,8 @@ PUT /api/audiobook/sentences/{id}
 | audio_file_path | String | Path to snippet MP3 |
 | audio_duration_ms | Integer | Used for SMIL timestamp calculation |
 | status | String | `pending_diarization` → `ready_for_audio` → `audio_generated` / `error` |
+| speaker_confidence | Float | Model confidence from `0` to `1`; manual assignments use `1` |
+| speaker_reason | Text | Short attribution rationale for review |
 
 **New columns on `books`**:
 - `audiobook_enabled` (Boolean, default `false`) — per-book opt-in gate for this pipeline
@@ -157,6 +159,15 @@ Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `ass
 - `audiobook_stop_after_phase` (String, nullable) — persisted checkpoint for a single-stage run
 - `audiobook_pause_requested` (Boolean, default `false`) — cooperative pause request acknowledged at a durable boundary
 - `audiobook_last_error` (Text, nullable) — actionable worker error shown in the book UI
+- `audiobook_summary` (Text, nullable) — roster-stage, spoiler-light story analysis
+- `audiobook_progress_current` / `audiobook_progress_total` — current phase work counters
+- `audiobook_progress_detail` — human-readable active operation
+- `audiobook_pipeline_started_at` / `audiobook_pipeline_updated_at` — run timing
+- `audiobook_batch_limit` — durable work-unit budget for **Run One Batch**
+- `audiobook_llm_requests` — model calls made during the current run
+
+Migration `0020_audiobook_observability.py` also adds chapter summaries, character aliases/evidence, and sentence
+confidence/rationales.
 
 ---
 
@@ -230,9 +241,30 @@ Choose **Deterministic local harness** in Audio Settings to make this mode expli
 choose an LLM provider and configure an OmniVoice-compatible endpoint. The harness is intentionally deterministic;
 it is a validation and UI-development path, not synthetic speech.
 
+## Recommended Local LLM (Ollama)
+
+The recommended local analysis model is `qwen3.5:9b`. The model is about 6.6 GB, has enough instruction-following
+capacity for schema-constrained roster and speaker assignment, and is substantially more practical for the many
+calls required by a full book than the 17 GB 27B quality tier. Install Ollama, start its service, and pull the model:
+
+```bash
+# macOS
+brew install ollama
+brew services start ollama
+make pull-ollama-model
+
+curl http://127.0.0.1:11434/api/tags
+```
+
+In **Audio Settings**, click **Use Recommended Local Ollama**, then **Save & Test LLM**. The preset uses provider
+`ollama`, base URL `http://127.0.0.1:11434`, and model `qwen3.5:9b`. Calls use Ollama's schema-constrained structured
+outputs, thinking disabled, temperature 0, and a 32K working context. This makes roster and speaker output directly
+machine-validated instead of relying on best-effort JSON prompting.
+
 ## Review and Recovery Controls
 
-The book UI offers **Run Next Stage** for debugging or reviewing intermediate artifacts and **Run to Completion**
+The book UI offers **Run Next Stage** for debugging or reviewing intermediate artifacts, **Run One Batch** for one
+40-sentence diarization batch, one TTS sentence, or one assembly chapter, and **Run to Completion**
 for unattended processing. A single-stage run persists its target phase and moves to `paused` only after that phase
 has committed. **Pause Safely** is cooperative: diarization pauses between batches, TTS between sentences, and
 assembly between chapters. Roster LLM requests and individual external TTS calls finish before the pause is
@@ -241,6 +273,11 @@ restart does not require restarting the entire book.
 
 Worker exceptions are stored in `audiobook_last_error` and returned by the status endpoint. Retrying clears the
 stale message; failed sentence audio is reset to `ready_for_audio` before TTS resumes.
+
+The Characters tab also offers **Regenerate Character Roster**. It preserves the parsed EPUB and sentence IDs while
+clearing roster, diarization, summaries, and derived audio state. Roster generation samples real story chapters
+across the book and supplements those excerpts with whole-book capitalized-name frequency hints, reducing the chance
+that front matter or a one-scene cameo displaces a recurring speaker.
 
 ---
 
@@ -270,12 +307,14 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 |---|---|---|
 | POST | `/api/books/{id}/audiobook/start` | Start or resume pipeline |
 | POST | `/api/books/{id}/audiobook/step` | Run only the next recoverable phase, then pause for review |
+| POST | `/api/books/{id}/audiobook/run-batch` | Run one diarization/TTS/assembly work unit, then pause |
 | POST | `/api/books/{id}/audiobook/pause` | Request a cooperative pause at the next durable boundary |
 | POST | `/api/books/{id}/audiobook/rebuild` | Force full rebuild |
-| GET | `/api/books/{id}/audiobook/status` | Status, next phase, controls, last error, and sentence counts |
+| POST | `/api/books/{id}/audiobook/roster/rebuild` | Preserve ingestion and regenerate roster/speaker analysis |
+| GET | `/api/books/{id}/audiobook/status` | Status, model, progress, summary, review flags, and sentence counts |
 | GET | `/api/books/{id}/audiobook/characters` | List characters |
 | PUT | `/api/audiobook/characters/{char_id}` | Update voice profile (triggers cascade) |
-| GET | `/api/books/{id}/audiobook/sentences` | Paginated sentence list (`?page=&limit=&chapter_id=`) |
+| GET | `/api/books/{id}/audiobook/sentences` | Paginated sentences (`?page=&limit=&chapter_id=&review_only=`) |
 | PUT | `/api/audiobook/sentences/{id}` | Update speaker/tags (triggers cascade) |
 | GET | `/api/audiobook/sentences/{id}/audio` | Stream sentence snippet MP3 |
 | GET | `/api/books/{id}/audiobook/chapters` | Chapter list with assembly status |
@@ -283,6 +322,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | GET | `/api/books/{id}/audiobook/download` | Download the completed EPUB 3 Media Overlay audiobook |
 | GET | `/api/audiobook/settings` | Get LLM/TTS config (API key masked) |
 | PUT | `/api/audiobook/settings` | Upsert LLM/TTS config |
+| POST | `/api/audiobook/settings/test-llm` | Validate the saved model with a structured-output request |
 
 ---
 
@@ -293,6 +333,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `backend/app/models.py` | Audiobook models and per-book pipeline/control state |
 | `backend/alembic/versions/0018_audiobook_pipeline.py` | Core audiobook schema migration |
 | `backend/alembic/versions/0019_audiobook_pipeline_controls.py` | Review, pause, and error-state migration |
+| `backend/alembic/versions/0020_audiobook_observability.py` | Progress, summaries, evidence, confidence, and batch controls |
 | `backend/app/crud/audiobook.py` | DB queries for all new tables |
 | `backend/app/services/audiobook_ingestion.py` | Phase 1: EPUB parse + span injection |
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |

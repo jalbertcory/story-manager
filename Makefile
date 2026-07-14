@@ -1,4 +1,4 @@
-.PHONY: help setup setup-omnivoice run-omnivoice run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
+.PHONY: help setup setup-omnivoice run-omnivoice pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -13,6 +13,7 @@ help:
 	@echo "  make run-ui           Run the Vite frontend"
 	@echo "  make setup-omnivoice  Install official OmniVoice in an isolated environment"
 	@echo "  make run-omnivoice    Run the local MPS/CUDA/CPU OmniVoice adapter"
+	@echo "  make pull-ollama-model Pull the recommended local audiobook LLM"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
@@ -30,6 +31,9 @@ setup-omnivoice:
 run-omnivoice: setup-omnivoice
 	PYTORCH_ENABLE_MPS_FALLBACK=1 services/omnivoice/.venv/bin/uvicorn \
 		services.omnivoice.server:app --host 127.0.0.1 --port $(OMNIVOICE_PORT)
+
+pull-ollama-model:
+	ollama pull qwen3.5:9b
 
 run-ui:
 	cd frontend && npm run dev

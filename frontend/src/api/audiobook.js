@@ -22,6 +22,13 @@ export function stepPipeline(bookId) {
   });
 }
 
+export function runPipelineBatch(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/run-batch`, {
+    method: "POST",
+    fallbackMessage: "Failed to run one pipeline batch",
+  });
+}
+
 export function pausePipeline(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/pause`, {
     method: "POST",
@@ -33,6 +40,13 @@ export function rebuildPipeline(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/rebuild`, {
     method: "POST",
     fallbackMessage: "Failed to rebuild pipeline",
+  });
+}
+
+export function rebuildCharacterRoster(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/rebuild`, {
+    method: "POST",
+    fallbackMessage: "Failed to regenerate the character roster",
   });
 }
 
@@ -53,9 +67,13 @@ export function updateCharacter(charId, data) {
 }
 
 // Sentences
-export function getSentences(bookId, { page = 1, limit = 50, chapterId } = {}) {
+export function getSentences(
+  bookId,
+  { page = 1, limit = 50, chapterId, reviewOnly = false } = {},
+) {
   const params = new URLSearchParams({ page, limit });
   if (chapterId != null) params.set("chapter_id", chapterId);
+  if (reviewOnly) params.set("review_only", "true");
   return getJson(
     `/api/books/${bookId}/audiobook/sentences?${params}`,
     "Failed to fetch sentences",
@@ -103,5 +121,12 @@ export function updateAudiobookSettings(data) {
     method: "PUT",
     body: data,
     fallbackMessage: "Failed to save audiobook settings",
+  });
+}
+
+export function testAudiobookLlm() {
+  return sendWithoutBody("/api/audiobook/settings/test-llm", {
+    method: "POST",
+    fallbackMessage: "Failed to connect to the configured LLM",
   });
 }
