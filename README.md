@@ -57,10 +57,14 @@ Useful commands:
 
 ```bash
 make migrate
+make run-omnivoice
 make test
 make test-migrations
 make e2e
 ```
+
+`make run-omnivoice` installs and runs the optional official local OmniVoice adapter for real audiobook speech.
+See [services/omnivoice/README.md](services/omnivoice/README.md) for hardware notes and configuration.
 
 For setup notes and testing details, see [docs/development.md](docs/development.md).
 
