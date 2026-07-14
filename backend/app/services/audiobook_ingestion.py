@@ -178,6 +178,14 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
 
     # Persist to database
     persisted_chapters = 0
+    total_chapters = sum(1 for _chapter_num, _item, sentences in all_chapter_records if sentences)
+    await crud.audiobook.update_book_pipeline_progress(
+        db,
+        book_id,
+        current=0,
+        total=total_chapters,
+        detail=f"Tokenized EPUB; saving {total_chapters} narratable sections",
+    )
     for chapter_num, item, chapter_sentences in all_chapter_records:
         if not chapter_sentences:
             continue
@@ -189,6 +197,13 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         )
         await crud.audiobook.create_sentences_bulk(db, chapter_id=chapter.id, sentences_data=chapter_sentences)
         persisted_chapters += 1
+        await crud.audiobook.update_book_pipeline_progress(
+            db,
+            book_id,
+            current=persisted_chapters,
+            total=total_chapters,
+            detail=f"Saved section {persisted_chapters} of {total_chapters}",
+        )
 
     await db.commit()
     if persisted_chapters == 0:

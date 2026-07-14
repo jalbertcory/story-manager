@@ -95,6 +95,11 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
 
     processed = 0
     failed = 0
+    counts = await crud.audiobook.count_sentences_by_status(db, book_id)
+    total = counts.get("ready_for_audio", 0)
+    await crud.audiobook.update_book_pipeline_progress(
+        db, book_id, current=0, total=total, detail=f"Preparing speech for {total} sentences"
+    )
     while True:
         if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
             logger.info("Book %s paused during TTS generation.", book_id)
@@ -148,10 +153,20 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
 
             await crud.audiobook.update_sentence_audio(db, sentence.id, _relative_path(out_path), duration_ms)
             processed += 1
+            await crud.audiobook.update_book_pipeline_progress(
+                db,
+                book_id,
+                current=processed,
+                total=total,
+                detail=f"Generated speech for {processed} of {total} sentences",
+            )
 
             # Flag chapter for reassembly if all its sentences are done
             if await crud.audiobook.chapter_all_audio_generated(db, sentence.chapter_id):
                 await crud.audiobook.flag_chapter_for_reassembly(db, sentence.chapter_id)
+            if await crud.audiobook.consume_book_batch_limit(db, book_id):
+                logger.info("Book %s paused after one TTS sentence.", book_id)
+                return
 
     if failed or await crud.audiobook.has_sentence_status(db, book_id, "error"):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "error")

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
@@ -38,7 +39,11 @@ async def upsert_audiobook_settings(db: AsyncSession, data: dict) -> AudiobookSe
 
 
 async def set_book_pipeline_status(db: AsyncSession, book_id: int, status: Optional[str]) -> None:
-    await db.execute(update(Book).where(Book.id == book_id).values(audiobook_pipeline_status=status))
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(audiobook_pipeline_status=status, audiobook_pipeline_updated_at=datetime.now(timezone.utc))
+    )
     await db.commit()
 
 
@@ -48,6 +53,7 @@ async def configure_book_pipeline_run(
     *,
     status: str,
     stop_after_phase: Optional[str],
+    batch_limit: Optional[int] = None,
 ) -> None:
     """Start or resume a run and clear stale pause/error state atomically."""
     await db.execute(
@@ -58,6 +64,13 @@ async def configure_book_pipeline_run(
             audiobook_stop_after_phase=stop_after_phase,
             audiobook_pause_requested=False,
             audiobook_last_error=None,
+            audiobook_batch_limit=batch_limit,
+            audiobook_progress_current=0,
+            audiobook_progress_total=0,
+            audiobook_progress_detail=None,
+            audiobook_pipeline_started_at=datetime.now(timezone.utc),
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
+            audiobook_llm_requests=0,
         )
     )
     await db.commit()
@@ -66,6 +79,62 @@ async def configure_book_pipeline_run(
 async def request_book_pipeline_pause(db: AsyncSession, book_id: int) -> None:
     await db.execute(update(Book).where(Book.id == book_id).values(audiobook_pause_requested=True))
     await db.commit()
+
+
+async def update_book_pipeline_progress(
+    db: AsyncSession,
+    book_id: int,
+    *,
+    current: int,
+    total: int,
+    detail: Optional[str],
+    llm_request_increment: int = 0,
+) -> None:
+    values = {
+        "audiobook_progress_current": max(0, current),
+        "audiobook_progress_total": max(0, total),
+        "audiobook_progress_detail": detail,
+        "audiobook_pipeline_updated_at": datetime.now(timezone.utc),
+    }
+    if llm_request_increment:
+        values["audiobook_llm_requests"] = Book.audiobook_llm_requests + llm_request_increment
+    await db.execute(update(Book).where(Book.id == book_id).values(**values))
+    await db.commit()
+
+
+async def set_book_audiobook_summary(db: AsyncSession, book_id: int, summary: Optional[str]) -> None:
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(audiobook_summary=summary, audiobook_pipeline_updated_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+
+
+async def consume_book_batch_limit(db: AsyncSession, book_id: int) -> bool:
+    """Consume one durable work unit and pause when a one-batch run is exhausted."""
+    result = await db.execute(select(Book.audiobook_batch_limit).where(Book.id == book_id))
+    remaining = result.scalar_one_or_none()
+    if remaining is None:
+        return False
+    remaining -= 1
+    if remaining > 0:
+        await db.execute(update(Book).where(Book.id == book_id).values(audiobook_batch_limit=remaining))
+        await db.commit()
+        return False
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id)
+        .values(
+            audiobook_pipeline_status="paused",
+            audiobook_batch_limit=None,
+            audiobook_stop_after_phase=None,
+            audiobook_pause_requested=False,
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return True
 
 
 async def pause_book_pipeline_if_requested(db: AsyncSession, book_id: int) -> bool:
@@ -80,6 +149,8 @@ async def pause_book_pipeline_if_requested(db: AsyncSession, book_id: int) -> bo
             audiobook_pipeline_status="paused",
             audiobook_pause_requested=False,
             audiobook_stop_after_phase=None,
+            audiobook_batch_limit=None,
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
         )
     )
     await db.commit()
@@ -95,7 +166,14 @@ async def pause_book_pipeline_after_phase(db: AsyncSession, book_id: int, phase:
     if row is None or row.audiobook_stop_after_phase != phase or row.audiobook_pipeline_status == "complete":
         return False
     await db.execute(
-        update(Book).where(Book.id == book_id).values(audiobook_pipeline_status="paused", audiobook_stop_after_phase=None)
+        update(Book)
+        .where(Book.id == book_id)
+        .values(
+            audiobook_pipeline_status="paused",
+            audiobook_stop_after_phase=None,
+            audiobook_batch_limit=None,
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
+        )
     )
     await db.commit()
     return True
@@ -109,6 +187,8 @@ async def set_book_pipeline_error(db: AsyncSession, book_id: int, message: str) 
             audiobook_pipeline_status="error",
             audiobook_pause_requested=False,
             audiobook_stop_after_phase=None,
+            audiobook_batch_limit=None,
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
             audiobook_last_error=message,
         )
     )
@@ -189,6 +269,15 @@ async def update_chapter_assembly(
     await db.commit()
 
 
+async def update_chapter_summary(db: AsyncSession, chapter_id: int, summary: Optional[str]) -> None:
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.id == chapter_id)
+        .values(summary=summary, summary_updated_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+
+
 async def flag_chapter_for_reassembly(db: AsyncSession, chapter_id: int) -> None:
     await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(needs_reassembly=True))
     await db.commit()
@@ -260,6 +349,35 @@ async def delete_characters_for_book(db: AsyncSession, book_id: int) -> None:
     await db.commit()
 
 
+async def reset_roster_and_diarization_for_book(db: AsyncSession, book_id: int) -> None:
+    """Clear derived speaker analysis while preserving the expensive EPUB ingestion."""
+    chapter_ids = select(AudiobookChapter.id).where(AudiobookChapter.book_id == book_id)
+    await db.execute(
+        update(AudiobookSentence)
+        .where(AudiobookSentence.chapter_id.in_(chapter_ids))
+        .values(
+            character_id=None,
+            tagged_text=AudiobookSentence.original_text,
+            audio_file_path=None,
+            audio_duration_ms=None,
+            speaker_confidence=None,
+            speaker_reason=None,
+            status="pending_diarization",
+        )
+    )
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.book_id == book_id)
+        .values(
+            summary=None,
+            summary_updated_at=None,
+            needs_reassembly=True,
+        )
+    )
+    await db.commit()
+    await delete_characters_for_book(db, book_id)
+
+
 # ---------------------------------------------------------------------------
 # Sentences
 # ---------------------------------------------------------------------------
@@ -285,6 +403,7 @@ async def get_sentences_paginated(
     page: int = 1,
     limit: int = 50,
     chapter_id: Optional[int] = None,
+    review_only: bool = False,
 ) -> tuple[list[AudiobookSentence], int]:
     base_query = (
         select(AudiobookSentence)
@@ -300,6 +419,17 @@ async def get_sentences_paginated(
     if chapter_id is not None:
         base_query = base_query.where(AudiobookSentence.chapter_id == chapter_id)
         count_query = count_query.where(AudiobookSentence.chapter_id == chapter_id)
+    if review_only:
+        review_filter = and_(
+            AudiobookSentence.status != "pending_diarization",
+            or_(
+                AudiobookSentence.character_id.is_(None),
+                AudiobookSentence.speaker_confidence.is_(None),
+                AudiobookSentence.speaker_confidence < 0.65,
+            ),
+        )
+        base_query = base_query.where(review_filter)
+        count_query = count_query.where(review_filter)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar_one()
@@ -312,8 +442,13 @@ async def get_sentences_paginated(
     return list(result.scalars().all()), total
 
 
-async def get_sentences_pending_diarization(db: AsyncSession, book_id: int, limit: int = 50) -> list[AudiobookSentence]:
-    result = await db.execute(
+async def get_sentences_pending_diarization(
+    db: AsyncSession,
+    book_id: int,
+    limit: int = 50,
+    chapter_id: Optional[int] = None,
+) -> list[AudiobookSentence]:
+    query = (
         select(AudiobookSentence)
         .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
         .where(
@@ -323,6 +458,9 @@ async def get_sentences_pending_diarization(db: AsyncSession, book_id: int, limi
         .order_by(AudiobookChapter.chapter_number, AudiobookSentence.sequence_order)
         .limit(limit)
     )
+    if chapter_id is not None:
+        query = query.where(AudiobookSentence.chapter_id == chapter_id)
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
@@ -341,12 +479,23 @@ async def get_sentences_ready_for_audio(db: AsyncSession, book_id: int, limit: i
 
 
 async def update_sentence_diarization(
-    db: AsyncSession, sentence_id: int, character_id: Optional[int], tagged_text: str
+    db: AsyncSession,
+    sentence_id: int,
+    character_id: Optional[int],
+    tagged_text: str,
+    speaker_confidence: Optional[float] = None,
+    speaker_reason: Optional[str] = None,
 ) -> None:
     await db.execute(
         update(AudiobookSentence)
         .where(AudiobookSentence.id == sentence_id)
-        .values(character_id=character_id, tagged_text=tagged_text, status="ready_for_audio")
+        .values(
+            character_id=character_id,
+            tagged_text=tagged_text,
+            speaker_confidence=speaker_confidence,
+            speaker_reason=speaker_reason,
+            status="ready_for_audio",
+        )
     )
     await db.commit()
 
@@ -389,6 +538,8 @@ async def update_sentence_speaker(
         return None
     sentence.character_id = character_id
     sentence.tagged_text = tagged_text
+    sentence.speaker_confidence = 1.0
+    sentence.speaker_reason = "Manually assigned"
     sentence.status = "ready_for_audio"
     sentence.audio_file_path = None
     sentence.audio_duration_ms = None
@@ -406,6 +557,48 @@ async def count_sentences_by_status(db: AsyncSession, book_id: int) -> dict[str,
         .group_by(AudiobookSentence.status)
     )
     return {row[0]: row[1] for row in result.all()}
+
+
+async def count_sentence_review_flags(db: AsyncSession, book_id: int) -> dict[str, int]:
+    base = (
+        select(AudiobookSentence)
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(AudiobookChapter.book_id == book_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            func.count().filter(base.c.character_id.is_(None)),
+            func.count().filter(base.c.speaker_confidence < 0.65),
+            func.count().filter(base.c.speaker_confidence.is_not(None)),
+        ).select_from(base)
+    )
+    unassigned, low_confidence, reviewed = result.one()
+    return {
+        "unassigned": unassigned or 0,
+        "low_confidence": low_confidence or 0,
+        "with_confidence": reviewed or 0,
+    }
+
+
+async def get_character_sentence_stats(db: AsyncSession, book_id: int) -> dict[int, dict[str, float | int | None]]:
+    result = await db.execute(
+        select(
+            AudiobookSentence.character_id,
+            func.count(),
+            func.avg(AudiobookSentence.speaker_confidence),
+        )
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(AudiobookChapter.book_id == book_id, AudiobookSentence.character_id.is_not(None))
+        .group_by(AudiobookSentence.character_id)
+    )
+    return {
+        character_id: {
+            "sentence_count": sentence_count,
+            "average_confidence": float(average_confidence) if average_confidence is not None else None,
+        }
+        for character_id, sentence_count, average_confidence in result.all()
+    }
 
 
 async def has_sentence_status(db: AsyncSession, book_id: int, statuses: str | list[str]) -> bool:

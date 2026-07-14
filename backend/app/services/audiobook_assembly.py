@@ -167,12 +167,25 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
         return
 
-    for chapter in chapters:
+    await crud.audiobook.update_book_pipeline_progress(
+        db, book_id, current=0, total=len(chapters), detail=f"Preparing {len(chapters)} chapter assemblies"
+    )
+    for chapter_index, chapter in enumerate(chapters, start=1):
         if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
             logger.info("Book %s paused between chapter assemblies.", book_id)
             return
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
         await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
+        await crud.audiobook.update_book_pipeline_progress(
+            db,
+            book_id,
+            current=chapter_index,
+            total=len(chapters),
+            detail=f"Assembled chapter {chapter_index} of {len(chapters)}",
+        )
+        if await crud.audiobook.consume_book_batch_limit(db, book_id):
+            logger.info("Book %s paused after one chapter assembly.", book_id)
+            return
 
     # Repackage the EPUB with updated media-overlay references
     working_epub_path = output_dir / "working.epub"

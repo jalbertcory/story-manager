@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookSettings,
+  testAudiobookLlm,
   updateAudiobookSettings,
 } from "../api/audiobook";
 
@@ -46,8 +47,7 @@ function AudiobookSettings() {
     },
   });
 
-  const handleSave = (e) => {
-    e.preventDefault();
+  const buildPayload = () => {
     const payload = {
       llm_provider: llmProvider || null,
       llm_base_url: llmBaseUrl || null,
@@ -59,7 +59,22 @@ function AudiobookSettings() {
     if (llmApiKey) {
       payload.llm_api_key = llmApiKey;
     }
-    saveMutation.mutate(payload);
+    return payload;
+  };
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      await updateAudiobookSettings(buildPayload());
+      return testAudiobookLlm();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    },
+  });
+
+  const handleSave = (e) => {
+    e.preventDefault();
+    saveMutation.mutate(buildPayload());
   };
 
   if (isLoading) return <p>Loading settings…</p>;
@@ -78,6 +93,7 @@ function AudiobookSettings() {
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama (local)</option>
               <option value="custom">Custom / Local</option>
               <option value="stub">Deterministic local harness</option>
             </select>
@@ -113,6 +129,43 @@ function AudiobookSettings() {
               placeholder="e.g. gpt-4o or claude-opus-4-7"
             />
           </label>
+          <div className="settings-actions-inline">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setLlmProvider("ollama");
+                setLlmBaseUrl("http://127.0.0.1:11434");
+                setLlmModel("qwen3.5:9b");
+              }}
+            >
+              Use Recommended Local Ollama
+            </button>
+            <button
+              type="button"
+              onClick={() => testMutation.mutate()}
+              disabled={testMutation.isPending}
+            >
+              {testMutation.isPending ? "Testing…" : "Save & Test LLM"}
+            </button>
+          </div>
+          <p className="settings-hint">
+            Recommended local default: <code>qwen3.5:9b</code> (6.6 GB). Run{" "}
+            <code>ollama pull qwen3.5:9b</code> first. Story Manager uses
+            Ollama&apos;s schema-constrained JSON output and disables thinking
+            for predictable extraction latency.
+          </p>
+          {testMutation.isSuccess && (
+            <p className="success">
+              Connected to {testMutation.data.provider} /{" "}
+              {testMutation.data.model || "local harness"}.
+            </p>
+          )}
+          {testMutation.isError && (
+            <p className="error">
+              {testMutation.error?.message || "LLM test failed"}
+            </p>
+          )}
         </section>
 
         <section className="settings-section">
