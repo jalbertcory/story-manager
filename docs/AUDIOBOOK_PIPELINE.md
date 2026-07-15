@@ -281,12 +281,14 @@ In **Audio Settings**, click **Use Recommended Local Ollama**, then **Save & Tes
 outputs, thinking disabled, temperature 0, and a 32K working context. This makes roster and speaker output directly
 machine-validated instead of relying on best-effort JSON prompting. Common trailing-comma errors are repaired
 locally. Malformed or incomplete assignment sets are retried against the same durable pending sentences with
-progressively smaller batches (40 → 20 → 10 → 5), so one oversized response does not fail an unattended book run.
+progressively smaller batches (10 → 5), so one oversized response does not fail an unattended book run. The
+10-sentence default reflects full-book testing with the recommended 9B model: larger dialogue-heavy responses were
+more likely to omit trailing assignment IDs and cost more time in retries than they saved in request overhead.
 
 ## Review and Recovery Controls
 
 The book UI offers **Run Next Stage** for debugging or reviewing intermediate artifacts, **Run One Batch** for one
-40-sentence diarization batch, one TTS sentence, or one assembly chapter, and **Run to Completion**
+10-sentence diarization batch, one TTS sentence, or one assembly chapter, and **Run to Completion**
 for unattended processing. A single-stage run persists its target phase and moves to `paused` only after that phase
 has committed. **Pause Safely** is cooperative: diarization pauses between batches, TTS between sentences, and
 assembly between chapters. Roster LLM requests and individual external TTS calls finish before the pause is

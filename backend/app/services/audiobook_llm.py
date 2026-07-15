@@ -85,7 +85,8 @@ For each sentence return:
 - reason: a brief evidence-based reason, such as an adjacent dialogue tag or turn-taking context
   (12 words or fewer)
 
-Also return chapter_summary: an updated spoiler-light summary incorporating this batch and the prior summary.
+Also return chapter_summary: an updated spoiler-light summary incorporating this batch and the prior summary, using
+no more than 100 words.
 The roster descriptions are identity hints only and may be inaccurate. Ground the chapter summary exclusively in the
 sentence text and prior chapter summary; never import plot events, body changes, relationships, or backstory from a
 character description.
@@ -95,15 +96,21 @@ Return JSON with keys assignments and chapter_summary. No markdown or explanatio
 _ALLOWED_EXPRESSION_TAGS = {"laughter", "sigh", "whisper", "shout"}
 _BRACKET_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
 _GENDERED_ATTRIBUTION_RE = re.compile(
-    r"\b(she|he)\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b",
+    r"\b(she|he)\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped|"
+    r"repeated|remarked|responded|interrupted)\b",
+    re.IGNORECASE,
+)
+_FIRST_PERSON_ATTRIBUTION_RE = re.compile(
+    r"\bI\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped|reminded)\b",
     re.IGNORECASE,
 )
 _DIALOGUE_ATTRIBUTION_IN_SENTENCE_RE = re.compile(
     r"\b(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b" r"[^“\"]{0,80}[“\"]",
     re.IGNORECASE,
 )
-MAX_DIARIZATION_BATCH_SIZE = 40
+MAX_DIARIZATION_BATCH_SIZE = 10
 MIN_DIARIZATION_BATCH_SIZE = 5
+MIN_STORY_CHAPTER_SENTENCES = 40
 
 ROSTER_SCHEMA = {
     "type": "object",
@@ -156,12 +163,12 @@ DIARIZATION_SCHEMA = {
                     "character_id": {"type": ["integer", "null"]},
                     "tagged_text": {"type": ["string", "null"]},
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "maxLength": 160},
                 },
                 "required": ["id", "character_id", "tagged_text", "confidence", "reason"],
             },
         },
-        "chapter_summary": {"type": "string"},
+        "chapter_summary": {"type": "string", "maxLength": 1200},
     },
     "required": ["assignments", "chapter_summary"],
 }
@@ -348,26 +355,63 @@ def _apply_speaker_guardrails(
     next_text: str,
     character_id: int | None,
     narrator_id: int | None,
+    protagonist_id: int | None,
     minor_female_id: int | None,
     minor_male_id: int | None,
     reason: str,
 ) -> tuple[int | None, str, float | None]:
     """Correct two common local-model ID errors without inventing named speakers."""
     starts_with_quote = text.lstrip().startswith(("“", '"'))
+    has_quote = any(quote in text for quote in ("“", "”", '"'))
     has_dialogue = starts_with_quote or bool(_DIALOGUE_ATTRIBUTION_IN_SENTENCE_RE.search(text))
 
-    if character_id == narrator_id and has_dialogue:
-        attribution = _GENDERED_ATTRIBUTION_RE.search(f"{text} {next_text}")
-        if attribution:
-            gender = attribution.group(1).casefold()
-            fallback_id = minor_female_id if gender == "she" else minor_male_id
-            if fallback_id is not None:
-                return fallback_id, f"Deterministic {gender} dialogue attribution to minor voice", 0.98
+    current_first_person = _FIRST_PERSON_ATTRIBUTION_RE.search(text)
+    next_first_person = starts_with_quote and _FIRST_PERSON_ATTRIBUTION_RE.match(next_text.lstrip())
+    if protagonist_id is not None and has_quote and (current_first_person or next_first_person):
+        return protagonist_id, "Deterministic first-person dialogue attribution", 0.99
+
+    current_gender = _GENDERED_ATTRIBUTION_RE.search(text)
+    next_gender = starts_with_quote and _GENDERED_ATTRIBUTION_RE.match(next_text.lstrip())
+    attribution = current_gender or next_gender
+    if has_quote and attribution:
+        gender = attribution.group(1).casefold()
+        fallback_id = minor_female_id if gender == "she" else minor_male_id
+        if fallback_id is not None:
+            return fallback_id, f"Deterministic {gender} dialogue attribution to minor voice", 0.98
+
+    if character_id == narrator_id and starts_with_quote and protagonist_id is not None:
+        return protagonist_id, "Deterministic first-person dialogue fallback", 0.75
 
     if character_id != narrator_id and not has_dialogue:
         return narrator_id, "Deterministic prose/narration guardrail", 0.98
 
     return character_id, reason, None
+
+
+def _advance_open_dialogue_speaker(
+    text: str,
+    resolved_character_id: int | None,
+    *,
+    narrator_id: int | None,
+    minor_female_id: int | None,
+    minor_male_id: int | None,
+    current_open_speaker_id: int | None,
+) -> int | None:
+    """Track a curly-quoted utterance split across sentence records."""
+    opens = text.count("“")
+    closes = text.count("”")
+    if opens > closes:
+        prefix = text.rsplit("“", 1)[0]
+        pronouns = re.findall(r"\b(she|her|he|him)\b", prefix[-120:], re.IGNORECASE)
+        if pronouns:
+            gender = pronouns[-1].casefold()
+            return minor_female_id if gender in {"she", "her"} else minor_male_id
+        if resolved_character_id != narrator_id:
+            return resolved_character_id
+        return None
+    if closes > opens:
+        return None
+    return current_open_speaker_id
 
 
 async def _build_roster_excerpt(chapters, db: AsyncSession) -> str:
@@ -991,6 +1035,10 @@ async def generate_character_roster(
                 character["voice_design_prompt"] = _normalise_voice_prompt(
                     character.get("voice_design_prompt"), gender=first_person_gender
                 )
+                character["description"] = (
+                    "First-person protagonist; spoken dialogue voice is separate from the Narrator. "
+                    f"{character['description']}"
+                )
 
     def character_tokens(character: dict) -> set[str]:
         values = [character["name"], *character["aliases"]]
@@ -1128,6 +1176,14 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
     character_ids = {character.id for character in characters}
     narrator_id = next((character.id for character in characters if character.is_narrator), None)
+    protagonist_id = next(
+        (
+            character.id
+            for character in characters
+            if "first-person protagonist" in str(character.description or "").casefold()
+        ),
+        None,
+    )
     minor_female_id = next((character.id for character in characters if character.name == "Minor Female Voice"), None)
     minor_male_id = next((character.id for character in characters if character.name == "Minor Male Voice"), None)
     roster_json = json.dumps(
@@ -1167,9 +1223,11 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
 
         # Treat short files before the first substantial chapter as front matter.
         # Once the story begins, retain short chapters and only skip tiny dividers.
-        if len(chapter_sentences) >= batch_size:
+        if len(chapter_sentences) >= MIN_STORY_CHAPTER_SENTENCES:
             story_started = True
-        is_front_matter = (not story_started and len(chapter_sentences) < batch_size) or len(chapter_sentences) < 20
+        is_front_matter = (not story_started and len(chapter_sentences) < MIN_STORY_CHAPTER_SENTENCES) or len(
+            chapter_sentences
+        ) < 20
         if is_front_matter:
             for sentence in pending:
                 await crud.audiobook.update_sentence_diarization(
@@ -1194,6 +1252,18 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
         context_window = [
             sentence.original_text for sentence in chapter_sentences if sentence.status != "pending_diarization"
         ][-8:]
+        open_dialogue_speaker_id = None
+        for previous_sentence in chapter_sentences:
+            if previous_sentence.status == "pending_diarization":
+                break
+            open_dialogue_speaker_id = _advance_open_dialogue_speaker(
+                previous_sentence.original_text,
+                previous_sentence.character_id,
+                narrator_id=narrator_id,
+                minor_female_id=minor_female_id,
+                minor_male_id=minor_male_id,
+                current_open_speaker_id=open_dialogue_speaker_id,
+            )
         while True:
             batch = await crud.audiobook.get_sentences_pending_diarization(
                 db, book_id, limit=batch_size, chapter_id=chapter.id
@@ -1334,12 +1404,25 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     next_text=next_text,
                     character_id=char_id,
                     narrator_id=narrator_id,
+                    protagonist_id=protagonist_id,
                     minor_female_id=minor_female_id,
                     minor_male_id=minor_male_id,
                     reason=reason,
                 )
                 if guardrail_confidence is not None:
                     confidence = guardrail_confidence
+                if open_dialogue_speaker_id is not None and char_id == narrator_id:
+                    char_id = open_dialogue_speaker_id
+                    reason = "Deterministic continuation of open quoted dialogue"
+                    confidence = 0.95
+                open_dialogue_speaker_id = _advance_open_dialogue_speaker(
+                    sentence.original_text,
+                    char_id,
+                    narrator_id=narrator_id,
+                    minor_female_id=minor_female_id,
+                    minor_male_id=minor_male_id,
+                    current_open_speaker_id=open_dialogue_speaker_id,
+                )
                 await crud.audiobook.update_sentence_diarization(
                     db,
                     sentence.id,
@@ -1350,7 +1433,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 )
                 context_window.append(sentence.original_text)
 
-            chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:4000]
+            chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:1200]
             await crud.audiobook.update_chapter_summary(db, chapter.id, chapter_summary or None)
             chapter.summary = chapter_summary or None
             processed += len(batch)

@@ -155,6 +155,7 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         next_text="",
         character_id=20,
         narrator_id=10,
+        protagonist_id=20,
         minor_female_id=30,
         minor_male_id=40,
         reason="Action description by the protagonist.",
@@ -164,6 +165,7 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         next_text="",
         character_id=20,
         narrator_id=10,
+        protagonist_id=20,
         minor_female_id=30,
         minor_male_id=40,
         reason="Expressing deep grief.",
@@ -173,6 +175,7 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         next_text="",
         character_id=20,
         narrator_id=10,
+        protagonist_id=20,
         minor_female_id=30,
         minor_male_id=40,
         reason="Recalling her final words.",
@@ -182,15 +185,37 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         next_text="she asked without looking up.",
         character_id=10,
         narrator_id=10,
+        protagonist_id=20,
         minor_female_id=30,
         minor_male_id=40,
         reason="Dialogue attributed to the unnamed recruiter.",
+    )
+    first_person_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“I could be lonely,” I said.",
+        next_text="“We do not get many,” she said.",
+        character_id=30,
+        narrator_id=10,
+        protagonist_id=20,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model confused the adjacent speaker.",
+    )
+    repeated_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“Coming or going,” she repeated. “",
+        next_text="",
+        character_id=50,
+        narrator_id=10,
+        protagonist_id=20,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model selected an unrelated named character.",
     )
     setup = audiobook_llm._apply_speaker_guardrails(
         text="The recruiter looked up. “",
         next_text="Hello,” she said.",
         character_id=10,
         narrator_id=10,
+        protagonist_id=20,
         minor_female_id=30,
         minor_male_id=40,
         reason="Narration setting up dialogue.",
@@ -200,7 +225,43 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
     assert emotional_prose == (10, "Deterministic prose/narration guardrail", 0.98)
     assert embedded_quote == (10, "Deterministic prose/narration guardrail", 0.98)
     assert dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
+    assert first_person_dialogue == (20, "Deterministic first-person dialogue attribution", 0.99)
+    assert repeated_dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
     assert setup == (10, "Narration setting up dialogue.", None)
+
+
+def test_open_dialogue_state_tracks_split_quote_speaker():
+    open_speaker = audiobook_llm._advance_open_dialogue_speaker(
+        "“Take your time,” I said. “",
+        20,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        current_open_speaker_id=None,
+    )
+    assert open_speaker == 20
+    assert (
+        audiobook_llm._advance_open_dialogue_speaker(
+            "I know the place is packed.”",
+            20,
+            narrator_id=10,
+            minor_female_id=30,
+            minor_male_id=40,
+            current_open_speaker_id=open_speaker,
+        )
+        is None
+    )
+    assert (
+        audiobook_llm._advance_open_dialogue_speaker(
+            "She looked back to her computer. “",
+            10,
+            narrator_id=10,
+            minor_female_id=30,
+            minor_male_id=40,
+            current_open_speaker_id=None,
+        )
+        == 30
+    )
 
 
 @pytest.mark.asyncio
@@ -370,7 +431,7 @@ async def test_diarization_retries_malformed_output_in_smaller_batches(db, monke
 
     counts = await crud.audiobook.count_sentences_by_status(db, book.id)
     await db.refresh(book)
-    assert request_sizes == [40, 20, 20, 5]
+    assert request_sizes == [10, 5, 5, 10, 10, 10, 5]
     assert counts == {"ready_for_audio": 45}
     assert book.audiobook_pipeline_status == "audio_gen"
 
