@@ -63,7 +63,13 @@ describe("App", () => {
 
   it("searches by unified query", async () => {
     const mockBooks = [
-      { id: 2, title: "Book B", author: "Author B", source_type: "epub", series: null },
+      {
+        id: 2,
+        title: "Book B",
+        author: "Author B",
+        source_type: "epub",
+        series: null,
+      },
     ];
 
     globalThis.fetch = vi.fn((url) => {
@@ -73,7 +79,9 @@ describe("App", () => {
           json: () => Promise.resolve([]),
         });
       }
-      if (url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc") {
+      if (
+        url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
@@ -171,8 +179,13 @@ describe("App", () => {
       expect(screen.getByText("Fantasy")).toBeInTheDocument();
     });
 
-    expect(globalThis.fetch).not.toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
-    expect(screen.getByAltText("Saga cover")).toHaveAttribute("src", "/api/covers/2");
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      "/api/books/details?ids=1&ids=2",
+    );
+    expect(screen.getByAltText("Saga cover")).toHaveAttribute(
+      "src",
+      "/api/covers/2",
+    );
 
     expect(screen.queryByText("Saga Book 1")).not.toBeInTheDocument();
 
@@ -239,12 +252,21 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /genres/i }));
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText("Fantasy, Science Fiction, Progression Fantasy")).toBeInTheDocument();
+      expect(
+        screen.getByPlaceholderText(
+          "Fantasy, Science Fiction, Progression Fantasy",
+        ),
+      ).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Fantasy, Science Fiction, Progression Fantasy"), {
-      target: { value: "Fantasy, Epic Fantasy" },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        "Fantasy, Science Fiction, Progression Fantasy",
+      ),
+      {
+        target: { value: "Fantasy, Epic Fantasy" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -264,7 +286,11 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Fantasy"],
-        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
+        effective_series_genre_tags: [
+          "Adventure",
+          "Fantasy",
+          "Progression Fantasy",
+        ],
         current_word_count: 1000,
         source_type: "epub",
       },
@@ -274,7 +300,11 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Adventure"],
-        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
+        effective_series_genre_tags: [
+          "Adventure",
+          "Fantasy",
+          "Progression Fantasy",
+        ],
         current_word_count: 1000,
         source_type: "epub",
       },
@@ -284,7 +314,11 @@ describe("App", () => {
         author: "Author A",
         series: "Mixed Saga",
         effective_genre_tags: ["Progression Fantasy"],
-        effective_series_genre_tags: ["Adventure", "Fantasy", "Progression Fantasy"],
+        effective_series_genre_tags: [
+          "Adventure",
+          "Fantasy",
+          "Progression Fantasy",
+        ],
         current_word_count: 1000,
         source_type: "epub",
       },
@@ -371,7 +405,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /assign series/i }));
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText("Add to a series")).toBeInTheDocument();
+      expect(
+        screen.getByPlaceholderText("Add to a series"),
+      ).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByPlaceholderText("Add to a series"), {
@@ -385,6 +421,71 @@ describe("App", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ series: "Saga" }),
       });
+    });
+  });
+
+  it("shows, filters, and sorts audiobook-enabled books", async () => {
+    const mockBooks = [
+      {
+        id: 31,
+        title: "Audio Ready",
+        author: "Narrator A",
+        current_word_count: 1200,
+        source_type: "epub",
+        series: null,
+        audiobook_enabled: true,
+        audiobook_pipeline_status: "paused",
+      },
+      {
+        id: 32,
+        title: "Text Only",
+        author: "Author B",
+        current_word_count: 900,
+        source_type: "epub",
+        series: null,
+        audiobook_enabled: false,
+      },
+    ];
+
+    globalThis.fetch = vi.fn((url) => {
+      if (
+        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
+        url === "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockBooks),
+        });
+      }
+      if (url === "/api/series") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([]),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
+
+    expect(await screen.findByTitle("Audiobook: paused")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 2 books")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Audiobook"), {
+      target: { value: "enabled" },
+    });
+    expect(screen.getByText("Showing 1 of 2 books")).toBeInTheDocument();
+    expect(screen.getByText("Audio Ready")).toBeInTheDocument();
+    expect(screen.queryByText("Text Only")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Sort library by"), {
+      target: { value: "audiobook_enabled" },
+    });
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc",
+      );
     });
   });
 });

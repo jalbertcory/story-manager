@@ -11,7 +11,8 @@ from ..database import SessionLocal
 from .audiobook_ingestion import ingest_epub
 from .audiobook_llm import generate_character_roster, diarize_sentences
 from .audiobook_tts import generate_audio_for_book
-from .audiobook_assembly import assemble_book
+from .audiobook_tts import generate_audio_for_chapter_preview
+from .audiobook_assembly import assemble_book, assemble_chapter_preview
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,13 @@ class AudiobookQueue:
     """App-scoped queue that processes one audiobook pipeline job at a time."""
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[Optional[int]] = asyncio.Queue()
+        self._queue: asyncio.Queue[Optional[int | tuple[int, int]]] = asyncio.Queue()
         self._queued_book_ids: set[int] = set()
         # A pipeline mutation may arrive while a book is already running. Keep
         # one follow-up job so the mutation is not lost when the current worker
         # finishes.
         self._rerun_book_ids: set[int] = set()
+        self._queued_preview_ids: set[int] = set()
         self._worker_task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
@@ -50,6 +52,7 @@ class AudiobookQueue:
         self._worker_task = None
         self._queued_book_ids.clear()
         self._rerun_book_ids.clear()
+        self._queued_preview_ids.clear()
 
     async def enqueue(self, book_id: int) -> bool:
         if book_id in self._queued_book_ids:
@@ -63,12 +66,26 @@ class AudiobookQueue:
         """Return whether a book is queued or currently being processed."""
         return book_id in self._queued_book_ids
 
+    async def enqueue_preview(self, book_id: int, chapter_id: int) -> bool:
+        if chapter_id in self._queued_preview_ids:
+            return False
+        self._queued_preview_ids.add(chapter_id)
+        await self._queue.put((book_id, chapter_id))
+        return True
+
     async def requeue_in_progress(self) -> int:
         async with SessionLocal() as db:
             books = await crud.audiobook.get_in_progress_audiobook_books(db)
         queued = 0
         for book in books:
             if await self.enqueue(book.id):
+                queued += 1
+        async with SessionLocal() as db:
+            preview_chapters = await crud.audiobook.get_chapters_with_pending_previews(db)
+            for chapter in preview_chapters:
+                await crud.audiobook.set_chapter_preview_status(db, chapter.id, "queued")
+        for chapter in preview_chapters:
+            if await self.enqueue_preview(chapter.book_id, chapter.id):
                 queued += 1
         return queued
 
@@ -78,6 +95,17 @@ class AudiobookQueue:
             try:
                 if item is None:
                     return
+                if isinstance(item, tuple):
+                    book_id, chapter_id = item
+                    try:
+                        await self._process_preview(book_id, chapter_id)
+                    except Exception as exc:
+                        logger.exception("Chapter preview failed for chapter %s.", chapter_id)
+                        async with SessionLocal() as db:
+                            await crud.audiobook.set_chapter_preview_status(db, chapter_id, "error", str(exc))
+                    finally:
+                        self._queued_preview_ids.discard(chapter_id)
+                    continue
                 book_id = item
                 try:
                     await self._process(book_id)
@@ -92,6 +120,13 @@ class AudiobookQueue:
                         await self.enqueue(book_id)
             finally:
                 self._queue.task_done()
+
+    async def _process_preview(self, book_id: int, chapter_id: int) -> None:
+        async with SessionLocal() as db:
+            await crud.audiobook.set_chapter_preview_status(db, chapter_id, "generating")
+            await generate_audio_for_chapter_preview(book_id, chapter_id, db)
+            await assemble_chapter_preview(book_id, chapter_id, db)
+            await crud.audiobook.set_chapter_preview_status(db, chapter_id, "ready")
 
     async def _process(self, book_id: int) -> None:
         """Run the pipeline from the book's current status to completion."""

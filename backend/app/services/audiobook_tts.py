@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..models import AudiobookCharacter
+from ..models import AudiobookChapter, AudiobookCharacter
 
 logger = logging.getLogger(__name__)
 
@@ -182,3 +182,73 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
 
     logger.info("TTS complete for book %s: %d sentences generated.", book_id, processed)
     await crud.audiobook.set_book_pipeline_status(db, book_id, "assembling")
+
+
+async def generate_audio_for_chapter_preview(
+    book_id: int,
+    chapter_id: int,
+    db: AsyncSession,
+) -> None:
+    """Generate/reuse sentence clips for one fully diarized chapter only."""
+    chapter = await db.get(AudiobookChapter, chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise RuntimeError("Audiobook chapter not found.")
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter_id)
+    if not sentences:
+        raise RuntimeError("Chapter has no narratable sentences.")
+    pending = [sentence for sentence in sentences if sentence.status == "pending_diarization"]
+    if pending:
+        raise RuntimeError(f"Finish speaker analysis for this chapter first ({len(pending)} sentences remain).")
+    if any(sentence.character_id is None for sentence in sentences):
+        raise RuntimeError("Assign a speaker to every chapter sentence before generating a preview.")
+
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    endpoint = settings.omnivoice_endpoint if settings else None
+    if not endpoint and (settings is None or (settings.llm_provider or "stub").lower() == "stub"):
+        endpoint = "stub://local"
+    if not endpoint:
+        raise RuntimeError("OmniVoice endpoint not configured. Set it in Audio Settings.")
+
+    snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
+    snippets_dir.mkdir(parents=True, exist_ok=True)
+    completed = 0
+    await crud.audiobook.update_book_pipeline_progress(
+        db,
+        book_id,
+        current=0,
+        total=len(sentences),
+        detail=f"Generating manual preview for chapter {chapter.chapter_number}",
+    )
+    for sentence in sentences:
+        existing_path = LIBRARY_PATH.parent / sentence.audio_file_path if sentence.audio_file_path else None
+        if sentence.status == "audio_generated" and existing_path and existing_path.exists():
+            completed += 1
+            continue
+
+        voice_prompt = DEFAULT_VOICE_PROMPT
+        char = await db.get(AudiobookCharacter, sentence.character_id)
+        if char and char.voice_design_prompt:
+            voice_prompt = char.voice_design_prompt
+        text_to_speak = sentence.tagged_text or sentence.original_text
+        try:
+            audio_bytes = await _call_omnivoice(endpoint, voice_prompt, text_to_speak)
+            out_path = _snippet_path(book_id, sentence.id)
+            out_path.write_bytes(audio_bytes)
+            duration_ms = _get_mp3_duration_ms(out_path)
+        except Exception:
+            await crud.audiobook.mark_sentence_error(db, sentence.id)
+            raise
+        await crud.audiobook.update_sentence_audio(
+            db,
+            sentence.id,
+            _relative_path(out_path),
+            duration_ms,
+        )
+        completed += 1
+        await crud.audiobook.update_book_pipeline_progress(
+            db,
+            book_id,
+            current=completed,
+            total=len(sentences),
+            detail=(f"Chapter {chapter.chapter_number} preview: " f"generated {completed} of {len(sentences)} sentences"),
+        )
