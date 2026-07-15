@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..models import AudiobookChapter, AudiobookCharacter
+from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,68 @@ async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) ->
     return resp.content
 
 
-async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
-    """Phase 4: iterate ready_for_audio sentences and call OmniVoice for each."""
+async def _get_tts_endpoint(db: AsyncSession) -> str:
     settings = await crud.audiobook.get_audiobook_settings(db)
     endpoint = settings.omnivoice_endpoint if settings else None
     if not endpoint and (settings is None or (settings.llm_provider or "stub").lower() == "stub"):
         endpoint = "stub://local"
     if not endpoint:
         raise RuntimeError("OmniVoice endpoint not configured. Set it in Audio Settings.")
+    return endpoint
+
+
+async def _generate_sentence_clip(
+    endpoint: str,
+    book_id: int,
+    sentence: AudiobookSentence,
+    db: AsyncSession,
+) -> None:
+    voice_prompt = DEFAULT_VOICE_PROMPT
+    if sentence.character_id is not None:
+        char = await db.get(AudiobookCharacter, sentence.character_id)
+        if char and char.voice_design_prompt:
+            voice_prompt = char.voice_design_prompt
+
+    audio_bytes = await _call_omnivoice(
+        endpoint,
+        voice_prompt,
+        sentence.tagged_text or sentence.original_text,
+    )
+    out_path = _snippet_path(book_id, sentence.id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(audio_bytes)
+    duration_ms = _get_mp3_duration_ms(out_path)
+    await crud.audiobook.update_sentence_audio(
+        db,
+        sentence.id,
+        _relative_path(out_path),
+        duration_ms,
+    )
+
+
+async def generate_audio_for_sentence(
+    book_id: int,
+    sentence_id: int,
+    db: AsyncSession,
+) -> None:
+    """Generate one manually requested sentence without advancing the book pipeline."""
+    sentence = await db.get(AudiobookSentence, sentence_id)
+    if sentence is None:
+        raise RuntimeError("Audiobook sentence not found.")
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise RuntimeError("Audiobook sentence does not belong to this book.")
+    if sentence.character_id is None:
+        raise RuntimeError("Assign a speaker before generating sentence audio.")
+
+    endpoint = await _get_tts_endpoint(db)
+    await _generate_sentence_clip(endpoint, book_id, sentence, db)
+    await crud.audiobook.flag_chapter_for_reassembly(db, chapter.id)
+
+
+async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
+    """Phase 4: iterate ready_for_audio sentences and call OmniVoice for each."""
+    endpoint = await _get_tts_endpoint(db)
 
     # Ensure snippets directory exists
     snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
@@ -114,22 +168,9 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
                 logger.info("Book %s paused during TTS generation.", book_id)
                 return
 
-            # Resolve voice prompt from the assigned character
-            voice_prompt = DEFAULT_VOICE_PROMPT
-            if sentence.character_id is not None:
-                char = await db.get(AudiobookCharacter, sentence.character_id)
-                if char and char.voice_design_prompt:
-                    voice_prompt = char.voice_design_prompt
-
-            text_to_speak = sentence.tagged_text or sentence.original_text
-
             logger.debug("Generating audio for sentence %s (book %s).", sentence.id, book_id)
             try:
-                audio_bytes = await _call_omnivoice(endpoint, voice_prompt, text_to_speak)
-                out_path = _snippet_path(book_id, sentence.id)
-                out_path.write_bytes(audio_bytes)
-
-                duration_ms = _get_mp3_duration_ms(out_path)
+                await _generate_sentence_clip(endpoint, book_id, sentence, db)
             except httpx.HTTPStatusError as exc:
                 response_text = exc.response.text[:200] if exc.response is not None else ""
                 logger.error(
@@ -151,7 +192,6 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
                 failed += 1
                 continue
 
-            await crud.audiobook.update_sentence_audio(db, sentence.id, _relative_path(out_path), duration_ms)
             processed += 1
             await crud.audiobook.update_book_pipeline_progress(
                 db,
@@ -202,12 +242,7 @@ async def generate_audio_for_chapter_preview(
     if any(sentence.character_id is None for sentence in sentences):
         raise RuntimeError("Assign a speaker to every chapter sentence before generating a preview.")
 
-    settings = await crud.audiobook.get_audiobook_settings(db)
-    endpoint = settings.omnivoice_endpoint if settings else None
-    if not endpoint and (settings is None or (settings.llm_provider or "stub").lower() == "stub"):
-        endpoint = "stub://local"
-    if not endpoint:
-        raise RuntimeError("OmniVoice endpoint not configured. Set it in Audio Settings.")
+    endpoint = await _get_tts_endpoint(db)
 
     snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
@@ -225,25 +260,11 @@ async def generate_audio_for_chapter_preview(
             completed += 1
             continue
 
-        voice_prompt = DEFAULT_VOICE_PROMPT
-        char = await db.get(AudiobookCharacter, sentence.character_id)
-        if char and char.voice_design_prompt:
-            voice_prompt = char.voice_design_prompt
-        text_to_speak = sentence.tagged_text or sentence.original_text
         try:
-            audio_bytes = await _call_omnivoice(endpoint, voice_prompt, text_to_speak)
-            out_path = _snippet_path(book_id, sentence.id)
-            out_path.write_bytes(audio_bytes)
-            duration_ms = _get_mp3_duration_ms(out_path)
+            await _generate_sentence_clip(endpoint, book_id, sentence, db)
         except Exception:
             await crud.audiobook.mark_sentence_error(db, sentence.id)
             raise
-        await crud.audiobook.update_sentence_audio(
-            db,
-            sentence.id,
-            _relative_path(out_path),
-            duration_ms,
-        )
         completed += 1
         await crud.audiobook.update_book_pipeline_progress(
             db,

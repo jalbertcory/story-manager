@@ -382,6 +382,7 @@ function AudiobookPipeline({ book }) {
             bookId={bookId}
             characters={characters}
             chapters={chapters}
+            pipelineActive={isActive(pipelineStatus)}
           />
         )}
         {subTab === "Chapter Assembly" && (

@@ -1311,9 +1311,15 @@
 
 /* ─── Book Settings page ─────────────────────────────────── */
 .book-settings {
+  box-sizing: border-box;
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
   padding: 0 1.25rem 3rem;
+}
+
+.book-settings--wide {
+  max-width: 1440px;
 }
 
 .settings-header {
@@ -1394,6 +1400,11 @@
 .audiobook-pipeline {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+}
+
+.sub-tab-content {
+  min-width: 0;
 }
 
 .pipeline-header,
@@ -1680,6 +1691,7 @@
 
 .script-table-wrap,
 .chapter-assembly {
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1688,6 +1700,11 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.78rem;
+}
+
+.script-table {
+  min-width: 1050px;
+  table-layout: fixed;
 }
 
 .script-table th,
@@ -1814,13 +1831,12 @@
 }
 
 .sentence-text {
-  min-width: 16rem;
-  max-width: 24rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .sentence-tags {
-  min-width: 12rem;
+  overflow-wrap: anywhere;
 }
 
 .sentence-tags-input,
@@ -1840,6 +1856,51 @@
 .confidence-badge--low {
   background: rgba(214, 143, 44, 0.15);
   color: var(--warning);
+}
+
+.sentence-seq {
+  width: 3rem;
+}
+
+.sentence-text,
+.sentence-tags {
+  width: 24%;
+}
+
+.sentence-speaker {
+  width: 11rem;
+}
+
+.sentence-confidence {
+  width: 6rem;
+}
+
+.sentence-status {
+  width: 8.5rem;
+  white-space: nowrap;
+}
+
+.sentence-status span + span {
+  margin-left: 0.35rem;
+}
+
+.sentence-audio {
+  width: 16rem;
+}
+
+.sentence-audio audio {
+  width: 100%;
+  min-width: 10rem;
+}
+
+.sentence-actions {
+  width: 7rem;
+}
+
+.sentence-audio-progress,
+.sentence-audio-error {
+  display: block;
+  font-size: 0.75rem;
 }
 
 @media (max-width: 720px) {

@@ -95,8 +95,13 @@ PUT /api/audiobook/characters/{id}
 PUT /api/audiobook/sentences/{id}
   → UPDATE sentence: character_id, tagged_text, status="ready_for_audio", audio_file_path=NULL
   → UPDATE chapter SET needs_reassembly=TRUE WHERE id = sentence.chapter_id
-  → wait for an explicit chapter preview or full pipeline run
+  → wait for an explicit sentence/chapter preview or full pipeline run
 ```
+
+In the Script Editor, **Generate audio** queues only that ready sentence. Its durable status moves through
+`audio_queued` → `audio_generating` → `audio_generated` (or `error`), and the row polls while work is active so the
+button is replaced with visible progress and then an audio player. Manual sentence jobs share the same serial worker
+as chapter previews and the full pipeline, and are recovered after an app restart.
 
 ---
 
@@ -342,6 +347,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | POST | `/api/books/{id}/audiobook/roster/rebuild` | Preserve ingestion and regenerate roster/speaker analysis |
 | POST | `/api/books/{id}/audiobook/roster/share-series` | Link/promote the book roster into its series roster |
 | POST | `/api/books/{id}/audiobook/chapters/{cid}/preview-audio` | Queue an explicit single-chapter audio preview |
+| POST | `/api/books/{id}/audiobook/sentences/{sid}/generate-audio` | Queue speech generation for one ready sentence |
 | GET | `/api/books/{id}/audiobook/status` | Status, model, progress, summary, review flags, and sentence counts |
 | GET | `/api/books/{id}/audiobook/characters` | List characters |
 | PUT | `/api/audiobook/characters/{char_id}` | Update voice profile (triggers cascade) |
