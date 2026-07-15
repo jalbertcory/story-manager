@@ -3,6 +3,7 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -156,6 +157,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=20,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Action description by the protagonist.",
@@ -166,6 +170,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=20,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Expressing deep grief.",
@@ -176,6 +183,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=20,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Recalling her final words.",
@@ -186,6 +196,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=10,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Dialogue attributed to the unnamed recruiter.",
@@ -196,6 +209,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=30,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Model confused the adjacent speaker.",
@@ -206,9 +222,38 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=50,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=30,
         minor_female_id=30,
         minor_male_id=40,
         reason="Model selected an unrelated named character.",
+    )
+    role_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“Final paragraph,” the recruiter said. “",
+        next_text="",
+        character_id=20,
+        narrator_id=10,
+        protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=30,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model selected the protagonist.",
+    )
+    named_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“Physics is lovely,” Harry said.",
+        next_text="",
+        character_id=10,
+        narrator_id=10,
+        protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=20,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model selected narration.",
     )
     setup = audiobook_llm._apply_speaker_guardrails(
         text="The recruiter looked up. “",
@@ -216,6 +261,9 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         character_id=10,
         narrator_id=10,
         protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=None,
         minor_female_id=30,
         minor_male_id=40,
         reason="Narration setting up dialogue.",
@@ -227,6 +275,8 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
     assert dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
     assert first_person_dialogue == (20, "Deterministic first-person dialogue attribution", 0.99)
     assert repeated_dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
+    assert role_dialogue == (30, "Deterministic grounded role dialogue attribution", 0.98)
+    assert named_dialogue == (50, "Deterministic named dialogue attribution to harry", 0.99)
     assert setup == (10, "Narration setting up dialogue.", None)
 
 
@@ -262,6 +312,15 @@ def test_open_dialogue_state_tracks_split_quote_speaker():
         )
         == 30
     )
+
+
+def test_role_speaker_grounding_uses_chapter_local_pronouns():
+    sentences = [
+        SimpleNamespace(original_text="I waited for the recruiter while she finished typing."),
+        SimpleNamespace(original_text="“Final paragraph,” the recruiter said."),
+    ]
+
+    assert audiobook_llm._infer_role_speaker_ids(sentences, 30, 40)["recruiter"] == 30
 
 
 @pytest.mark.asyncio
@@ -314,7 +373,7 @@ async def test_ollama_call_requests_schema_constrained_non_thinking_json(monkeyp
     assert payload["think"] is False
     assert payload["format"] == schema
     assert payload["options"]["temperature"] == 0
-    assert payload["options"]["num_predict"] == 8192
+    assert payload["options"]["num_predict"] == 2048
 
 
 @pytest.mark.asyncio
@@ -392,7 +451,7 @@ async def test_diarization_retries_malformed_output_in_smaller_batches(db, monke
             {
                 "html_element_id": f"sentence-{index}",
                 "sequence_order": index,
-                "original_text": f"Sentence {index} has enough text for analysis.",
+                "original_text": f"“Sentence {index} has enough dialogue for analysis.”",
                 "status": "pending_diarization",
             }
             for index in range(45)
@@ -434,6 +493,56 @@ async def test_diarization_retries_malformed_output_in_smaller_batches(db, monke
     assert request_sizes == [10, 5, 5, 10, 10, 10, 5]
     assert counts == {"ready_for_audio": 45}
     assert book.audiobook_pipeline_status == "audio_gen"
+
+
+@pytest.mark.asyncio
+async def test_diarization_short_circuits_quote_free_prose_without_llm(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="diarizing")
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_base_url="http://127.0.0.1:11434",
+        llm_model="local-test",
+    )
+    db.add(settings)
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "Text/prose.xhtml")
+    narrator = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal][age-middle]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": f"prose-{index}",
+                "sequence_order": index,
+                "original_text": f"Narrative sentence {index} contains no dialogue.",
+                "status": "pending_diarization",
+            }
+            for index in range(40)
+        ],
+    )
+
+    async def unexpected_llm(*_args, **_kwargs):
+        raise AssertionError("Quote-free narration should not call the LLM")
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", unexpected_llm)
+
+    await audiobook_llm.diarize_sentences(book.id, db)
+
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    assert {sentence.character_id for sentence in sentences} == {narrator.id}
+    assert {sentence.speaker_reason for sentence in sentences} == {"Deterministic quote-free narration"}
+    assert await crud.audiobook.count_sentences_by_status(db, book.id) == {"ready_for_audio": 40}
 
 
 @pytest.mark.asyncio
