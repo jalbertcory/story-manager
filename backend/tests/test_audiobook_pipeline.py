@@ -648,9 +648,11 @@ async def test_diarization_honors_pause_after_current_durable_batch(db, monkeypa
     )
 
     async def fake_llm(_settings, messages, **_kwargs):
-        serialized = messages[0]["content"].split(
-            "Sentences to process (JSON array with id and text):\n", 1
-        )[1].split("\n\nFor each sentence return:", 1)[0]
+        serialized = (
+            messages[0]["content"]
+            .split("Sentences to process (JSON array with id and text):\n", 1)[1]
+            .split("\n\nFor each sentence return:", 1)[0]
+        )
         sentences = json.loads(serialized)
         await crud.audiobook.request_book_pipeline_pause(db, book.id)
         return json.dumps(
