@@ -255,6 +255,32 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         minor_male_id=40,
         reason="Model selected narration.",
     )
+    current_named_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“I dislike that,” Jesse said.",
+        next_text="“It may be harmless,” Harry said.",
+        character_id=50,
+        narrator_id=10,
+        protagonist_id=20,
+        character_name_ids={"harry": 50, "jesse": 60},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=50,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model followed the next sentence's speaker.",
+    )
+    turn_taking_dialogue = audiobook_llm._apply_speaker_guardrails(
+        text="“Does that bother you?”",
+        next_text="“No,” she said.",
+        character_id=50,
+        narrator_id=10,
+        protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=30,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model selected an unrelated named character.",
+    )
     setup = audiobook_llm._apply_speaker_guardrails(
         text="The recruiter looked up. “",
         next_text="Hello,” she said.",
@@ -277,6 +303,8 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
     assert repeated_dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
     assert role_dialogue == (30, "Deterministic grounded role dialogue attribution", 0.98)
     assert named_dialogue == (50, "Deterministic named dialogue attribution to harry", 0.99)
+    assert current_named_dialogue == (60, "Deterministic named dialogue attribution to jesse", 0.99)
+    assert turn_taking_dialogue == (20, "Deterministic first-person turn-taking fallback", 0.8)
     assert setup == (10, "Narration setting up dialogue.", None)
 
 
@@ -313,6 +341,29 @@ def test_open_dialogue_state_tracks_split_quote_speaker():
         == 30
     )
 
+    # A close followed by a new opening in one sentence starts another
+    # paragraph of the same resolved speaker's utterance.
+    reopened = audiobook_llm._advance_open_dialogue_speaker(
+        "You were sent refresher materials,” she said. “",
+        30,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        current_open_speaker_id=30,
+    )
+    assert reopened == 30
+    assert (
+        audiobook_llm._advance_open_dialogue_speaker(
+            "Additionally, you have been reminded of your obligations.",
+            30,
+            narrator_id=10,
+            minor_female_id=30,
+            minor_male_id=40,
+            current_open_speaker_id=reopened,
+        )
+        == 30
+    )
+
 
 def test_role_speaker_grounding_uses_chapter_local_pronouns():
     sentences = [
@@ -321,6 +372,19 @@ def test_role_speaker_grounding_uses_chapter_local_pronouns():
     ]
 
     assert audiobook_llm._infer_role_speaker_ids(sentences, 30, 40)["recruiter"] == 30
+
+
+def test_unattributed_open_quote_uses_established_other_speaker():
+    assert (
+        audiobook_llm._fallback_open_dialogue_speaker(
+            "I nodded. “",
+            None,
+            protagonist_id=20,
+            last_dialogue_speaker_id=20,
+            last_other_dialogue_speaker_id=30,
+        )
+        == 30
+    )
 
 
 @pytest.mark.asyncio
@@ -543,6 +607,78 @@ async def test_diarization_short_circuits_quote_free_prose_without_llm(db, monke
     assert {sentence.character_id for sentence in sentences} == {narrator.id}
     assert {sentence.speaker_reason for sentence in sentences} == {"Deterministic quote-free narration"}
     assert await crud.audiobook.count_sentences_by_status(db, book.id) == {"ready_for_audio": 40}
+
+
+@pytest.mark.asyncio
+async def test_diarization_honors_pause_after_current_durable_batch(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="diarizing")
+    db.add(
+        models.AudiobookSettings(
+            llm_provider="ollama",
+            llm_base_url="http://127.0.0.1:11434",
+            llm_model="local-test",
+        )
+    )
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "Text/dialogue.xhtml")
+    narrator = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal][age-middle]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": f"dialogue-{index}",
+                "sequence_order": index,
+                "original_text": f"“Dialogue sentence {index}.”",
+                "status": "pending_diarization",
+            }
+            for index in range(40)
+        ],
+    )
+
+    async def fake_llm(_settings, messages, **_kwargs):
+        serialized = messages[0]["content"].split(
+            "Sentences to process (JSON array with id and text):\n", 1
+        )[1].split("\n\nFor each sentence return:", 1)[0]
+        sentences = json.loads(serialized)
+        await crud.audiobook.request_book_pipeline_pause(db, book.id)
+        return json.dumps(
+            {
+                "assignments": [
+                    {
+                        "id": sentence["id"],
+                        "character_id": narrator.id,
+                        "tagged_text": None,
+                        "confidence": 1.0,
+                        "reason": "Test attribution",
+                    }
+                    for sentence in sentences
+                ]
+            }
+        )
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", fake_llm)
+
+    await audiobook_llm.diarize_sentences(book.id, db)
+
+    await db.refresh(book)
+    assert await crud.audiobook.count_sentences_by_status(db, book.id) == {
+        "pending_diarization": 30,
+        "ready_for_audio": 10,
+    }
+    assert book.audiobook_pipeline_status == "paused"
+    assert book.audiobook_pause_requested is False
 
 
 @pytest.mark.asyncio
