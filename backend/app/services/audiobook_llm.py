@@ -382,14 +382,19 @@ def _apply_speaker_guardrails(
     has_dialogue = starts_with_quote or bool(_DIALOGUE_ATTRIBUTION_IN_SENTENCE_RE.search(text))
 
     attribution_context = f"{text} {next_text if starts_with_quote else ''}"
-    for name, attributed_character_id in character_name_ids.items():
-        escaped_name = re.escape(name)
-        if re.search(
-            rf"(?:\b{escaped_name}\s+(?:{_ATTRIBUTION_VERBS})\b|\b(?:{_ATTRIBUTION_VERBS})\s+{escaped_name}\b)",
-            attribution_context,
-            re.IGNORECASE,
-        ):
-            return attributed_character_id, f"Deterministic named dialogue attribution to {name}", 0.99
+    named_contexts = [text]
+    if starts_with_quote and next_text:
+        named_contexts.append(next_text)
+    for named_context in named_contexts:
+        for name, attributed_character_id in character_name_ids.items():
+            escaped_name = re.escape(name)
+            if re.search(
+                rf"(?:\b{escaped_name}\s+(?:{_ATTRIBUTION_VERBS})\b|"
+                rf"\b(?:{_ATTRIBUTION_VERBS})\s+{escaped_name}\b)",
+                named_context,
+                re.IGNORECASE,
+            ):
+                return attributed_character_id, f"Deterministic named dialogue attribution to {name}", 0.99
 
     current_first_person = _FIRST_PERSON_ATTRIBUTION_RE.search(text)
     next_first_person = starts_with_quote and _FIRST_PERSON_ATTRIBUTION_RE.match(next_text.lstrip())
@@ -413,6 +418,14 @@ def _apply_speaker_guardrails(
         if last_dialogue_speaker_id is not None:
             return last_dialogue_speaker_id, "Deterministic recurring role dialogue attribution", 0.9
 
+    if (
+        starts_with_quote
+        and protagonist_id is not None
+        and character_id != protagonist_id
+        and last_dialogue_speaker_id in {minor_female_id, minor_male_id}
+    ):
+        return protagonist_id, "Deterministic first-person turn-taking fallback", 0.8
+
     if character_id == narrator_id and starts_with_quote and protagonist_id is not None:
         return protagonist_id, "Deterministic first-person dialogue fallback", 0.75
 
@@ -431,21 +444,44 @@ def _advance_open_dialogue_speaker(
     minor_male_id: int | None,
     current_open_speaker_id: int | None,
 ) -> int | None:
-    """Track a curly-quoted utterance split across sentence records."""
-    opens = text.count("“")
-    closes = text.count("”")
-    if opens > closes:
-        prefix = text.rsplit("“", 1)[0]
-        pronouns = re.findall(r"\b(she|her|he|him)\b", prefix[-120:], re.IGNORECASE)
+    """Track quoted speech in source order, including close-then-reopen lines."""
+    open_speaker_id = current_open_speaker_id
+    for quote in re.finditer("[“”]", text):
+        if quote.group(0) == "”":
+            open_speaker_id = None
+            continue
+
+        # A repeated opening quote while a speaker is already active is the
+        # conventional marker for a new paragraph in the same long speech.
+        if open_speaker_id is not None:
+            continue
+
+        prefix = text[max(0, quote.start() - 120):quote.start()]
+        pronouns = re.findall(r"\b(she|her|he|him)\b", prefix, re.IGNORECASE)
         if pronouns:
             gender = pronouns[-1].casefold()
-            return minor_female_id if gender in {"she", "her"} else minor_male_id
-        if resolved_character_id != narrator_id:
-            return resolved_character_id
-        return None
-    if closes > opens:
-        return None
-    return current_open_speaker_id
+            open_speaker_id = minor_female_id if gender in {"she", "her"} else minor_male_id
+        elif resolved_character_id != narrator_id:
+            open_speaker_id = resolved_character_id
+    return open_speaker_id
+
+
+def _fallback_open_dialogue_speaker(
+    text: str,
+    inferred_open_speaker_id: int | None,
+    *,
+    protagonist_id: int | None,
+    last_dialogue_speaker_id: int | None,
+    last_other_dialogue_speaker_id: int | None,
+) -> int | None:
+    """Resolve an unattributed opening quote from established turn-taking."""
+    if inferred_open_speaker_id is not None or text.count("“") <= text.count("”"):
+        return inferred_open_speaker_id
+    if last_dialogue_speaker_id == protagonist_id and last_other_dialogue_speaker_id is not None:
+        return last_other_dialogue_speaker_id
+    if protagonist_id is not None and last_dialogue_speaker_id not in {None, protagonist_id}:
+        return protagonist_id
+    return None
 
 
 def _infer_role_speaker_ids(sentences: list[Any], minor_female_id: int | None, minor_male_id: int | None) -> dict[str, int]:
@@ -1315,6 +1351,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
         ][-8:]
         open_dialogue_speaker_id = None
         last_dialogue_speaker_id = None
+        last_other_dialogue_speaker_id = None
         for previous_sentence in chapter_sentences:
             if previous_sentence.status == "pending_diarization":
                 break
@@ -1323,13 +1360,22 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 was_open_dialogue or any(quote in previous_sentence.original_text for quote in ("“", "”", '"'))
             ):
                 last_dialogue_speaker_id = previous_sentence.character_id
-            open_dialogue_speaker_id = _advance_open_dialogue_speaker(
+                if previous_sentence.character_id != protagonist_id:
+                    last_other_dialogue_speaker_id = previous_sentence.character_id
+            inferred_open_speaker_id = _advance_open_dialogue_speaker(
                 previous_sentence.original_text,
                 previous_sentence.character_id,
                 narrator_id=narrator_id,
                 minor_female_id=minor_female_id,
                 minor_male_id=minor_male_id,
                 current_open_speaker_id=open_dialogue_speaker_id,
+            )
+            open_dialogue_speaker_id = _fallback_open_dialogue_speaker(
+                previous_sentence.original_text,
+                inferred_open_speaker_id,
+                protagonist_id=protagonist_id,
+                last_dialogue_speaker_id=last_dialogue_speaker_id,
+                last_other_dialogue_speaker_id=last_other_dialogue_speaker_id,
             )
         while True:
             batch = await crud.audiobook.get_sentences_pending_diarization(
@@ -1366,6 +1412,9 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     total=total,
                     detail=f"Chapter {chapter.chapter_number}: short-circuited quote-free prose",
                 )
+                if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+                    logger.info("Book %s paused after a deterministic narration batch.", book_id)
+                    return
                 if await crud.audiobook.consume_book_batch_limit(db, book_id):
                     logger.info("Book %s paused after one deterministic narration batch.", book_id)
                     return
@@ -1514,7 +1563,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 )
                 if guardrail_confidence is not None:
                     confidence = guardrail_confidence
-                if open_dialogue_speaker_id is not None and char_id == narrator_id:
+                if open_dialogue_speaker_id is not None and char_id != open_dialogue_speaker_id:
                     char_id = open_dialogue_speaker_id
                     reason = "Deterministic continuation of open quoted dialogue"
                     confidence = 0.95
@@ -1522,13 +1571,22 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     open_dialogue_speaker_id is not None or any(quote in sentence.original_text for quote in ("“", "”", '"'))
                 ):
                     last_dialogue_speaker_id = char_id
-                open_dialogue_speaker_id = _advance_open_dialogue_speaker(
+                    if char_id != protagonist_id:
+                        last_other_dialogue_speaker_id = char_id
+                inferred_open_speaker_id = _advance_open_dialogue_speaker(
                     sentence.original_text,
                     char_id,
                     narrator_id=narrator_id,
                     minor_female_id=minor_female_id,
                     minor_male_id=minor_male_id,
                     current_open_speaker_id=open_dialogue_speaker_id,
+                )
+                open_dialogue_speaker_id = _fallback_open_dialogue_speaker(
+                    sentence.original_text,
+                    inferred_open_speaker_id,
+                    protagonist_id=protagonist_id,
+                    last_dialogue_speaker_id=last_dialogue_speaker_id,
+                    last_other_dialogue_speaker_id=last_other_dialogue_speaker_id,
                 )
                 await crud.audiobook.update_sentence_diarization(
                     db,
@@ -1551,6 +1609,9 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 total=total,
                 detail=f"Chapter {chapter.chapter_number}: attributed {processed} of {total} sentences",
             )
+            if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+                logger.info("Book %s paused after a diarization batch.", book_id)
+                return
             if await crud.audiobook.consume_book_batch_limit(db, book_id):
                 logger.info("Book %s paused after one diarization batch.", book_id)
                 return
