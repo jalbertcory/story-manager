@@ -18,6 +18,7 @@ from ..models import (
     Book,
 )
 
+
 async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
     """Remove a stale EPUB package and make a completed book resumable."""
     packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
