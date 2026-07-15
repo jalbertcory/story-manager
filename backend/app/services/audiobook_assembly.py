@@ -155,6 +155,7 @@ async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSessi
         raise RuntimeError("Every sentence in the chapter needs audio before preview assembly.")
     output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
+    await crud.audiobook.invalidate_packaged_audiobook(db, book_id)
     await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
 
 

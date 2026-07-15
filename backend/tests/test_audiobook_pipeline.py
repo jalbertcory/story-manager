@@ -901,18 +901,25 @@ async def test_manual_sentence_audio_queues_and_generates_only_that_sentence(db,
 async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, monkeypatch):
     library_path = tmp_path / "library"
     library_path.mkdir()
-    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="complete")
     chapter, _character, _sentence = await _seed_audio_chapter(db, book.id)
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_assembly, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+    packaged_epub = library_path / "audiobooks" / str(book.id) / "audiobook.epub"
+    packaged_epub.parent.mkdir(parents=True)
+    packaged_epub.write_bytes(b"stale package")
 
     await audiobook_tts.generate_audio_for_chapter_preview(book.id, chapter.id, db)
     await audiobook_assembly.assemble_chapter_preview(book.id, chapter.id, db)
     await db.refresh(chapter)
+    await db.refresh(book)
 
     assert chapter.audio_file_path
     assert (library_path.parent / chapter.audio_file_path).exists()
     assert chapter.smil_file_path
+    assert packaged_epub.exists() is False
+    assert book.audiobook_pipeline_status == "paused"
 
 
 @pytest.mark.asyncio

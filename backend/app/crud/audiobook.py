@@ -18,6 +18,22 @@ from ..models import (
     Book,
 )
 
+
+async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
+    """Remove a stale EPUB package and make a completed book resumable."""
+    packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
+    packaged_epub.unlink(missing_ok=True)
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id, Book.audiobook_pipeline_status == "complete")
+        .values(
+            audiobook_pipeline_status="paused",
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -287,12 +303,16 @@ async def update_chapter_summary(db: AsyncSession, chapter_id: int, summary: Opt
 
 
 async def flag_chapter_for_reassembly(db: AsyncSession, chapter_id: int) -> None:
+    result = await db.execute(select(AudiobookChapter.book_id).where(AudiobookChapter.id == chapter_id))
+    book_id = result.scalar_one_or_none()
     await db.execute(
         update(AudiobookChapter)
         .where(AudiobookChapter.id == chapter_id)
         .values(needs_reassembly=True, preview_status=None, preview_error=None)
     )
     await db.commit()
+    if book_id is not None:
+        await invalidate_packaged_audiobook(db, book_id)
 
 
 async def set_chapter_preview_status(
@@ -500,13 +520,18 @@ async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
     )
     result = await db.execute(select(AudiobookSentence.chapter_id).where(AudiobookSentence.character_id == char_id).distinct())
     chapter_ids = [row[0] for row in result.all()]
+    book_ids: list[int] = []
     if chapter_ids:
+        result = await db.execute(select(AudiobookChapter.book_id).where(AudiobookChapter.id.in_(chapter_ids)).distinct())
+        book_ids = [row[0] for row in result.all()]
         await db.execute(
             update(AudiobookChapter)
             .where(AudiobookChapter.id.in_(chapter_ids))
             .values(needs_reassembly=True, preview_status=None, preview_error=None)
         )
     await db.commit()
+    for book_id in book_ids:
+        await invalidate_packaged_audiobook(db, book_id)
 
 
 async def delete_characters_for_book(db: AsyncSession, book_id: int) -> None:
@@ -734,6 +759,9 @@ async def update_sentence_speaker(
         .values(needs_reassembly=True, preview_status=None, preview_error=None)
     )
     await db.commit()
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    if chapter is not None:
+        await invalidate_packaged_audiobook(db, chapter.book_id)
     await db.refresh(sentence)
     return sentence
 
