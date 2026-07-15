@@ -279,7 +279,7 @@ async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_
         db,
         book_id,
         status="roster_gen",
-        stop_after_phase="roster_gen",
+        stop_after_phase=crud.audiobook.ROSTER_REFRESH_STOP_MARKER,
     )
     queued = await get_audiobook_queue().enqueue(book_id)
     return {"status": "roster_gen", "queued": queued, "stop_after_phase": "roster_gen"}

@@ -101,6 +101,40 @@ def test_default_roster_prompt_formats_voice_token_examples():
     assert "A story excerpt." in prompt
 
 
+def test_json_extraction_repairs_trailing_commas_from_local_models():
+    raw = """{
+      "assignments": [
+        {"id": 4, "character_id": 1, "tagged_text": null, "confidence": 1.0, "reason": "Narration",},
+      ],
+      "chapter_summary": "A summary",
+    }"""
+
+    result = audiobook_llm._extract_json(raw)
+
+    assert result["assignments"][0]["id"] == 4
+    assert result["chapter_summary"] == "A summary"
+
+
+def test_diarization_result_requires_complete_unique_sentence_coverage():
+    incomplete = {
+        "assignments": [
+            {"id": 1},
+            {"id": 1},
+        ],
+        "chapter_summary": "Summary",
+    }
+
+    with pytest.raises(ValueError, match="missing=\\[2\\].*duplicates=\\[1\\]"):
+        audiobook_llm._normalise_diarization_result(incomplete, {1, 2})
+
+    with_extras = {
+        "assignments": [{"id": 1}, {"id": 2}, {"id": 999}],
+        "chapter_summary": "Summary",
+    }
+    normalised = audiobook_llm._normalise_diarization_result(with_extras, {1, 2})
+    assert [result["id"] for result in normalised["assignments"]] == [1, 2]
+
+
 def test_tagged_text_sanitizer_only_accepts_supported_insertions():
     original = "Take your time, I said."
 
@@ -120,6 +154,24 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         minor_female_id=30,
         minor_male_id=40,
         reason="Action description by the protagonist.",
+    )
+    emotional_prose = audiobook_llm._apply_speaker_guardrails(
+        text="I hated visiting the cemetery.",
+        next_text="",
+        character_id=20,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Expressing deep grief.",
+    )
+    embedded_quote = audiobook_llm._apply_speaker_guardrails(
+        text="I remembered her last words: “Where is the vanilla?”",
+        next_text="",
+        character_id=20,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Recalling her final words.",
     )
     dialogue = audiobook_llm._apply_speaker_guardrails(
         text="“You coming or going?”",
@@ -141,6 +193,8 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
     )
 
     assert prose == (10, "Deterministic prose/narration guardrail", 0.98)
+    assert emotional_prose == (10, "Deterministic prose/narration guardrail", 0.98)
+    assert embedded_quote == (10, "Deterministic prose/narration guardrail", 0.98)
     assert dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
     assert setup == (10, "Narration setting up dialogue.", None)
 
@@ -195,6 +249,126 @@ async def test_ollama_call_requests_schema_constrained_non_thinking_json(monkeyp
     assert payload["think"] is False
     assert payload["format"] == schema
     assert payload["options"]["temperature"] == 0
+    assert payload["options"]["num_predict"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_request_includes_durable_character_identity(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        content = b"mp3"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **kwargs):
+            captured["url"] = url
+            captured["request"] = kwargs
+            return FakeResponse()
+
+    monkeypatch.setattr(audiobook_tts.httpx, "AsyncClient", FakeClient)
+
+    result = await audiobook_tts._call_omnivoice(
+        "http://127.0.0.1:8001",
+        "[gender-male][pitch-low][speed-normal][age-middle]",
+        "A spoken line.",
+        voice_id="series-character:7",
+    )
+
+    assert result == b"mp3"
+    assert captured["url"] == "http://127.0.0.1:8001/generate"
+    assert captured["request"]["json"]["voice_id"] == "series-character:7"
+
+
+@pytest.mark.asyncio
+async def test_diarization_retries_malformed_output_in_smaller_batches(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="diarizing")
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_base_url="http://127.0.0.1:11434",
+        llm_model="local-test",
+    )
+    db.add(settings)
+    await db.commit()
+    chapter = await crud.audiobook.create_chapter(
+        db,
+        book_id=book.id,
+        chapter_number=1,
+        content_file_name="Text/chapter_1.xhtml",
+    )
+    narrator = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book_id=book.id,
+            characters_data=[
+                {
+                    "name": "Narrator",
+                    "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal][age-middle]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter_id=chapter.id,
+        sentences_data=[
+            {
+                "html_element_id": f"sentence-{index}",
+                "sequence_order": index,
+                "original_text": f"Sentence {index} has enough text for analysis.",
+                "status": "pending_diarization",
+            }
+            for index in range(45)
+        ],
+    )
+    request_sizes = []
+
+    async def fake_llm(_settings, messages, **_kwargs):
+        prompt = messages[0]["content"]
+        serialized = prompt.split("Sentences to process (JSON array with id and text):\n", 1)[1].split(
+            "\n\nFor each sentence return:", 1
+        )[0]
+        sentences = json.loads(serialized)
+        request_sizes.append(len(sentences))
+        if len(request_sizes) == 1:
+            return '{"assignments": ['
+        return json.dumps(
+            {
+                "assignments": [
+                    {
+                        "id": sentence["id"],
+                        "character_id": narrator.id,
+                        "tagged_text": None,
+                        "confidence": 1.0,
+                        "reason": "Narrative prose",
+                    }
+                    for sentence in sentences
+                ],
+                "chapter_summary": "A complete test chapter.",
+            }
+        )
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", fake_llm)
+
+    await audiobook_llm.diarize_sentences(book.id, db)
+
+    counts = await crud.audiobook.count_sentences_by_status(db, book.id)
+    await db.refresh(book)
+    assert request_sizes == [40, 20, 20, 5]
+    assert counts == {"ready_for_audio": 45}
+    assert book.audiobook_pipeline_status == "audio_gen"
 
 
 @pytest.mark.asyncio
@@ -224,6 +398,31 @@ async def test_queue_schedules_one_rerun_for_changes_during_processing(monkeypat
         assert processed == [42, 42]
     finally:
         await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_queue_stop_cancels_an_in_flight_book_without_waiting(monkeypatch):
+    queue = AudiobookQueue()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def process(_book_id: int) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(queue, "_process", process)
+    await queue.start()
+    await queue.enqueue(42)
+    await started.wait()
+
+    await asyncio.wait_for(queue.stop(), timeout=1)
+
+    assert cancelled.is_set()
+    assert queue._worker_task is None
 
 
 @pytest.mark.asyncio
@@ -431,6 +630,7 @@ async def test_roster_rebuild_preserves_ingestion_and_clears_derived_analysis(db
         "stop_after_phase": "roster_gen",
     }
     assert book.audiobook_pipeline_status == "roster_gen"
+    assert book.audiobook_stop_after_phase == crud.audiobook.ROSTER_REFRESH_STOP_MARKER
     assert sentence.status == "pending_diarization"
     assert sentence.character_id is None
     assert sentence.speaker_confidence is None
@@ -502,7 +702,7 @@ async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db,
     db.add(settings)
     await db.commit()
 
-    async def fail_omnivoice(endpoint, voice_prompt, tagged_text):
+    async def fail_omnivoice(endpoint, voice_prompt, tagged_text, **_kwargs):
         request = httpx.Request("POST", endpoint)
         raise httpx.ConnectError("connection failed", request=request)
 
@@ -640,6 +840,20 @@ async def test_roster_excerpt_skips_short_front_matter(db):
             for index in range(40)
         ],
     )
+    back_matter = await crud.audiobook.create_chapter(db, book.id, 3, "ads.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        back_matter.id,
+        [
+            {
+                "html_element_id": f"ads_{index}",
+                "sequence_order": index,
+                "original_text": "ACKNOWLEDGMENTS" if index == 0 else f"Advertisement person Thomas Stein {index}.",
+                "status": "pending_diarization",
+            }
+            for index in range(40)
+        ],
+    )
 
     excerpt = await audiobook_llm._build_roster_excerpt(
         await crud.audiobook.get_chapters_for_book(db, book.id),
@@ -649,6 +863,119 @@ async def test_roster_excerpt_skips_short_front_matter(db):
     assert "Copyright page only" not in excerpt
     assert "John and Kathy continue the story" in excerpt
     assert "### Chapter 2" in excerpt
+    assert "Thomas Stein" not in excerpt
+
+
+@pytest.mark.asyncio
+async def test_first_person_gender_uses_explicit_self_identification_and_stops_at_back_matter(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    story = await crud.audiobook.create_chapter(db, book.id, 1, "story.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        story.id,
+        [
+            {
+                "html_element_id": "story_0",
+                "sequence_order": 0,
+                "original_text": "I was a widower and he was a bachelor.",
+                "status": "pending_diarization",
+            }
+        ],
+    )
+    ads = await crud.audiobook.create_chapter(db, book.id, 2, "ads.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        ads.id,
+        [
+            {
+                "html_element_id": "ads_0",
+                "sequence_order": 0,
+                "original_text": "ACKNOWLEDGMENTS",
+                "status": "pending_diarization",
+            },
+            {
+                "html_element_id": "ads_1",
+                "sequence_order": 1,
+                "original_text": "I'm a woman in this unrelated advertisement.",
+                "status": "pending_diarization",
+            },
+        ],
+    )
+
+    assert (
+        await audiobook_llm._infer_first_person_gender(await crud.audiobook.get_chapters_for_book(db, book.id), db) == "male"
+    )
+
+
+def test_roster_canonicalization_merges_full_names_and_removes_speculation():
+    characters = [
+        {
+            "name": "Jane",
+            "aliases": [],
+            "description": "Invented biography.",
+            "evidence": ["Thomas Jane said hello."],
+            "voice_design_prompt": "[gender-female][pitch-high][speed-fast]",
+            "is_narrator": False,
+        },
+        {
+            "name": "Thomas",
+            "aliases": [],
+            "description": "Another invented biography.",
+            "evidence": [],
+            "voice_design_prompt": "[gender-neutral][pitch-low][speed-normal]",
+            "is_narrator": False,
+        },
+        {
+            "name": "Sagan",
+            "aliases": [],
+            "description": "Invented biography.",
+            "evidence": ["Jane Sagan replied."],
+            "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
+            "is_narrator": False,
+        },
+    ]
+    candidates = [
+        {
+            "name": "Jane",
+            "canonical_name": "Thomas Jane",
+            "mention_count": 70,
+            "dialogue_count": 30,
+            "gender": "male",
+        },
+        {
+            "name": "Thomas",
+            "canonical_name": "Thomas Jane",
+            "mention_count": 50,
+            "dialogue_count": 20,
+            "gender": "male",
+        },
+        {
+            "name": "Sagan",
+            "canonical_name": "Jane Sagan",
+            "mention_count": 40,
+            "dialogue_count": 25,
+            "gender": "female",
+        },
+    ]
+
+    result = audiobook_llm._canonicalize_roster_characters(
+        characters,
+        candidates,
+        "thomas jane said hello. jane sagan replied.",
+    )
+
+    assert [character["name"] for character in result] == ["Thomas Jane", "Jane Sagan"]
+    assert result[0]["aliases"] == ["Jane", "Thomas"]
+    assert "30 explicit dialogue attributions" in result[0]["description"]
+    assert result[0]["voice_design_prompt"].startswith("[gender-male]")
+    assert result[1]["voice_design_prompt"].startswith("[gender-female]")
+    assert "Invented biography" not in " ".join(character["description"] for character in result)
+
+
+def test_voice_prompt_normalization_adds_required_tokens():
+    assert audiobook_llm._normalise_voice_prompt("[gender-female][pitch-high]", gender="male") == (
+        "[gender-male][pitch-high][speed-normal][age-middle]"
+    )
 
 
 @pytest.mark.asyncio
@@ -755,6 +1082,23 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     assert second_character.series_character_id == first_character.series_character_id
     assert second_character.voice_design_prompt == "[gender-female][pitch-low][speed-normal]"
 
+    second_character.description = "Fresh grounded series analysis."
+    second_character.voice_design_prompt = "[gender-neutral][pitch-high][speed-fast]"
+    await db.commit()
+    await crud.audiobook.sync_book_roster_with_series(
+        db,
+        second,
+        [second_character],
+        prefer_series=False,
+    )
+    await db.refresh(first_character)
+    await db.refresh(second_character)
+
+    assert first_character.description == "Fresh grounded series analysis."
+    assert second_character.description == "Fresh grounded series analysis."
+    assert first_character.voice_design_prompt == "[gender-neutral][pitch-high][speed-fast]"
+    assert second_character.voice_design_prompt == "[gender-neutral][pitch-high][speed-fast]"
+
     first_character.voice_design_prompt = "[gender-female][pitch-medium][speed-slow]"
     await db.commit()
     linked = await crud.audiobook.propagate_character_profile_across_series(db, first_character)
@@ -784,6 +1128,20 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     await crud.audiobook.propagate_character_profile_across_series(db, other_character)
     await db.refresh(other_character)
     assert other_character.series_character_id == first_character.series_character_id
+
+    orphan = models.AudiobookSeriesCharacter(
+        series_name="Shared Saga",
+        canonical_name="stale guess",
+        name="Stale Guess",
+    )
+    db.add(orphan)
+    await db.commit()
+    orphan_id = orphan.id
+
+    sibling_profiles = await crud.audiobook.get_sibling_series_characters(db, "Shared Saga", first.id)
+    assert {profile.name for profile in sibling_profiles} == {"Captain Vale"}
+    assert await crud.audiobook.delete_orphaned_series_characters(db, "Shared Saga") == 1
+    assert await db.get(models.AudiobookSeriesCharacter, orphan_id) is None
 
 
 @pytest.mark.asyncio
