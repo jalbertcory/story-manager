@@ -389,8 +389,7 @@ def _apply_speaker_guardrails(
         for name, attributed_character_id in character_name_ids.items():
             escaped_name = re.escape(name)
             if re.search(
-                rf"(?:\b{escaped_name}\s+(?:{_ATTRIBUTION_VERBS})\b|"
-                rf"\b(?:{_ATTRIBUTION_VERBS})\s+{escaped_name}\b)",
+                rf"(?:\b{escaped_name}\s+(?:{_ATTRIBUTION_VERBS})\b|" rf"\b(?:{_ATTRIBUTION_VERBS})\s+{escaped_name}\b)",
                 named_context,
                 re.IGNORECASE,
             ):
@@ -456,7 +455,9 @@ def _advance_open_dialogue_speaker(
         if open_speaker_id is not None:
             continue
 
-        prefix = text[max(0, quote.start() - 120):quote.start()]
+        prefix_end = quote.start()
+        prefix_start = max(0, prefix_end - 120)
+        prefix = text[prefix_start:prefix_end]
         pronouns = re.findall(r"\b(she|her|he|him)\b", prefix, re.IGNORECASE)
         if pronouns:
             gender = pronouns[-1].casefold()
