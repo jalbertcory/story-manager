@@ -417,6 +417,11 @@ def _apply_speaker_guardrails(
         if last_dialogue_speaker_id is not None:
             return last_dialogue_speaker_id, "Deterministic recurring role dialogue attribution", 0.9
 
+    if has_quote and re.match(r'^\s*[“"]?Paragraph\s+(?:one|two|three|four|five|six|\d+)\b', text, re.I):
+        recruiter_id = role_speaker_ids.get("recruiter")
+        if recruiter_id is not None:
+            return recruiter_id, "Deterministic grounded recruiter enumeration", 0.98
+
     if (
         starts_with_quote
         and protagonist_id is not None
@@ -1564,7 +1569,11 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 )
                 if guardrail_confidence is not None:
                     confidence = guardrail_confidence
-                if open_dialogue_speaker_id is not None and char_id != open_dialogue_speaker_id:
+                if (
+                    open_dialogue_speaker_id is not None
+                    and char_id != open_dialogue_speaker_id
+                    and (guardrail_confidence is None or guardrail_confidence < 0.9)
+                ):
                     char_id = open_dialogue_speaker_id
                     reason = "Deterministic continuation of open quoted dialogue"
                     confidence = 0.95

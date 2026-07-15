@@ -264,6 +264,19 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         minor_male_id=40,
         reason="Model followed the next sentence's speaker.",
     )
+    recruiter_enumeration = audiobook_llm._apply_speaker_guardrails(
+        text="“Paragraph two: I understand that I am volunteering.”",
+        next_text="",
+        character_id=20,
+        narrator_id=10,
+        protagonist_id=20,
+        character_name_ids={"harry": 50},
+        role_speaker_ids={"recruiter": 30},
+        last_dialogue_speaker_id=30,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Model selected the protagonist.",
+    )
     turn_taking_dialogue = audiobook_llm._apply_speaker_guardrails(
         text="“Does that bother you?”",
         next_text="“No,” she said.",
@@ -300,6 +313,7 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
     assert role_dialogue == (30, "Deterministic grounded role dialogue attribution", 0.98)
     assert named_dialogue == (50, "Deterministic named dialogue attribution to harry", 0.99)
     assert current_named_dialogue == (60, "Deterministic named dialogue attribution to jesse", 0.99)
+    assert recruiter_enumeration == (30, "Deterministic grounded recruiter enumeration", 0.98)
     assert turn_taking_dialogue == (20, "Deterministic first-person turn-taking fallback", 0.8)
     assert setup == (10, "Narration setting up dialogue.", None)
 
