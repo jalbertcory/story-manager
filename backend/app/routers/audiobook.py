@@ -53,6 +53,8 @@ class AudiobookStatusResponse(BaseModel):
 class CharacterResponse(BaseModel):
     id: int
     book_id: int
+    series_character_id: Optional[int] = None
+    shared_series_name: Optional[str] = None
     name: str
     description: Optional[str]
     voice_design_prompt: Optional[str]
@@ -104,8 +106,11 @@ class ChapterResponse(BaseModel):
     needs_reassembly: bool
     summary: Optional[str]
     summary_updated_at: Optional[datetime]
+    preview_status: Optional[str]
+    preview_error: Optional[str]
     sentence_count: int = 0
     processed_sentence_count: int = 0
+    audio_generated_count: int = 0
     low_confidence_count: int = 0
 
     model_config = {"from_attributes": True}
@@ -319,13 +324,15 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
 
 @router.get("/api/books/{book_id}/audiobook/characters", response_model=list[CharacterResponse])
 async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[CharacterResponse]:
-    await _get_audiobook_book_or_404(book_id, db)
+    book = await _get_audiobook_book_or_404(book_id, db)
     chars = await crud.audiobook.get_characters_for_book(db, book_id)
     stats = await crud.audiobook.get_character_sentence_stats(db, book_id)
     return [
         CharacterResponse(
             id=character.id,
             book_id=character.book_id,
+            series_character_id=character.series_character_id,
+            shared_series_name=book.series if character.series_character_id else None,
             name=character.name,
             description=character.description,
             voice_design_prompt=character.voice_design_prompt,
@@ -350,15 +357,41 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
     await _get_audiobook_book_or_404(existing.book_id, db)
 
     char = await crud.audiobook.update_character(db, char_id, data)
+    linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, char)
 
     if voice_changed:
-        await crud.audiobook.cascade_voice_change(db, char_id)
-        # Re-enqueue for TTS phase
-        queue = get_audiobook_queue()
-        await crud.audiobook.set_book_pipeline_status(db, char.book_id, "audio_gen")
-        await queue.enqueue(char.book_id)
+        for linked_character in linked_characters:
+            await crud.audiobook.cascade_voice_change(db, linked_character.id)
 
     return CharacterResponse.model_validate(char)
+
+
+@router.post("/api/books/{book_id}/audiobook/roster/share-series")
+async def share_character_roster_with_series(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if not book.series:
+        raise HTTPException(status_code=409, detail="Assign this book to a series before sharing its roster")
+    characters = await crud.audiobook.get_characters_for_book(db, book_id)
+    if not characters:
+        raise HTTPException(status_code=409, detail="Generate a character roster before sharing it")
+    linked = await crud.audiobook.sync_book_roster_with_series(
+        db,
+        book,
+        characters,
+        prefer_series=True,
+    )
+    affected_book_ids: set[int] = {book_id}
+    for character in characters:
+        siblings = await crud.audiobook.propagate_character_profile_across_series(db, character)
+        affected_book_ids.update(sibling.book_id for sibling in siblings)
+    return {
+        "series": book.series,
+        "profiles": linked,
+        "books_updated": len(affected_book_ids),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +403,7 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
 async def list_sentences(
     book_id: int,
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=1000),
     chapter_id: Optional[int] = Query(None),
     review_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
@@ -455,8 +488,11 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> lis
                 needs_reassembly=chapter.needs_reassembly,
                 summary=chapter.summary,
                 summary_updated_at=chapter.summary_updated_at,
+                preview_status=chapter.preview_status,
+                preview_error=chapter.preview_error,
                 sentence_count=len(sentences),
                 processed_sentence_count=len(processed),
+                audio_generated_count=sum(1 for sentence in sentences if sentence.status == "audio_generated"),
                 low_confidence_count=sum(
                     1
                     for sentence in sentences
@@ -465,6 +501,36 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> lis
             )
         )
     return response
+
+
+@router.post("/api/books/{book_id}/audiobook/chapters/{chapter_id}/preview-audio")
+async def generate_chapter_preview(
+    book_id: int,
+    chapter_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
+        raise HTTPException(status_code=409, detail="Pause the full-book pipeline before generating a preview")
+    chapter = await db.get(AudiobookChapter, chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise HTTPException(status_code=404, detail="Audiobook chapter not found")
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter_id)
+    pending = sum(1 for sentence in sentences if sentence.status == "pending_diarization")
+    if not sentences or pending:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Finish speaker analysis for this chapter first ({pending} sentences remain)"
+                if pending
+                else "Chapter has no narratable sentences"
+            ),
+        )
+    if chapter.preview_status in ("queued", "generating"):
+        return {"status": chapter.preview_status, "queued": False}
+    await crud.audiobook.set_chapter_preview_status(db, chapter_id, "queued")
+    queued = await get_audiobook_queue().enqueue_preview(book_id, chapter_id)
+    return {"status": "queued", "queued": queued, "chapter_id": chapter_id}
 
 
 @router.get("/api/books/{book_id}/audiobook/chapters/{chapter_id}/audio")

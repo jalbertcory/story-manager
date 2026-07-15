@@ -148,4 +148,106 @@ describe("AudiobookPipeline", () => {
       );
     });
   });
+
+  it("queues a manual chapter preview and exposes playable text and audio", async () => {
+    const chapter = {
+      id: 9,
+      chapter_number: 1,
+      sentence_count: 2,
+      processed_sentence_count: 2,
+      audio_generated_count: 0,
+      low_confidence_count: 0,
+      summary: "The opening scene.",
+      preview_status: null,
+      preview_error: null,
+      audio_file_path: "audiobooks/11/chapter_1.mp3",
+      smil_file_path: "audiobooks/11/chapter_1.smil",
+      needs_reassembly: false,
+    };
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              pipeline_status: "paused",
+              next_phase: "audio_gen",
+              pause_requested: false,
+              sentence_counts: { pending_audio: 2 },
+            }),
+        });
+      }
+      if (url === "/api/books/11/audiobook/characters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 4, name: "Avery" }]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/chapters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([chapter]),
+        });
+      }
+      if (
+        url === "/api/books/11/audiobook/chapters/9/preview-audio" &&
+        options?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ queued: true }),
+        });
+      }
+      if (
+        url ===
+        "/api/books/11/audiobook/sentences?page=1&limit=1000&chapter_id=9"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              items: [
+                {
+                  id: 1,
+                  original_text: "Avery opened the door.",
+                  character_id: 4,
+                },
+                {
+                  id: 2,
+                  original_text: "The hall was quiet.",
+                  character_id: null,
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    const { container } = renderWithClient(
+      <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Chapter Assembly" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild Preview" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/chapters/9/preview-audio",
+        { method: "POST" },
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen & Read" }));
+    expect(
+      await screen.findByText("Avery opened the door."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The hall was quiet.")).toBeInTheDocument();
+    expect(container.querySelector("audio")).toHaveAttribute(
+      "src",
+      "/api/books/11/audiobook/chapters/9/audio",
+    );
+  });
 });

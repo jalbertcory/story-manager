@@ -50,6 +50,23 @@ export function rebuildCharacterRoster(bookId) {
   });
 }
 
+export function shareCharacterRosterWithSeries(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/share-series`, {
+    method: "POST",
+    fallbackMessage: "Failed to sync the series character roster",
+  });
+}
+
+export function generateChapterPreview(bookId, chapterId) {
+  return sendWithoutBody(
+    `/api/books/${bookId}/audiobook/chapters/${chapterId}/preview-audio`,
+    {
+      method: "POST",
+      fallbackMessage: "Failed to queue the chapter preview",
+    },
+  );
+}
+
 // Characters
 export function getCharacters(bookId) {
   return getJson(

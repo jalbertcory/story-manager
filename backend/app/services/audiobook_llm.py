@@ -12,7 +12,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
-from ..models import AudiobookSettings
+from ..models import AudiobookSettings, Book
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ Return JSON with keys book_summary and characters. No markdown or explanation.
 
 Candidate name frequency hints from the complete book (not ground truth; ignore non-people):
 {candidate_hints}
+
+Existing shared roster for this series (reuse these canonical identities and voice profiles when they appear):
+{series_roster}
 
 Names with explicit dialogue-tag hits (for example, "Harry said") are confirmed speaking candidates. Include the
 highest-hit confirmed speakers unless the evidence clearly shows they are not a person. Do not substitute low-count
@@ -456,14 +459,54 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = (settings.llm_provider or STUB_PROVIDER).lower() if settings else STUB_PROVIDER
 
+    book = await db.get(Book, book_id)
+    if book is None:
+        raise RuntimeError(f"Book {book_id} was deleted during roster generation.")
+
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     if not chapters:
         raise RuntimeError(f"No narratable chapters found for book {book_id} during roster generation.")
 
-    combined_text = await _build_roster_excerpt(chapters, db)
-    candidate_hints, confirmed_speakers = await _build_character_candidate_analysis(chapters, db)
+    context_chapters = list(chapters)
+    series_profiles = []
+    series_book_count = 1
+    if book.series:
+        series_profiles = await crud.audiobook.get_series_characters(db, book.series)
+        sibling_books = await crud.get_books_by_series(db, book.series, skip=0, limit=1000)
+        series_book_count = len(sibling_books)
+        for sibling in sibling_books:
+            if sibling.id == book_id:
+                continue
+            context_chapters.extend(await crud.audiobook.get_chapters_for_book(db, sibling.id))
+
+    combined_text = await _build_roster_excerpt(context_chapters, db)
+    candidate_hints, confirmed_speakers = await _build_character_candidate_analysis(context_chapters, db)
+    series_roster = (
+        json.dumps(
+            [
+                {
+                    "name": profile.name,
+                    "aliases": profile.aliases or [],
+                    "description": profile.description,
+                    "voice_design_prompt": profile.voice_design_prompt,
+                }
+                for profile in series_profiles
+            ],
+            ensure_ascii=False,
+        )
+        if series_profiles
+        else "(none yet)"
+    )
     await crud.audiobook.update_book_pipeline_progress(
-        db, book_id, current=0, total=1, detail="Analyzing story excerpts for recurring characters"
+        db,
+        book_id,
+        current=0,
+        total=1,
+        detail=(
+            f"Analyzing recurring characters across {series_book_count} series books"
+            if book.series and series_book_count > 1
+            else "Analyzing story excerpts for recurring characters"
+        ),
     )
 
     if provider == STUB_PROVIDER:
@@ -482,7 +525,11 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         }
     else:
         prompt_template = settings.roster_prompt_template or DEFAULT_ROSTER_PROMPT
-        prompt = prompt_template.format(text=combined_text, candidate_hints=candidate_hints)
+        prompt = prompt_template.format(
+            text=combined_text,
+            candidate_hints=candidate_hints,
+            series_roster=series_roster,
+        )
         logger.info("Calling LLM for character roster (book %s).", book_id)
         await crud.audiobook.update_book_pipeline_progress(
             db,
@@ -642,8 +689,36 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
             ]
         )
 
+    shared_by_name = {profile.canonical_name: profile for profile in series_profiles}
+    for character in normalised:
+        profile = shared_by_name.get(" ".join(character["name"].casefold().split()))
+        if profile is None:
+            continue
+        character.update(
+            {
+                "series_character_id": profile.id,
+                "name": profile.name,
+                "description": profile.description,
+                "voice_design_prompt": profile.voice_design_prompt,
+                "is_narrator": profile.is_narrator,
+                "aliases": profile.aliases or [],
+                "evidence": profile.evidence or [],
+            }
+        )
+
     await crud.audiobook.delete_characters_for_book(db, book_id)
-    await crud.audiobook.create_characters_bulk(db, book_id=book_id, characters_data=normalised[:15])
+    created_characters = await crud.audiobook.create_characters_bulk(
+        db,
+        book_id=book_id,
+        characters_data=normalised[:15],
+    )
+    if book.series:
+        await crud.audiobook.sync_book_roster_with_series(
+            db,
+            book,
+            created_characters,
+            prefer_series=True,
+        )
     await crud.audiobook.set_book_audiobook_summary(db, book_id, roster_result.get("book_summary"))
     await crud.audiobook.update_book_pipeline_progress(
         db, book_id, current=1, total=1, detail=f"Created {len(normalised[:15])} character profiles"

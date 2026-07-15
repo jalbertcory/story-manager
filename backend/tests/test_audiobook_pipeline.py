@@ -74,9 +74,14 @@ async def _seed_audio_chapter(db, book_id: int, *, sentence_status: str = "ready
 class _FakeQueue:
     def __init__(self):
         self.enqueued: list[int] = []
+        self.preview_enqueued: list[tuple[int, int]] = []
 
     async def enqueue(self, book_id: int) -> bool:
         self.enqueued.append(book_id)
+        return True
+
+    async def enqueue_preview(self, book_id: int, chapter_id: int) -> bool:
+        self.preview_enqueued.append((book_id, chapter_id))
         return True
 
 
@@ -84,6 +89,7 @@ def test_default_roster_prompt_formats_voice_token_examples():
     prompt = audiobook_llm.DEFAULT_ROSTER_PROMPT.format(
         text="A story excerpt.",
         candidate_hints="- Harry: 12 mentions",
+        series_roster="(none yet)",
     )
 
     assert "[gender-{male|female|neutral}]" in prompt
@@ -698,6 +704,122 @@ async def test_roster_keeps_first_person_protagonist_separate_from_narrator(db, 
     assert characters[2].aliases == []
     assert "40 explicit dialogue attributions" in characters[1].description
     assert "Harry: 40 mentions" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_series_roster_reuses_and_propagates_voice_profiles(db):
+    first = await _make_book(db, title="Saga One", series="Shared Saga", audiobook_enabled=True)
+    second = await _make_book(db, title="Saga Two", series="Shared Saga", audiobook_enabled=True)
+    first_character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            first.id,
+            [
+                {
+                    "name": "Captain Vale",
+                    "description": "Series captain.",
+                    "voice_design_prompt": "[gender-female][pitch-low][speed-normal]",
+                    "is_narrator": False,
+                    "aliases": ["Vale"],
+                    "evidence": [],
+                }
+            ],
+        )
+    )[0]
+    second_character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            second.id,
+            [
+                {
+                    "name": "Captain Vale",
+                    "description": "Book-specific guess.",
+                    "voice_design_prompt": "[gender-neutral][pitch-high][speed-fast]",
+                    "is_narrator": False,
+                    "aliases": [],
+                    "evidence": [],
+                }
+            ],
+        )
+    )[0]
+
+    await crud.audiobook.sync_book_roster_with_series(db, first, [first_character])
+    await crud.audiobook.sync_book_roster_with_series(db, second, [second_character])
+    await db.refresh(second_character)
+
+    assert second_character.series_character_id == first_character.series_character_id
+    assert second_character.voice_design_prompt == "[gender-female][pitch-low][speed-normal]"
+
+    first_character.voice_design_prompt = "[gender-female][pitch-medium][speed-slow]"
+    await db.commit()
+    linked = await crud.audiobook.propagate_character_profile_across_series(db, first_character)
+    await db.refresh(second_character)
+
+    assert {character.book_id for character in linked} == {first.id, second.id}
+    assert second_character.voice_design_prompt == "[gender-female][pitch-medium][speed-slow]"
+
+    # Renaming onto an existing canonical identity merges the shared profiles
+    # instead of violating the series/name uniqueness constraint.
+    other_character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            first.id,
+            [
+                {
+                    "name": "Commander Vale",
+                    "voice_design_prompt": "[gender-female][pitch-high][speed-normal]",
+                    "is_narrator": False,
+                }
+            ],
+        )
+    )[0]
+    await crud.audiobook.sync_book_roster_with_series(db, first, [other_character])
+    other_character.name = "Captain Vale"
+    await db.commit()
+    await crud.audiobook.propagate_character_profile_across_series(db, other_character)
+    await db.refresh(other_character)
+    assert other_character.series_character_id == first_character.series_character_id
+
+
+@pytest.mark.asyncio
+async def test_manual_chapter_preview_requires_analysis_and_queues_work(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
+    chapter, _character, sentence = await _seed_audio_chapter(db, book.id)
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    response = await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
+    await db.refresh(chapter)
+
+    assert response == {"status": "queued", "queued": True, "chapter_id": chapter.id}
+    assert queue.preview_enqueued == [(book.id, chapter.id)]
+    assert chapter.preview_status == "queued"
+
+    sentence.status = "pending_diarization"
+    chapter.preview_status = None
+    await db.commit()
+    with pytest.raises(audiobook_router.HTTPException) as exc_info:
+        await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for MP3 assembly")
+async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
+    chapter, _character, _sentence = await _seed_audio_chapter(db, book.id)
+    monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_assembly, "LIBRARY_PATH", library_path)
+
+    await audiobook_tts.generate_audio_for_chapter_preview(book.id, chapter.id, db)
+    await audiobook_assembly.assemble_chapter_preview(book.id, chapter.id, db)
+    await db.refresh(chapter)
+
+    assert chapter.audio_file_path
+    assert (library_path.parent / chapter.audio_file_path).exists()
+    assert chapter.smil_file_path
 
 
 @pytest.mark.asyncio

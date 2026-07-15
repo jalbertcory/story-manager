@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { rebuildCharacterRoster, updateCharacter } from "../../api/audiobook";
+import {
+  rebuildCharacterRoster,
+  shareCharacterRosterWithSeries,
+  updateCharacter,
+} from "../../api/audiobook";
 
 const ACTIVE_STATUSES = new Set([
   "ingesting",
@@ -38,6 +42,14 @@ function CharacterCard({ character, bookId }) {
       <div className="character-card-header">
         <strong>{character.name}</strong>
         {character.is_narrator && <span className="badge">Narrator</span>}
+        {character.shared_series_name && (
+          <span
+            className="badge badge--success"
+            title={`Shared across ${character.shared_series_name}`}
+          >
+            Series profile
+          </span>
+        )}
       </div>
       {character.description && (
         <p className="character-description">{character.description}</p>
@@ -88,7 +100,8 @@ function CharacterCard({ character, bookId }) {
       )}
       {saved && (
         <p className="success">
-          Saved — audio for this character will be regenerated.
+          Saved across the series. Existing clips were invalidated; use a
+          chapter preview when you are ready to compare the voice.
         </p>
       )}
       <button onClick={handleSave} disabled={mutation.isPending}>
@@ -98,7 +111,7 @@ function CharacterCard({ character, bookId }) {
   );
 }
 
-function CharacterRoster({ characters, bookId, pipelineStatus }) {
+function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
   const queryClient = useQueryClient();
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const regenerateMutation = useMutation({
@@ -111,6 +124,14 @@ function CharacterRoster({ characters, bookId, pipelineStatus }) {
       });
       queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
+      });
+    },
+  });
+  const shareMutation = useMutation({
+    mutationFn: () => shareCharacterRosterWithSeries(bookId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-characters", bookId],
       });
     },
   });
@@ -129,8 +150,18 @@ function CharacterRoster({ characters, bookId, pipelineStatus }) {
         <span>
           {characters.length} voice profiles. Regenerating preserves EPUB
           ingestion but clears speaker assignments and invalidates generated
-          snippets.
+          snippets. {series ? `Profiles can be shared across ${series}.` : ""}
         </span>
+        {series && (
+          <button
+            onClick={() => shareMutation.mutate()}
+            disabled={
+              shareMutation.isPending || ACTIVE_STATUSES.has(pipelineStatus)
+            }
+          >
+            {shareMutation.isPending ? "Syncing series…" : "Sync Series Roster"}
+          </button>
+        )}
         {!confirmRegenerate ? (
           <button
             onClick={() => setConfirmRegenerate(true)}
@@ -160,6 +191,14 @@ function CharacterRoster({ characters, bookId, pipelineStatus }) {
         )}
         {regenerateMutation.isError && (
           <span className="error">{regenerateMutation.error?.message}</span>
+        )}
+        {shareMutation.isSuccess && (
+          <span className="success">
+            Shared profiles are now linked across {series}.
+          </span>
+        )}
+        {shareMutation.isError && (
+          <span className="error">{shareMutation.error?.message}</span>
         )}
       </div>
       <div className="character-roster">

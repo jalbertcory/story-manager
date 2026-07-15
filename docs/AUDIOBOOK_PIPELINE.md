@@ -82,11 +82,12 @@ Changes propagate via cascades without requiring full rebuilds.
 **Character voice profile updated:**
 ```
 PUT /api/audiobook/characters/{id}
+  → promote the profile into the series roster and update matching sibling-book characters
   → UPDATE sentences SET status="ready_for_audio", audio_file_path=NULL
       WHERE character_id = {id}
   → UPDATE chapters SET needs_reassembly=TRUE
       WHERE id IN (SELECT chapter_id FROM audiobook_sentences WHERE character_id = {id})
-  → Re-enqueue book starting at "audio_gen" phase
+  → wait for an explicit chapter preview or full pipeline run
 ```
 
 **Sentence speaker or tags changed:**
@@ -94,7 +95,7 @@ PUT /api/audiobook/characters/{id}
 PUT /api/audiobook/sentences/{id}
   → UPDATE sentence: character_id, tagged_text, status="ready_for_audio", audio_file_path=NULL
   → UPDATE chapter SET needs_reassembly=TRUE WHERE id = sentence.chapter_id
-  → Re-enqueue book starting at "audio_gen" phase
+  → wait for an explicit chapter preview or full pipeline run
 ```
 
 ---
@@ -125,16 +126,25 @@ PUT /api/audiobook/sentences/{id}
 | smil_file_path | String | Relative path to generated `.smil` |
 | audio_file_path | String | Relative path to concatenated chapter MP3 |
 | needs_reassembly | Boolean | Worker polls for `True` |
+| preview_status | String | `queued`, `generating`, `ready`, or `error` for a manual preview |
+| preview_error | Text | Last preview-generation error |
 
 **`audiobook_characters`**
 | Column | Type | Notes |
 |---|---|---|
 | id | Integer PK | |
 | book_id | FK → books CASCADE | |
+| series_character_id | FK → audiobook_series_characters SET NULL | Shared series voice/profile link |
 | name | String | |
 | description | Text | LLM-generated summary |
 | voice_design_prompt | String | OmniVoice params e.g. `[gender-male][pitch-low]` |
 | is_narrator | Boolean | |
+
+**`audiobook_series_characters`** (migration 0021) — the canonical character and voice profile roster shared by
+all audiobook-enabled books in a named series. Book-specific character rows remain stable for sentence assignments,
+while edits to a linked voice profile propagate to matching sibling-book characters and invalidate only their derived
+audio. Roster generation includes previously identified series characters as context and reuses their profiles when
+the same character appears in a later book.
 
 **`audiobook_sentences`** — the state engine
 | Column | Type | Notes |
@@ -167,7 +177,8 @@ Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `ass
 - `audiobook_llm_requests` — model calls made during the current run
 
 Migration `0020_audiobook_observability.py` also adds chapter summaries, character aliases/evidence, and sentence
-confidence/rationales.
+confidence/rationales. Migration `0021_series_roster_and_chapter_previews.py` adds the shared series roster links and
+durable manual chapter-preview state.
 
 ---
 
@@ -276,8 +287,26 @@ stale message; failed sentence audio is reset to `ready_for_audio` before TTS re
 
 The Characters tab also offers **Regenerate Character Roster**. It preserves the parsed EPUB and sentence IDs while
 clearing roster, diarization, summaries, and derived audio state. Roster generation samples real story chapters
-across the book and supplements those excerpts with whole-book capitalized-name frequency hints, reducing the chance
-that front matter or a one-scene cameo displaces a recurring speaker.
+across the book and sibling books in the same series. It supplements those excerpts with capitalized-name frequency
+hints and any existing series roster, reducing the chance that front matter or a one-scene cameo displaces a recurring
+speaker. **Sync Series Roster** can promote an already-generated standalone book roster after its series metadata is
+assigned.
+
+## Manual Voice Evaluation
+
+Voice-profile edits deliberately do not start a potentially expensive full-book TTS run. In **Chapter Assembly**, a
+fully diarized chapter exposes **Generate Preview** (or **Rebuild Preview** after a voice change). The preview job runs
+through the same serial worker as the full pipeline, generates or reuses only that chapter's sentence clips, assembles
+its MP3 and SMIL, and leaves the full-book pipeline paused. A partially analyzed chapter shows its analyzed sentence
+count and keeps the action disabled, preventing audio from being generated against incomplete speaker assignments.
+
+Ready previews appear in **Listen & Read**, which provides chapter navigation, a seekable audio player, the chapter
+summary, and the chapter transcript with speaker names available as sentence tooltips. This supports early voice
+evaluation without pretending the final voice roster is complete; after refining a series profile, rebuild the chosen
+chapter explicitly to compare it.
+
+The library catalog shows a headphone badge on audiobook-enabled books and a count on series rows. The Audiobook
+filter can show only enabled or non-enabled books, and the main sort control can order enabled books first.
 
 ---
 
@@ -311,6 +340,8 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | POST | `/api/books/{id}/audiobook/pause` | Request a cooperative pause at the next durable boundary |
 | POST | `/api/books/{id}/audiobook/rebuild` | Force full rebuild |
 | POST | `/api/books/{id}/audiobook/roster/rebuild` | Preserve ingestion and regenerate roster/speaker analysis |
+| POST | `/api/books/{id}/audiobook/roster/share-series` | Link/promote the book roster into its series roster |
+| POST | `/api/books/{id}/audiobook/chapters/{cid}/preview-audio` | Queue an explicit single-chapter audio preview |
 | GET | `/api/books/{id}/audiobook/status` | Status, model, progress, summary, review flags, and sentence counts |
 | GET | `/api/books/{id}/audiobook/characters` | List characters |
 | PUT | `/api/audiobook/characters/{char_id}` | Update voice profile (triggers cascade) |
@@ -334,6 +365,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `backend/alembic/versions/0018_audiobook_pipeline.py` | Core audiobook schema migration |
 | `backend/alembic/versions/0019_audiobook_pipeline_controls.py` | Review, pause, and error-state migration |
 | `backend/alembic/versions/0020_audiobook_observability.py` | Progress, summaries, evidence, confidence, and batch controls |
+| `backend/alembic/versions/0021_series_roster_and_chapter_previews.py` | Shared series profiles and chapter-preview state |
 | `backend/app/crud/audiobook.py` | DB queries for all new tables |
 | `backend/app/services/audiobook_ingestion.py` | Phase 1: EPUB parse + span injection |
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |
@@ -353,8 +385,10 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `frontend/src/components/AudiobookPipeline.jsx` | Pipeline tab container (progress + sub-tabs) |
 | `frontend/src/components/audiobook/CharacterRoster.jsx` | Character card grid with voice editing |
 | `frontend/src/components/audiobook/ScriptEditor.jsx` | Paginated sentence table with inline editing |
-| `frontend/src/components/audiobook/ChapterAssembly.jsx` | Chapter assembly status list |
-| `frontend/src/App.jsx` | +Audio Settings tab routing |
+| `frontend/src/components/audiobook/ChapterAssembly.jsx` | Chapter assembly status and manual preview controls |
+| `frontend/src/components/audiobook/AudiobookReader.jsx` | Playable preview chapters with read-along text |
+| `frontend/src/components/BookList.jsx` | Library audiobook filter and enabled counts |
+| `frontend/src/App.jsx` | +Audio Settings tab routing and audiobook-enabled sorting |
 | `frontend/src/components/BookSettings.jsx` | +Audiobook Pipeline tab |
 
 ---

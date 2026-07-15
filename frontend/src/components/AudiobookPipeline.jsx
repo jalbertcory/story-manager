@@ -15,6 +15,7 @@ import CharacterRoster from "./audiobook/CharacterRoster";
 import ScriptEditor from "./audiobook/ScriptEditor";
 import ChapterAssembly from "./audiobook/ChapterAssembly";
 import AnalysisOverview from "./audiobook/AnalysisOverview";
+import AudiobookReader from "./audiobook/AudiobookReader";
 
 const PIPELINE_STEPS = [
   { status: "ingesting", label: "Ingesting" },
@@ -113,6 +114,7 @@ const SUB_TABS = [
   "Analysis",
   "Characters",
   "Script Editor",
+  "Listen & Read",
   "Chapter Assembly",
 ];
 
@@ -141,9 +143,12 @@ function AudiobookPipeline({ book }) {
   const { data: chapters = [] } = useQuery({
     queryKey: ["audiobook-chapters", bookId],
     queryFn: () => getAudiobookChapters(bookId),
-    refetchInterval: () => {
+    refetchInterval: ({ state }) => {
       const s = statusData?.pipeline_status;
-      return s && isActive(s) ? 5000 : false;
+      const previewActive = state.data?.some((chapter) =>
+        ["queued", "generating"].includes(chapter.preview_status),
+      );
+      return (s && isActive(s)) || previewActive ? 3000 : false;
     },
   });
 
@@ -369,6 +374,7 @@ function AudiobookPipeline({ book }) {
             characters={characters}
             bookId={bookId}
             pipelineStatus={pipelineStatus}
+            series={book.series}
           />
         )}
         {subTab === "Script Editor" && (
@@ -379,7 +385,18 @@ function AudiobookPipeline({ book }) {
           />
         )}
         {subTab === "Chapter Assembly" && (
-          <ChapterAssembly chapters={chapters} bookId={bookId} />
+          <ChapterAssembly
+            chapters={chapters}
+            bookId={bookId}
+            pipelineActive={isActive(pipelineStatus)}
+          />
+        )}
+        {subTab === "Listen & Read" && (
+          <AudiobookReader
+            chapters={chapters}
+            characters={characters}
+            bookId={bookId}
+          />
         )}
       </div>
     </div>

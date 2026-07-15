@@ -97,6 +97,38 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
 
 
 @pytest.mark.asyncio
+async def test_book_catalog_sorts_audiobook_enabled_first(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        enabled = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Audio Book",
+                author="Catalog Author",
+                immutable_path="audio-sort-enabled-source.epub",
+                current_path="audio-sort-enabled.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        enabled.audiobook_enabled = True
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Text Book",
+                author="Catalog Author",
+                immutable_path="audio-sort-disabled-source.epub",
+                current_path="audio-sort-disabled.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+        await session.commit()
+
+    response = client.get("/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc")
+
+    assert response.status_code == 200
+    assert [book["title"] for book in response.json()] == ["Audio Book", "Text Book"]
+
+
+@pytest.mark.asyncio
 async def test_get_book_catalog_includes_series_and_effective_genre_tags(db_session):
     async with AsyncTestingSessionLocal() as session:
         await crud.create_book(

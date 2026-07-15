@@ -23,6 +23,20 @@ export function GenreTagList({ tags, className = "" }) {
   );
 }
 
+export function AudiobookBadge({ book }) {
+  if (!book.audiobook_enabled) return null;
+  const status = book.audiobook_pipeline_status;
+  return (
+    <span
+      className="badge-audiobook"
+      title={status ? `Audiobook: ${status}` : "Audiobook enabled"}
+    >
+      <span aria-hidden="true">🎧</span>{" "}
+      {status === "complete" ? "Audiobook ready" : "Audiobook"}
+    </span>
+  );
+}
+
 export function BookCard({ book, onEdit }) {
   const isPending = book.download_status === "pending";
   const isError = book.download_status === "error";
@@ -115,6 +129,7 @@ export function BookCard({ book, onEdit }) {
         {book.source_type === "web" && !isPending && (
           <span className="badge-web">Web</span>
         )}
+        {!isPending && <AudiobookBadge book={book} />}
         {isError && book.source_url && (
           <p className="book-error-url" title={book.source_url}>
             {book.source_url.length > 40
@@ -174,6 +189,7 @@ export function BookRow({
             {book.source_type === "web" && (
               <span className="badge-web">Web</span>
             )}
+            <AudiobookBadge book={book} />
           </div>
           {subtitle && <div className="book-row-subtitle">{subtitle}</div>}
           {status && (

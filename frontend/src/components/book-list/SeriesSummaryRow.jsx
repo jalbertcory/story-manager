@@ -108,6 +108,8 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       authors,
       totalWords,
       hasWebNovel: orderedBooks.some((book) => book.source_type === "web"),
+      audiobookCount: orderedBooks.filter((book) => book.audiobook_enabled)
+        .length,
       coverBook,
       coverBooks,
       latestUpdate: latestUpdate.getTime() > 0 ? latestUpdate : null,
@@ -191,6 +193,12 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
           <div className="series-summary-topline">
             <span className="series-name">{series}</span>
             {summary.hasWebNovel && <span className="badge-web">Web</span>}
+            {summary.audiobookCount > 0 && (
+              <span className="badge-audiobook">
+                <span aria-hidden="true">🎧</span> {summary.audiobookCount}/
+                {books.length}
+              </span>
+            )}
           </div>
           <div className="series-meta">
             <span className="series-meta-author">

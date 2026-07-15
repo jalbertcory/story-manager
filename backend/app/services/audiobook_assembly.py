@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from ..models import AudiobookChapter
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,19 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
         audio_file_path=_relative_path(audio_path),
         smil_file_path=_relative_path(smil_path),
     )
+
+
+async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSession) -> None:
+    """Assemble one chapter without requiring the rest of the book to be ready."""
+    chapter = await db.get(AudiobookChapter, chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise RuntimeError("Audiobook chapter not found.")
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter_id)
+    if not sentences or any(sentence.status != "audio_generated" for sentence in sentences):
+        raise RuntimeError("Every sentence in the chapter needs audio before preview assembly.")
+    output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
 
 
 async def assemble_book(book_id: int, db: AsyncSession) -> None:
