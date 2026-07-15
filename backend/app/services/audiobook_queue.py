@@ -59,6 +59,10 @@ class AudiobookQueue:
         await self._queue.put(book_id)
         return True
 
+    def has_book_job(self, book_id: int) -> bool:
+        """Return whether a book is queued or currently being processed."""
+        return book_id in self._queued_book_ids
+
     async def requeue_in_progress(self) -> int:
         async with SessionLocal() as db:
             books = await crud.audiobook.get_in_progress_audiobook_books(db)

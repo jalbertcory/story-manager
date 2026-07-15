@@ -147,25 +147,26 @@ function AudiobookPipeline({ book }) {
               Pause Workers
             </button>
           )}
-          {!confirmRebuild ? (
-            <button className="btn-danger" onClick={() => setConfirmRebuild(true)}>
-              Force Full Rebuild
-            </button>
-          ) : (
-            <span className="confirm-inline">
-              Destroy all audio and re-run from scratch?{" "}
-              <button
-                className="btn-danger"
-                onClick={() => rebuildMutation.mutate()}
-                disabled={rebuildMutation.isPending}
-              >
-                {rebuildMutation.isPending ? "Rebuilding…" : "Yes, rebuild"}
-              </button>{" "}
-              <button className="btn-text" onClick={() => setConfirmRebuild(false)}>
-                Cancel
+          {!isActive(pipelineStatus) &&
+            (!confirmRebuild ? (
+              <button className="btn-danger" onClick={() => setConfirmRebuild(true)}>
+                Force Full Rebuild
               </button>
-            </span>
-          )}
+            ) : (
+              <span className="confirm-inline">
+                Destroy all audio and re-run from scratch?{" "}
+                <button
+                  className="btn-danger"
+                  onClick={() => rebuildMutation.mutate()}
+                  disabled={rebuildMutation.isPending}
+                >
+                  {rebuildMutation.isPending ? "Rebuilding…" : "Yes, rebuild"}
+                </button>{" "}
+                <button className="btn-text" onClick={() => setConfirmRebuild(false)}>
+                  Cancel
+                </button>
+              </span>
+            ))}
         </div>
 
         {(startMutation.isError || pauseMutation.isError || rebuildMutation.isError) && (

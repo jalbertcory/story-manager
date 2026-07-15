@@ -70,12 +70,16 @@ async def _seed_audio_chapter(db, book_id: int, *, sentence_status: str = "ready
 
 
 class _FakeQueue:
-    def __init__(self):
+    def __init__(self, *, active_book_ids: set[int] | None = None):
         self.enqueued: list[int] = []
+        self.active_book_ids = active_book_ids or set()
 
     async def enqueue(self, book_id: int) -> bool:
         self.enqueued.append(book_id)
         return True
+
+    def has_book_job(self, book_id: int) -> bool:
+        return book_id in self.active_book_ids
 
 
 @pytest.mark.asyncio
@@ -176,6 +180,54 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     assert sentence.status == "ready_for_audio"
     assert sentence.audio_file_path is None
     assert chapter.needs_reassembly is True
+
+
+@pytest.mark.asyncio
+async def test_rebuild_rejects_an_active_pipeline(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="diarizing")
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    with pytest.raises(audiobook_router.HTTPException) as exc_info:
+        await audiobook_router.rebuild_pipeline(book.id, db)
+
+    assert exc_info.value.status_code == 409
+    assert queue.enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_rebuild_waits_for_a_paused_worker_to_exit(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
+    queue = _FakeQueue(active_book_ids={book.id})
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    with pytest.raises(audiobook_router.HTTPException) as exc_info:
+        await audiobook_router.rebuild_pipeline(book.id, db)
+
+    assert exc_info.value.status_code == 409
+    assert queue.enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_sentence_speaker_must_belong_to_the_same_book(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    other_book = await _make_book(db, title="Other Audio", audiobook_enabled=True)
+    _chapter, _character, sentence = await _seed_audio_chapter(db, book.id)
+    _other_chapter, other_character, _other_sentence = await _seed_audio_chapter(db, other_book.id)
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    with pytest.raises(audiobook_router.HTTPException) as exc_info:
+        await audiobook_router.update_sentence(
+            sentence.id,
+            audiobook_router.SentenceUpdate(character_id=other_character.id, tagged_text=sentence.original_text),
+            db,
+        )
+
+    await db.refresh(sentence)
+    assert exc_info.value.status_code == 404
+    assert sentence.character_id != other_character.id
+    assert queue.enqueued == []
 
 
 @pytest.mark.asyncio
@@ -338,3 +390,15 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
     response = await audiobook_router.download_audiobook(book.id, db)
     assert Path(response.path) == output_path
     assert response.media_type == "application/epub+zip"
+
+    # A crash or cleanup after chapter assembly must resume packaging rather
+    # than leaving a false complete state with a missing download.
+    output_path.unlink()
+    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+    assert await crud.audiobook.infer_audiobook_resume_status(db, book.id) == "assembling"
+
+    await audiobook_assembly.assemble_book(book.id, db)
+
+    await db.refresh(book)
+    assert output_path.exists()
+    assert book.audiobook_pipeline_status == "complete"

@@ -161,11 +161,15 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
         raise RuntimeError(f"Cannot assemble book {book_id}: not all sentences have generated audio.")
 
+    audiobook_epub_path = output_dir / "audiobook.epub"
     chapters = await crud.audiobook.get_chapters_pending_assembly(db, book_id)
-    if not chapters:
-        logger.info("No chapters need reassembly for book %s.", book_id)
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
-        return
+    if chapters:
+        # Once chapter state changes, an older package is no longer a valid
+        # completion marker. Removing it makes an interrupted package step
+        # resume at assembly on the next run.
+        audiobook_epub_path.unlink(missing_ok=True)
+    else:
+        logger.info("No chapters need reassembly for book %s; rebuilding the EPUB package.", book_id)
 
     for chapter in chapters:
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
@@ -174,19 +178,18 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     # Repackage the EPUB with updated media-overlay references
     working_epub_path = output_dir / "working.epub"
     if not working_epub_path.exists():
-        logger.warning("Working EPUB not found for book %s; skipping repackage.", book_id)
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
-        return
+        await crud.audiobook.set_book_pipeline_status(db, book_id, "error")
+        raise RuntimeError(f"Working EPUB not found for book {book_id}; run ingestion again.")
 
     ebook = epub.read_epub(str(working_epub_path))
 
     all_chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     for chapter in all_chapters:
         if not chapter.smil_file_path:
-            continue
+            raise RuntimeError(f"Missing SMIL path for book {book_id}, chapter {chapter.id}.")
         smil_full = LIBRARY_PATH.parent / chapter.smil_file_path
         if not smil_full.exists():
-            continue
+            raise RuntimeError(f"Missing SMIL file for book {book_id}, chapter {chapter.id}.")
         audio_full = LIBRARY_PATH.parent / chapter.audio_file_path if chapter.audio_file_path else None
         if audio_full is None or not audio_full.exists():
             raise RuntimeError(f"Missing chapter audio for book {book_id}, chapter {chapter.id}.")
@@ -212,9 +215,11 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
                 item.media_overlay = smil_item.id
                 break
 
-    audiobook_epub_path = output_dir / "audiobook.epub"
+    temporary_epub_path = output_dir / "audiobook.tmp.epub"
+    temporary_epub_path.unlink(missing_ok=True)
     _ensure_toc_link_ids(ebook.toc)
-    epub.write_epub(str(audiobook_epub_path), ebook)
+    epub.write_epub(str(temporary_epub_path), ebook)
+    temporary_epub_path.replace(audiobook_epub_path)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
     if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":

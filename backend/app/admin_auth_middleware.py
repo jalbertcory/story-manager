@@ -27,4 +27,6 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         if not is_admin_auth_enabled():
             return False
         path = request.url.path
-        return path.startswith("/api/") and not path.startswith("/api/auth/")
+        protected_api = path.startswith("/api/") and not path.startswith("/api/auth/")
+        protected_audiobook = path == "/library/audiobooks" or path.startswith("/library/audiobooks/")
+        return protected_api or protected_audiobook

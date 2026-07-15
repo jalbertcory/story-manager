@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..models import AudiobookChapter, AudiobookSentence, Book
+from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
 from ..services.audiobook_queue import get_audiobook_queue
 
 logger = logging.getLogger(__name__)
@@ -175,12 +175,20 @@ async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
 @router.post("/api/books/{book_id}/audiobook/rebuild")
 async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await _get_audiobook_book_or_404(book_id, db)
+    book = await _get_audiobook_book_or_404(book_id, db)
+    queue = get_audiobook_queue()
+    if book.audiobook_pipeline_status in (
+        "ingesting",
+        "roster_gen",
+        "diarizing",
+        "audio_gen",
+        "assembling",
+    ) or queue.has_book_job(book_id):
+        raise HTTPException(status_code=409, detail="Pause the active pipeline before rebuilding it")
     # Delete existing pipeline data so ingestion runs fresh
     await crud.audiobook.delete_chapters_for_book(db, book_id)
     await crud.audiobook.delete_characters_for_book(db, book_id)
     await crud.audiobook.set_book_pipeline_status(db, book_id, "ingesting")
-    queue = get_audiobook_queue()
     await queue.enqueue(book_id)
     return {"status": "ingesting", "queued": True}
 
@@ -260,6 +268,10 @@ async def update_sentence(sentence_id: int, body: SentenceUpdate, db: AsyncSessi
     chapter = await db.get(AudiobookChapter, existing.chapter_id)
     if chapter:
         await _get_audiobook_book_or_404(chapter.book_id, db)
+    if body.character_id is not None:
+        character = await db.get(AudiobookCharacter, body.character_id)
+        if chapter is None or character is None or character.book_id != chapter.book_id:
+            raise HTTPException(status_code=404, detail="Character not found for this book")
 
     sentence = await crud.audiobook.update_sentence_speaker(
         db,

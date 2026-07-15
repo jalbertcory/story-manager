@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import LIBRARY_PATH
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
 
 # ---------------------------------------------------------------------------
@@ -373,7 +374,8 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     total = sum(counts.values())
     if total > 0 and counts.get("audio_generated", 0) == total:
         pending_chapters = await get_chapters_pending_assembly(db, book_id)
-        return "assembling" if pending_chapters else "complete"
+        packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
+        return "assembling" if pending_chapters or not packaged_epub.is_file() else "complete"
 
     return "ingesting"
 
