@@ -822,10 +822,7 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     counts = await count_sentences_by_status(db, book_id)
     if counts.get("pending_diarization", 0) > 0:
         return "diarizing"
-    if any(
-        counts.get(status, 0) > 0
-        for status in ("ready_for_audio", "audio_queued", "audio_generating", "error")
-    ):
+    if any(counts.get(status, 0) > 0 for status in ("ready_for_audio", "audio_queued", "audio_generating", "error")):
         return "audio_gen"
 
     total = sum(counts.values())
