@@ -345,7 +345,13 @@ function BookSettings({ book: initialBook, onBack }) {
     book.source_type === "web" && book.immutable_path && book.current_path;
 
   return (
-    <div className="book-settings">
+    <div
+      className={`book-settings${
+        book.audiobook_enabled && bookTab === "audiobook"
+          ? " book-settings--wide"
+          : ""
+      }`}
+    >
       <div className="settings-header">
         <button
           className="btn-text"

@@ -105,6 +105,16 @@ export function updateSentence(sentenceId, data) {
   });
 }
 
+export function generateSentenceAudio(bookId, sentenceId) {
+  return sendWithoutBody(
+    `/api/books/${bookId}/audiobook/sentences/${sentenceId}/generate-audio`,
+    {
+      method: "POST",
+      fallbackMessage: "Failed to queue sentence audio",
+    },
+  );
+}
+
 export function getSentenceAudioUrl(sentenceId) {
   return `/api/audiobook/sentences/${sentenceId}/audio`;
 }

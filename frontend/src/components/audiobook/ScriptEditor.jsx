@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  generateSentenceAudio,
   getSentences,
   updateSentence,
   getSentenceAudioUrl,
@@ -9,11 +10,13 @@ import {
 const STATUS_ICONS = {
   pending_diarization: { icon: "⏳", label: "Pending diarization" },
   ready_for_audio: { icon: "🎙", label: "Ready for audio" },
+  audio_queued: { icon: "⏱", label: "Audio queued" },
+  audio_generating: { icon: "🔊", label: "Generating audio" },
   audio_generated: { icon: "✅", label: "Audio generated" },
   error: { icon: "❌", label: "Error" },
 };
 
-function SentenceRow({ sentence, characters, bookId }) {
+function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
   const queryClient = useQueryClient();
   const [tags, setTags] = useState(
     sentence.tagged_text || sentence.original_text,
@@ -29,6 +32,19 @@ function SentenceRow({ sentence, characters, bookId }) {
         queryKey: ["audiobook-sentences", bookId],
       });
       queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+    },
+  });
+
+  const audioMutation = useMutation({
+    mutationFn: () => generateSentenceAudio(bookId, sentence.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-sentences", bookId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-chapters", bookId],
+      });
     },
   });
 
@@ -99,16 +115,54 @@ function SentenceRow({ sentence, characters, bookId }) {
         )}
       </td>
       <td className="sentence-status" title={statusInfo.label}>
-        {statusInfo.icon}
+        <span aria-hidden="true">{statusInfo.icon}</span>
+        <span>{statusInfo.label}</span>
       </td>
       <td className="sentence-audio">
-        {audioUrl && (
+        {audioUrl ? (
           <audio
             controls
             src={audioUrl}
             preload="none"
             style={{ height: "24px" }}
           />
+        ) : sentence.status === "ready_for_audio" ||
+          sentence.status === "error" ? (
+          <button
+            type="button"
+            className="btn-small"
+            onClick={() => audioMutation.mutate()}
+            disabled={
+              audioMutation.isPending ||
+              pipelineActive ||
+              editing ||
+              characterId === ""
+            }
+            title={
+              pipelineActive
+                ? "Pause the full-book pipeline first"
+                : editing
+                  ? "Save sentence edits before generating audio"
+                  : characterId === ""
+                    ? "Assign a speaker first"
+                    : "Generate only this sentence with its current voice profile"
+            }
+          >
+            {audioMutation.isPending
+              ? "Queueing…"
+              : sentence.status === "error"
+                ? "Retry audio"
+                : "Generate audio"}
+          </button>
+        ) : ["audio_queued", "audio_generating"].includes(sentence.status) ? (
+          <span className="sentence-audio-progress">
+            {sentence.status === "audio_queued" ? "Waiting…" : "Working…"}
+          </span>
+        ) : null}
+        {audioMutation.isError && (
+          <span className="error sentence-audio-error">
+            {audioMutation.error?.message}
+          </span>
         )}
       </td>
       <td className="sentence-actions">
@@ -141,7 +195,12 @@ function SentenceRow({ sentence, characters, bookId }) {
   );
 }
 
-function ScriptEditor({ bookId, characters, chapters = [] }) {
+function ScriptEditor({
+  bookId,
+  characters,
+  chapters = [],
+  pipelineActive = false,
+}) {
   const [page, setPage] = useState(1);
   const [chapterFilter, setChapterFilter] = useState("");
   const [reviewOnly, setReviewOnly] = useState(false);
@@ -157,6 +216,12 @@ function ScriptEditor({ bookId, characters, chapters = [] }) {
         reviewOnly,
       }),
     keepPreviousData: true,
+    refetchInterval: ({ state }) =>
+      state.data?.items?.some((sentence) =>
+        ["audio_queued", "audio_generating"].includes(sentence.status),
+      )
+        ? 1500
+        : false,
   });
 
   if (isLoading) return <p>Loading sentences…</p>;
@@ -246,6 +311,7 @@ function ScriptEditor({ bookId, characters, chapters = [] }) {
                   sentence={sentence}
                   characters={characters}
                   bookId={bookId}
+                  pipelineActive={pipelineActive}
                 />
               ))}
             </tbody>

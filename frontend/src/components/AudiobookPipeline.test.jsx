@@ -250,4 +250,97 @@ describe("AudiobookPipeline", () => {
       "/api/books/11/audiobook/chapters/9/audio",
     );
   });
+
+  it("queues one ready sentence from the Script Editor and shows its state", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              pipeline_status: "paused",
+              next_phase: "audio_gen",
+              pause_requested: false,
+              sentence_counts: { ready_for_audio: 1 },
+            }),
+        });
+      }
+      if (url === "/api/books/11/audiobook/characters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 4, name: "Avery" }]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/chapters") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              {
+                id: 9,
+                chapter_number: 1,
+                sentence_count: 1,
+                processed_sentence_count: 1,
+              },
+            ]),
+        });
+      }
+      if (
+        url === "/api/books/11/audiobook/sentences?page=1&limit=50" ||
+        url === "/api/books/11/audiobook/sentences?page=1&limit=50&chapter_id=9"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              items: [
+                {
+                  id: 31,
+                  chapter_id: 9,
+                  character_id: 4,
+                  sequence_order: 0,
+                  original_text: "Avery opened the door.",
+                  tagged_text: "Avery opened the door.",
+                  speaker_confidence: 0.96,
+                  speaker_reason: "Explicit attribution",
+                  status: "ready_for_audio",
+                },
+              ],
+              total: 1,
+            }),
+        });
+      }
+      if (
+        url === "/api/books/11/audiobook/sentences/31/generate-audio" &&
+        options?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              status: "audio_queued",
+              queued: true,
+              sentence_id: 31,
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Script Editor" }),
+    );
+    expect(await screen.findByText("Ready for audio")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Generate audio" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/sentences/31/generate-audio",
+        { method: "POST" },
+      );
+    });
+  });
 });

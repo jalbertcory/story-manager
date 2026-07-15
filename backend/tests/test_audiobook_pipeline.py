@@ -76,6 +76,7 @@ class _FakeQueue:
         self.enqueued: list[int] = []
         self.active_book_ids = active_book_ids or set()
         self.preview_enqueued: list[tuple[int, int]] = []
+        self.sentence_enqueued: list[tuple[int, int]] = []
 
     async def enqueue(self, book_id: int) -> bool:
         self.enqueued.append(book_id)
@@ -86,6 +87,10 @@ class _FakeQueue:
 
     async def enqueue_preview(self, book_id: int, chapter_id: int) -> bool:
         self.preview_enqueued.append((book_id, chapter_id))
+        return True
+
+    async def enqueue_sentence_audio(self, book_id: int, sentence_id: int) -> bool:
+        self.sentence_enqueued.append((book_id, sentence_id))
         return True
 
 
@@ -853,6 +858,42 @@ async def test_manual_chapter_preview_requires_analysis_and_queues_work(db, monk
     with pytest.raises(audiobook_router.HTTPException) as exc_info:
         await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
     assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for MP3 generation")
+async def test_manual_sentence_audio_queues_and_generates_only_that_sentence(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
+    chapter, _character, sentence = await _seed_audio_chapter(db, book.id)
+    chapter.preview_status = "ready"
+    chapter.audio_file_path = "library/audiobooks/old-preview.mp3"
+    await db.commit()
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
+
+    response = await audiobook_router.generate_sentence_audio(book.id, sentence.id, db)
+    await db.refresh(sentence)
+
+    assert response == {
+        "status": "audio_queued",
+        "queued": True,
+        "sentence_id": sentence.id,
+    }
+    assert sentence.status == "audio_queued"
+    assert queue.sentence_enqueued == [(book.id, sentence.id)]
+
+    await audiobook_tts.generate_audio_for_sentence(book.id, sentence.id, db)
+    await db.refresh(sentence)
+    await db.refresh(chapter)
+
+    assert sentence.status == "audio_generated"
+    assert sentence.audio_file_path
+    assert (library_path.parent / sentence.audio_file_path).exists()
+    assert chapter.needs_reassembly is True
+    assert chapter.preview_status is None
 
 
 @pytest.mark.asyncio

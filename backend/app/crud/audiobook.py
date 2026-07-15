@@ -287,7 +287,11 @@ async def update_chapter_summary(db: AsyncSession, chapter_id: int, summary: Opt
 
 
 async def flag_chapter_for_reassembly(db: AsyncSession, chapter_id: int) -> None:
-    await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(needs_reassembly=True))
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.id == chapter_id)
+        .values(needs_reassembly=True, preview_status=None, preview_error=None)
+    )
     await db.commit()
 
 
@@ -643,6 +647,22 @@ async def get_sentences_ready_for_audio(db: AsyncSession, book_id: int, limit: i
     return list(result.scalars().all())
 
 
+async def get_pending_sentence_audio_jobs(db: AsyncSession) -> list[tuple[int, int]]:
+    """Return durable manual sentence jobs as (book_id, sentence_id)."""
+    result = await db.execute(
+        select(AudiobookChapter.book_id, AudiobookSentence.id)
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(AudiobookSentence.status.in_(["audio_queued", "audio_generating"]))
+        .order_by(AudiobookSentence.id)
+    )
+    return [(book_id, sentence_id) for book_id, sentence_id in result.all()]
+
+
+async def set_sentence_status(db: AsyncSession, sentence_id: int, status: str) -> None:
+    await db.execute(update(AudiobookSentence).where(AudiobookSentence.id == sentence_id).values(status=status))
+    await db.commit()
+
+
 async def update_sentence_diarization(
     db: AsyncSession,
     sentence_id: int,
@@ -802,7 +822,10 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     counts = await count_sentences_by_status(db, book_id)
     if counts.get("pending_diarization", 0) > 0:
         return "diarizing"
-    if counts.get("ready_for_audio", 0) > 0 or counts.get("error", 0) > 0:
+    if any(
+        counts.get(status, 0) > 0
+        for status in ("ready_for_audio", "audio_queued", "audio_generating", "error")
+    ):
         return "audio_gen"
 
     total = sum(counts.values())

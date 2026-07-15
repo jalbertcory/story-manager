@@ -453,13 +453,34 @@ async def update_sentence(sentence_id: int, body: SentenceUpdate, db: AsyncSessi
         tagged_text=body.tagged_text or "",
     )
 
-    # Re-enqueue for TTS
-    if chapter:
-        queue = get_audiobook_queue()
-        await crud.audiobook.set_book_pipeline_status(db, chapter.book_id, "audio_gen")
-        await queue.enqueue(chapter.book_id)
-
     return SentenceResponse.model_validate(sentence)
+
+
+@router.post("/api/books/{book_id}/audiobook/sentences/{sentence_id}/generate-audio")
+async def generate_sentence_audio(
+    book_id: int,
+    sentence_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
+        raise HTTPException(status_code=409, detail="Pause the full-book pipeline before generating sentence audio")
+    sentence = await db.get(AudiobookSentence, sentence_id)
+    if sentence is None:
+        raise HTTPException(status_code=404, detail="Audiobook sentence not found")
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise HTTPException(status_code=404, detail="Audiobook sentence not found")
+    if sentence.status in ("audio_queued", "audio_generating"):
+        return {"status": sentence.status, "queued": False, "sentence_id": sentence_id}
+    if sentence.status not in ("ready_for_audio", "error"):
+        raise HTTPException(status_code=409, detail=f"Sentence is {sentence.status}, not ready for audio")
+    if sentence.character_id is None:
+        raise HTTPException(status_code=409, detail="Assign a speaker before generating sentence audio")
+
+    await crud.audiobook.set_sentence_status(db, sentence_id, "audio_queued")
+    queued = await get_audiobook_queue().enqueue_sentence_audio(book_id, sentence_id)
+    return {"status": "audio_queued", "queued": queued, "sentence_id": sentence_id}
 
 
 @router.get("/api/audiobook/sentences/{sentence_id}/audio")
