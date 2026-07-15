@@ -35,8 +35,15 @@ LLM provider can remain selected; it will handle roster/diarization locally whil
 | `OMNIVOICE_NUM_STEPS` | `16` | Diffusion steps; use `32` for higher quality/slower output |
 | `OMNIVOICE_MP3_BITRATE` | `96k` | Returned MP3 bitrate |
 | `OMNIVOICE_PORT` | `8001` | Port used by the Make target |
+| `OMNIVOICE_VOICE_ANCHOR_TEXT` | Built-in neutral calibration sentence | Text used to create each stable character voice anchor |
 
 Legacy Story Manager profiles such as `[gender-female][pitch-low][speed-normal]` are translated into the official
 comma-separated voice-design attributes. Official instructions such as `female, middle-aged, low pitch` are also
 accepted directly. Supported OmniVoice non-verbal tags are preserved; unsupported historical tags are removed so
 one bad expression tag cannot fail a full audiobook run.
+
+When `voice_id` is included in a generation request, the adapter deterministically seeds a one-time voice-design
+sample for that identity, converts it into OmniVoice's reusable voice-clone prompt, and caches it in memory. All
+subsequent lines for that identity use the same anchor and deterministic position selection. Story Manager derives
+the identity from the shared series character when available, so a recurring character retains the same voice in
+sibling books. Restarting the adapter recreates the same seeded anchor on first use.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import LIBRARY_PATH
@@ -17,7 +17,6 @@ from ..models import (
     AudiobookSentence,
     Book,
 )
-
 
 async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
     """Remove a stale EPUB package and make a completed book resumable."""
@@ -33,6 +32,8 @@ async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
     )
     await db.commit()
 
+
+ROSTER_REFRESH_STOP_MARKER = "roster_gen:refresh_series_metadata"
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -187,7 +188,8 @@ async def pause_book_pipeline_after_phase(db: AsyncSession, book_id: int, phase:
         select(Book.audiobook_stop_after_phase, Book.audiobook_pipeline_status).where(Book.id == book_id)
     )
     row = result.one_or_none()
-    if row is None or row.audiobook_stop_after_phase != phase or row.audiobook_pipeline_status == "complete":
+    requested_phase = row.audiobook_stop_after_phase.split(":", 1)[0] if row and row.audiobook_stop_after_phase else None
+    if row is None or requested_phase != phase or row.audiobook_pipeline_status == "complete":
         return False
     await db.execute(
         update(Book)
@@ -390,6 +392,40 @@ async def get_series_characters(db: AsyncSession, series_name: str) -> list[Audi
     return list(result.scalars().all())
 
 
+async def get_sibling_series_characters(
+    db: AsyncSession, series_name: str, current_book_id: int
+) -> list[AudiobookSeriesCharacter]:
+    """Return profiles backed by another book, excluding current-book-only guesses."""
+    linked_profile_ids = select(AudiobookCharacter.series_character_id).where(
+        AudiobookCharacter.book_id != current_book_id,
+        AudiobookCharacter.series_character_id.is_not(None),
+    )
+    result = await db.execute(
+        select(AudiobookSeriesCharacter)
+        .where(
+            func.lower(AudiobookSeriesCharacter.series_name) == series_name.lower(),
+            AudiobookSeriesCharacter.id.in_(linked_profile_ids),
+        )
+        .order_by(AudiobookSeriesCharacter.is_narrator.desc(), AudiobookSeriesCharacter.name)
+    )
+    return list(result.scalars().all())
+
+
+async def delete_orphaned_series_characters(db: AsyncSession, series_name: str) -> int:
+    """Remove stale profiles left behind by an explicit roster refresh."""
+    linked_profile_ids = select(AudiobookCharacter.series_character_id).where(
+        AudiobookCharacter.series_character_id.is_not(None)
+    )
+    result = await db.execute(
+        delete(AudiobookSeriesCharacter).where(
+            func.lower(AudiobookSeriesCharacter.series_name) == series_name.lower(),
+            AudiobookSeriesCharacter.id.not_in(linked_profile_ids),
+        )
+    )
+    await db.commit()
+    return result.rowcount or 0
+
+
 def _copy_series_profile_to_book_character(
     profile: AudiobookSeriesCharacter,
     character: AudiobookCharacter,
@@ -416,6 +452,8 @@ async def sync_book_roster_with_series(
 
     profiles = await get_series_characters(db, book.series)
     by_name = {profile.canonical_name: profile for profile in profiles}
+    refreshed_profiles: dict[int, AudiobookSeriesCharacter] = {}
+    voice_changed_profiles: set[int] = set()
     linked = 0
     for character in characters:
         canonical = _canonical_character_name(character.name)
@@ -436,10 +474,37 @@ async def sync_book_roster_with_series(
             by_name[canonical] = profile
         elif prefer_series:
             _copy_series_profile_to_book_character(profile, character)
+        else:
+            # An explicit roster rebuild refreshes shared analysis while
+            # retaining the established cross-book voice unless it was empty.
+            profile.name = character.name
+            profile.description = character.description
+            profile.aliases = character.aliases or []
+            profile.evidence = character.evidence or []
+            profile.is_narrator = character.is_narrator
+            if character.voice_design_prompt and profile.voice_design_prompt != character.voice_design_prompt:
+                profile.voice_design_prompt = character.voice_design_prompt
+                voice_changed_profiles.add(profile.id)
+            refreshed_profiles[profile.id] = profile
         character.series_character_id = profile.id
         linked += 1
 
+    changed_voice_character_ids: list[int] = []
+    if refreshed_profiles:
+        result = await db.execute(
+            select(AudiobookCharacter).where(AudiobookCharacter.series_character_id.in_(list(refreshed_profiles)))
+        )
+        for linked_character in result.scalars().all():
+            _copy_series_profile_to_book_character(
+                refreshed_profiles[linked_character.series_character_id],
+                linked_character,
+            )
+            if linked_character.series_character_id in voice_changed_profiles:
+                changed_voice_character_ids.append(linked_character.id)
+
     await db.commit()
+    for character_id in changed_voice_character_ids:
+        await cascade_voice_change(db, character_id)
     return linked
 
 

@@ -199,6 +199,7 @@ Accept: audio/mpeg
 
 {
   "voice": "[gender-female][pitch-high][speed-normal]",
+  "voice_id": "series-character:42",
   "text": "She laughed. [laughter] \"I can't believe it,\" she said."
 }
 
@@ -229,7 +230,10 @@ Users can manually edit these values in the Character Roster UI.
 Story Manager includes a native adapter for the official
 [`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 release. It uses the upstream model directly, keeps it
 resident between requests, translates existing bracket-style voice profiles into official voice-design attributes,
-and converts the 24 kHz output to MP3.
+and converts the 24 kHz output to MP3. Story Manager sends a stable book- or series-character identity with every
+line. The adapter uses that identity to create one seeded calibration voice, caches the upstream reusable
+voice-clone prompt, and conditions every later line on that anchor. Actual sentence decoding disables stochastic
+position selection, improving line-to-line identity consistency while distinct characters retain distinct anchors.
 
 ```bash
 make run-omnivoice
@@ -275,7 +279,9 @@ curl http://127.0.0.1:11434/api/tags
 In **Audio Settings**, click **Use Recommended Local Ollama**, then **Save & Test LLM**. The preset uses provider
 `ollama`, base URL `http://127.0.0.1:11434`, and model `qwen3.5:9b`. Calls use Ollama's schema-constrained structured
 outputs, thinking disabled, temperature 0, and a 32K working context. This makes roster and speaker output directly
-machine-validated instead of relying on best-effort JSON prompting.
+machine-validated instead of relying on best-effort JSON prompting. Common trailing-comma errors are repaired
+locally. Malformed or incomplete assignment sets are retried against the same durable pending sentences with
+progressively smaller batches (40 → 20 → 10 → 5), so one oversized response does not fail an unattended book run.
 
 ## Review and Recovery Controls
 
@@ -286,16 +292,26 @@ has committed. **Pause Safely** is cooperative: diarization pauses between batch
 assembly between chapters. Roster LLM requests and individual external TTS calls finish before the pause is
 acknowledged. Starting or stepping again infers the next safe phase from durable chapter/sentence state, so an app
 restart does not require restarting the entire book.
+Application shutdown cancels the active worker immediately rather than waiting behind the rest of a multi-hour
+book job. Already committed sentence/chapter state remains durable, and startup recovery re-queues the same phase.
 
 Worker exceptions are stored in `audiobook_last_error` and returned by the status endpoint. Retrying clears the
 stale message; failed sentence audio is reset to `ready_for_audio` before TTS resumes.
 
 The Characters tab also offers **Regenerate Character Roster**. It preserves the parsed EPUB and sentence IDs while
 clearing roster, diarization, summaries, and derived audio state. Roster generation samples real story chapters
-across the book and sibling books in the same series. It supplements those excerpts with capitalized-name frequency
-hints and any existing series roster, reducing the chance that front matter or a one-scene cameo displaces a recurring
-speaker. **Sync Series Roster** can promote an already-generated standalone book roster after its series metadata is
-assigned.
+across the book and sibling books in the same series, stopping before acknowledgments, publisher ads, and next-book
+excerpts. It supplements those excerpts with whole-story name and dialogue-tag counts, canonicalizes first-name and
+surname references into grounded full identities, replaces speculative biographies with evidence counts, stores only
+source-grounded quotations, and can retain up to 20 useful voices. Canonical aliases are included in every
+diarization request. An explicit rebuild uses only profiles backed by sibling books, removes orphaned stale guesses,
+and refreshes linked series metadata; shared voice changes invalidate affected clips. **Sync Series Roster** can
+promote an already-generated standalone book roster after its series metadata is assigned.
+
+Speaker guardrails keep quote-free prose on the Narrator even in a first-person story, keep the protagonist's spoken
+dialogue as a separate voice, and route clearly gender-attributed unnamed dialogue to the matching minor voice. This
+prevents emotional first-person narration from drifting onto a character voice merely because a local model's
+rationale describes the protagonist.
 
 ## Manual Voice Evaluation
 
