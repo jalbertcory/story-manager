@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from ..models import AudiobookChapter
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +145,26 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
     )
 
 
+async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSession) -> None:
+    """Assemble one chapter without requiring the rest of the book to be ready."""
+    chapter = await db.get(AudiobookChapter, chapter_id)
+    if chapter is None or chapter.book_id != book_id:
+        raise RuntimeError("Audiobook chapter not found.")
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter_id)
+    if not sentences or any(sentence.status != "audio_generated" for sentence in sentences):
+        raise RuntimeError("Every sentence in the chapter needs audio before preview assembly.")
+    output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    await crud.audiobook.invalidate_packaged_audiobook(db, book_id)
+    await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
+
+
 async def assemble_book(book_id: int, db: AsyncSession) -> None:
     """Phase 5: assemble all chapters that need reassembly and repackage the EPUB."""
     output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+    if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         logger.info("Book %s paused before assembly.", book_id)
         return
 
@@ -171,9 +186,25 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     else:
         logger.info("No chapters need reassembly for book %s; rebuilding the EPUB package.", book_id)
 
-    for chapter in chapters:
+    await crud.audiobook.update_book_pipeline_progress(
+        db, book_id, current=0, total=len(chapters), detail=f"Preparing {len(chapters)} chapter assemblies"
+    )
+    for chapter_index, chapter in enumerate(chapters, start=1):
+        if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+            logger.info("Book %s paused between chapter assemblies.", book_id)
+            return
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
         await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
+        await crud.audiobook.update_book_pipeline_progress(
+            db,
+            book_id,
+            current=chapter_index,
+            total=len(chapters),
+            detail=f"Assembled chapter {chapter_index} of {len(chapters)}",
+        )
+        if await crud.audiobook.consume_book_batch_limit(db, book_id):
+            logger.info("Book %s paused after one chapter assembly.", book_id)
+            return
 
     # Repackage the EPUB with updated media-overlay references
     working_epub_path = output_dir / "working.epub"
@@ -222,7 +253,7 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     temporary_epub_path.replace(audiobook_epub_path)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+    if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
     logger.info("Assembly complete for book %s.", book_id)
 

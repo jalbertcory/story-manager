@@ -39,15 +39,15 @@ AudiobookQueue.enqueue(book_id)
 │                                                          │
 │  Phase 2 – Roster Gen (status="roster_gen")              │
 │    audiobook_llm.generate_character_roster(book_id)      │
-│    • chunk chapter text → LLM (provider from settings)   │
+│    • sample story chapters across the book → LLM         │
 │    • parse characters + voice params                     │
 │    • INSERT audiobook_characters (incl. Narrator)        │
 │    • set status = "diarizing"                            │
 │                                                          │
 │  Phase 3 – Diarization (status="diarizing")              │
 │    audiobook_llm.diarize_sentences(book_id)              │
-│    • batch 50 sentences + 5-sentence context window      │
-│    • LLM assigns character_id + tagged_text              │
+│    • batch 40 sentences + 8-sentence context window      │
+│    • LLM assigns speaker, confidence, rationale + tags   │
 │    • UPDATE sentence status → "ready_for_audio"          │
 │    • set status = "audio_gen" when all done              │
 │                                                          │
@@ -82,11 +82,12 @@ Changes propagate via cascades without requiring full rebuilds.
 **Character voice profile updated:**
 ```
 PUT /api/audiobook/characters/{id}
+  → promote the profile into the series roster and update matching sibling-book characters
   → UPDATE sentences SET status="ready_for_audio", audio_file_path=NULL
       WHERE character_id = {id}
   → UPDATE chapters SET needs_reassembly=TRUE
       WHERE id IN (SELECT chapter_id FROM audiobook_sentences WHERE character_id = {id})
-  → Re-enqueue book starting at "audio_gen" phase
+  → wait for an explicit chapter preview or full pipeline run
 ```
 
 **Sentence speaker or tags changed:**
@@ -94,8 +95,13 @@ PUT /api/audiobook/characters/{id}
 PUT /api/audiobook/sentences/{id}
   → UPDATE sentence: character_id, tagged_text, status="ready_for_audio", audio_file_path=NULL
   → UPDATE chapter SET needs_reassembly=TRUE WHERE id = sentence.chapter_id
-  → Re-enqueue book starting at "audio_gen" phase
+  → wait for an explicit sentence/chapter preview or full pipeline run
 ```
+
+In the Script Editor, **Generate audio** queues only that ready sentence. Its durable status moves through
+`audio_queued` → `audio_generating` → `audio_generated` (or `error`), and the row polls while work is active so the
+button is replaced with visible progress and then an audio player. Manual sentence jobs share the same serial worker
+as chapter previews and the full pipeline, and are recovered after an app restart.
 
 ---
 
@@ -107,7 +113,7 @@ PUT /api/audiobook/sentences/{id}
 | Column | Type | Notes |
 |---|---|---|
 | id | Integer PK | |
-| llm_provider | String | `"stub"`, `"openai"`, `"anthropic"`, `"custom"` |
+| llm_provider | String | `"stub"`, `"ollama"`, `"openai"`, `"anthropic"`, `"custom"` |
 | llm_api_key | String | Stored plaintext; masked on GET |
 | llm_base_url | String | Override for custom/local LLMs |
 | llm_model | String | e.g. `"gpt-4o"`, `"claude-opus-4-7"` |
@@ -125,16 +131,25 @@ PUT /api/audiobook/sentences/{id}
 | smil_file_path | String | Relative path to generated `.smil` |
 | audio_file_path | String | Relative path to concatenated chapter MP3 |
 | needs_reassembly | Boolean | Worker polls for `True` |
+| preview_status | String | `queued`, `generating`, `ready`, or `error` for a manual preview |
+| preview_error | Text | Last preview-generation error |
 
 **`audiobook_characters`**
 | Column | Type | Notes |
 |---|---|---|
 | id | Integer PK | |
 | book_id | FK → books CASCADE | |
+| series_character_id | FK → audiobook_series_characters SET NULL | Shared series voice/profile link |
 | name | String | |
 | description | Text | LLM-generated summary |
 | voice_design_prompt | String | OmniVoice params e.g. `[gender-male][pitch-low]` |
 | is_narrator | Boolean | |
+
+**`audiobook_series_characters`** (migration 0021) — the canonical character and voice profile roster shared by
+all audiobook-enabled books in a named series. Book-specific character rows remain stable for sentence assignments,
+while edits to a linked voice profile propagate to matching sibling-book characters and invalidate only their derived
+audio. Roster generation includes previously identified series characters as context and reuses their profiles when
+the same character appears in a later book.
 
 **`audiobook_sentences`** — the state engine
 | Column | Type | Notes |
@@ -149,11 +164,26 @@ PUT /api/audiobook/sentences/{id}
 | audio_file_path | String | Path to snippet MP3 |
 | audio_duration_ms | Integer | Used for SMIL timestamp calculation |
 | status | String | `pending_diarization` → `ready_for_audio` → `audio_generated` / `error` |
+| speaker_confidence | Float | Model confidence from `0` to `1`; manual assignments use `1` |
+| speaker_reason | Text | Short attribution rationale for review |
 
 **New columns on `books`**:
 - `audiobook_enabled` (Boolean, default `false`) — per-book opt-in gate for this pipeline
 - `audiobook_pipeline_status` (String, nullable)
 Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `assembling`, `complete`, `error`, `paused`
+- `audiobook_stop_after_phase` (String, nullable) — persisted checkpoint for a single-stage run
+- `audiobook_pause_requested` (Boolean, default `false`) — cooperative pause request acknowledged at a durable boundary
+- `audiobook_last_error` (Text, nullable) — actionable worker error shown in the book UI
+- `audiobook_summary` (Text, nullable) — roster-stage, spoiler-light story analysis
+- `audiobook_progress_current` / `audiobook_progress_total` — current phase work counters
+- `audiobook_progress_detail` — human-readable active operation
+- `audiobook_pipeline_started_at` / `audiobook_pipeline_updated_at` — run timing
+- `audiobook_batch_limit` — durable work-unit budget for **Run One Batch**
+- `audiobook_llm_requests` — model calls made during the current run
+
+Migration `0020_audiobook_observability.py` also adds chapter summaries, character aliases/evidence, and sentence
+confidence/rationales. Migration `0021_series_roster_and_chapter_previews.py` adds the shared series roster links and
+durable manual chapter-preview state.
 
 ---
 
@@ -194,6 +224,28 @@ Examples:
 
 Users can manually edit these values in the Character Roster UI.
 
+### Official Local OmniVoice
+
+Story Manager includes a native adapter for the official
+[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 release. It uses the upstream model directly, keeps it
+resident between requests, translates existing bracket-style voice profiles into official voice-design attributes,
+and converts the 24 kHz output to MP3.
+
+```bash
+make run-omnivoice
+curl http://127.0.0.1:8001/health
+```
+
+The isolated service environment lives under `services/omnivoice/.venv`. The first start downloads about 3.3 GB of
+public model weights. CUDA, Intel XPU, Apple MPS, and CPU are auto-detected; Apple Silicon uses native MPS with the
+upstream audio tokenizer on CPU. Configure `http://127.0.0.1:8001` as the OmniVoice endpoint in **Audio Settings**.
+The `stub` LLM provider may remain selected for deterministic local roster generation and diarization while the
+OmniVoice adapter produces real speech.
+
+The defaults use 16 diffusion steps for interactive local throughput. Set `OMNIVOICE_NUM_STEPS=32` before
+`make run-omnivoice` for the upstream quality default. Other adapter options are documented in
+`services/omnivoice/README.md`.
+
 ## Deterministic Local Harness
 
 The pipeline works without API keys or network services. When no settings row exists—or when the LLM provider is
@@ -204,6 +256,62 @@ chapter assembly, SMIL generation, and final EPUB packaging end to end.
 Choose **Deterministic local harness** in Audio Settings to make this mode explicit. To switch to real generation,
 choose an LLM provider and configure an OmniVoice-compatible endpoint. The harness is intentionally deterministic;
 it is a validation and UI-development path, not synthetic speech.
+
+## Recommended Local LLM (Ollama)
+
+The recommended local analysis model is `qwen3.5:9b`. The model is about 6.6 GB, has enough instruction-following
+capacity for schema-constrained roster and speaker assignment, and is substantially more practical for the many
+calls required by a full book than the 17 GB 27B quality tier. Install Ollama, start its service, and pull the model:
+
+```bash
+# macOS
+brew install ollama
+brew services start ollama
+make pull-ollama-model
+
+curl http://127.0.0.1:11434/api/tags
+```
+
+In **Audio Settings**, click **Use Recommended Local Ollama**, then **Save & Test LLM**. The preset uses provider
+`ollama`, base URL `http://127.0.0.1:11434`, and model `qwen3.5:9b`. Calls use Ollama's schema-constrained structured
+outputs, thinking disabled, temperature 0, and a 32K working context. This makes roster and speaker output directly
+machine-validated instead of relying on best-effort JSON prompting.
+
+## Review and Recovery Controls
+
+The book UI offers **Run Next Stage** for debugging or reviewing intermediate artifacts, **Run One Batch** for one
+40-sentence diarization batch, one TTS sentence, or one assembly chapter, and **Run to Completion**
+for unattended processing. A single-stage run persists its target phase and moves to `paused` only after that phase
+has committed. **Pause Safely** is cooperative: diarization pauses between batches, TTS between sentences, and
+assembly between chapters. Roster LLM requests and individual external TTS calls finish before the pause is
+acknowledged. Starting or stepping again infers the next safe phase from durable chapter/sentence state, so an app
+restart does not require restarting the entire book.
+
+Worker exceptions are stored in `audiobook_last_error` and returned by the status endpoint. Retrying clears the
+stale message; failed sentence audio is reset to `ready_for_audio` before TTS resumes.
+
+The Characters tab also offers **Regenerate Character Roster**. It preserves the parsed EPUB and sentence IDs while
+clearing roster, diarization, summaries, and derived audio state. Roster generation samples real story chapters
+across the book and sibling books in the same series. It supplements those excerpts with capitalized-name frequency
+hints and any existing series roster, reducing the chance that front matter or a one-scene cameo displaces a recurring
+speaker. **Sync Series Roster** can promote an already-generated standalone book roster after its series metadata is
+assigned.
+
+## Manual Voice Evaluation
+
+Voice-profile edits deliberately do not start a potentially expensive full-book TTS run. In **Chapter Assembly**, a
+fully diarized chapter exposes **Generate Preview** (or **Rebuild Preview** after a voice change). The preview job runs
+through the same serial worker as the full pipeline, generates or reuses only that chapter's sentence clips, assembles
+its MP3 and SMIL, and leaves the full-book pipeline paused. A partially analyzed chapter shows its analyzed sentence
+count and keeps the action disabled, preventing audio from being generated against incomplete speaker assignments.
+
+Ready previews appear in **Listen & Read**, which provides chapter navigation, a seekable audio player, the chapter
+summary, and the chapter transcript with speaker names available as sentence tooltips. This supports early voice
+evaluation without pretending the final voice roster is complete; after refining a series profile, rebuild the chosen
+chapter explicitly to compare it.
+
+The library catalog shows a headphone badge on audiobook-enabled books and a count on series rows. The Audiobook
+filter can show only enabled or non-enabled books, and the main sort control can order enabled books first.
 
 ---
 
@@ -232,12 +340,18 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/books/{id}/audiobook/start` | Start or resume pipeline |
-| POST | `/api/books/{id}/audiobook/pause` | Pause workers (set status=paused) |
+| POST | `/api/books/{id}/audiobook/step` | Run only the next recoverable phase, then pause for review |
+| POST | `/api/books/{id}/audiobook/run-batch` | Run one diarization/TTS/assembly work unit, then pause |
+| POST | `/api/books/{id}/audiobook/pause` | Request a cooperative pause at the next durable boundary |
 | POST | `/api/books/{id}/audiobook/rebuild` | Force full rebuild |
-| GET | `/api/books/{id}/audiobook/status` | Pipeline status + sentence counts by status |
+| POST | `/api/books/{id}/audiobook/roster/rebuild` | Preserve ingestion and regenerate roster/speaker analysis |
+| POST | `/api/books/{id}/audiobook/roster/share-series` | Link/promote the book roster into its series roster |
+| POST | `/api/books/{id}/audiobook/chapters/{cid}/preview-audio` | Queue an explicit single-chapter audio preview |
+| POST | `/api/books/{id}/audiobook/sentences/{sid}/generate-audio` | Queue speech generation for one ready sentence |
+| GET | `/api/books/{id}/audiobook/status` | Status, model, progress, summary, review flags, and sentence counts |
 | GET | `/api/books/{id}/audiobook/characters` | List characters |
 | PUT | `/api/audiobook/characters/{char_id}` | Update voice profile (triggers cascade) |
-| GET | `/api/books/{id}/audiobook/sentences` | Paginated sentence list (`?page=&limit=&chapter_id=`) |
+| GET | `/api/books/{id}/audiobook/sentences` | Paginated sentences (`?page=&limit=&chapter_id=&review_only=`) |
 | PUT | `/api/audiobook/sentences/{id}` | Update speaker/tags (triggers cascade) |
 | GET | `/api/audiobook/sentences/{id}/audio` | Stream sentence snippet MP3 |
 | GET | `/api/books/{id}/audiobook/chapters` | Chapter list with assembly status |
@@ -245,6 +359,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | GET | `/api/books/{id}/audiobook/download` | Download the completed EPUB 3 Media Overlay audiobook |
 | GET | `/api/audiobook/settings` | Get LLM/TTS config (API key masked) |
 | PUT | `/api/audiobook/settings` | Upsert LLM/TTS config |
+| POST | `/api/audiobook/settings/test-llm` | Validate the saved model with a structured-output request |
 
 ---
 
@@ -252,8 +367,11 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 
 | File | Purpose |
 |---|---|
-| `backend/app/models.py` | +4 new models, +1 Book column |
-| `backend/alembic/versions/0018_audiobook_pipeline.py` | Schema migration |
+| `backend/app/models.py` | Audiobook models and per-book pipeline/control state |
+| `backend/alembic/versions/0018_audiobook_pipeline.py` | Core audiobook schema migration |
+| `backend/alembic/versions/0019_audiobook_pipeline_controls.py` | Review, pause, and error-state migration |
+| `backend/alembic/versions/0020_audiobook_observability.py` | Progress, summaries, evidence, confidence, and batch controls |
+| `backend/alembic/versions/0021_series_roster_and_chapter_previews.py` | Shared series profiles and chapter-preview state |
 | `backend/app/crud/audiobook.py` | DB queries for all new tables |
 | `backend/app/services/audiobook_ingestion.py` | Phase 1: EPUB parse + span injection |
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |
@@ -273,8 +391,10 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `frontend/src/components/AudiobookPipeline.jsx` | Pipeline tab container (progress + sub-tabs) |
 | `frontend/src/components/audiobook/CharacterRoster.jsx` | Character card grid with voice editing |
 | `frontend/src/components/audiobook/ScriptEditor.jsx` | Paginated sentence table with inline editing |
-| `frontend/src/components/audiobook/ChapterAssembly.jsx` | Chapter assembly status list |
-| `frontend/src/App.jsx` | +Audio Settings tab routing |
+| `frontend/src/components/audiobook/ChapterAssembly.jsx` | Chapter assembly status and manual preview controls |
+| `frontend/src/components/audiobook/AudiobookReader.jsx` | Playable preview chapters with read-along text |
+| `frontend/src/components/BookList.jsx` | Library audiobook filter and enabled counts |
+| `frontend/src/App.jsx` | +Audio Settings tab routing and audiobook-enabled sorting |
 | `frontend/src/components/BookSettings.jsx` | +Audiobook Pipeline tab |
 
 ---

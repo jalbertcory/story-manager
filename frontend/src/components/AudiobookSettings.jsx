@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAudiobookSettings, updateAudiobookSettings } from "../api/audiobook";
+import {
+  getAudiobookSettings,
+  testAudiobookLlm,
+  updateAudiobookSettings,
+} from "../api/audiobook";
 
-const DEFAULT_ROSTER_PROMPT_HINT = "Leave blank to use the built-in roster extraction prompt.";
-const DEFAULT_DIARIZATION_PROMPT_HINT = "Leave blank to use the built-in diarization prompt.";
+const DEFAULT_ROSTER_PROMPT_HINT =
+  "Leave blank to use the built-in roster extraction prompt.";
+const DEFAULT_DIARIZATION_PROMPT_HINT =
+  "Leave blank to use the built-in diarization prompt.";
 
 function AudiobookSettings() {
   const queryClient = useQueryClient();
@@ -41,8 +47,7 @@ function AudiobookSettings() {
     },
   });
 
-  const handleSave = (e) => {
-    e.preventDefault();
+  const buildPayload = () => {
     const payload = {
       llm_provider: llmProvider || null,
       llm_base_url: llmBaseUrl || null,
@@ -54,7 +59,22 @@ function AudiobookSettings() {
     if (llmApiKey) {
       payload.llm_api_key = llmApiKey;
     }
-    saveMutation.mutate(payload);
+    return payload;
+  };
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      await updateAudiobookSettings(buildPayload());
+      return testAudiobookLlm();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    },
+  });
+
+  const handleSave = (e) => {
+    e.preventDefault();
+    saveMutation.mutate(buildPayload());
   };
 
   if (isLoading) return <p>Loading settings…</p>;
@@ -67,9 +87,13 @@ function AudiobookSettings() {
           <h3>LLM Provider</h3>
           <label>
             Provider
-            <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)}>
+            <select
+              value={llmProvider}
+              onChange={(e) => setLlmProvider(e.target.value)}
+            >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama (local)</option>
               <option value="custom">Custom / Local</option>
               <option value="stub">Deterministic local harness</option>
             </select>
@@ -80,7 +104,11 @@ function AudiobookSettings() {
               type="password"
               value={llmApiKey}
               onChange={(e) => setLlmApiKey(e.target.value)}
-              placeholder={settings?.llm_api_key_set ? "••••••••  (set — enter new key to change)" : "Enter API key"}
+              placeholder={
+                settings?.llm_api_key_set
+                  ? "••••••••  (set — enter new key to change)"
+                  : "Enter API key"
+              }
             />
           </label>
           <label>
@@ -101,6 +129,43 @@ function AudiobookSettings() {
               placeholder="e.g. gpt-4o or claude-opus-4-7"
             />
           </label>
+          <div className="settings-actions-inline">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setLlmProvider("ollama");
+                setLlmBaseUrl("http://127.0.0.1:11434");
+                setLlmModel("qwen3.5:9b");
+              }}
+            >
+              Use Recommended Local Ollama
+            </button>
+            <button
+              type="button"
+              onClick={() => testMutation.mutate()}
+              disabled={testMutation.isPending}
+            >
+              {testMutation.isPending ? "Testing…" : "Save & Test LLM"}
+            </button>
+          </div>
+          <p className="settings-hint">
+            Recommended local default: <code>qwen3.5:9b</code> (6.6 GB). Run{" "}
+            <code>ollama pull qwen3.5:9b</code> first. Story Manager uses
+            Ollama&apos;s schema-constrained JSON output and disables thinking
+            for predictable extraction latency.
+          </p>
+          {testMutation.isSuccess && (
+            <p className="success">
+              Connected to {testMutation.data.provider} /{" "}
+              {testMutation.data.model || "local harness"}.
+            </p>
+          )}
+          {testMutation.isError && (
+            <p className="error">
+              {testMutation.error?.message || "LLM test failed"}
+            </p>
+          )}
         </section>
 
         <section className="settings-section">
@@ -114,14 +179,29 @@ function AudiobookSettings() {
               placeholder="http://your-omnivoice-server:port"
             />
           </label>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setOmnivoiceEndpoint("http://127.0.0.1:8001")}
+          >
+            Use Local OmniVoice Adapter
+          </button>
           <p className="settings-hint">
             OmniVoice receives <code>POST /generate</code> with{" "}
-            <code>{"{ \"voice\": \"[gender-male][pitch-low]\", \"text\": \"...\" }"}</code> and
-            returns raw MP3 bytes.
+            <code>
+              {'{ "voice": "[gender-male][pitch-low]", "text": "..." }'}
+            </code>{" "}
+            and returns raw MP3 bytes.
           </p>
           <p className="settings-hint">
-            For offline validation, choose the deterministic local harness and leave this blank.
-            It generates silent placeholder MP3s with realistic timing.
+            For real local speech, run <code>make run-omnivoice</code>, choose
+            the local adapter above, and save settings. The first start
+            downloads the official model.
+          </p>
+          <p className="settings-hint">
+            For offline validation, choose the deterministic local harness and
+            leave this blank. It generates silent placeholder MP3s with
+            realistic timing.
           </p>
         </section>
 
@@ -148,7 +228,9 @@ function AudiobookSettings() {
         </section>
 
         {saveMutation.isError && (
-          <p className="error">{saveMutation.error?.message || "Save failed"}</p>
+          <p className="error">
+            {saveMutation.error?.message || "Save failed"}
+          </p>
         )}
         {saveMutation.isSuccess && <p className="success">Settings saved.</p>}
 

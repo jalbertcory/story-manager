@@ -16,6 +16,7 @@ def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
         "series": models.Book.series,
         "word_count": models.Book.current_word_count,
         "updated_at": models.Book.updated_at,
+        "audiobook_enabled": models.Book.audiobook_enabled,
     }
     column = sort_columns.get(sort_by, models.Book.title)
     order = asc(column) if sort_order == "asc" else desc(column)

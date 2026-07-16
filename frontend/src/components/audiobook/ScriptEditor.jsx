@@ -1,17 +1,26 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getSentences, updateSentence, getSentenceAudioUrl } from "../../api/audiobook";
+import {
+  generateSentenceAudio,
+  getSentences,
+  updateSentence,
+  getSentenceAudioUrl,
+} from "../../api/audiobook";
 
 const STATUS_ICONS = {
   pending_diarization: { icon: "⏳", label: "Pending diarization" },
   ready_for_audio: { icon: "🎙", label: "Ready for audio" },
+  audio_queued: { icon: "⏱", label: "Audio queued" },
+  audio_generating: { icon: "🔊", label: "Generating audio" },
   audio_generated: { icon: "✅", label: "Audio generated" },
   error: { icon: "❌", label: "Error" },
 };
 
-function SentenceRow({ sentence, characters, bookId }) {
+function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
   const queryClient = useQueryClient();
-  const [tags, setTags] = useState(sentence.tagged_text || sentence.original_text);
+  const [tags, setTags] = useState(
+    sentence.tagged_text || sentence.original_text,
+  );
   const [characterId, setCharacterId] = useState(sentence.character_id ?? "");
   const [editing, setEditing] = useState(false);
 
@@ -19,8 +28,23 @@ function SentenceRow({ sentence, characters, bookId }) {
     mutationFn: (data) => updateSentence(sentence.id, data),
     onSuccess: () => {
       setEditing(false);
-      queryClient.invalidateQueries({ queryKey: ["audiobook-sentences", bookId] });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-sentences", bookId],
+      });
       queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+    },
+  });
+
+  const audioMutation = useMutation({
+    mutationFn: () => generateSentenceAudio(bookId, sentence.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-sentences", bookId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-chapters", bookId],
+      });
     },
   });
 
@@ -31,8 +55,14 @@ function SentenceRow({ sentence, characters, bookId }) {
     });
   };
 
-  const statusInfo = STATUS_ICONS[sentence.status] || { icon: "?", label: sentence.status };
-  const audioUrl = sentence.status === "audio_generated" ? getSentenceAudioUrl(sentence.id) : null;
+  const statusInfo = STATUS_ICONS[sentence.status] || {
+    icon: "?",
+    label: sentence.status,
+  };
+  const audioUrl =
+    sentence.status === "audio_generated"
+      ? getSentenceAudioUrl(sentence.id)
+      : null;
 
   return (
     <tr className={`sentence-row sentence-row--${sentence.status}`}>
@@ -68,18 +98,81 @@ function SentenceRow({ sentence, characters, bookId }) {
           ))}
         </select>
       </td>
+      <td
+        className="sentence-confidence"
+        title={sentence.speaker_reason || "No model rationale"}
+      >
+        {sentence.speaker_confidence == null ? (
+          "—"
+        ) : (
+          <span
+            className={`confidence-badge${
+              sentence.speaker_confidence < 0.65 ? " confidence-badge--low" : ""
+            }`}
+          >
+            {Math.round(sentence.speaker_confidence * 100)}%
+          </span>
+        )}
+      </td>
       <td className="sentence-status" title={statusInfo.label}>
-        {statusInfo.icon}
+        <span aria-hidden="true">{statusInfo.icon}</span>
+        <span>{statusInfo.label}</span>
       </td>
       <td className="sentence-audio">
-        {audioUrl && (
-          <audio controls src={audioUrl} preload="none" style={{ height: "24px" }} />
+        {audioUrl ? (
+          <audio
+            controls
+            src={audioUrl}
+            preload="none"
+            style={{ height: "24px" }}
+          />
+        ) : sentence.status === "ready_for_audio" ||
+          sentence.status === "error" ? (
+          <button
+            type="button"
+            className="btn-small"
+            onClick={() => audioMutation.mutate()}
+            disabled={
+              audioMutation.isPending ||
+              pipelineActive ||
+              editing ||
+              characterId === ""
+            }
+            title={
+              pipelineActive
+                ? "Pause the full-book pipeline first"
+                : editing
+                  ? "Save sentence edits before generating audio"
+                  : characterId === ""
+                    ? "Assign a speaker first"
+                    : "Generate only this sentence with its current voice profile"
+            }
+          >
+            {audioMutation.isPending
+              ? "Queueing…"
+              : sentence.status === "error"
+                ? "Retry audio"
+                : "Generate audio"}
+          </button>
+        ) : ["audio_queued", "audio_generating"].includes(sentence.status) ? (
+          <span className="sentence-audio-progress">
+            {sentence.status === "audio_queued" ? "Waiting…" : "Working…"}
+          </span>
+        ) : null}
+        {audioMutation.isError && (
+          <span className="error sentence-audio-error">
+            {audioMutation.error?.message}
+          </span>
         )}
       </td>
       <td className="sentence-actions">
         {editing && (
           <>
-            <button onClick={handleSave} disabled={mutation.isPending} className="btn-small">
+            <button
+              onClick={handleSave}
+              disabled={mutation.isPending}
+              className="btn-small"
+            >
               {mutation.isPending ? "…" : "Save"}
             </button>
             <button
@@ -94,30 +187,48 @@ function SentenceRow({ sentence, characters, bookId }) {
             </button>
           </>
         )}
-        {mutation.isError && <span className="error">{mutation.error?.message}</span>}
+        {mutation.isError && (
+          <span className="error">{mutation.error?.message}</span>
+        )}
       </td>
     </tr>
   );
 }
 
-function ScriptEditor({ bookId, characters }) {
+function ScriptEditor({
+  bookId,
+  characters,
+  chapters = [],
+  pipelineActive = false,
+}) {
   const [page, setPage] = useState(1);
-  const [chapterFilter, _setChapterFilter] = useState("");
+  const [chapterFilter, setChapterFilter] = useState("");
+  const [reviewOnly, setReviewOnly] = useState(false);
   const limit = 50;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["audiobook-sentences", bookId, page, chapterFilter],
+    queryKey: ["audiobook-sentences", bookId, page, chapterFilter, reviewOnly],
     queryFn: () =>
       getSentences(bookId, {
         page,
         limit,
         chapterId: chapterFilter ? Number(chapterFilter) : undefined,
+        reviewOnly,
       }),
     keepPreviousData: true,
+    refetchInterval: ({ state }) =>
+      state.data?.items?.some((sentence) =>
+        ["audio_queued", "audio_generating"].includes(sentence.status),
+      )
+        ? 1500
+        : false,
   });
 
   if (isLoading) return <p>Loading sentences…</p>;
-  if (isError) return <p className="error">{error?.message || "Failed to load sentences"}</p>;
+  if (isError)
+    return (
+      <p className="error">{error?.message || "Failed to load sentences"}</p>
+    );
 
   const { items = [], total = 0 } = data || {};
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -126,21 +237,58 @@ function ScriptEditor({ bookId, characters }) {
     <div className="script-editor">
       <div className="script-editor-controls">
         <span>{total} sentences</span>
+        <label>
+          Chapter
+          <select
+            value={chapterFilter}
+            onChange={(event) => {
+              setChapterFilter(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All</option>
+            {chapters.map((chapter) => (
+              <option key={chapter.id} value={chapter.id}>
+                {chapter.chapter_number} · {chapter.processed_sentence_count}/
+                {chapter.sentence_count}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="review-filter">
+          <input
+            type="checkbox"
+            checked={reviewOnly}
+            onChange={(event) => {
+              setReviewOnly(event.target.checked);
+              setPage(1);
+            }}
+          />
+          Needs review only
+        </label>
         <div className="pagination">
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+          >
             ‹ Prev
           </button>
           <span>
             Page {page} / {totalPages}
           </span>
-          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+          >
             Next ›
           </button>
         </div>
       </div>
 
       {items.length === 0 ? (
-        <p className="empty-state">No sentences found. Start the pipeline first.</p>
+        <p className="empty-state">
+          No sentences found. Start the pipeline first.
+        </p>
       ) : (
         <div className="script-table-wrap">
           <table className="script-table">
@@ -150,6 +298,7 @@ function ScriptEditor({ bookId, characters }) {
                 <th>Original Text</th>
                 <th>Tags</th>
                 <th>Speaker</th>
+                <th>Confidence</th>
                 <th>Status</th>
                 <th>Audio</th>
                 <th></th>
@@ -162,6 +311,7 @@ function ScriptEditor({ bookId, characters }) {
                   sentence={sentence}
                   characters={characters}
                   bookId={bookId}
+                  pipelineActive={pipelineActive}
                 />
               ))}
             </tbody>

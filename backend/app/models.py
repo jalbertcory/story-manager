@@ -1,4 +1,17 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Enum, JSON, Numeric, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Float,
+    ForeignKey,
+    Enum,
+    JSON,
+    Numeric,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -44,6 +57,19 @@ class Book(Base):
     # Audiobook pipeline state. Values: None (idle), "ingesting", "roster_gen",
     # "diarizing", "audio_gen", "assembling", "complete", "error", "paused".
     audiobook_pipeline_status = Column(String, nullable=True)
+    # Cooperative control state is persisted so a restart cannot turn a
+    # single-stage/debug run into an unattended full-book run.
+    audiobook_stop_after_phase = Column(String, nullable=True)
+    audiobook_pause_requested = Column(Boolean, nullable=False, default=False, server_default="false")
+    audiobook_last_error = Column(Text, nullable=True)
+    audiobook_summary = Column(Text, nullable=True)
+    audiobook_progress_current = Column(Integer, nullable=False, default=0, server_default="0")
+    audiobook_progress_total = Column(Integer, nullable=False, default=0, server_default="0")
+    audiobook_progress_detail = Column(String, nullable=True)
+    audiobook_pipeline_started_at = Column(DateTime(timezone=True), nullable=True)
+    audiobook_pipeline_updated_at = Column(DateTime(timezone=True), nullable=True)
+    audiobook_batch_limit = Column(Integer, nullable=True)
+    audiobook_llm_requests = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -191,6 +217,29 @@ class AudiobookChapter(Base):
     smil_file_path = Column(String, nullable=True)
     audio_file_path = Column(String, nullable=True)
     needs_reassembly = Column(Boolean, nullable=False, server_default="false")
+    summary = Column(Text, nullable=True)
+    summary_updated_at = Column(DateTime(timezone=True), nullable=True)
+    # Manual chapter previews are independent of the full-book pipeline.
+    # Values: None, queued, generating, ready, error.
+    preview_status = Column(String, nullable=True)
+    preview_error = Column(Text, nullable=True)
+
+
+class AudiobookSeriesCharacter(Base):
+    __tablename__ = "audiobook_series_characters"
+    __table_args__ = (UniqueConstraint("series_name", "canonical_name", name="uq_audiobook_series_character"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    series_name = Column(String, nullable=False, index=True)
+    canonical_name = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    voice_design_prompt = Column(String, nullable=True)
+    is_narrator = Column(Boolean, nullable=False, server_default="false")
+    aliases = Column(JSON, nullable=True)
+    evidence = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
 
 class AudiobookCharacter(Base):
@@ -198,10 +247,18 @@ class AudiobookCharacter(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    series_character_id = Column(
+        Integer,
+        ForeignKey("audiobook_series_characters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     voice_design_prompt = Column(String, nullable=True)
     is_narrator = Column(Boolean, nullable=False, server_default="false")
+    aliases = Column(JSON, nullable=True)
+    evidence = Column(JSON, nullable=True)
 
 
 class AudiobookSentence(Base):
@@ -216,5 +273,7 @@ class AudiobookSentence(Base):
     tagged_text = Column(Text, nullable=True)
     audio_file_path = Column(String, nullable=True)
     audio_duration_ms = Column(Integer, nullable=True)
+    speaker_confidence = Column(Float, nullable=True)
+    speaker_reason = Column(Text, nullable=True)
     # Status values: pending_diarization, ready_for_audio, audio_generated, error
     status = Column(String, nullable=False, server_default="pending_diarization")

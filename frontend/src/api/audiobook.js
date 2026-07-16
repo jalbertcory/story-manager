@@ -2,13 +2,30 @@ import { getJson, sendJson, sendWithoutBody } from "./client";
 
 // Pipeline control
 export function getAudiobookStatus(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/status`, "Failed to fetch audiobook status");
+  return getJson(
+    `/api/books/${bookId}/audiobook/status`,
+    "Failed to fetch audiobook status",
+  );
 }
 
 export function startPipeline(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/start`, {
     method: "POST",
     fallbackMessage: "Failed to start pipeline",
+  });
+}
+
+export function stepPipeline(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/step`, {
+    method: "POST",
+    fallbackMessage: "Failed to run the next pipeline stage",
+  });
+}
+
+export function runPipelineBatch(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/run-batch`, {
+    method: "POST",
+    fallbackMessage: "Failed to run one pipeline batch",
   });
 }
 
@@ -26,9 +43,36 @@ export function rebuildPipeline(bookId) {
   });
 }
 
+export function rebuildCharacterRoster(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/rebuild`, {
+    method: "POST",
+    fallbackMessage: "Failed to regenerate the character roster",
+  });
+}
+
+export function shareCharacterRosterWithSeries(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/share-series`, {
+    method: "POST",
+    fallbackMessage: "Failed to sync the series character roster",
+  });
+}
+
+export function generateChapterPreview(bookId, chapterId) {
+  return sendWithoutBody(
+    `/api/books/${bookId}/audiobook/chapters/${chapterId}/preview-audio`,
+    {
+      method: "POST",
+      fallbackMessage: "Failed to queue the chapter preview",
+    },
+  );
+}
+
 // Characters
 export function getCharacters(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/characters`, "Failed to fetch characters");
+  return getJson(
+    `/api/books/${bookId}/audiobook/characters`,
+    "Failed to fetch characters",
+  );
 }
 
 export function updateCharacter(charId, data) {
@@ -40,10 +84,17 @@ export function updateCharacter(charId, data) {
 }
 
 // Sentences
-export function getSentences(bookId, { page = 1, limit = 50, chapterId } = {}) {
+export function getSentences(
+  bookId,
+  { page = 1, limit = 50, chapterId, reviewOnly = false } = {},
+) {
   const params = new URLSearchParams({ page, limit });
   if (chapterId != null) params.set("chapter_id", chapterId);
-  return getJson(`/api/books/${bookId}/audiobook/sentences?${params}`, "Failed to fetch sentences");
+  if (reviewOnly) params.set("review_only", "true");
+  return getJson(
+    `/api/books/${bookId}/audiobook/sentences?${params}`,
+    "Failed to fetch sentences",
+  );
 }
 
 export function updateSentence(sentenceId, data) {
@@ -54,13 +105,26 @@ export function updateSentence(sentenceId, data) {
   });
 }
 
+export function generateSentenceAudio(bookId, sentenceId) {
+  return sendWithoutBody(
+    `/api/books/${bookId}/audiobook/sentences/${sentenceId}/generate-audio`,
+    {
+      method: "POST",
+      fallbackMessage: "Failed to queue sentence audio",
+    },
+  );
+}
+
 export function getSentenceAudioUrl(sentenceId) {
   return `/api/audiobook/sentences/${sentenceId}/audio`;
 }
 
 // Chapters
 export function getAudiobookChapters(bookId) {
-  return getJson(`/api/books/${bookId}/audiobook/chapters`, "Failed to fetch chapters");
+  return getJson(
+    `/api/books/${bookId}/audiobook/chapters`,
+    "Failed to fetch chapters",
+  );
 }
 
 export function getChapterAudioUrl(bookId, chapterId) {
@@ -73,7 +137,10 @@ export function getAudiobookDownloadUrl(bookId) {
 
 // Settings
 export function getAudiobookSettings() {
-  return getJson("/api/audiobook/settings", "Failed to fetch audiobook settings");
+  return getJson(
+    "/api/audiobook/settings",
+    "Failed to fetch audiobook settings",
+  );
 }
 
 export function updateAudiobookSettings(data) {
@@ -81,5 +148,12 @@ export function updateAudiobookSettings(data) {
     method: "PUT",
     body: data,
     fallbackMessage: "Failed to save audiobook settings",
+  });
+}
+
+export function testAudiobookLlm() {
+  return sendWithoutBody("/api/audiobook/settings/test-llm", {
+    method: "POST",
+    fallbackMessage: "Failed to connect to the configured LLM",
   });
 }
