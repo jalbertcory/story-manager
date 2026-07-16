@@ -6,6 +6,7 @@ import {
   getAudiobookChapters,
   startPipeline,
   stepPipeline,
+  runPipelineBatch,
   pausePipeline,
   rebuildPipeline,
   getAudiobookDownloadUrl,
@@ -13,6 +14,7 @@ import {
 import CharacterRoster from "./audiobook/CharacterRoster";
 import ScriptEditor from "./audiobook/ScriptEditor";
 import ChapterAssembly from "./audiobook/ChapterAssembly";
+import AnalysisOverview from "./audiobook/AnalysisOverview";
 
 const PIPELINE_STEPS = [
   { status: "ingesting", label: "Ingesting" },
@@ -30,6 +32,7 @@ const ACTIVE_STATUSES = new Set([
   "audio_gen",
   "assembling",
 ]);
+const BATCHABLE_STATUSES = new Set(["diarizing", "audio_gen", "assembling"]);
 
 function PipelineProgress({ status }) {
   const currentIdx = PIPELINE_STEPS.findIndex((s) => s.status === status);
@@ -50,12 +53,73 @@ function PipelineProgress({ status }) {
   );
 }
 
-const SUB_TABS = ["Characters", "Script Editor", "Chapter Assembly"];
+function JobInspector({ statusData, totalSentences, doneCount }) {
+  const progressTotal = statusData?.progress_total ?? 0;
+  const progressCurrent = statusData?.progress_current ?? 0;
+  const percent = statusData?.progress_percent ?? 0;
+  const review = statusData?.review_counts ?? {};
+
+  return (
+    <section className="pipeline-inspector" aria-label="Audiobook job details">
+      <div className="pipeline-inspector-grid">
+        <div>
+          <span className="metric-label">Active model</span>
+          <strong>
+            {statusData?.llm_provider || "stub"}
+            {statusData?.llm_model ? ` / ${statusData.llm_model}` : ""}
+          </strong>
+        </div>
+        <div>
+          <span className="metric-label">Model requests</span>
+          <strong>{statusData?.llm_requests ?? 0}</strong>
+        </div>
+        <div>
+          <span className="metric-label">Sentence state</span>
+          <strong>
+            {doneCount} audio / {totalSentences} total
+          </strong>
+        </div>
+        <div>
+          <span className="metric-label">Needs review</span>
+          <strong>
+            {review.low_confidence ?? 0} low confidence ·{" "}
+            {review.unassigned ?? 0} unassigned
+          </strong>
+        </div>
+      </div>
+      {progressTotal > 0 && (
+        <div className="pipeline-work-progress">
+          <div className="pipeline-work-progress-label">
+            <span>{statusData?.progress_detail || "Working…"}</span>
+            <strong>
+              {progressCurrent.toLocaleString()} /{" "}
+              {progressTotal.toLocaleString()} ({percent}%)
+            </strong>
+          </div>
+          <progress value={progressCurrent} max={progressTotal} />
+        </div>
+      )}
+      {statusData?.summary && (
+        <details className="pipeline-summary" open>
+          <summary>Model analysis summary · review required</summary>
+          <p>{statusData.summary}</p>
+        </details>
+      )}
+    </section>
+  );
+}
+
+const SUB_TABS = [
+  "Analysis",
+  "Characters",
+  "Script Editor",
+  "Chapter Assembly",
+];
 
 function AudiobookPipeline({ book }) {
   const bookId = book.id;
   const queryClient = useQueryClient();
-  const [subTab, setSubTab] = useState("Characters");
+  const [subTab, setSubTab] = useState("Analysis");
   const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   const isActive = (status) => ACTIVE_STATUSES.has(status);
@@ -98,6 +162,11 @@ function AudiobookPipeline({ book }) {
 
   const stepMutation = useMutation({
     mutationFn: () => stepPipeline(bookId),
+    onSuccess: invalidateAll,
+  });
+
+  const batchMutation = useMutation({
+    mutationFn: () => runPipelineBatch(bookId),
     onSuccess: invalidateAll,
   });
 
@@ -172,6 +241,12 @@ function AudiobookPipeline({ book }) {
           )}
         </div>
 
+        <JobInspector
+          statusData={statusData}
+          totalSentences={totalSentences}
+          doneCount={doneCount}
+        />
+
         <div className="pipeline-controls">
           {pipelineStatus === "complete" && (
             <a
@@ -184,15 +259,37 @@ function AudiobookPipeline({ book }) {
           )}
           {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
             <>
+              {BATCHABLE_STATUSES.has(nextPhase) && (
+                <button
+                  onClick={() => batchMutation.mutate()}
+                  disabled={
+                    batchMutation.isPending ||
+                    stepMutation.isPending ||
+                    startMutation.isPending
+                  }
+                >
+                  {batchMutation.isPending
+                    ? "Starting Batch…"
+                    : "Run One Batch"}
+                </button>
+              )}
               <button
                 onClick={() => stepMutation.mutate()}
-                disabled={stepMutation.isPending || startMutation.isPending}
+                disabled={
+                  stepMutation.isPending ||
+                  startMutation.isPending ||
+                  batchMutation.isPending
+                }
               >
                 Run Next Stage: {nextPhaseLabel}
               </button>
               <button
                 onClick={() => startMutation.mutate()}
-                disabled={startMutation.isPending || stepMutation.isPending}
+                disabled={
+                  startMutation.isPending ||
+                  stepMutation.isPending ||
+                  batchMutation.isPending
+                }
                 className="btn-primary"
               >
                 Run to Completion
@@ -237,12 +334,14 @@ function AudiobookPipeline({ book }) {
 
         {(startMutation.isError ||
           stepMutation.isError ||
+          batchMutation.isError ||
           pauseMutation.isError ||
           rebuildMutation.isError) && (
           <p className="error">
             {(
               startMutation.error ||
               stepMutation.error ||
+              batchMutation.error ||
               pauseMutation.error ||
               rebuildMutation.error
             )?.message || "Action failed"}
@@ -263,11 +362,22 @@ function AudiobookPipeline({ book }) {
       </nav>
 
       <div className="sub-tab-content">
+        {subTab === "Analysis" && (
+          <AnalysisOverview status={statusData} chapters={chapters} />
+        )}
         {subTab === "Characters" && (
-          <CharacterRoster characters={characters} bookId={bookId} />
+          <CharacterRoster
+            characters={characters}
+            bookId={bookId}
+            pipelineStatus={pipelineStatus}
+          />
         )}
         {subTab === "Script Editor" && (
-          <ScriptEditor bookId={bookId} characters={characters} />
+          <ScriptEditor
+            bookId={bookId}
+            characters={characters}
+            chapters={chapters}
+          />
         )}
         {subTab === "Chapter Assembly" && (
           <ChapterAssembly chapters={chapters} bookId={bookId} />

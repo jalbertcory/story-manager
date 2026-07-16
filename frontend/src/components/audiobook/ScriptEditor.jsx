@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getSentences, updateSentence, getSentenceAudioUrl } from "../../api/audiobook";
+import {
+  getSentences,
+  updateSentence,
+  getSentenceAudioUrl,
+} from "../../api/audiobook";
 
 const STATUS_ICONS = {
   pending_diarization: { icon: "⏳", label: "Pending diarization" },
@@ -11,7 +15,9 @@ const STATUS_ICONS = {
 
 function SentenceRow({ sentence, characters, bookId }) {
   const queryClient = useQueryClient();
-  const [tags, setTags] = useState(sentence.tagged_text || sentence.original_text);
+  const [tags, setTags] = useState(
+    sentence.tagged_text || sentence.original_text,
+  );
   const [characterId, setCharacterId] = useState(sentence.character_id ?? "");
   const [editing, setEditing] = useState(false);
 
@@ -19,7 +25,9 @@ function SentenceRow({ sentence, characters, bookId }) {
     mutationFn: (data) => updateSentence(sentence.id, data),
     onSuccess: () => {
       setEditing(false);
-      queryClient.invalidateQueries({ queryKey: ["audiobook-sentences", bookId] });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-sentences", bookId],
+      });
       queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
     },
   });
@@ -31,8 +39,14 @@ function SentenceRow({ sentence, characters, bookId }) {
     });
   };
 
-  const statusInfo = STATUS_ICONS[sentence.status] || { icon: "?", label: sentence.status };
-  const audioUrl = sentence.status === "audio_generated" ? getSentenceAudioUrl(sentence.id) : null;
+  const statusInfo = STATUS_ICONS[sentence.status] || {
+    icon: "?",
+    label: sentence.status,
+  };
+  const audioUrl =
+    sentence.status === "audio_generated"
+      ? getSentenceAudioUrl(sentence.id)
+      : null;
 
   return (
     <tr className={`sentence-row sentence-row--${sentence.status}`}>
@@ -68,18 +82,43 @@ function SentenceRow({ sentence, characters, bookId }) {
           ))}
         </select>
       </td>
+      <td
+        className="sentence-confidence"
+        title={sentence.speaker_reason || "No model rationale"}
+      >
+        {sentence.speaker_confidence == null ? (
+          "—"
+        ) : (
+          <span
+            className={`confidence-badge${
+              sentence.speaker_confidence < 0.65 ? " confidence-badge--low" : ""
+            }`}
+          >
+            {Math.round(sentence.speaker_confidence * 100)}%
+          </span>
+        )}
+      </td>
       <td className="sentence-status" title={statusInfo.label}>
         {statusInfo.icon}
       </td>
       <td className="sentence-audio">
         {audioUrl && (
-          <audio controls src={audioUrl} preload="none" style={{ height: "24px" }} />
+          <audio
+            controls
+            src={audioUrl}
+            preload="none"
+            style={{ height: "24px" }}
+          />
         )}
       </td>
       <td className="sentence-actions">
         {editing && (
           <>
-            <button onClick={handleSave} disabled={mutation.isPending} className="btn-small">
+            <button
+              onClick={handleSave}
+              disabled={mutation.isPending}
+              className="btn-small"
+            >
               {mutation.isPending ? "…" : "Save"}
             </button>
             <button
@@ -94,30 +133,37 @@ function SentenceRow({ sentence, characters, bookId }) {
             </button>
           </>
         )}
-        {mutation.isError && <span className="error">{mutation.error?.message}</span>}
+        {mutation.isError && (
+          <span className="error">{mutation.error?.message}</span>
+        )}
       </td>
     </tr>
   );
 }
 
-function ScriptEditor({ bookId, characters }) {
+function ScriptEditor({ bookId, characters, chapters = [] }) {
   const [page, setPage] = useState(1);
-  const [chapterFilter, _setChapterFilter] = useState("");
+  const [chapterFilter, setChapterFilter] = useState("");
+  const [reviewOnly, setReviewOnly] = useState(false);
   const limit = 50;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["audiobook-sentences", bookId, page, chapterFilter],
+    queryKey: ["audiobook-sentences", bookId, page, chapterFilter, reviewOnly],
     queryFn: () =>
       getSentences(bookId, {
         page,
         limit,
         chapterId: chapterFilter ? Number(chapterFilter) : undefined,
+        reviewOnly,
       }),
     keepPreviousData: true,
   });
 
   if (isLoading) return <p>Loading sentences…</p>;
-  if (isError) return <p className="error">{error?.message || "Failed to load sentences"}</p>;
+  if (isError)
+    return (
+      <p className="error">{error?.message || "Failed to load sentences"}</p>
+    );
 
   const { items = [], total = 0 } = data || {};
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -126,21 +172,58 @@ function ScriptEditor({ bookId, characters }) {
     <div className="script-editor">
       <div className="script-editor-controls">
         <span>{total} sentences</span>
+        <label>
+          Chapter
+          <select
+            value={chapterFilter}
+            onChange={(event) => {
+              setChapterFilter(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All</option>
+            {chapters.map((chapter) => (
+              <option key={chapter.id} value={chapter.id}>
+                {chapter.chapter_number} · {chapter.processed_sentence_count}/
+                {chapter.sentence_count}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="review-filter">
+          <input
+            type="checkbox"
+            checked={reviewOnly}
+            onChange={(event) => {
+              setReviewOnly(event.target.checked);
+              setPage(1);
+            }}
+          />
+          Needs review only
+        </label>
         <div className="pagination">
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+          >
             ‹ Prev
           </button>
           <span>
             Page {page} / {totalPages}
           </span>
-          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+          >
             Next ›
           </button>
         </div>
       </div>
 
       {items.length === 0 ? (
-        <p className="empty-state">No sentences found. Start the pipeline first.</p>
+        <p className="empty-state">
+          No sentences found. Start the pipeline first.
+        </p>
       ) : (
         <div className="script-table-wrap">
           <table className="script-table">
@@ -150,6 +233,7 @@ function ScriptEditor({ bookId, characters }) {
                 <th>Original Text</th>
                 <th>Tags</th>
                 <th>Speaker</th>
+                <th>Confidence</th>
                 <th>Status</th>
                 <th>Audio</th>
                 <th></th>
