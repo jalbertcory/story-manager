@@ -240,6 +240,16 @@ async def update_book_details(
     ):
         await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
     if updated_book.series != previous_series:
+        characters = await crud.audiobook.get_characters_for_book(db, updated_book.id)
+        if updated_book.series and characters:
+            await crud.audiobook.sync_book_roster_with_series(
+                db,
+                updated_book,
+                characters,
+                prefer_series=True,
+            )
+        elif not updated_book.series:
+            await crud.audiobook.unlink_book_roster_from_series(db, updated_book.id)
         await crud.cleanup_orphaned_series_metadata(db)
     return updated_book
 

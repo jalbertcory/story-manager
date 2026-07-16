@@ -139,7 +139,7 @@ function App() {
 
   const handleSortByChange = (newSortBy) => {
     setSortBy(newSortBy);
-    setSortOrder("asc");
+    setSortOrder(newSortBy === "audiobook_enabled" ? "desc" : "asc");
   };
 
   const handleToggleSortOrder = () => {
@@ -165,7 +165,10 @@ function App() {
     };
     const onDragLeave = (e) => {
       // Only clear when the drag exits the browser window entirely
-      if (e.relatedTarget === null || !document.documentElement.contains(e.relatedTarget)) {
+      if (
+        e.relatedTarget === null ||
+        !document.documentElement.contains(e.relatedTarget)
+      ) {
         setGlobalDragging(false);
       }
     };
@@ -179,7 +182,7 @@ function App() {
         (entry) =>
           entry.isDirectory ||
           entry.name.toLowerCase().endsWith(".epub") ||
-          entry.name.toLowerCase().endsWith(".zip")
+          entry.name.toLowerCase().endsWith(".zip"),
       );
       if (hasRelevant) {
         setActiveTab("library");
@@ -266,6 +269,7 @@ function App() {
               </div>
               <div className="sort-controls">
                 <select
+                  aria-label="Sort library by"
                   value={sortBy}
                   onChange={(e) => handleSortByChange(e.target.value)}
                 >
@@ -273,6 +277,7 @@ function App() {
                   <option value="author">Author</option>
                   <option value="word_count">Word Count</option>
                   <option value="updated_at">Last Updated</option>
+                  <option value="audiobook_enabled">Audiobook Enabled</option>
                 </select>
                 <button
                   className="sort-order-btn"

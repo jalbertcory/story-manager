@@ -148,6 +148,8 @@ async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
         else:
             old_metadata.series_name = new_name
 
+    await _merge_audiobook_series_rosters(db, old_name, new_name)
+
     await db.commit()
     return len(books)
 
@@ -170,8 +172,44 @@ async def merge_series(db: AsyncSession, source: str, target: str) -> int:
             )
             await db.delete(source_metadata)
 
+    await _merge_audiobook_series_rosters(db, source, target)
+
     await db.commit()
     return len(books)
+
+
+async def _merge_audiobook_series_rosters(db: AsyncSession, source: str, target: str) -> None:
+    """Move or merge shared character profiles when a library series changes."""
+    source_result = await db.execute(
+        select(models.AudiobookSeriesCharacter).where(
+            func.lower(models.AudiobookSeriesCharacter.series_name) == source.lower()
+        )
+    )
+    target_result = await db.execute(
+        select(models.AudiobookSeriesCharacter).where(
+            func.lower(models.AudiobookSeriesCharacter.series_name) == target.lower()
+        )
+    )
+    source_profiles = list(source_result.scalars().all())
+    target_profiles = {profile.canonical_name: profile for profile in target_result.scalars().all()}
+    for profile in source_profiles:
+        existing = target_profiles.get(profile.canonical_name)
+        if existing is None:
+            profile.series_name = target
+            target_profiles[profile.canonical_name] = profile
+            continue
+        await db.execute(
+            models.AudiobookCharacter.__table__.update()
+            .where(models.AudiobookCharacter.series_character_id == profile.id)
+            .values(series_character_id=existing.id)
+        )
+        existing.aliases = _normalize_tags([*(existing.aliases or []), *(profile.aliases or [])])
+        existing.evidence = [*(existing.evidence or []), *(profile.evidence or [])][:6]
+        if not existing.description:
+            existing.description = profile.description
+        if not existing.voice_design_prompt:
+            existing.voice_design_prompt = profile.voice_design_prompt
+        await db.delete(profile)
 
 
 def validate_genre_tags(tags: list[str]) -> None:
@@ -227,11 +265,11 @@ def compute_effective_series_genre_tags(
 
 
 async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
-    """Delete SeriesMetadata records whose series_name has no matching books."""
+    """Delete series metadata and audiobook rosters with no matching books."""
     result = await db.execute(select(models.SeriesMetadata))
     all_metadata = result.scalars().all()
-    if not all_metadata:
-        return 0
+    roster_result = await db.execute(select(models.AudiobookSeriesCharacter))
+    all_roster_profiles = roster_result.scalars().all()
 
     active_result = await db.execute(select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct())
     active_series = {row[0] for row in active_result.all()}
@@ -240,6 +278,10 @@ async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
     for metadata in all_metadata:
         if metadata.series_name.lower() not in active_series:
             await db.delete(metadata)
+            deleted += 1
+    for profile in all_roster_profiles:
+        if profile.series_name.lower() not in active_series:
+            await db.delete(profile)
             deleted += 1
 
     if deleted:

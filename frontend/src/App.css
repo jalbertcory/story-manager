@@ -737,6 +737,19 @@
   color: var(--accent);
   border-radius: 3px;
 }
+.badge-audiobook {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.15em 0.55em;
+  font-size: 0.68rem;
+  font-weight: 650;
+  background: rgba(34, 197, 94, 0.14);
+  color: #79d99a;
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  border-radius: 999px;
+  white-space: nowrap;
+}
 .badge-config {
   display: inline-block;
   padding: 0.15em 0.55em;
@@ -1298,9 +1311,15 @@
 
 /* ─── Book Settings page ─────────────────────────────────── */
 .book-settings {
+  box-sizing: border-box;
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
   padding: 0 1.25rem 3rem;
+}
+
+.book-settings--wide {
+  max-width: 1440px;
 }
 
 .settings-header {
@@ -1381,6 +1400,11 @@
 .audiobook-pipeline {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+}
+
+.sub-tab-content {
+  min-width: 0;
 }
 
 .pipeline-header,
@@ -1667,6 +1691,7 @@
 
 .script-table-wrap,
 .chapter-assembly {
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1675,6 +1700,11 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.78rem;
+}
+
+.script-table {
+  min-width: 1050px;
+  table-layout: fixed;
 }
 
 .script-table th,
@@ -1695,14 +1725,118 @@
   text-transform: uppercase;
 }
 
+.chapter-preview-hint,
+.chapter-preview-error {
+  display: block;
+  margin-top: 0.35rem;
+  max-width: 18rem;
+}
+
+.chapter-preview-note {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin: 1rem;
+}
+
+.audiobook-reader {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.audiobook-reader-chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.audiobook-reader-chapters button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.audiobook-reader-chapters button.active {
+  border-color: var(--accent);
+  background: rgba(98, 114, 234, 0.12);
+}
+
+.audiobook-reader-chapters small {
+  color: var(--text-muted);
+}
+
+.audiobook-reader-content {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.audiobook-reader-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.audiobook-reader-heading h3 {
+  margin: 0.15rem 0 0;
+}
+
+.audiobook-reader-nav {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.audiobook-reader-player {
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.audiobook-reader-summary {
+  color: var(--text-muted);
+  border-left: 3px solid var(--accent);
+  padding-left: 0.8rem;
+}
+
+.audiobook-reader-text {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.05rem;
+  line-height: 1.75;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .audiobook-reader {
+    grid-template-columns: 1fr;
+  }
+
+  .audiobook-reader-chapters {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .audiobook-reader-chapters button {
+    min-width: 9rem;
+  }
+}
+
 .sentence-text {
-  min-width: 16rem;
-  max-width: 24rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .sentence-tags {
-  min-width: 12rem;
+  overflow-wrap: anywhere;
 }
 
 .sentence-tags-input,
@@ -1722,6 +1856,51 @@
 .confidence-badge--low {
   background: rgba(214, 143, 44, 0.15);
   color: var(--warning);
+}
+
+.sentence-seq {
+  width: 3rem;
+}
+
+.sentence-text,
+.sentence-tags {
+  width: 24%;
+}
+
+.sentence-speaker {
+  width: 11rem;
+}
+
+.sentence-confidence {
+  width: 6rem;
+}
+
+.sentence-status {
+  width: 8.5rem;
+  white-space: nowrap;
+}
+
+.sentence-status span + span {
+  margin-left: 0.35rem;
+}
+
+.sentence-audio {
+  width: 16rem;
+}
+
+.sentence-audio audio {
+  width: 100%;
+  min-width: 10rem;
+}
+
+.sentence-actions {
+  width: 7rem;
+}
+
+.sentence-audio-progress,
+.sentence-audio-error {
+  display: block;
+  font-size: 0.75rem;
 }
 
 @media (max-width: 720px) {

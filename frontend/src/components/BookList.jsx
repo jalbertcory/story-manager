@@ -56,7 +56,12 @@ function getWebNovelStatus(book) {
   };
 }
 
-function LibraryFilters({ reviewFilter, onReviewFilterChange }) {
+function LibraryFilters({
+  reviewFilter,
+  onReviewFilterChange,
+  audiobookFilter,
+  onAudiobookFilterChange,
+}) {
   return (
     <div className="library-filters" aria-label="Library filters">
       <label>
@@ -69,6 +74,17 @@ function LibraryFilters({ reviewFilter, onReviewFilterChange }) {
           <option value="missing-series">Missing series</option>
           <option value="refreshing">Refreshing or queued</option>
           <option value="refresh-error">Refresh needs attention</option>
+        </select>
+      </label>
+      <label>
+        Audiobook
+        <select
+          value={audiobookFilter}
+          onChange={(event) => onAudiobookFilterChange(event.target.value)}
+        >
+          <option value="">All books</option>
+          <option value="enabled">Enabled</option>
+          <option value="disabled">Not enabled</option>
         </select>
       </label>
     </div>
@@ -147,6 +163,7 @@ function BookList({
   const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] =
     useState(false);
   const [reviewFilter, setReviewFilter] = useState("");
+  const [audiobookFilter, setAudiobookFilter] = useState("");
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -172,6 +189,12 @@ function BookList({
   const filteredBooks = useMemo(
     () =>
       books.filter((book) => {
+        if (audiobookFilter === "enabled" && !book.audiobook_enabled) {
+          return false;
+        }
+        if (audiobookFilter === "disabled" && book.audiobook_enabled) {
+          return false;
+        }
         if (reviewFilter === "missing-series") {
           return (
             !book.series && book.source_type !== "web" && !book.download_status
@@ -185,7 +208,7 @@ function BookList({
         }
         return true;
       }),
-    [books, reviewFilter],
+    [audiobookFilter, books, reviewFilter],
   );
 
   const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } =
@@ -225,6 +248,8 @@ function BookList({
       <LibraryFilters
         reviewFilter={reviewFilter}
         onReviewFilterChange={handleReviewFilterChange}
+        audiobookFilter={audiobookFilter}
+        onAudiobookFilterChange={setAudiobookFilter}
       />
       <div className="library-results-summary" role="status">
         Showing {filteredBooks.length} of {books.length} books

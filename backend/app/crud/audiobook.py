@@ -9,7 +9,30 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import LIBRARY_PATH
-from ..models import AudiobookSettings, AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
+from ..models import (
+    AudiobookSettings,
+    AudiobookChapter,
+    AudiobookCharacter,
+    AudiobookSeriesCharacter,
+    AudiobookSentence,
+    Book,
+)
+
+
+async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
+    """Remove a stale EPUB package and make a completed book resumable."""
+    packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
+    packaged_epub.unlink(missing_ok=True)
+    await db.execute(
+        update(Book)
+        .where(Book.id == book_id, Book.audiobook_pipeline_status == "complete")
+        .values(
+            audiobook_pipeline_status="paused",
+            audiobook_pipeline_updated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -280,8 +303,33 @@ async def update_chapter_summary(db: AsyncSession, chapter_id: int, summary: Opt
 
 
 async def flag_chapter_for_reassembly(db: AsyncSession, chapter_id: int) -> None:
-    await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(needs_reassembly=True))
+    result = await db.execute(select(AudiobookChapter.book_id).where(AudiobookChapter.id == chapter_id))
+    book_id = result.scalar_one_or_none()
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.id == chapter_id)
+        .values(needs_reassembly=True, preview_status=None, preview_error=None)
+    )
     await db.commit()
+    if book_id is not None:
+        await invalidate_packaged_audiobook(db, book_id)
+
+
+async def set_chapter_preview_status(
+    db: AsyncSession,
+    chapter_id: int,
+    status: Optional[str],
+    error: Optional[str] = None,
+) -> None:
+    await db.execute(
+        update(AudiobookChapter).where(AudiobookChapter.id == chapter_id).values(preview_status=status, preview_error=error)
+    )
+    await db.commit()
+
+
+async def get_chapters_with_pending_previews(db: AsyncSession) -> list[AudiobookChapter]:
+    result = await db.execute(select(AudiobookChapter).where(AudiobookChapter.preview_status.in_(["queued", "generating"])))
+    return list(result.scalars().all())
 
 
 async def delete_chapters_for_book(db: AsyncSession, book_id: int) -> None:
@@ -329,6 +377,140 @@ async def update_character(db: AsyncSession, char_id: int, data: dict) -> Option
     return char
 
 
+def _canonical_character_name(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+async def get_series_characters(db: AsyncSession, series_name: str) -> list[AudiobookSeriesCharacter]:
+    result = await db.execute(
+        select(AudiobookSeriesCharacter)
+        .where(func.lower(AudiobookSeriesCharacter.series_name) == series_name.lower())
+        .order_by(AudiobookSeriesCharacter.is_narrator.desc(), AudiobookSeriesCharacter.name)
+    )
+    return list(result.scalars().all())
+
+
+def _copy_series_profile_to_book_character(
+    profile: AudiobookSeriesCharacter,
+    character: AudiobookCharacter,
+) -> None:
+    character.series_character_id = profile.id
+    character.name = profile.name
+    character.description = profile.description
+    character.voice_design_prompt = profile.voice_design_prompt
+    character.is_narrator = profile.is_narrator
+    character.aliases = profile.aliases or []
+    character.evidence = profile.evidence or []
+
+
+async def sync_book_roster_with_series(
+    db: AsyncSession,
+    book: Book,
+    characters: list[AudiobookCharacter],
+    *,
+    prefer_series: bool = True,
+) -> int:
+    """Link a book roster to durable series profiles without changing sentence IDs."""
+    if not book.series:
+        return 0
+
+    profiles = await get_series_characters(db, book.series)
+    by_name = {profile.canonical_name: profile for profile in profiles}
+    linked = 0
+    for character in characters:
+        canonical = _canonical_character_name(character.name)
+        profile = by_name.get(canonical)
+        if profile is None:
+            profile = AudiobookSeriesCharacter(
+                series_name=book.series,
+                canonical_name=canonical,
+                name=character.name,
+                description=character.description,
+                voice_design_prompt=character.voice_design_prompt,
+                is_narrator=character.is_narrator,
+                aliases=character.aliases or [],
+                evidence=character.evidence or [],
+            )
+            db.add(profile)
+            await db.flush()
+            by_name[canonical] = profile
+        elif prefer_series:
+            _copy_series_profile_to_book_character(profile, character)
+        character.series_character_id = profile.id
+        linked += 1
+
+    await db.commit()
+    return linked
+
+
+async def unlink_book_roster_from_series(db: AsyncSession, book_id: int) -> None:
+    """Detach book-local characters when a book is removed from a series."""
+    await db.execute(update(AudiobookCharacter).where(AudiobookCharacter.book_id == book_id).values(series_character_id=None))
+    await db.commit()
+
+
+async def propagate_character_profile_across_series(
+    db: AsyncSession,
+    character: AudiobookCharacter,
+) -> list[AudiobookCharacter]:
+    """Promote an edited character and update matching profiles in sibling books."""
+    book = await db.get(Book, character.book_id)
+    if book is None or not book.series:
+        return [character]
+
+    linked_profile = (
+        await db.get(AudiobookSeriesCharacter, character.series_character_id) if character.series_character_id else None
+    )
+    canonical = _canonical_character_name(character.name)
+    result = await db.execute(
+        select(AudiobookSeriesCharacter).where(
+            func.lower(AudiobookSeriesCharacter.series_name) == book.series.lower(),
+            AudiobookSeriesCharacter.canonical_name == canonical,
+        )
+    )
+    matching_profile = result.scalar_one_or_none()
+    profile = matching_profile or linked_profile
+    if matching_profile is not None and linked_profile is not None and matching_profile.id != linked_profile.id:
+        await db.execute(
+            update(AudiobookCharacter)
+            .where(AudiobookCharacter.series_character_id == linked_profile.id)
+            .values(series_character_id=matching_profile.id)
+        )
+        await db.delete(linked_profile)
+        await db.flush()
+    if profile is None:
+        profile = AudiobookSeriesCharacter(series_name=book.series, canonical_name=canonical, name=character.name)
+        db.add(profile)
+        await db.flush()
+
+    profile.canonical_name = canonical
+    profile.name = character.name
+    profile.description = character.description
+    profile.voice_design_prompt = character.voice_design_prompt
+    profile.is_narrator = character.is_narrator
+    profile.aliases = character.aliases or []
+    profile.evidence = character.evidence or []
+
+    result = await db.execute(
+        select(AudiobookCharacter)
+        .join(Book, Book.id == AudiobookCharacter.book_id)
+        .where(
+            func.lower(Book.series) == book.series.lower(),
+            or_(
+                AudiobookCharacter.series_character_id == profile.id,
+                func.lower(AudiobookCharacter.name) == character.name.lower(),
+            ),
+        )
+    )
+    matching = list(result.scalars().all())
+    if character not in matching:
+        matching.append(character)
+    for sibling in matching:
+        _copy_series_profile_to_book_character(profile, sibling)
+    await db.commit()
+    return matching
+
+
 async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
     """Reset audio for all sentences by this character and flag affected chapters."""
     await db.execute(
@@ -338,9 +520,18 @@ async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
     )
     result = await db.execute(select(AudiobookSentence.chapter_id).where(AudiobookSentence.character_id == char_id).distinct())
     chapter_ids = [row[0] for row in result.all()]
+    book_ids: list[int] = []
     if chapter_ids:
-        await db.execute(update(AudiobookChapter).where(AudiobookChapter.id.in_(chapter_ids)).values(needs_reassembly=True))
+        result = await db.execute(select(AudiobookChapter.book_id).where(AudiobookChapter.id.in_(chapter_ids)).distinct())
+        book_ids = [row[0] for row in result.all()]
+        await db.execute(
+            update(AudiobookChapter)
+            .where(AudiobookChapter.id.in_(chapter_ids))
+            .values(needs_reassembly=True, preview_status=None, preview_error=None)
+        )
     await db.commit()
+    for book_id in book_ids:
+        await invalidate_packaged_audiobook(db, book_id)
 
 
 async def delete_characters_for_book(db: AsyncSession, book_id: int) -> None:
@@ -373,6 +564,8 @@ async def reset_roster_and_diarization_for_book(db: AsyncSession, book_id: int) 
             summary=None,
             summary_updated_at=None,
             needs_reassembly=True,
+            preview_status=None,
+            preview_error=None,
         )
     )
     await db.commit()
@@ -479,6 +672,22 @@ async def get_sentences_ready_for_audio(db: AsyncSession, book_id: int, limit: i
     return list(result.scalars().all())
 
 
+async def get_pending_sentence_audio_jobs(db: AsyncSession) -> list[tuple[int, int]]:
+    """Return durable manual sentence jobs as (book_id, sentence_id)."""
+    result = await db.execute(
+        select(AudiobookChapter.book_id, AudiobookSentence.id)
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(AudiobookSentence.status.in_(["audio_queued", "audio_generating"]))
+        .order_by(AudiobookSentence.id)
+    )
+    return [(book_id, sentence_id) for book_id, sentence_id in result.all()]
+
+
+async def set_sentence_status(db: AsyncSession, sentence_id: int, status: str) -> None:
+    await db.execute(update(AudiobookSentence).where(AudiobookSentence.id == sentence_id).values(status=status))
+    await db.commit()
+
+
 async def update_sentence_diarization(
     db: AsyncSession,
     sentence_id: int,
@@ -544,8 +753,15 @@ async def update_sentence_speaker(
     sentence.status = "ready_for_audio"
     sentence.audio_file_path = None
     sentence.audio_duration_ms = None
-    await db.execute(update(AudiobookChapter).where(AudiobookChapter.id == sentence.chapter_id).values(needs_reassembly=True))
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.id == sentence.chapter_id)
+        .values(needs_reassembly=True, preview_status=None, preview_error=None)
+    )
     await db.commit()
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    if chapter is not None:
+        await invalidate_packaged_audiobook(db, chapter.book_id)
     await db.refresh(sentence)
     return sentence
 
@@ -634,7 +850,7 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     counts = await count_sentences_by_status(db, book_id)
     if counts.get("pending_diarization", 0) > 0:
         return "diarizing"
-    if counts.get("ready_for_audio", 0) > 0 or counts.get("error", 0) > 0:
+    if any(counts.get(status, 0) > 0 for status in ("ready_for_audio", "audio_queued", "audio_generating", "error")):
         return "audio_gen"
 
     total = sum(counts.values())

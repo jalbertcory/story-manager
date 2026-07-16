@@ -1,4 +1,17 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Float, ForeignKey, Enum, JSON, Numeric, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Float,
+    ForeignKey,
+    Enum,
+    JSON,
+    Numeric,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 from .database import Base
 import enum
@@ -206,6 +219,27 @@ class AudiobookChapter(Base):
     needs_reassembly = Column(Boolean, nullable=False, server_default="false")
     summary = Column(Text, nullable=True)
     summary_updated_at = Column(DateTime(timezone=True), nullable=True)
+    # Manual chapter previews are independent of the full-book pipeline.
+    # Values: None, queued, generating, ready, error.
+    preview_status = Column(String, nullable=True)
+    preview_error = Column(Text, nullable=True)
+
+
+class AudiobookSeriesCharacter(Base):
+    __tablename__ = "audiobook_series_characters"
+    __table_args__ = (UniqueConstraint("series_name", "canonical_name", name="uq_audiobook_series_character"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    series_name = Column(String, nullable=False, index=True)
+    canonical_name = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    voice_design_prompt = Column(String, nullable=True)
+    is_narrator = Column(Boolean, nullable=False, server_default="false")
+    aliases = Column(JSON, nullable=True)
+    evidence = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
 
 class AudiobookCharacter(Base):
@@ -213,6 +247,12 @@ class AudiobookCharacter(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    series_character_id = Column(
+        Integer,
+        ForeignKey("audiobook_series_characters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     voice_design_prompt = Column(String, nullable=True)
