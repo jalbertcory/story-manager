@@ -4,6 +4,7 @@ export const TABS = [
   { key: "scheduler", label: "Scheduler", path: "/scheduler" },
   { key: "logs", label: "Logs", path: "/logs" },
   { key: "utilities", label: "Utilities", path: "/utilities" },
+  { key: "audio-settings", label: "Audio Settings", path: "/audio-settings" },
 ];
 
 export const LIBRARY_VIEWS = ["series", "standalone", "web"];

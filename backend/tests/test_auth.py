@@ -13,6 +13,7 @@ from backend.app.auth import (
     validate_admin_session_token,
     verify_admin_password,
 )
+from backend.app.admin_auth_middleware import AdminAuthMiddleware
 
 
 class TestGenerateReaderToken:
@@ -70,6 +71,16 @@ class TestExtractPrefix:
 
 
 class TestAdminAuth:
+    def test_audiobook_files_require_admin_auth(self, monkeypatch):
+        monkeypatch.setenv("STORY_MANAGER_ADMIN_PASSWORD", "secret")
+        audiobook_request = Request(
+            {"type": "http", "method": "GET", "path": "/library/audiobooks/1/working.epub", "headers": []}
+        )
+        cover_request = Request({"type": "http", "method": "GET", "path": "/library/covers/1.jpg", "headers": []})
+
+        assert AdminAuthMiddleware._requires_admin_auth(audiobook_request) is True
+        assert AdminAuthMiddleware._requires_admin_auth(cover_request) is False
+
     def test_verify_admin_password_uses_env(self, monkeypatch):
         monkeypatch.setenv("STORY_MANAGER_ADMIN_PASSWORD", "secret")
 

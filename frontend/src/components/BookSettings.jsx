@@ -1,5 +1,6 @@
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import AudiobookPipeline from "./AudiobookPipeline";
 
 import {
   deleteBook,
@@ -135,6 +136,7 @@ function BookSettings({ book: initialBook, onBack }) {
     getUpdatedFields,
   } = useBookSettingsForm(initialBook);
   const [previewedChapter, setPreviewedChapter] = useState(null);
+  const [bookTab, setBookTab] = useState("details");
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
@@ -174,9 +176,19 @@ function BookSettings({ book: initialBook, onBack }) {
 
   const saveMutation = useMutation({
     mutationFn: (data) => updateBook(book.id, data),
-    onSuccess: () => {
+    onSuccess: (updatedBook) => {
+      queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
+
+  const enableAudiobookMutation = useMutation({
+    mutationFn: () => updateBook(book.id, { audiobook_enabled: true }),
+    onSuccess: (updatedBook) => {
+      queryClient.setQueryData(["book", book.id], updatedBook);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      setBookTab("audiobook");
     },
   });
 
@@ -231,6 +243,12 @@ function BookSettings({ book: initialBook, onBack }) {
   });
 
   const [coverUrl, setCoverUrl] = useState("");
+
+  useEffect(() => {
+    if (!book.audiobook_enabled && bookTab === "audiobook") {
+      setBookTab("details");
+    }
+  }, [book.audiobook_enabled, bookTab]);
 
   // Cover files live at a deterministic URL (/api/covers/{book_id}), so the
   // browser happily caches them. Whenever any cover mutation succeeds we bump
@@ -321,6 +339,7 @@ function BookSettings({ book: initialBook, onBack }) {
     refreshMutation.isPending ||
     detachSourceMutation.isPending ||
     deleteMutation.isPending ||
+    enableAudiobookMutation.isPending ||
     isRefreshing;
   const canDetachWebMarker =
     book.source_type === "web" && book.immutable_path && book.current_path;
@@ -336,7 +355,8 @@ function BookSettings({ book: initialBook, onBack }) {
             processMutation.isPending ||
             refreshMutation.isPending ||
             detachSourceMutation.isPending ||
-            deleteMutation.isPending
+            deleteMutation.isPending ||
+            enableAudiobookMutation.isPending
           }
           style={{ flexShrink: 0 }}
         >
@@ -345,6 +365,29 @@ function BookSettings({ book: initialBook, onBack }) {
         <h2>{book.title}</h2>
       </div>
 
+      <nav className="book-settings-tabs">
+        <button
+          className={`book-settings-tab${bookTab === "details" ? " book-settings-tab--active" : ""}`}
+          onClick={() => setBookTab("details")}
+        >
+          Details
+        </button>
+        {book.audiobook_enabled && (
+          <button
+            className={`book-settings-tab${bookTab === "audiobook" ? " book-settings-tab--active" : ""}`}
+            onClick={() => setBookTab("audiobook")}
+          >
+            Audiobook Pipeline
+          </button>
+        )}
+      </nav>
+
+      {book.audiobook_enabled && bookTab === "audiobook" && (
+        <AudiobookPipeline book={book} />
+      )}
+
+      {bookTab === "details" && (
+      <>
       {isRefreshing && (
         <div className="hint" role="status" style={{ marginBottom: "0.75rem" }}>
           {book.refresh_status === "queued"
@@ -518,6 +561,32 @@ function BookSettings({ book: initialBook, onBack }) {
           </div>
         </div>
       </section>
+
+      {!book.audiobook_enabled && (
+        <section className="settings-section">
+          <h3>Audiobook</h3>
+          <p className="hint">
+            Generate an EPUB 3 audiobook with synchronized sentence-level
+            narration. Enabling this creates processing records for this book;
+            it does not start generation until you ask it to.
+          </p>
+          <button
+            type="button"
+            onClick={() => enableAudiobookMutation.mutate()}
+            disabled={enableAudiobookMutation.isPending}
+          >
+            {enableAudiobookMutation.isPending
+              ? "Enabling…"
+              : "Enable Audiobook Pipeline"}
+          </button>
+          {enableAudiobookMutation.isError && (
+            <p className="error">
+              {enableAudiobookMutation.error?.message ||
+                "Failed to enable the audiobook pipeline"}
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="settings-section">
         <h3>Notes</h3>
@@ -770,6 +839,8 @@ function BookSettings({ book: initialBook, onBack }) {
       )}
       {deleteMutation.isError && (
         <p className="error">Delete failed: {deleteMutation.error.message}</p>
+      )}
+      </>
       )}
     </div>
   );
