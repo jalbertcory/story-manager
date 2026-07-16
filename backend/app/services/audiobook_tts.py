@@ -34,7 +34,13 @@ def _get_mp3_duration_ms(path: Path) -> int:
     return int(audio.info.length * 1000)
 
 
-async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) -> bytes:
+async def _call_omnivoice(
+    endpoint: str,
+    voice_prompt: str,
+    tagged_text: str,
+    *,
+    voice_id: str | None = None,
+) -> bytes:
     if endpoint.startswith("stub://"):
         duration_ms = max(350, min(5000, len(tagged_text.split()) * 260))
         ffmpeg = shutil.which("ffmpeg")
@@ -71,9 +77,12 @@ async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) ->
     # kernels warm up. Keep connection failures fast but allow inference time.
     timeout = httpx.Timeout(600.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
+        request_body = {"voice": voice_prompt, "text": tagged_text}
+        if voice_id:
+            request_body["voice_id"] = voice_id
         resp = await client.post(
             url,
-            json={"voice": voice_prompt, "text": tagged_text},
+            json=request_body,
             headers={"Accept": "audio/mpeg"},
         )
         resp.raise_for_status()
@@ -97,15 +106,23 @@ async def _generate_sentence_clip(
     db: AsyncSession,
 ) -> None:
     voice_prompt = DEFAULT_VOICE_PROMPT
+    voice_id = None
     if sentence.character_id is not None:
         char = await db.get(AudiobookCharacter, sentence.character_id)
-        if char and char.voice_design_prompt:
-            voice_prompt = char.voice_design_prompt
+        if char:
+            if char.voice_design_prompt:
+                voice_prompt = char.voice_design_prompt
+            voice_id = (
+                f"series-character:{char.series_character_id}"
+                if char.series_character_id is not None
+                else f"book:{book_id}:character:{char.id}"
+            )
 
     audio_bytes = await _call_omnivoice(
         endpoint,
         voice_prompt,
         sentence.tagged_text or sentence.original_text,
+        voice_id=voice_id,
     )
     out_path = _snippet_path(book_id, sentence.id)
     out_path.parent.mkdir(parents=True, exist_ok=True)

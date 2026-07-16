@@ -23,17 +23,19 @@ You are a literary analyst preparing a cast list for an audiobook. Analyze the s
 book and identify the primary narrator plus the major or recurring speaking characters. Merge aliases, titles, and \
 surname-only references into one character. Do not include authors, publishers, places, organizations, unnamed \
 crowds, or one-line background figures. Prefer people with repeated mentions across the book and omit one-scene \
-figures even if they appear in an excerpt. Return no more than 15 characters.
+figures even if they appear in an excerpt. Return no more than 18 characters.
 
 For each character produce:
 - name: canonical full name; use "Narrator" for the narrative prose voice
 - aliases: other names, surnames, nicknames, ranks, or titles used for this person
 - description: a concise description of their personality, relationships, and role
-- evidence: 1-3 short quotations or explicit textual facts supporting the identification
+- evidence: 1-3 short exact quotations from the supplied text supporting the identification
 - voice_design_prompt: an OmniVoice voice parameter string using ONLY these tokens:
   [gender-{{male|female|neutral}}] [pitch-{{low|medium|high}}] [speed-{{slow|normal|fast}}]
   Optional: [accent-{{british|american|australian}}] [age-{{young|middle|old}}]
   Example: [gender-male][pitch-low][speed-normal][age-middle]
+  Always include gender, pitch, speed, and age. Use the textual evidence to make recurring characters distinct;
+  do not give every character the same generic profile. Add an accent only when the text supports it.
 - is_narrator: true only for an entry named exactly "Narrator". In first-person books, the protagonist must be a \
   separate character with is_narrator false so their spoken dialogue has a distinct voice.
 
@@ -81,8 +83,10 @@ For each sentence return:
   when no tag is needed (do not repeat unchanged text)
 - confidence: a number from 0 to 1 for the speaker assignment
 - reason: a brief evidence-based reason, such as an adjacent dialogue tag or turn-taking context
+  (12 words or fewer)
 
-Also return chapter_summary: an updated spoiler-light summary incorporating this batch and the prior summary.
+Also return chapter_summary: an updated spoiler-light summary incorporating this batch and the prior summary, using
+no more than 100 words.
 The roster descriptions are identity hints only and may be inaccurate. Ground the chapter summary exclusively in the
 sentence text and prior chapter summary; never import plot events, body changes, relationships, or backstory from a
 character description.
@@ -92,13 +96,30 @@ Return JSON with keys assignments and chapter_summary. No markdown or explanatio
 _ALLOWED_EXPRESSION_TAGS = {"laughter", "sigh", "whisper", "shout"}
 _BRACKET_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
 _GENDERED_ATTRIBUTION_RE = re.compile(
-    r"\b(she|he)\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b",
+    r"\b(she|he)\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped|"
+    r"repeated|remarked|responded|interrupted)\b",
     re.IGNORECASE,
 )
-_NARRATION_REASON_RE = re.compile(
-    r"\b(?:narrat(?:or|ion|ive)|internal|reflection|action description|monologue|observation|recounting)\b",
+_FIRST_PERSON_ATTRIBUTION_RE = re.compile(
+    r"\bI\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped|reminded)\b",
     re.IGNORECASE,
 )
+_DIALOGUE_ATTRIBUTION_IN_SENTENCE_RE = re.compile(
+    r"\b(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b" r"[^“\"]{0,80}[“\"]",
+    re.IGNORECASE,
+)
+_ATTRIBUTION_VERBS = (
+    "said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped|reminded|"
+    "repeated|remarked|responded|interrupted"
+)
+_GENERIC_SPEAKER_ROLES = ("recruiter", "doctor", "nurse", "clerk", "manager", "officer", "soldier", "guard", "pilot")
+_GENERIC_ROLE_ATTRIBUTION_RE = re.compile(
+    rf"\b(?:the\s+)?(?P<role>{'|'.join(_GENERIC_SPEAKER_ROLES)})\s+(?:{_ATTRIBUTION_VERBS})\b",
+    re.IGNORECASE,
+)
+MAX_DIARIZATION_BATCH_SIZE = 10
+MIN_DIARIZATION_BATCH_SIZE = 5
+MIN_STORY_CHAPTER_SENTENCES = 40
 
 ROSTER_SCHEMA = {
     "type": "object",
@@ -106,7 +127,7 @@ ROSTER_SCHEMA = {
         "book_summary": {"type": "string"},
         "characters": {
             "type": "array",
-            "maxItems": 15,
+            "maxItems": 18,
             "items": {
                 "type": "object",
                 "properties": {
@@ -151,12 +172,12 @@ DIARIZATION_SCHEMA = {
                     "character_id": {"type": ["integer", "null"]},
                     "tagged_text": {"type": ["string", "null"]},
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "maxLength": 160},
                 },
                 "required": ["id", "character_id", "tagged_text", "confidence", "reason"],
             },
         },
-        "chapter_summary": {"type": "string"},
+        "chapter_summary": {"type": "string", "maxLength": 1200},
     },
     "required": ["assignments", "chapter_summary"],
 }
@@ -185,7 +206,11 @@ async def _call_llm(
             "stream": False,
             "think": False,
             "format": response_schema or "json",
-            "options": {"temperature": 0, "num_ctx": 32768, "num_predict": 4096},
+            "options": {
+                "temperature": 0,
+                "num_ctx": 32768,
+                "num_predict": 8192 if response_schema is ROSTER_SCHEMA else 2048,
+            },
             "keep_alive": "30m",
         }
         timeout = httpx.Timeout(600.0, connect=10.0)
@@ -234,14 +259,86 @@ async def _call_llm(
         return data["choices"][0]["message"]["content"]
 
 
-def _extract_json(raw: str) -> Any:
-    """Strip markdown code fences if present and parse JSON."""
+def _strip_json_fence(raw: str) -> str:
     text = raw.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         # Drop first and last fence lines
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text)
+    return text
+
+
+def _remove_trailing_json_commas(text: str) -> str:
+    """Remove commas immediately before ] or } without changing JSON strings."""
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            continue
+        if char in "]}":
+            previous = len(output) - 1
+            while previous >= 0 and output[previous].isspace():
+                previous -= 1
+            if previous >= 0 and output[previous] == ",":
+                del output[previous]
+        output.append(char)
+    return "".join(output)
+
+
+def _extract_json(raw: str) -> Any:
+    """Parse structured output and repair common local-model trailing commas."""
+    text = _strip_json_fence(raw)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original_error:
+        repaired = _remove_trailing_json_commas(text)
+        if repaired == text:
+            raise
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            raise original_error
+
+
+def _normalise_diarization_result(batch_result: Any, expected_ids: set[int]) -> dict[str, Any]:
+    """Require exactly one assignment for every requested sentence."""
+    if isinstance(batch_result, list):
+        batch_result = {"assignments": batch_result, "chapter_summary": None}
+    if not isinstance(batch_result, dict) or not isinstance(batch_result.get("assignments"), list):
+        raise ValueError(f"Expected a JSON object with assignments, got {type(batch_result).__name__}")
+
+    result_ids = [
+        result.get("id")
+        for result in batch_result["assignments"]
+        if isinstance(result, dict) and isinstance(result.get("id"), int)
+    ]
+    result_id_set = set(result_ids)
+    missing = sorted(expected_ids - result_id_set)
+    unexpected = sorted(result_id_set - expected_ids)
+    duplicates = sorted(
+        sentence_id for sentence_id, count in Counter(result_ids).items() if sentence_id in expected_ids and count > 1
+    )
+    if missing or duplicates or len(result_ids) != len(batch_result["assignments"]):
+        raise ValueError(
+            "Invalid assignment coverage: "
+            f"missing={missing[:10]}, unexpected={unexpected[:10]}, duplicates={duplicates[:10]}"
+        )
+    if unexpected:
+        logger.warning("Ignoring %d unsolicited diarization assignments: %s", len(unexpected), unexpected[:10])
+        batch_result["assignments"] = [result for result in batch_result["assignments"] if result.get("id") in expected_ids]
+    return batch_result
 
 
 def _sanitize_tagged_text(original: str, tagged: Any) -> str:
@@ -271,27 +368,145 @@ def _apply_speaker_guardrails(
     next_text: str,
     character_id: int | None,
     narrator_id: int | None,
+    protagonist_id: int | None,
+    character_name_ids: dict[str, int],
+    role_speaker_ids: dict[str, int],
+    last_dialogue_speaker_id: int | None,
     minor_female_id: int | None,
     minor_male_id: int | None,
     reason: str,
 ) -> tuple[int | None, str, float | None]:
     """Correct two common local-model ID errors without inventing named speakers."""
-    has_closing_quote = "”" in text or ('"' in text and not text.rstrip().endswith('"'))
     starts_with_quote = text.lstrip().startswith(("“", '"'))
-    has_dialogue = has_closing_quote or starts_with_quote
+    has_quote = any(quote in text for quote in ("“", "”", '"'))
+    has_dialogue = starts_with_quote or bool(_DIALOGUE_ATTRIBUTION_IN_SENTENCE_RE.search(text))
 
-    if character_id == narrator_id and has_dialogue:
-        attribution = _GENDERED_ATTRIBUTION_RE.search(f"{text} {next_text}")
-        if attribution:
-            gender = attribution.group(1).casefold()
-            fallback_id = minor_female_id if gender == "she" else minor_male_id
-            if fallback_id is not None:
-                return fallback_id, f"Deterministic {gender} dialogue attribution to minor voice", 0.98
+    attribution_context = f"{text} {next_text if starts_with_quote else ''}"
+    named_contexts = [text]
+    if starts_with_quote and next_text:
+        named_contexts.append(next_text)
+    for named_context in named_contexts:
+        for name, attributed_character_id in character_name_ids.items():
+            escaped_name = re.escape(name)
+            if re.search(
+                rf"(?:\b{escaped_name}\s+(?:{_ATTRIBUTION_VERBS})\b|" rf"\b(?:{_ATTRIBUTION_VERBS})\s+{escaped_name}\b)",
+                named_context,
+                re.IGNORECASE,
+            ):
+                return attributed_character_id, f"Deterministic named dialogue attribution to {name}", 0.99
 
-    if character_id != narrator_id and not has_dialogue and _NARRATION_REASON_RE.search(reason):
+    current_first_person = _FIRST_PERSON_ATTRIBUTION_RE.search(text)
+    next_first_person = starts_with_quote and _FIRST_PERSON_ATTRIBUTION_RE.match(next_text.lstrip())
+    if protagonist_id is not None and has_quote and (current_first_person or next_first_person):
+        return protagonist_id, "Deterministic first-person dialogue attribution", 0.99
+
+    current_gender = _GENDERED_ATTRIBUTION_RE.search(text)
+    next_gender = starts_with_quote and _GENDERED_ATTRIBUTION_RE.match(next_text.lstrip())
+    attribution = current_gender or next_gender
+    if has_quote and attribution:
+        gender = attribution.group(1).casefold()
+        fallback_id = minor_female_id if gender == "she" else minor_male_id
+        if fallback_id is not None:
+            return fallback_id, f"Deterministic {gender} dialogue attribution to minor voice", 0.98
+
+    role_attribution = _GENERIC_ROLE_ATTRIBUTION_RE.search(attribution_context) if has_quote else None
+    if role_attribution:
+        role_speaker_id = role_speaker_ids.get(role_attribution.group("role").casefold())
+        if role_speaker_id is not None:
+            return role_speaker_id, "Deterministic grounded role dialogue attribution", 0.98
+        if last_dialogue_speaker_id is not None:
+            return last_dialogue_speaker_id, "Deterministic recurring role dialogue attribution", 0.9
+
+    if has_quote and re.match(r'^\s*[“"]?Paragraph\s+(?:one|two|three|four|five|six|\d+)\b', text, re.I):
+        recruiter_id = role_speaker_ids.get("recruiter")
+        if recruiter_id is not None:
+            return recruiter_id, "Deterministic grounded recruiter enumeration", 0.98
+
+    if (
+        starts_with_quote
+        and protagonist_id is not None
+        and character_id != protagonist_id
+        and last_dialogue_speaker_id in {minor_female_id, minor_male_id}
+    ):
+        return protagonist_id, "Deterministic first-person turn-taking fallback", 0.8
+
+    if character_id == narrator_id and starts_with_quote and protagonist_id is not None:
+        return protagonist_id, "Deterministic first-person dialogue fallback", 0.75
+
+    if character_id != narrator_id and not has_dialogue:
         return narrator_id, "Deterministic prose/narration guardrail", 0.98
 
     return character_id, reason, None
+
+
+def _advance_open_dialogue_speaker(
+    text: str,
+    resolved_character_id: int | None,
+    *,
+    narrator_id: int | None,
+    minor_female_id: int | None,
+    minor_male_id: int | None,
+    current_open_speaker_id: int | None,
+) -> int | None:
+    """Track quoted speech in source order, including close-then-reopen lines."""
+    open_speaker_id = current_open_speaker_id
+    for quote in re.finditer("[“”]", text):
+        if quote.group(0) == "”":
+            open_speaker_id = None
+            continue
+
+        # A repeated opening quote while a speaker is already active is the
+        # conventional marker for a new paragraph in the same long speech.
+        if open_speaker_id is not None:
+            continue
+
+        prefix_end = quote.start()
+        prefix_start = max(0, prefix_end - 120)
+        prefix = text[prefix_start:prefix_end]
+        pronouns = re.findall(r"\b(she|her|he|him)\b", prefix, re.IGNORECASE)
+        if pronouns:
+            gender = pronouns[-1].casefold()
+            open_speaker_id = minor_female_id if gender in {"she", "her"} else minor_male_id
+        elif resolved_character_id != narrator_id:
+            open_speaker_id = resolved_character_id
+    return open_speaker_id
+
+
+def _fallback_open_dialogue_speaker(
+    text: str,
+    inferred_open_speaker_id: int | None,
+    *,
+    protagonist_id: int | None,
+    last_dialogue_speaker_id: int | None,
+    last_other_dialogue_speaker_id: int | None,
+) -> int | None:
+    """Resolve an unattributed opening quote from established turn-taking."""
+    if inferred_open_speaker_id is not None or text.count("“") <= text.count("”"):
+        return inferred_open_speaker_id
+    if last_dialogue_speaker_id == protagonist_id and last_other_dialogue_speaker_id is not None:
+        return last_other_dialogue_speaker_id
+    if protagonist_id is not None and last_dialogue_speaker_id not in {None, protagonist_id}:
+        return protagonist_id
+    return None
+
+
+def _infer_role_speaker_ids(sentences: list[Any], minor_female_id: int | None, minor_male_id: int | None) -> dict[str, int]:
+    """Ground recurring unnamed roles in repeated chapter-local pronouns."""
+    result: dict[str, int] = {}
+    for role in _GENERIC_SPEAKER_ROLES:
+        pronouns: Counter[str] = Counter()
+        role_pattern = re.compile(rf"\b{re.escape(role)}\b", re.IGNORECASE)
+        for sentence in sentences:
+            text = sentence.original_text
+            if role_pattern.search(text):
+                pronouns.update(token.casefold() for token in re.findall(r"\b(?:she|her|he|him|his)\b", text, re.I))
+        female = pronouns["she"] + pronouns["her"]
+        male = pronouns["he"] + pronouns["him"] + pronouns["his"]
+        if minor_female_id is not None and female >= 1 and female >= male * 2:
+            result[role] = minor_female_id
+        elif minor_male_id is not None and male >= 1 and male >= female * 2:
+            result[role] = minor_male_id
+    return result
 
 
 async def _build_roster_excerpt(chapters, db: AsyncSession) -> str:
@@ -299,12 +514,16 @@ async def _build_roster_excerpt(chapters, db: AsyncSession) -> str:
     candidates: list[tuple[Any, list[Any]]] = []
     for chapter in chapters:
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        if _starts_back_matter(sentences):
+            break
         if len(sentences) >= 40:
             candidates.append((chapter, sentences))
 
     if not candidates:
         for chapter in chapters:
             sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+            if _starts_back_matter(sentences):
+                break
             if sentences:
                 candidates.append((chapter, sentences))
 
@@ -322,6 +541,7 @@ async def _build_roster_excerpt(chapters, db: AsyncSession) -> str:
 
 
 _CANDIDATE_TOKEN_RE = re.compile(r"\b[A-Z][a-z]{2,}\b")
+_FULL_NAME_RE = re.compile(r"\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b")
 _DIALOGUE_TAG_RE = re.compile(
     r"\b([A-Z][a-z]{2,})\s+(?:said|asked|replied|yelled|shouted|whispered|added|continued|noted|answered|"
     r"snapped|muttered|called|agreed|insisted)\b|\b(?:said|asked|replied|yelled|shouted|whispered|added|"
@@ -398,6 +618,111 @@ _CANDIDATE_STOP_WORDS = {
     "You",
     "Your",
 }
+_NAME_TITLE_WORDS = {
+    "Administrator",
+    "Admiral",
+    "Captain",
+    "Colonel",
+    "Corporal",
+    "Doctor",
+    "Doubtful",
+    "General",
+    "Lieutenant",
+    "Major",
+    "Master",
+    "Mister",
+    "Private",
+    "Professor",
+    "Sergeant",
+}
+_BACK_MATTER_HEADINGS = (
+    "ACKNOWLEDGMENTS",
+    "ACKNOWLEDGEMENTS",
+    "ABOUT THE AUTHOR",
+    "ALSO BY ",
+    "EXCERPT FROM",
+    "THIS IS A WORK OF FICTION",
+    "TOR BOOKS BY ",
+)
+_FIRST_PERSON_GENDER_RE = re.compile(
+    r"\bI(?:'m| am| was)\s+(?:an?\s+)?(?:old\s+|young\s+)?(man|male|widower|woman|female|widow)\b",
+    re.IGNORECASE,
+)
+
+
+def _starts_back_matter(sentences: list[Any]) -> bool:
+    if not sentences:
+        return False
+    heading = " ".join(str(sentences[0].original_text).split()).upper()
+    return any(heading.startswith(marker) for marker in _BACK_MATTER_HEADINGS)
+
+
+async def _infer_first_person_gender(chapters, db: AsyncSession) -> str | None:
+    counts: Counter[str] = Counter()
+    for chapter in chapters:
+        sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        if _starts_back_matter(sentences):
+            break
+        for sentence in sentences:
+            for match in _FIRST_PERSON_GENDER_RE.finditer(sentence.original_text):
+                token = match.group(1).casefold()
+                counts["male" if token in {"man", "male", "widower"} else "female"] += 1
+    if counts["male"] >= 1 and counts["male"] >= counts["female"] * 2:
+        return "male"
+    if counts["female"] >= 1 and counts["female"] >= counts["male"] * 2:
+        return "female"
+    return None
+
+
+def _infer_candidate_gender(texts: list[str], names: set[str]) -> str | None:
+    """Infer gender only when repeated, local pronoun evidence is decisive."""
+    pronouns: Counter[str] = Counter()
+    patterns = [re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE) for name in names if name]
+    self_intro_patterns = [
+        re.compile(
+            rf"^\s*[“\"]?{re.escape(name)}\s*[,.”\"]+\s*(she|he)\s+" r"(?:said|replied|answered)\b",
+            re.IGNORECASE,
+        )
+        for name in names
+        if " " in name
+    ]
+    for text in texts:
+        for pattern in self_intro_patterns:
+            match = pattern.search(text)
+            if match:
+                return "female" if match.group(1).casefold() == "she" else "male"
+        if not any(pattern.search(text) for pattern in patterns):
+            continue
+        pronouns.update(token.casefold() for token in re.findall(r"\b(?:he|him|his|she|her|hers)\b", text, re.I))
+    male = sum(pronouns[token] for token in ("he", "him", "his"))
+    female = sum(pronouns[token] for token in ("she", "her", "hers"))
+    if male >= 3 and male >= female * 2:
+        return "male"
+    if female >= 3 and female >= male * 2:
+        return "female"
+    return None
+
+
+def _normalise_voice_prompt(value: Any, *, gender: str | None = None) -> str:
+    """Keep OmniVoice parameters valid and apply evidence-backed gender."""
+    text = str(value or "")
+
+    def token(kind: str, allowed: set[str], default: str) -> str:
+        match = re.search(rf"\[{kind}-([^\]]+)\]", text, re.IGNORECASE)
+        candidate = match.group(1).casefold() if match else default
+        return candidate if candidate in allowed else default
+
+    selected_gender = gender or token("gender", {"male", "female", "neutral"}, "neutral")
+    parts = [
+        f"[gender-{selected_gender}]",
+        f"[pitch-{token('pitch', {'low', 'medium', 'high'}, 'medium')}]",
+        f"[speed-{token('speed', {'slow', 'normal', 'fast'}, 'normal')}]",
+    ]
+    accent = token("accent", {"british", "american", "australian"}, "")
+    if accent:
+        parts.append(f"[accent-{accent}]")
+    parts.append(f"[age-{token('age', {'young', 'middle', 'old'}, 'middle')}]")
+    return "".join(parts)
 
 
 async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tuple[str, list[dict[str, Any]]]:
@@ -406,21 +731,32 @@ async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tup
     contextual_counts: Counter[str] = Counter()
     dialogue_counts: Counter[str] = Counter()
     dialogue_examples: dict[str, str] = {}
+    full_name_counts: Counter[str] = Counter()
+    all_texts: list[str] = []
     for chapter in chapters:
-        for sentence in await crud.audiobook.get_sentences_for_chapter(db, chapter.id):
-            for match in _CANDIDATE_TOKEN_RE.finditer(sentence.original_text):
+        chapter_sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        if _starts_back_matter(chapter_sentences):
+            break
+        for sentence in chapter_sentences:
+            text = sentence.original_text
+            all_texts.append(text)
+            for match in _CANDIDATE_TOKEN_RE.finditer(text):
                 token = match.group(0)
                 if token in _CANDIDATE_STOP_WORDS:
                     continue
                 counts[token] += 1
                 if match.start() > 0:
                     contextual_counts[token] += 1
-            for match in _DIALOGUE_TAG_RE.finditer(sentence.original_text):
+            for match in _FULL_NAME_RE.finditer(text):
+                first, last = match.groups()
+                if first not in _CANDIDATE_STOP_WORDS and last not in _CANDIDATE_STOP_WORDS and first not in _NAME_TITLE_WORDS:
+                    full_name_counts[f"{first} {last}"] += 1
+            for match in _DIALOGUE_TAG_RE.finditer(text):
                 name = match.group(1) or match.group(2)
                 if name in _CANDIDATE_STOP_WORDS:
                     continue
                 dialogue_counts[name] += 1
-                dialogue_examples.setdefault(name, sentence.original_text[:220])
+                dialogue_examples.setdefault(name, text[:220])
 
     candidates = [
         (name, count, contextual_counts[name], dialogue_counts[name])
@@ -434,17 +770,60 @@ async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tup
         if dialogue_count and name in dialogue_examples:
             line += f'; example: "{dialogue_examples[name]}"'
         lines.append(line)
-    confirmed = [
-        {
-            "name": name,
-            "mention_count": count,
-            "dialogue_count": dialogue_count,
-            "evidence": dialogue_examples.get(name),
-        }
-        for name, count, _, dialogue_count in candidates
-        if dialogue_count >= 5
-    ]
-    required_names = ", ".join(candidate["name"] for candidate in confirmed[:12])
+    confirmed = []
+    for name, count, _, dialogue_count in candidates:
+        if dialogue_count < 5:
+            continue
+        surname_matches = [
+            (full_name, full_count) for full_name, full_count in full_name_counts.items() if full_name.split()[-1] == name
+        ]
+        first_name_matches = [
+            (full_name, full_count) for full_name, full_count in full_name_counts.items() if full_name.split()[0] == name
+        ]
+        matches = surname_matches or first_name_matches
+        canonical_name = max(matches, key=lambda item: (item[1], item[0]))[0] if matches else name
+        identity_names = {canonical_name} if " " in canonical_name else {name}
+        confirmed.append(
+            {
+                "name": name,
+                "canonical_name": canonical_name,
+                "mention_count": count,
+                "dialogue_count": dialogue_count,
+                "evidence": dialogue_examples.get(name),
+                "gender": _infer_candidate_gender(all_texts, identity_names),
+                "required": True,
+            }
+        )
+
+    # Full names are useful for validating an LLM-produced protagonist even
+    # when a first-person book rarely uses their name in dialogue tags. They
+    # are identity metadata only and are not promoted into the roster by
+    # themselves.
+    known_canonical_names = {candidate["canonical_name"].casefold() for candidate in confirmed}
+    for full_name, full_count in full_name_counts.most_common():
+        if full_count < 3 or full_name.casefold() in known_canonical_names:
+            continue
+        first, last = full_name.split()
+        if max(counts[first], counts[last]) < 8:
+            continue
+        confirmed.append(
+            {
+                "name": full_name,
+                "canonical_name": full_name,
+                "mention_count": full_count,
+                "dialogue_count": 0,
+                "evidence": next(
+                    (text[:220] for text in all_texts if re.search(rf"\b{re.escape(full_name)}\b", text)),
+                    None,
+                ),
+                "gender": _infer_candidate_gender(all_texts, {full_name}),
+                "required": False,
+            }
+        )
+        known_canonical_names.add(full_name.casefold())
+
+    required = [candidate for candidate in confirmed if candidate["required"]]
+    required_names = ", ".join(dict.fromkeys(candidate["canonical_name"] for candidate in required[:16]))
     heading = f"REQUIRED confirmed speakers (include all): {required_names}\n" if required_names else ""
     return heading + ("\n".join(lines) or "(none)"), confirmed
 
@@ -454,7 +833,102 @@ async def _build_character_candidate_hints(chapters, db: AsyncSession) -> str:
     return hints
 
 
-async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
+def _canonicalize_roster_characters(
+    characters: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    grounding_corpus: str,
+) -> list[dict[str, Any]]:
+    """Merge split identities and replace speculative biographies with facts."""
+    stats_by_canonical: dict[str, dict[str, Any]] = {}
+    identity_lookup: dict[str, str] = {}
+    for candidate in candidates:
+        canonical_name = str(candidate.get("canonical_name") or candidate["name"]).strip()
+        canonical_key = canonical_name.casefold()
+        stats = stats_by_canonical.setdefault(
+            canonical_key,
+            {
+                "canonical_name": canonical_name,
+                "names": set(),
+                "mention_count": 0,
+                "dialogue_count": 0,
+                "gender": None,
+                "gender_score": -1,
+                "required": False,
+            },
+        )
+        original_name = str(candidate["name"]).strip()
+        stats["names"].update({original_name, canonical_name})
+        stats["mention_count"] = max(stats["mention_count"], int(candidate.get("mention_count") or 0))
+        stats["dialogue_count"] = max(stats["dialogue_count"], int(candidate.get("dialogue_count") or 0))
+        stats["required"] = stats["required"] or bool(candidate.get("required", True))
+        gender = candidate.get("gender")
+        gender_score = int(candidate.get("dialogue_count") or 0) + int(candidate.get("mention_count") or 0)
+        if gender and gender_score > stats["gender_score"]:
+            stats["gender"] = gender
+            stats["gender_score"] = gender_score
+        identity_lookup[original_name.casefold()] = canonical_key
+        identity_lookup[canonical_key] = canonical_key
+
+    merged: dict[str, dict[str, Any]] = {}
+    for character in characters:
+        character = dict(character)
+        original_name = str(character["name"]).strip()
+        lookup_keys = [original_name.casefold(), *(str(alias).strip().casefold() for alias in character["aliases"])]
+        canonical_key = next((identity_lookup[key] for key in lookup_keys if key in identity_lookup), None)
+        stats = stats_by_canonical.get(canonical_key or "")
+        allowed_identity_names: set[str] = set()
+        if stats and not character["is_narrator"]:
+            character["name"] = stats["canonical_name"]
+            allowed_identity_names = {name.casefold() for name in stats["names"]}
+            character["aliases"] = [
+                *character["aliases"],
+                *(name for name in sorted(stats["names"]) if name.casefold() != character["name"].casefold()),
+            ]
+            if original_name.casefold() != character["name"].casefold():
+                character["aliases"] = [*character["aliases"], original_name]
+            dialogue_count = stats["dialogue_count"]
+            mention_count = stats["mention_count"]
+            if dialogue_count:
+                character["description"] = (
+                    f"Recurring speaking character identified from {dialogue_count} explicit dialogue "
+                    f"attributions and {mention_count} name mentions."
+                )
+            else:
+                character["description"] = f"Character identity grounded by {mention_count} full-name mentions."
+            evidence_gender = stats["gender"] or ("neutral" if stats["required"] else None)
+            character["voice_design_prompt"] = _normalise_voice_prompt(
+                character.get("voice_design_prompt"), gender=evidence_gender
+            )
+        elif not character["is_narrator"]:
+            character["description"] = "Speaking character identified from supplied story excerpts."
+            character["voice_design_prompt"] = _normalise_voice_prompt(character.get("voice_design_prompt"))
+
+        grounded_aliases = []
+        for alias in character["aliases"]:
+            value = " ".join(str(alias).split()).strip()
+            if not value or value.casefold() == character["name"].casefold():
+                continue
+            if value.casefold() in allowed_identity_names or value.casefold() in grounding_corpus:
+                grounded_aliases.append(value)
+        character["aliases"] = list(dict.fromkeys(grounded_aliases))[:10]
+
+        merge_key = character["name"].strip().casefold()
+        existing = merged.get(merge_key)
+        if existing is None:
+            merged[merge_key] = character
+            continue
+        existing["aliases"] = list(dict.fromkeys([*existing["aliases"], *character["aliases"]]))[:10]
+        existing["evidence"] = list(dict.fromkeys([*existing["evidence"], *character["evidence"]]))[:3]
+
+    return list(merged.values())
+
+
+async def generate_character_roster(
+    book_id: int,
+    db: AsyncSession,
+    *,
+    refresh_series_metadata: bool = False,
+) -> None:
     """Phase 2: extract characters from book text and persist to audiobook_characters."""
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = (settings.llm_provider or STUB_PROVIDER).lower() if settings else STUB_PROVIDER
@@ -481,6 +955,10 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 
     combined_text = await _build_roster_excerpt(context_chapters, db)
     candidate_hints, confirmed_speakers = await _build_character_candidate_analysis(context_chapters, db)
+    first_person_gender = await _infer_first_person_gender(context_chapters, db)
+    prompt_series_profiles = series_profiles
+    if refresh_series_metadata and book.series:
+        prompt_series_profiles = await crud.audiobook.get_sibling_series_characters(db, book.series, book_id)
     series_roster = (
         json.dumps(
             [
@@ -490,11 +968,11 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "description": profile.description,
                     "voice_design_prompt": profile.voice_design_prompt,
                 }
-                for profile in series_profiles
+                for profile in prompt_series_profiles
             ],
             ensure_ascii=False,
         )
-        if series_profiles
+        if prompt_series_profiles
         else "(none yet)"
     )
     await crud.audiobook.update_book_pipeline_progress(
@@ -557,19 +1035,36 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     if not isinstance(characters_data, list):
         raise RuntimeError(f"Expected a JSON array from LLM, got: {type(characters_data)}")
 
+    grounding_corpus = " ".join(combined_text.split()).casefold()
+    grounding_corpus += " " + " ".join(
+        " ".join(str(candidate.get("evidence") or "").split()).casefold() for candidate in confirmed_speakers
+    )
+
+    def grounded_evidence(items: Any) -> list[str]:
+        if not isinstance(items, list):
+            return []
+        grounded = []
+        for item in items:
+            value = " ".join(str(item).split()).strip(' "“”')
+            if len(value) >= 8 and value.casefold() in grounding_corpus:
+                grounded.append(value)
+        return grounded[:3]
+
     # Normalise keys to match our model
     normalised: list[dict] = []
     for c in characters_data:
         if not isinstance(c, dict):
             continue
+        description = c.get("description")
         normalised.append(
             {
                 "name": str(c.get("name", "Unknown")),
                 "aliases": [str(alias) for alias in c.get("aliases", []) if alias],
-                "description": c.get("description"),
-                "evidence": [str(item) for item in c.get("evidence", []) if item][:3],
+                "description": description,
+                "evidence": grounded_evidence(c.get("evidence")),
                 "voice_design_prompt": c.get("voice_design_prompt"),
                 "is_narrator": str(c.get("name", "")).strip().casefold() == "narrator",
+                "_is_protagonist": bool(re.search(r"\b(?:protagonist|first-person)\b", str(description or ""), re.IGNORECASE)),
             }
         )
     if not normalised:
@@ -593,6 +1088,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                         "evidence": character["evidence"],
                         "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
                         "is_narrator": False,
+                        "_is_protagonist": True,
                     }
                 )
                 existing_names.add(canonical)
@@ -612,36 +1108,61 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "evidence": [],
                 "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                 "is_narrator": True,
+                "_is_protagonist": False,
             },
         )
+    for character in normalised:
+        if character["is_narrator"]:
+            character["name"] = "Narrator"
+            character["aliases"] = []
+            character["description"] = "Primary narrative voice for prose; not a story character."
+            character["evidence"] = []
+            character["_is_protagonist"] = False
     if promoted_protagonists:
         narrator_index = next(index for index, character in enumerate(normalised) if character["is_narrator"])
         for offset, protagonist in enumerate(promoted_protagonists, start=1):
             normalised.insert(narrator_index + offset, protagonist)
 
+    normalised = _canonicalize_roster_characters(normalised, confirmed_speakers, grounding_corpus)
+    if first_person_gender:
+        for character in normalised:
+            if character.get("_is_protagonist"):
+                character["voice_design_prompt"] = _normalise_voice_prompt(
+                    character.get("voice_design_prompt"), gender=first_person_gender
+                )
+                character["description"] = (
+                    "First-person protagonist; spoken dialogue voice is separate from the Narrator. "
+                    f"{character['description']}"
+                )
+
     def character_tokens(character: dict) -> set[str]:
         values = [character["name"], *character["aliases"]]
         return {token.casefold() for value in values for token in _CANDIDATE_TOKEN_RE.findall(value)}
 
-    represented_tokens = set().union(*(character_tokens(character) for character in normalised))
-    for candidate in confirmed_speakers[:12]:
-        canonical = candidate["name"].casefold()
-        if canonical in represented_tokens:
+    represented_names = {
+        value.strip().casefold() for character in normalised for value in [character["name"], *character["aliases"]]
+    }
+    required_speakers = [candidate for candidate in confirmed_speakers if candidate.get("required", True)][:16]
+    for candidate in required_speakers:
+        candidate_name = str(candidate.get("canonical_name") or candidate["name"])
+        canonical = candidate_name.casefold()
+        if canonical in represented_names:
             continue
         normalised.append(
             {
-                "name": candidate["name"],
-                "aliases": [],
+                "name": candidate_name,
+                "aliases": [candidate["name"]] if candidate["name"].casefold() != canonical else [],
                 "description": (
                     f"Recurring speaking character identified from {candidate['dialogue_count']} explicit "
-                    "dialogue attributions across the book."
+                    f"dialogue attributions and {candidate['mention_count']} name mentions."
                 ),
                 "evidence": [candidate["evidence"]] if candidate["evidence"] else [],
-                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "voice_design_prompt": _normalise_voice_prompt(None, gender=candidate.get("gender") or "neutral"),
                 "is_narrator": False,
+                "_is_protagonist": False,
             }
         )
-        represented_tokens.add(canonical)
+        represented_names.update({canonical, candidate["name"].casefold()})
 
     protagonist_names = {character["name"].strip().casefold() for character in promoted_protagonists}
     if protagonist_names:
@@ -652,12 +1173,16 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 alias for alias in character["aliases"] if alias.strip().casefold() not in protagonist_names
             ]
 
-    dialogue_scores = {candidate["name"].casefold(): candidate["dialogue_count"] for candidate in confirmed_speakers}
+    dialogue_scores = {
+        name.casefold(): candidate["dialogue_count"]
+        for candidate in confirmed_speakers
+        for name in {candidate["name"], candidate.get("canonical_name") or candidate["name"]}
+    }
 
     def roster_priority(character: dict) -> tuple[int, int, str]:
         if character["is_narrator"]:
             return (3, 0, character["name"])
-        if "protagonist" in str(character.get("description") or "").casefold():
+        if character.get("_is_protagonist"):
             return (2, 0, character["name"])
         score = max((dialogue_scores.get(token, 0) for token in character_tokens(character)), default=0)
         return (1, score, character["name"])
@@ -667,7 +1192,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
     if provider != STUB_PROVIDER:
         # Reserve stable voices for one-scene and unnamed dialogue without
         # allowing hundreds of cameos to crowd recurring characters out.
-        normalised = normalised[:13]
+        normalised = normalised[:18]
         normalised.extend(
             [
                 {
@@ -677,6 +1202,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "evidence": [],
                     "voice_design_prompt": "[gender-female][pitch-medium][speed-normal]",
                     "is_narrator": False,
+                    "_is_protagonist": False,
                 },
                 {
                     "name": "Minor Male Voice",
@@ -685,6 +1211,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "evidence": [],
                     "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
                     "is_narrator": False,
+                    "_is_protagonist": False,
                 },
             ]
         )
@@ -694,34 +1221,42 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         profile = shared_by_name.get(" ".join(character["name"].casefold().split()))
         if profile is None:
             continue
-        character.update(
-            {
-                "series_character_id": profile.id,
-                "name": profile.name,
-                "description": profile.description,
-                "voice_design_prompt": profile.voice_design_prompt,
-                "is_narrator": profile.is_narrator,
-                "aliases": profile.aliases or [],
-                "evidence": profile.evidence or [],
-            }
-        )
+        if refresh_series_metadata:
+            character["series_character_id"] = profile.id
+        else:
+            character.update(
+                {
+                    "series_character_id": profile.id,
+                    "name": profile.name,
+                    "description": profile.description,
+                    "voice_design_prompt": profile.voice_design_prompt,
+                    "is_narrator": profile.is_narrator,
+                    "aliases": profile.aliases or [],
+                    "evidence": profile.evidence or [],
+                }
+            )
+
+    for character in normalised:
+        character.pop("_is_protagonist", None)
 
     await crud.audiobook.delete_characters_for_book(db, book_id)
     created_characters = await crud.audiobook.create_characters_bulk(
         db,
         book_id=book_id,
-        characters_data=normalised[:15],
+        characters_data=normalised[:20],
     )
     if book.series:
         await crud.audiobook.sync_book_roster_with_series(
             db,
             book,
             created_characters,
-            prefer_series=True,
+            prefer_series=not refresh_series_metadata,
         )
+        if refresh_series_metadata:
+            await crud.audiobook.delete_orphaned_series_characters(db, book.series)
     await crud.audiobook.set_book_audiobook_summary(db, book_id, roster_result.get("book_summary"))
     await crud.audiobook.update_book_pipeline_progress(
-        db, book_id, current=1, total=1, detail=f"Created {len(normalised[:15])} character profiles"
+        db, book_id, current=1, total=1, detail=f"Created {len(normalised[:20])} character profiles"
     )
     logger.info("Created %d characters for book %s.", len(normalised), book_id)
     if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
@@ -736,10 +1271,34 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
     character_ids = {character.id for character in characters}
     narrator_id = next((character.id for character in characters if character.is_narrator), None)
+    protagonist_id = next(
+        (
+            character.id
+            for character in characters
+            if "first-person protagonist" in str(character.description or "").casefold()
+        ),
+        None,
+    )
     minor_female_id = next((character.id for character in characters if character.name == "Minor Female Voice"), None)
     minor_male_id = next((character.id for character in characters if character.name == "Minor Male Voice"), None)
+    character_name_ids = {
+        name.casefold(): character.id
+        for character in characters
+        if not character.is_narrator and character.id not in {minor_female_id, minor_male_id}
+        for name in sorted([character.name, *(character.aliases or [])], key=len, reverse=True)
+        if len(name.strip()) >= 3
+    }
     roster_json = json.dumps(
-        [{"id": c.id, "name": c.name, "description": c.description, "is_narrator": c.is_narrator} for c in characters],
+        [
+            {
+                "id": c.id,
+                "name": c.name,
+                "aliases": c.aliases or [],
+                "description": c.description,
+                "is_narrator": c.is_narrator,
+            }
+            for c in characters
+        ],
         ensure_ascii=False,
     )
 
@@ -747,7 +1306,8 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     counts = await crud.audiobook.count_sentences_by_status(db, book_id)
     total = sum(counts.values())
     processed = total - counts.get("pending_diarization", 0)
-    batch_size = 40
+    batch_size = MAX_DIARIZATION_BATCH_SIZE
+    smaller_batch_successes = 0
     await crud.audiobook.update_book_pipeline_progress(
         db, book_id, current=processed, total=total, detail="Preparing dialogue attribution"
     )
@@ -759,15 +1319,18 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             return
 
         chapter_sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        role_speaker_ids = _infer_role_speaker_ids(chapter_sentences, minor_female_id, minor_male_id)
         pending = [sentence for sentence in chapter_sentences if sentence.status == "pending_diarization"]
         if not pending:
             continue
 
         # Treat short files before the first substantial chapter as front matter.
         # Once the story begins, retain short chapters and only skip tiny dividers.
-        if len(chapter_sentences) >= batch_size:
+        if len(chapter_sentences) >= MIN_STORY_CHAPTER_SENTENCES:
             story_started = True
-        is_front_matter = (not story_started and len(chapter_sentences) < batch_size) or len(chapter_sentences) < 20
+        is_front_matter = (not story_started and len(chapter_sentences) < MIN_STORY_CHAPTER_SENTENCES) or len(
+            chapter_sentences
+        ) < 20
         if is_front_matter:
             for sentence in pending:
                 await crud.audiobook.update_sentence_diarization(
@@ -792,12 +1355,76 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
         context_window = [
             sentence.original_text for sentence in chapter_sentences if sentence.status != "pending_diarization"
         ][-8:]
+        open_dialogue_speaker_id = None
+        last_dialogue_speaker_id = None
+        last_other_dialogue_speaker_id = None
+        for previous_sentence in chapter_sentences:
+            if previous_sentence.status == "pending_diarization":
+                break
+            was_open_dialogue = open_dialogue_speaker_id is not None
+            if previous_sentence.character_id != narrator_id and (
+                was_open_dialogue or any(quote in previous_sentence.original_text for quote in ("“", "”", '"'))
+            ):
+                last_dialogue_speaker_id = previous_sentence.character_id
+                if previous_sentence.character_id != protagonist_id:
+                    last_other_dialogue_speaker_id = previous_sentence.character_id
+            inferred_open_speaker_id = _advance_open_dialogue_speaker(
+                previous_sentence.original_text,
+                previous_sentence.character_id,
+                narrator_id=narrator_id,
+                minor_female_id=minor_female_id,
+                minor_male_id=minor_male_id,
+                current_open_speaker_id=open_dialogue_speaker_id,
+            )
+            open_dialogue_speaker_id = _fallback_open_dialogue_speaker(
+                previous_sentence.original_text,
+                inferred_open_speaker_id,
+                protagonist_id=protagonist_id,
+                last_dialogue_speaker_id=last_dialogue_speaker_id,
+                last_other_dialogue_speaker_id=last_other_dialogue_speaker_id,
+            )
         while True:
             batch = await crud.audiobook.get_sentences_pending_diarization(
                 db, book_id, limit=batch_size, chapter_id=chapter.id
             )
             if not batch:
                 break
+
+            # Quote-free prose cannot be a spoken character line. Commit the
+            # unambiguous prefix before asking the local model about the next
+            # dialogue span; long prose should never inflate a dialogue call.
+            deterministic_prefix = []
+            if open_dialogue_speaker_id is None:
+                for sentence in batch:
+                    if any(quote in sentence.original_text for quote in ("“", "”", '"')):
+                        break
+                    deterministic_prefix.append(sentence)
+            if deterministic_prefix:
+                for sentence in deterministic_prefix:
+                    await crud.audiobook.update_sentence_diarization(
+                        db,
+                        sentence.id,
+                        narrator_id,
+                        sentence.original_text,
+                        speaker_confidence=0.99,
+                        speaker_reason="Deterministic quote-free narration",
+                    )
+                    context_window.append(sentence.original_text)
+                processed += len(deterministic_prefix)
+                await crud.audiobook.update_book_pipeline_progress(
+                    db,
+                    book_id,
+                    current=processed,
+                    total=total,
+                    detail=f"Chapter {chapter.chapter_number}: short-circuited quote-free prose",
+                )
+                if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+                    logger.info("Book %s paused after a deterministic narration batch.", book_id)
+                    return
+                if await crud.audiobook.consume_book_batch_limit(db, book_id):
+                    logger.info("Book %s paused after one deterministic narration batch.", book_id)
+                    return
+                continue
 
             sentences_json = json.dumps(
                 [{"id": s.id, "text": s.original_text} for s in batch],
@@ -854,12 +1481,62 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 try:
                     batch_result = _extract_json(raw)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError(f"LLM returned invalid JSON for diarization: {exc}\nRaw: {raw[:500]}") from exc
+                    if batch_size > MIN_DIARIZATION_BATCH_SIZE:
+                        smaller_batch_size = max(MIN_DIARIZATION_BATCH_SIZE, batch_size // 2)
+                        logger.warning(
+                            "Invalid diarization JSON for book %s at batch size %s; retrying %s sentences: %s",
+                            book_id,
+                            batch_size,
+                            smaller_batch_size,
+                            exc,
+                        )
+                        batch_size = smaller_batch_size
+                        smaller_batch_successes = 0
+                        await crud.audiobook.update_book_pipeline_progress(
+                            db,
+                            book_id,
+                            current=processed,
+                            total=total,
+                            detail=f"Retrying malformed model output with {batch_size} sentences",
+                        )
+                        continue
+                    raw_excerpt = f"{raw[:500]}\n...\n{raw[-500:]}" if len(raw) > 1000 else raw
+                    raise RuntimeError(
+                        f"LLM returned invalid JSON for diarization after smaller-batch retries: {exc}\n" f"Raw: {raw_excerpt}"
+                    ) from exc
 
-            if isinstance(batch_result, list):
-                batch_result = {"assignments": batch_result, "chapter_summary": chapter.summary}
-            if not isinstance(batch_result, dict) or not isinstance(batch_result.get("assignments"), list):
-                raise RuntimeError(f"Expected a JSON object from diarization, got: {type(batch_result)}")
+            try:
+                batch_result = _normalise_diarization_result(
+                    batch_result,
+                    {sentence.id for sentence in batch},
+                )
+            except ValueError as exc:
+                if provider != STUB_PROVIDER and batch_size > MIN_DIARIZATION_BATCH_SIZE:
+                    smaller_batch_size = max(MIN_DIARIZATION_BATCH_SIZE, batch_size // 2)
+                    logger.warning(
+                        "Incomplete diarization response for book %s at batch size %s; retrying %s sentences: %s",
+                        book_id,
+                        batch_size,
+                        smaller_batch_size,
+                        exc,
+                    )
+                    batch_size = smaller_batch_size
+                    smaller_batch_successes = 0
+                    await crud.audiobook.update_book_pipeline_progress(
+                        db,
+                        book_id,
+                        current=processed,
+                        total=total,
+                        detail=f"Retrying incomplete model output with {batch_size} sentences",
+                    )
+                    continue
+                raise RuntimeError(f"Invalid diarization response: {exc}") from exc
+
+            if batch_size < MAX_DIARIZATION_BATCH_SIZE:
+                smaller_batch_successes += 1
+                if smaller_batch_successes >= 2:
+                    batch_size = min(MAX_DIARIZATION_BATCH_SIZE, batch_size * 2)
+                    smaller_batch_successes = 0
             results = batch_result["assignments"]
 
             result_map = {r["id"]: r for r in results if isinstance(r, dict) and isinstance(r.get("id"), int)}
@@ -882,12 +1559,45 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     next_text=next_text,
                     character_id=char_id,
                     narrator_id=narrator_id,
+                    protagonist_id=protagonist_id,
+                    character_name_ids=character_name_ids,
+                    role_speaker_ids=role_speaker_ids,
+                    last_dialogue_speaker_id=last_dialogue_speaker_id,
                     minor_female_id=minor_female_id,
                     minor_male_id=minor_male_id,
                     reason=reason,
                 )
                 if guardrail_confidence is not None:
                     confidence = guardrail_confidence
+                if (
+                    open_dialogue_speaker_id is not None
+                    and char_id != open_dialogue_speaker_id
+                    and (guardrail_confidence is None or guardrail_confidence < 0.9)
+                ):
+                    char_id = open_dialogue_speaker_id
+                    reason = "Deterministic continuation of open quoted dialogue"
+                    confidence = 0.95
+                if char_id != narrator_id and (
+                    open_dialogue_speaker_id is not None or any(quote in sentence.original_text for quote in ("“", "”", '"'))
+                ):
+                    last_dialogue_speaker_id = char_id
+                    if char_id != protagonist_id:
+                        last_other_dialogue_speaker_id = char_id
+                inferred_open_speaker_id = _advance_open_dialogue_speaker(
+                    sentence.original_text,
+                    char_id,
+                    narrator_id=narrator_id,
+                    minor_female_id=minor_female_id,
+                    minor_male_id=minor_male_id,
+                    current_open_speaker_id=open_dialogue_speaker_id,
+                )
+                open_dialogue_speaker_id = _fallback_open_dialogue_speaker(
+                    sentence.original_text,
+                    inferred_open_speaker_id,
+                    protagonist_id=protagonist_id,
+                    last_dialogue_speaker_id=last_dialogue_speaker_id,
+                    last_other_dialogue_speaker_id=last_other_dialogue_speaker_id,
+                )
                 await crud.audiobook.update_sentence_diarization(
                     db,
                     sentence.id,
@@ -898,7 +1608,7 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 )
                 context_window.append(sentence.original_text)
 
-            chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:4000]
+            chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:1200]
             await crud.audiobook.update_chapter_summary(db, chapter.id, chapter_summary or None)
             chapter.summary = chapter_summary or None
             processed += len(batch)
@@ -909,6 +1619,9 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                 total=total,
                 detail=f"Chapter {chapter.chapter_number}: attributed {processed} of {total} sentences",
             )
+            if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+                logger.info("Book %s paused after a diarization batch.", book_id)
+                return
             if await crud.audiobook.consume_book_batch_limit(db, book_id):
                 logger.info("Book %s paused after one diarization batch.", book_id)
                 return

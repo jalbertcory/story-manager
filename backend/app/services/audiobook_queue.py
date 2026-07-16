@@ -48,9 +48,18 @@ class AudiobookQueue:
     async def stop(self) -> None:
         if not self._worker_task:
             return
-        await self._queue.put(None)
-        await self._worker_task
+        self._worker_task.cancel()
+        try:
+            await self._worker_task
+        except asyncio.CancelledError:
+            logger.info("Audiobook worker cancelled at its durable checkpoint.")
         self._worker_task = None
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+            except asyncio.QueueEmpty:
+                break
         self._queued_book_ids.clear()
         self._rerun_book_ids.clear()
         self._queued_preview_ids.clear()
@@ -188,7 +197,15 @@ class AudiobookQueue:
                 if phase == "ingesting":
                     await ingest_epub(book_id, db)
                 elif phase == "roster_gen":
-                    await generate_character_roster(book_id, db)
+                    book = await db.get(Book, book_id)
+                    refresh_series_metadata = bool(
+                        book and book.audiobook_stop_after_phase == crud.audiobook.ROSTER_REFRESH_STOP_MARKER
+                    )
+                    await generate_character_roster(
+                        book_id,
+                        db,
+                        refresh_series_metadata=refresh_series_metadata,
+                    )
                 elif phase == "diarizing":
                     await diarize_sentences(book_id, db)
                 elif phase == "audio_gen":
