@@ -29,6 +29,10 @@ router = APIRouter()
 
 class AudiobookStatusResponse(BaseModel):
     pipeline_status: Optional[str]
+    next_phase: str
+    pause_requested: bool
+    stop_after_phase: Optional[str]
+    last_error: Optional[str]
     sentence_counts: dict[str, int]
 
 
@@ -155,10 +159,10 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
     resume_status = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     if resume_status == "complete":
-        await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
         return {"status": "complete", "queued": False}
 
-    await crud.audiobook.set_book_pipeline_status(db, book_id, resume_status)
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status=resume_status, stop_after_phase=None)
 
     queue = get_audiobook_queue()
     queued = await queue.enqueue(book_id)
@@ -166,11 +170,35 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
     return {"status": current_status, "queued": queued}
 
 
+@router.post("/api/books/{book_id}/audiobook/step")
+async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Run exactly the next recoverable phase, then stop for review."""
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
+        return {"status": book.audiobook_pipeline_status, "queued": False}
+
+    if book.audiobook_pipeline_status == "error" and await crud.audiobook.has_sentence_status(db, book_id, "error"):
+        await crud.audiobook.reset_error_sentences_for_book(db, book_id)
+
+    next_phase = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
+    if next_phase == "complete":
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
+        return {"status": "complete", "queued": False}
+
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status=next_phase, stop_after_phase=next_phase)
+    queued = await get_audiobook_queue().enqueue(book_id)
+    return {"status": next_phase, "queued": queued, "stop_after_phase": next_phase}
+
+
 @router.post("/api/books/{book_id}/audiobook/pause")
 async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    await _get_audiobook_book_or_404(book_id, db)
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "paused")
-    return {"status": "paused"}
+    book = await _get_audiobook_book_or_404(book_id, db)
+    active = book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling")
+    await crud.audiobook.request_book_pipeline_pause(db, book_id)
+    if active:
+        return {"status": book.audiobook_pipeline_status, "pause_requested": True}
+    await crud.audiobook.pause_book_pipeline_if_requested(db, book_id)
+    return {"status": "paused", "pause_requested": False}
 
 
 @router.post("/api/books/{book_id}/audiobook/rebuild")
@@ -188,7 +216,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
     # Delete existing pipeline data so ingestion runs fresh
     await crud.audiobook.delete_chapters_for_book(db, book_id)
     await crud.audiobook.delete_characters_for_book(db, book_id)
-    await crud.audiobook.set_book_pipeline_status(db, book_id, "ingesting")
+    await crud.audiobook.configure_book_pipeline_run(db, book_id, status="ingesting", stop_after_phase=None)
     await queue.enqueue(book_id)
     return {"status": "ingesting", "queued": True}
 
@@ -197,8 +225,14 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
 async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) -> AudiobookStatusResponse:
     book = await _get_audiobook_book_or_404(book_id, db)
     counts = await crud.audiobook.count_sentences_by_status(db, book_id)
+    next_phase = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
+    await db.refresh(book)
     return AudiobookStatusResponse(
         pipeline_status=book.audiobook_pipeline_status,
+        next_phase=next_phase,
+        pause_requested=book.audiobook_pause_requested,
+        stop_after_phase=book.audiobook_stop_after_phase,
+        last_error=book.audiobook_last_error,
         sentence_counts=counts,
     )
 

@@ -1,10 +1,11 @@
 import zipfile
 from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
 from ebooklib import epub
 
-from backend.app import epub_editor
+from backend.app import epub_editor, models
 from backend.app.services.epub_utils import PROSE_BLOCK_MAX_CHARS
 
 
@@ -51,3 +52,34 @@ def test_process_epub_normalizes_oversized_prose_blocks(tmp_path):
     assert word_count is not None
     assert len(paragraphs) == 3
     assert all(len(p.get_text(" ", strip=True)) <= PROSE_BLOCK_MAX_CHARS for p in paragraphs)
+
+
+@pytest.mark.asyncio
+async def test_forced_cleaning_rebuild_restores_epub_after_last_rule_is_removed(db, monkeypatch):
+    book = models.Book(
+        title="Restored",
+        author="Reader",
+        source_type=models.SourceType.epub,
+        immutable_path="library/restored-immutable.epub",
+        current_path="library/restored.epub",
+        removed_chapters=[],
+        content_selectors=[],
+        current_word_count=0,
+    )
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+    calls = []
+
+    def process(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 3
+
+    monkeypatch.setattr(epub_editor, "process_epub", process)
+
+    changed = await epub_editor.apply_book_cleaning(book, db, force=True)
+
+    assert changed is True
+    assert len(calls) == 1
+    assert calls[0][0][2:4] == ([], [])
+    assert book.current_word_count == 3

@@ -149,7 +149,7 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) == "paused":
+    if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         logger.info("Book %s paused before assembly.", book_id)
         return
 
@@ -172,6 +172,9 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         logger.info("No chapters need reassembly for book %s; rebuilding the EPUB package.", book_id)
 
     for chapter in chapters:
+        if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
+            logger.info("Book %s paused between chapter assemblies.", book_id)
+            return
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
         await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
 
@@ -222,7 +225,7 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     temporary_epub_path.replace(audiobook_epub_path)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
-    if await crud.audiobook.get_book_pipeline_status(db, book_id) != "paused":
+    if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):
         await crud.audiobook.set_book_pipeline_status(db, book_id, "complete")
     logger.info("Assembly complete for book %s.", book_id)
 
