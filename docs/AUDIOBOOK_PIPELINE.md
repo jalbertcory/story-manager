@@ -197,6 +197,28 @@ Examples:
 
 Users can manually edit these values in the Character Roster UI.
 
+### Official Local OmniVoice
+
+Story Manager includes a native adapter for the official
+[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 release. It uses the upstream model directly, keeps it
+resident between requests, translates existing bracket-style voice profiles into official voice-design attributes,
+and converts the 24 kHz output to MP3.
+
+```bash
+make run-omnivoice
+curl http://127.0.0.1:8001/health
+```
+
+The isolated service environment lives under `services/omnivoice/.venv`. The first start downloads about 3.3 GB of
+public model weights. CUDA, Intel XPU, Apple MPS, and CPU are auto-detected; Apple Silicon uses native MPS with the
+upstream audio tokenizer on CPU. Configure `http://127.0.0.1:8001` as the OmniVoice endpoint in **Audio Settings**.
+The `stub` LLM provider may remain selected for deterministic local roster generation and diarization while the
+OmniVoice adapter produces real speech.
+
+The defaults use 16 diffusion steps for interactive local throughput. Set `OMNIVOICE_NUM_STEPS=32` before
+`make run-omnivoice` for the upstream quality default. Other adapter options are documented in
+`services/omnivoice/README.md`.
+
 ## Deterministic Local Harness
 
 The pipeline works without API keys or network services. When no settings row exists—or when the LLM provider is
