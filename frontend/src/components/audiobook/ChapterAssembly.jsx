@@ -47,7 +47,7 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
               chapter.audio_file_path && !chapter.needs_reassembly;
             return (
               <tr key={chapter.id}>
-                <td>Chapter {chapter.chapter_number}</td>
+                <td>{chapter.title}</td>
                 <td>
                   {previewBusy ? (
                     <span className="badge badge--warning">

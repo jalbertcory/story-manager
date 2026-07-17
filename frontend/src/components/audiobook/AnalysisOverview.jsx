@@ -19,7 +19,8 @@ function AnalysisOverview({ status, chapters = [] }) {
         </p>
         {status?.summary && (
           <small className="analysis-review-note">
-            Model-generated working analysis — verify names and plot details before production.
+            Model-generated working analysis — verify names and plot details
+            before production.
           </small>
         )}
       </section>
@@ -35,7 +36,7 @@ function AnalysisOverview({ status, chapters = [] }) {
           return (
             <article className="chapter-analysis-card" key={chapter.id}>
               <div className="chapter-analysis-header">
-                <strong>Chapter {chapter.chapter_number}</strong>
+                <strong>{chapter.title}</strong>
                 <span>{percent}% attributed</span>
               </div>
               <div className="chapter-analysis-counts">

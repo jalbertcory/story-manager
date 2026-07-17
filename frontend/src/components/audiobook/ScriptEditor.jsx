@@ -249,7 +249,7 @@ function ScriptEditor({
             <option value="">All</option>
             {chapters.map((chapter) => (
               <option key={chapter.id} value={chapter.id}>
-                {chapter.chapter_number} · {chapter.processed_sentence_count}/
+                {chapter.title} · {chapter.processed_sentence_count}/
                 {chapter.sentence_count}
               </option>
             ))}

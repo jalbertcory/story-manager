@@ -153,6 +153,7 @@ describe("AudiobookPipeline", () => {
     const chapter = {
       id: 9,
       chapter_number: 1,
+      content_file_name: "Text/chapter-one.xhtml",
       sentence_count: 2,
       processed_sentence_count: 2,
       audio_generated_count: 0,
@@ -226,12 +227,21 @@ describe("AudiobookPipeline", () => {
     globalThis.fetch = fetchMock;
 
     const { container } = renderWithClient(
-      <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
+      <AudiobookPipeline
+        book={{ id: 11, series: "The Saga" }}
+        epubChapters={[
+          {
+            filename: "Text/chapter-one.xhtml",
+            title: "The Door Opens",
+          },
+        ]}
+      />,
     );
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Chapter Assembly" }),
     );
+    expect(screen.getByText("The Door Opens")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rebuild Preview" }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -241,6 +251,7 @@ describe("AudiobookPipeline", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Listen & Read" }));
+    expect(screen.getAllByText("The Door Opens")).toHaveLength(2);
     expect(
       await screen.findByText("Avery opened the door."),
     ).toBeInTheDocument();
