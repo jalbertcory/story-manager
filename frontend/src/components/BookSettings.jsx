@@ -389,7 +389,7 @@ function BookSettings({ book: initialBook, onBack }) {
       </nav>
 
       {book.audiobook_enabled && bookTab === "audiobook" && (
-        <AudiobookPipeline book={book} />
+        <AudiobookPipeline book={book} epubChapters={chapters} />
       )}
 
       {bookTab === "details" && (

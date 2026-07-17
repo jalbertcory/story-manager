@@ -1795,9 +1795,29 @@
   gap: 0.4rem;
 }
 
-.audiobook-reader-player {
-  width: 100%;
+.audiobook-reader-playback {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   margin: 1rem 0;
+}
+
+.audiobook-reader-player {
+  flex: 1;
+  min-width: 0;
+}
+
+.audiobook-reader-speed {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.audiobook-reader-speed select {
+  width: auto;
 }
 
 .audiobook-reader-summary {
@@ -1815,6 +1835,22 @@
   padding-right: 0.75rem;
 }
 
+.audiobook-reader-sentence {
+  border-radius: 0.25rem;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.audiobook-reader-sentence--active {
+  background: rgba(98, 114, 234, 0.2);
+  box-shadow:
+    0.15rem 0 0 rgba(98, 114, 234, 0.2),
+    -0.15rem 0 0 rgba(98, 114, 234, 0.2);
+}
+
 @media (max-width: 760px) {
   .audiobook-reader {
     grid-template-columns: 1fr;
@@ -1827,6 +1863,15 @@
 
   .audiobook-reader-chapters button {
     min-width: 9rem;
+  }
+
+  .audiobook-reader-playback {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .audiobook-reader-speed {
+    align-self: flex-end;
   }
 }
 

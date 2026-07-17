@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookStatus,
@@ -118,7 +118,7 @@ const SUB_TABS = [
   "Chapter Assembly",
 ];
 
-function AudiobookPipeline({ book }) {
+function AudiobookPipeline({ book, epubChapters = [] }) {
   const bookId = book.id;
   const queryClient = useQueryClient();
   const [subTab, setSubTab] = useState("Analysis");
@@ -151,6 +151,17 @@ function AudiobookPipeline({ book }) {
       return (s && isActive(s)) || previewActive ? 3000 : false;
     },
   });
+  const titledChapters = useMemo(() => {
+    const titleByFilename = new Map(
+      epubChapters.map((chapter) => [chapter.filename, chapter.title]),
+    );
+    return chapters.map((chapter) => ({
+      ...chapter,
+      title:
+        titleByFilename.get(chapter.content_file_name)?.trim() ||
+        `Chapter ${chapter.chapter_number}`,
+    }));
+  }, [chapters, epubChapters]);
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
@@ -368,7 +379,7 @@ function AudiobookPipeline({ book }) {
 
       <div className="sub-tab-content">
         {subTab === "Analysis" && (
-          <AnalysisOverview status={statusData} chapters={chapters} />
+          <AnalysisOverview status={statusData} chapters={titledChapters} />
         )}
         {subTab === "Characters" && (
           <CharacterRoster
@@ -382,20 +393,20 @@ function AudiobookPipeline({ book }) {
           <ScriptEditor
             bookId={bookId}
             characters={characters}
-            chapters={chapters}
+            chapters={titledChapters}
             pipelineActive={isActive(pipelineStatus)}
           />
         )}
         {subTab === "Chapter Assembly" && (
           <ChapterAssembly
-            chapters={chapters}
+            chapters={titledChapters}
             bookId={bookId}
             pipelineActive={isActive(pipelineStatus)}
           />
         )}
         {subTab === "Listen & Read" && (
           <AudiobookReader
-            chapters={chapters}
+            chapters={titledChapters}
             characters={characters}
             bookId={bookId}
           />
