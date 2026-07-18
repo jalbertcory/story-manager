@@ -16,9 +16,8 @@ const ACTIVE_STATUSES = new Set([
 
 function CharacterCard({ character, bookId }) {
   const queryClient = useQueryClient();
-  const [voicePrompt, setVoicePrompt] = useState(
-    character.voice_design_prompt || "",
-  );
+  const [voicePrompt, setVoicePrompt] = useState(character.voice_prompt || "");
+  const [voiceId, setVoiceId] = useState(character.tts_voice_id || "");
   const [saved, setSaved] = useState(false);
 
   const mutation = useMutation({
@@ -34,7 +33,10 @@ function CharacterCard({ character, bookId }) {
   });
 
   const handleSave = () => {
-    mutation.mutate({ voice_design_prompt: voicePrompt });
+    mutation.mutate({
+      voice_prompt: voicePrompt || null,
+      tts_voice_id: voiceId || null,
+    });
   };
 
   return (
@@ -80,7 +82,7 @@ function CharacterCard({ character, bookId }) {
         </details>
       )}
       <label className="character-voice-label">
-        Voice Design Prompt
+        Voice Profile
         <input
           type="text"
           value={voicePrompt}
@@ -94,6 +96,19 @@ function CharacterCard({ character, bookId }) {
         <code>[speed-slow|normal|fast]</code>{" "}
         <code>[age-young|middle|old]</code>{" "}
         <code>[accent-british|american|…]</code>
+      </p>
+      <label className="character-voice-label">
+        Provider Voice ID
+        <input
+          type="text"
+          value={voiceId}
+          onChange={(e) => setVoiceId(e.target.value)}
+          placeholder="Optional; overrides the provider default voice"
+        />
+      </label>
+      <p className="character-voice-hint">
+        Used by fixed-voice providers such as OpenAI-compatible APIs and
+        ElevenLabs. OmniVoice uses the descriptive profile above.
       </p>
       {mutation.isError && (
         <p className="error">{mutation.error?.message || "Save failed"}</p>

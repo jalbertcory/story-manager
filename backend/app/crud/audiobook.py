@@ -397,7 +397,8 @@ def _copy_series_profile_to_book_character(
     character.series_character_id = profile.id
     character.name = profile.name
     character.description = profile.description
-    character.voice_design_prompt = profile.voice_design_prompt
+    character.voice_prompt = profile.voice_prompt
+    character.tts_voice_id = profile.tts_voice_id
     character.is_narrator = profile.is_narrator
     character.aliases = profile.aliases or []
     character.evidence = profile.evidence or []
@@ -426,7 +427,8 @@ async def sync_book_roster_with_series(
                 canonical_name=canonical,
                 name=character.name,
                 description=character.description,
-                voice_design_prompt=character.voice_design_prompt,
+                voice_prompt=character.voice_prompt,
+                tts_voice_id=character.tts_voice_id,
                 is_narrator=character.is_narrator,
                 aliases=character.aliases or [],
                 evidence=character.evidence or [],
@@ -486,7 +488,8 @@ async def propagate_character_profile_across_series(
     profile.canonical_name = canonical
     profile.name = character.name
     profile.description = character.description
-    profile.voice_design_prompt = character.voice_design_prompt
+    profile.voice_prompt = character.voice_prompt
+    profile.tts_voice_id = character.tts_voice_id
     profile.is_narrator = character.is_narrator
     profile.aliases = character.aliases or []
     profile.evidence = character.evidence or []

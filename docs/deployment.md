@@ -18,7 +18,9 @@ The default `docker-compose.yml` stores persistent data under `./config`:
 
 The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container.
 
-Story Manager currently requires one application worker because its scheduler and background queues run in process. `WEB_CONCURRENCY` must remain `1` until distributed job coordination is implemented.
+Story Manager's production image always starts one application worker because its scheduler and background queues
+run in process. The worker count is intentionally not configurable until distributed job coordination is
+implemented.
 
 ## Admin Authentication
 
@@ -78,10 +80,7 @@ The production container serves static frontend assets through FastAPI and does 
 
 ## Unraid
 
-The provided `docker-compose.yml` is compatible with Unraid's Docker Compose Manager.
-
-1. Copy `docker-compose.yml` to a directory such as `/mnt/user/appdata/story-manager`.
-2. Start the stack from that directory with `docker compose up -d`.
-3. Open `http://<UNRAID_HOST>:8000`.
-
-Relative volume paths create `config` inside the directory where the compose file lives.
+Use the prebuilt `ghcr.io/jalbertcory/story-manager:latest` image from Unraid's **Add Container** screen. The
+[Unraid guide in the README](../README.md#unraid) lists the required port and persistent path mappings, optional
+authentication variables, and the supported Ollama, OmniVoice, Kokoro, OpenAI, and ElevenLabs configuration for
+audiobook generation.

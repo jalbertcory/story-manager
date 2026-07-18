@@ -23,8 +23,34 @@ Verify readiness:
 curl http://127.0.0.1:8001/health
 ```
 
-In Story Manager, open **Audio Settings**, click **Use Local OmniVoice Adapter**, and save. The deterministic `stub`
+In Story Manager, open **Audio Settings**, click **Use Local OmniVoice**, and save. The deterministic `stub`
 LLM provider can remain selected; it will handle roster/diarization locally while this service produces real speech.
+
+## Docker
+
+The published `linux/amd64` image supports NVIDIA CUDA or CPU inference. The unpacked image is about 4.4 GB. Model
+weights are downloaded on first start, so mount `/models` to persistent storage instead of storing another roughly
+3.3 GB inside the container layer:
+
+```bash
+docker run -d \
+  --name story-manager-omnivoice \
+  --restart unless-stopped \
+  --gpus all \
+  -p 8001:8001 \
+  -e OMNIVOICE_DEVICE=auto \
+  -e OMNIVOICE_NUM_STEPS=16 \
+  -v /path/to/omnivoice-models:/models \
+  ghcr.io/jalbertcory/story-manager-omnivoice:latest
+```
+
+Remove `--gpus all` for CPU-only inference. The container reports healthy only after the model is loaded:
+
+```bash
+curl http://127.0.0.1:8001/health
+```
+
+The image is rebuilt and published only when files under `services/omnivoice/` or its image workflow change.
 
 ## Configuration
 

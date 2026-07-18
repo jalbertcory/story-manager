@@ -48,7 +48,7 @@ async def _seed_audio_chapter(db, book_id: int, *, sentence_status: str = "ready
             {
                 "name": "Narrator",
                 "description": "Primary narrator",
-                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                 "is_narrator": True,
             }
         ],
@@ -550,15 +550,18 @@ async def test_pause_is_cooperative_and_status_exposes_error_context(db):
 async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db, monkeypatch):
     book = await _make_book(db)
     chapter, _character, _sentence = await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
-    settings = models.AudiobookSettings(omnivoice_endpoint="http://tts.example.test")
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://tts.example.test",
+    )
     db.add(settings)
     await db.commit()
 
-    async def fail_omnivoice(endpoint, voice_prompt, tagged_text):
-        request = httpx.Request("POST", endpoint)
+    async def fail_tts(_settings, _request):
+        request = httpx.Request("POST", "http://tts.example.test/generate")
         raise httpx.ConnectError("connection failed", request=request)
 
-    monkeypatch.setattr(audiobook_tts, "_call_omnivoice", fail_omnivoice)
+    monkeypatch.setattr(audiobook_tts, "synthesize_speech", fail_tts)
 
     with pytest.raises(RuntimeError, match="TTS failed"):
         await audiobook_tts.generate_audio_for_book(book.id, db)
@@ -739,7 +742,7 @@ async def test_roster_keeps_first_person_protagonist_separate_from_narrator(db, 
                         "aliases": ["Narrator"],
                         "description": "First-person protagonist.",
                         "evidence": ["John speaks."],
-                        "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
+                        "voice_prompt": "[gender-male][pitch-medium][speed-normal]",
                         "is_narrator": True,
                     }
                 ],
@@ -775,7 +778,8 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
                 {
                     "name": "Captain Vale",
                     "description": "Series captain.",
-                    "voice_design_prompt": "[gender-female][pitch-low][speed-normal]",
+                    "voice_prompt": "[gender-female][pitch-low][speed-normal]",
+                    "tts_voice_id": "captain",
                     "is_narrator": False,
                     "aliases": ["Vale"],
                     "evidence": [],
@@ -791,7 +795,8 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
                 {
                     "name": "Captain Vale",
                     "description": "Book-specific guess.",
-                    "voice_design_prompt": "[gender-neutral][pitch-high][speed-fast]",
+                    "voice_prompt": "[gender-neutral][pitch-high][speed-fast]",
+                    "tts_voice_id": "wrong-voice",
                     "is_narrator": False,
                     "aliases": [],
                     "evidence": [],
@@ -805,15 +810,18 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     await db.refresh(second_character)
 
     assert second_character.series_character_id == first_character.series_character_id
-    assert second_character.voice_design_prompt == "[gender-female][pitch-low][speed-normal]"
+    assert second_character.voice_prompt == "[gender-female][pitch-low][speed-normal]"
+    assert second_character.tts_voice_id == "captain"
 
-    first_character.voice_design_prompt = "[gender-female][pitch-medium][speed-slow]"
+    first_character.voice_prompt = "[gender-female][pitch-medium][speed-slow]"
+    first_character.tts_voice_id = "captain-v2"
     await db.commit()
     linked = await crud.audiobook.propagate_character_profile_across_series(db, first_character)
     await db.refresh(second_character)
 
     assert {character.book_id for character in linked} == {first.id, second.id}
-    assert second_character.voice_design_prompt == "[gender-female][pitch-medium][speed-slow]"
+    assert second_character.voice_prompt == "[gender-female][pitch-medium][speed-slow]"
+    assert second_character.tts_voice_id == "captain-v2"
 
     # Renaming onto an existing canonical identity merges the shared profiles
     # instead of violating the series/name uniqueness constraint.
@@ -824,7 +832,7 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
             [
                 {
                     "name": "Commander Vale",
-                    "voice_design_prompt": "[gender-female][pitch-high][speed-normal]",
+                    "voice_prompt": "[gender-female][pitch-high][speed-normal]",
                     "is_narrator": False,
                 }
             ],

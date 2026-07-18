@@ -18,6 +18,7 @@ from ..database import get_db
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
 from ..services.audiobook_queue import get_audiobook_queue
 from ..services import audiobook_llm
+from ..services.tts_providers import TTSRequest, synthesize_speech
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,8 @@ class CharacterResponse(BaseModel):
     shared_series_name: Optional[str] = None
     name: str
     description: Optional[str]
-    voice_design_prompt: Optional[str]
+    voice_prompt: Optional[str]
+    tts_voice_id: Optional[str]
     is_narrator: bool
     aliases: Optional[list[str]] = None
     evidence: Optional[list[str]] = None
@@ -70,7 +72,8 @@ class CharacterResponse(BaseModel):
 class CharacterUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    voice_design_prompt: Optional[str] = None
+    voice_prompt: Optional[str] = None
+    tts_voice_id: Optional[str] = None
     is_narrator: Optional[bool] = None
 
 
@@ -122,7 +125,11 @@ class SettingsResponse(BaseModel):
     llm_api_key_set: bool
     llm_base_url: Optional[str]
     llm_model: Optional[str]
-    omnivoice_endpoint: Optional[str]
+    tts_provider: Optional[str]
+    tts_api_key_set: bool
+    tts_base_url: Optional[str]
+    tts_model: Optional[str]
+    tts_default_voice: Optional[str]
     roster_prompt_template: Optional[str]
     diarization_prompt_template: Optional[str]
 
@@ -132,7 +139,11 @@ class SettingsUpdate(BaseModel):
     llm_api_key: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
-    omnivoice_endpoint: Optional[str] = None
+    tts_provider: Optional[str] = None
+    tts_api_key: Optional[str] = None
+    tts_base_url: Optional[str] = None
+    tts_model: Optional[str] = None
+    tts_default_voice: Optional[str] = None
     roster_prompt_template: Optional[str] = None
     diarization_prompt_template: Optional[str] = None
 
@@ -343,7 +354,8 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
             shared_series_name=book.series if character.series_character_id else None,
             name=character.name,
             description=character.description,
-            voice_design_prompt=character.voice_design_prompt,
+            voice_prompt=character.voice_prompt,
+            tts_voice_id=character.tts_voice_id,
             is_narrator=character.is_narrator,
             aliases=character.aliases or [],
             evidence=character.evidence or [],
@@ -356,8 +368,8 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
 
 @router.put("/api/audiobook/characters/{char_id}", response_model=CharacterResponse)
 async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession = Depends(get_db)) -> CharacterResponse:
-    data = body.model_dump(exclude_none=True)
-    voice_changed = "voice_design_prompt" in data
+    data = body.model_dump(exclude_unset=True)
+    voice_changed = bool({"voice_prompt", "tts_voice_id"} & data.keys())
 
     existing = await crud.audiobook.get_character(db, char_id)
     if existing is None:
@@ -605,7 +617,11 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
             llm_api_key_set=False,
             llm_base_url=None,
             llm_model=None,
-            omnivoice_endpoint=None,
+            tts_provider="stub",
+            tts_api_key_set=False,
+            tts_base_url=None,
+            tts_model=None,
+            tts_default_voice=None,
             roster_prompt_template=None,
             diarization_prompt_template=None,
         )
@@ -615,7 +631,11 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
         llm_api_key_set=bool(settings.llm_api_key),
         llm_base_url=settings.llm_base_url,
         llm_model=settings.llm_model,
-        omnivoice_endpoint=settings.omnivoice_endpoint,
+        tts_provider=settings.tts_provider or "stub",
+        tts_api_key_set=bool(settings.tts_api_key),
+        tts_base_url=settings.tts_base_url,
+        tts_model=settings.tts_model,
+        tts_default_voice=settings.tts_default_voice,
         roster_prompt_template=settings.roster_prompt_template,
         diarization_prompt_template=settings.diarization_prompt_template,
     )
@@ -623,7 +643,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
 
 @router.put("/api/audiobook/settings", response_model=SettingsResponse)
 async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_db)) -> SettingsResponse:
-    data = body.model_dump(exclude_none=True)
+    data = body.model_dump(exclude_unset=True)
     settings = await crud.audiobook.upsert_audiobook_settings(db, data)
     return SettingsResponse(
         id=settings.id,
@@ -631,7 +651,11 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         llm_api_key_set=bool(settings.llm_api_key),
         llm_base_url=settings.llm_base_url,
         llm_model=settings.llm_model,
-        omnivoice_endpoint=settings.omnivoice_endpoint,
+        tts_provider=settings.tts_provider or "stub",
+        tts_api_key_set=bool(settings.tts_api_key),
+        tts_base_url=settings.tts_base_url,
+        tts_model=settings.tts_model,
+        tts_default_voice=settings.tts_default_voice,
         roster_prompt_template=settings.roster_prompt_template,
         diarization_prompt_template=settings.diarization_prompt_template,
     )
@@ -658,4 +682,25 @@ async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
         "provider": settings.llm_provider,
         "model": settings.llm_model,
         "response": parsed,
+    }
+
+
+@router.post("/api/audiobook/settings/test-tts")
+async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    provider = (settings.tts_provider or "stub") if settings else "stub"
+    audio = await synthesize_speech(
+        settings,
+        TTSRequest(
+            text="Story Manager text to speech is ready.",
+            voice_id=settings.tts_default_voice if settings else None,
+        ),
+    )
+    if not audio:
+        raise HTTPException(status_code=502, detail="The TTS provider returned an empty response.")
+    return {
+        "status": "ready",
+        "provider": provider,
+        "model": settings.tts_model if settings else None,
+        "audio_bytes": len(audio),
     }

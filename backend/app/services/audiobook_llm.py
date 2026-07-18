@@ -30,7 +30,7 @@ For each character produce:
 - aliases: other names, surnames, nicknames, ranks, or titles used for this person
 - description: a concise description of their personality, relationships, and role
 - evidence: 1-3 short quotations or explicit textual facts supporting the identification
-- voice_design_prompt: an OmniVoice voice parameter string using ONLY these tokens:
+- voice_prompt: a provider-neutral voice profile using ONLY these tokens:
   [gender-{{male|female|neutral}}] [pitch-{{low|medium|high}}] [speed-{{slow|normal|fast}}]
   Optional: [accent-{{british|american|australian}}] [age-{{young|middle|old}}]
   Example: [gender-male][pitch-low][speed-normal][age-middle]
@@ -122,7 +122,7 @@ ROSTER_SCHEMA = {
                         "maxItems": 3,
                         "items": {"type": "string"},
                     },
-                    "voice_design_prompt": {"type": "string"},
+                    "voice_prompt": {"type": "string"},
                     "is_narrator": {"type": "boolean"},
                 },
                 "required": [
@@ -130,7 +130,7 @@ ROSTER_SCHEMA = {
                     "aliases",
                     "description",
                     "evidence",
-                    "voice_design_prompt",
+                    "voice_prompt",
                     "is_narrator",
                 ],
             },
@@ -488,7 +488,8 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "name": profile.name,
                     "aliases": profile.aliases or [],
                     "description": profile.description,
-                    "voice_design_prompt": profile.voice_design_prompt,
+                    "voice_prompt": profile.voice_prompt,
+                    "tts_voice_id": profile.tts_voice_id,
                 }
                 for profile in series_profiles
             ],
@@ -518,7 +519,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "aliases": [],
                     "description": "Deterministic local harness narrator.",
                     "evidence": [],
-                    "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                    "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                     "is_narrator": True,
                 }
             ],
@@ -568,7 +569,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "aliases": [str(alias) for alias in c.get("aliases", []) if alias],
                 "description": c.get("description"),
                 "evidence": [str(item) for item in c.get("evidence", []) if item][:3],
-                "voice_design_prompt": c.get("voice_design_prompt"),
+                "voice_prompt": c.get("voice_prompt"),
                 "is_narrator": str(c.get("name", "")).strip().casefold() == "narrator",
             }
         )
@@ -591,7 +592,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                         "aliases": [],
                         "description": "First-person protagonist, kept separate from the narrative prose voice.",
                         "evidence": character["evidence"],
-                        "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
+                        "voice_prompt": "[gender-male][pitch-medium][speed-normal]",
                         "is_narrator": False,
                     }
                 )
@@ -610,7 +611,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "aliases": [],
                 "description": "Primary narrative voice.",
                 "evidence": [],
-                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                 "is_narrator": True,
             },
         )
@@ -637,7 +638,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "dialogue attributions across the book."
                 ),
                 "evidence": [candidate["evidence"]] if candidate["evidence"] else [],
-                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                 "is_narrator": False,
             }
         )
@@ -675,7 +676,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "aliases": ["Unnamed female speaker"],
                     "description": "Fallback voice for unnamed or one-scene female dialogue.",
                     "evidence": [],
-                    "voice_design_prompt": "[gender-female][pitch-medium][speed-normal]",
+                    "voice_prompt": "[gender-female][pitch-medium][speed-normal]",
                     "is_narrator": False,
                 },
                 {
@@ -683,7 +684,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "aliases": ["Unnamed male speaker"],
                     "description": "Fallback voice for unnamed or one-scene male dialogue.",
                     "evidence": [],
-                    "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
+                    "voice_prompt": "[gender-male][pitch-medium][speed-normal]",
                     "is_narrator": False,
                 },
             ]
@@ -699,7 +700,8 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "series_character_id": profile.id,
                 "name": profile.name,
                 "description": profile.description,
-                "voice_design_prompt": profile.voice_design_prompt,
+                "voice_prompt": profile.voice_prompt,
+                "tts_voice_id": profile.tts_voice_id,
                 "is_narrator": profile.is_narrator,
                 "aliases": profile.aliases or [],
                 "evidence": profile.evidence or [],
