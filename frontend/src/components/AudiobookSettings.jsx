@@ -51,6 +51,7 @@ function AudiobookSettings() {
   const saveMutation = useMutation({
     mutationFn: (data) => updateAudiobookSettings(data),
     onSuccess: () => {
+      setTtsApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -82,6 +83,7 @@ function AudiobookSettings() {
       return testAudiobookLlm();
     },
     onSuccess: () => {
+      setTtsApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -92,6 +94,7 @@ function AudiobookSettings() {
       return testAudiobookTts();
     },
     onSuccess: () => {
+      setTtsApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -198,7 +201,10 @@ function AudiobookSettings() {
             Provider
             <select
               value={ttsProvider}
-              onChange={(e) => setTtsProvider(e.target.value)}
+              onChange={(e) => {
+                setTtsProvider(e.target.value);
+                setTtsApiKey("");
+              }}
             >
               <option value="omnivoice">OmniVoice</option>
               <option value="openai-compatible">
@@ -288,6 +294,7 @@ function AudiobookSettings() {
               className="btn-secondary"
               onClick={() => {
                 setTtsProvider("omnivoice");
+                setTtsApiKey("");
                 setTtsBaseUrl("http://127.0.0.1:8001");
                 setTtsModel("");
                 setTtsDefaultVoice("");
@@ -300,6 +307,7 @@ function AudiobookSettings() {
               className="btn-secondary"
               onClick={() => {
                 setTtsProvider("openai-compatible");
+                setTtsApiKey("");
                 setTtsBaseUrl("http://127.0.0.1:8880");
                 setTtsModel("kokoro");
                 setTtsDefaultVoice("af_heart");

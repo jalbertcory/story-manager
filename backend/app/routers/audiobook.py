@@ -18,7 +18,7 @@ from ..database import get_db
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
 from ..services.audiobook_queue import get_audiobook_queue
 from ..services import audiobook_llm
-from ..services.tts_providers import TTSRequest, synthesize_speech
+from ..services.tts_providers import TTSRequest, synthesize_speech, tts_provider_name
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,7 @@ class CharacterResponse(BaseModel):
     description: Optional[str]
     voice_prompt: Optional[str]
     tts_voice_id: Optional[str]
+    tts_voice_provider: Optional[str]
     is_narrator: bool
     aliases: Optional[list[str]] = None
     evidence: Optional[list[str]] = None
@@ -356,6 +357,7 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
             description=character.description,
             voice_prompt=character.voice_prompt,
             tts_voice_id=character.tts_voice_id,
+            tts_voice_provider=character.tts_voice_provider,
             is_narrator=character.is_narrator,
             aliases=character.aliases or [],
             evidence=character.evidence or [],
@@ -375,6 +377,13 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
     if existing is None:
         raise HTTPException(status_code=404, detail="Character not found")
     await _get_audiobook_book_or_404(existing.book_id, db)
+    if "tts_voice_id" in data:
+        voice_id = data["tts_voice_id"]
+        if isinstance(voice_id, str):
+            voice_id = voice_id.strip() or None
+        data["tts_voice_id"] = voice_id
+        settings = await crud.audiobook.get_audiobook_settings(db)
+        data["tts_voice_provider"] = tts_provider_name(settings) if voice_id else None
 
     char = await crud.audiobook.update_character(db, char_id, data)
     linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, char)
@@ -644,7 +653,24 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
 @router.put("/api/audiobook/settings", response_model=SettingsResponse)
 async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_db)) -> SettingsResponse:
     data = body.model_dump(exclude_unset=True)
+    previous = await crud.audiobook.get_audiobook_settings(db)
+    previous_provider = tts_provider_name(previous)
+    next_provider = str(data.get("tts_provider") or previous_provider).strip().lower()
+    if next_provider != previous_provider and "tts_api_key" not in data:
+        data["tts_api_key"] = None
+
+    previous_tts = {
+        "tts_provider": previous_provider,
+        "tts_base_url": previous.tts_base_url if previous else None,
+        "tts_model": previous.tts_model if previous else None,
+        "tts_default_voice": previous.tts_default_voice if previous else None,
+    }
+    next_tts = {name: data.get(name, value) for name, value in previous_tts.items()}
+    next_tts["tts_provider"] = next_provider
+    tts_changed = next_tts != previous_tts
     settings = await crud.audiobook.upsert_audiobook_settings(db, data)
+    if tts_changed:
+        await crud.audiobook.invalidate_generated_audio_for_tts_change(db)
     return SettingsResponse(
         id=settings.id,
         llm_provider=settings.llm_provider,

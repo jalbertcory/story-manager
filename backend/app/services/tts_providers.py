@@ -110,7 +110,7 @@ async def _stub_speech(text: str) -> bytes:
     return stdout
 
 
-def _provider(settings: AudiobookSettings | None) -> str:
+def tts_provider_name(settings: AudiobookSettings | None) -> str:
     provider = (settings.tts_provider if settings else None) or "stub"
     provider = provider.strip().lower()
     if provider not in SUPPORTED_TTS_PROVIDERS:
@@ -124,7 +124,7 @@ async def synthesize_speech(
     request: TTSRequest,
 ) -> bytes:
     """Generate an MP3 using the selected provider."""
-    provider = _provider(settings)
+    provider = tts_provider_name(settings)
     if provider == "stub":
         return await _stub_speech(request.text)
     if settings is None:
@@ -154,9 +154,7 @@ async def synthesize_speech(
         )
 
     if provider in {"openai", "openai-compatible"}:
-        base_url = settings.tts_base_url or (
-            "https://api.openai.com" if provider == "openai" else None
-        )
+        base_url = settings.tts_base_url or ("https://api.openai.com" if provider == "openai" else None)
         if not base_url:
             raise RuntimeError("A base URL is required for an OpenAI-compatible TTS provider.")
         if provider == "openai" and not settings.tts_api_key:
@@ -208,6 +206,7 @@ async def synthesize_speech(
             json={
                 "text": _plain_text(request.text),
                 "model_id": model,
+                "voice_settings": {"speed": _speech_speed(request.voice_prompt)},
             },
             headers={
                 "Accept": "audio/mpeg",

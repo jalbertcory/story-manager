@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, AudiobookSettings
-from .tts_providers import DEFAULT_VOICE_PROMPT, TTSRequest, synthesize_speech
+from .tts_providers import DEFAULT_VOICE_PROMPT, TTSRequest, synthesize_speech, tts_provider_name
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,15 @@ def _get_mp3_duration_ms(path: Path) -> int:
     return int(audio.info.length * 1000)
 
 
+def _voice_id_for_provider(
+    settings: AudiobookSettings | None,
+    character: AudiobookCharacter,
+) -> str | None:
+    if character.tts_voice_provider != tts_provider_name(settings):
+        return None
+    return character.tts_voice_id
+
+
 async def _generate_sentence_clip(
     settings: AudiobookSettings | None,
     book_id: int,
@@ -43,7 +52,7 @@ async def _generate_sentence_clip(
         char = await db.get(AudiobookCharacter, sentence.character_id)
         if char:
             voice_prompt = char.voice_prompt or voice_prompt
-            voice_id = char.tts_voice_id
+            voice_id = _voice_id_for_provider(settings, char)
 
     audio_bytes = await synthesize_speech(
         settings,

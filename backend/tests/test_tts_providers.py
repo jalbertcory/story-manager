@@ -125,7 +125,11 @@ async def test_elevenlabs_uses_character_voice_override():
 
     await tts_providers.synthesize_speech(
         settings,
-        TTSRequest(text="Hello.", voice_id="character-id"),
+        TTSRequest(
+            text="Hello.",
+            voice_prompt="[gender-neutral][pitch-medium][speed-fast]",
+            voice_id="character-id",
+        ),
     )
 
     url, request = _Client.calls[0]
@@ -135,6 +139,7 @@ async def test_elevenlabs_uses_character_voice_override():
     assert request["json"] == {
         "text": "Hello.",
         "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"speed": 1.15},
     }
 
 

@@ -51,11 +51,7 @@ def upgrade():
         )
         .values(tts_provider="omnivoice")
     )
-    conn.execute(
-        audiobook_settings.update()
-        .where(audiobook_settings.c.tts_provider.is_(None))
-        .values(tts_provider="stub")
-    )
+    conn.execute(audiobook_settings.update().where(audiobook_settings.c.tts_provider.is_(None)).values(tts_provider="stub"))
 
     for table_name in ("audiobook_characters", "audiobook_series_characters"):
         columns = _column_names(conn, table_name)
@@ -69,8 +65,9 @@ def upgrade():
             )
             columns.remove("voice_design_prompt")
             columns.add("voice_prompt")
-        if "tts_voice_id" not in columns:
-            op.add_column(table_name, sa.Column("tts_voice_id", sa.String(), nullable=True))
+        for name in ("tts_voice_id", "tts_voice_provider"):
+            if name not in columns:
+                op.add_column(table_name, sa.Column(name, sa.String(), nullable=True))
 
 
 def downgrade():
@@ -80,8 +77,9 @@ def downgrade():
         columns = _column_names(conn, table_name)
         if not columns:
             continue
-        if "tts_voice_id" in columns:
-            op.drop_column(table_name, "tts_voice_id")
+        for name in ("tts_voice_provider", "tts_voice_id"):
+            if name in columns:
+                op.drop_column(table_name, name)
         if "voice_prompt" in columns and "voice_design_prompt" not in columns:
             op.alter_column(
                 table_name,

@@ -148,6 +148,7 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | description | Text | LLM-generated summary |
 | voice_prompt | String | Provider-neutral attributes e.g. `[gender-male][pitch-low]` |
 | tts_voice_id | String | Optional provider voice ID overriding the global default |
+| tts_voice_provider | String | Provider that owns `tts_voice_id`; mismatched IDs are ignored |
 | is_narrator | Boolean | |
 
 **`audiobook_series_characters`** (migration 0021) — the canonical character and voice profile roster shared by
@@ -247,6 +248,14 @@ Examples:
 - Child character: `[gender-female][pitch-high][speed-fast][age-young]`
 
 Users can manually edit these values in the Character Roster UI.
+
+Provider voice IDs are scoped to the provider selected when they are saved. Switching providers leaves the old ID
+available for reference but does not send it to the new provider. Provider changes also clear the stored TTS API key
+so credentials are never reused against a different service.
+
+When synthesis settings change, completed books and unfinished books that already have at least 80% of their sentence
+audio remain untouched. For unfinished books below 80%, generated sentence clips are reset to `ready_for_audio` so
+the next run uses the new provider settings without redoing ingestion or speaker analysis.
 
 ### Official Local OmniVoice
 

@@ -490,6 +490,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                     "description": profile.description,
                     "voice_prompt": profile.voice_prompt,
                     "tts_voice_id": profile.tts_voice_id,
+                    "tts_voice_provider": profile.tts_voice_provider,
                 }
                 for profile in series_profiles
             ],
@@ -702,6 +703,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
                 "description": profile.description,
                 "voice_prompt": profile.voice_prompt,
                 "tts_voice_id": profile.tts_voice_id,
+                "tts_voice_provider": profile.tts_voice_provider,
                 "is_narrator": profile.is_narrator,
                 "aliases": profile.aliases or [],
                 "evidence": profile.evidence or [],
