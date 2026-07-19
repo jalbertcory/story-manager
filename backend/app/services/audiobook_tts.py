@@ -1,22 +1,19 @@
-"""Phase 4: OmniVoice TTS — generate a per-sentence MP3 snippet."""
+"""Phase 4: provider-neutral TTS — generate a per-sentence MP3 snippet."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
-import shutil
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
+from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, AudiobookSettings
+from .tts_providers import DEFAULT_VOICE_PROMPT, TTSRequest, synthesize_speech, tts_provider_name
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_VOICE_PROMPT = "[gender-neutral][pitch-medium][speed-normal]"
 
 
 def _snippet_path(book_id: int, sentence_id: int) -> Path:
@@ -34,78 +31,36 @@ def _get_mp3_duration_ms(path: Path) -> int:
     return int(audio.info.length * 1000)
 
 
-async def _call_omnivoice(endpoint: str, voice_prompt: str, tagged_text: str) -> bytes:
-    if endpoint.startswith("stub://"):
-        duration_ms = max(350, min(5000, len(tagged_text.split()) * 260))
-        ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg is required by the local audiobook TTS harness.")
-        process = await asyncio.create_subprocess_exec(
-            ffmpeg,
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=22050:cl=mono",
-            "-t",
-            f"{duration_ms / 1000:.3f}",
-            "-codec:a",
-            "libmp3lame",
-            "-b:a",
-            "64k",
-            "-f",
-            "mp3",
-            "pipe:1",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode:
-            message = stderr.decode("utf-8", errors="replace")[:500]
-            raise RuntimeError(f"Local TTS harness failed: {message}")
-        return stdout
-
-    url = endpoint.rstrip("/") + "/generate"
-    # Local neural TTS can take longer on the first MPS/CPU request while
-    # kernels warm up. Keep connection failures fast but allow inference time.
-    timeout = httpx.Timeout(600.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            url,
-            json={"voice": voice_prompt, "text": tagged_text},
-            headers={"Accept": "audio/mpeg"},
-        )
-        resp.raise_for_status()
-    return resp.content
-
-
-async def _get_tts_endpoint(db: AsyncSession) -> str:
-    settings = await crud.audiobook.get_audiobook_settings(db)
-    endpoint = settings.omnivoice_endpoint if settings else None
-    if not endpoint and (settings is None or (settings.llm_provider or "stub").lower() == "stub"):
-        endpoint = "stub://local"
-    if not endpoint:
-        raise RuntimeError("OmniVoice endpoint not configured. Set it in Audio Settings.")
-    return endpoint
+def _voice_id_for_provider(
+    settings: AudiobookSettings | None,
+    character: AudiobookCharacter,
+) -> str | None:
+    if character.tts_voice_provider != tts_provider_name(settings):
+        return None
+    return character.tts_voice_id
 
 
 async def _generate_sentence_clip(
-    endpoint: str,
+    settings: AudiobookSettings | None,
     book_id: int,
     sentence: AudiobookSentence,
     db: AsyncSession,
 ) -> None:
     voice_prompt = DEFAULT_VOICE_PROMPT
+    voice_id = None
     if sentence.character_id is not None:
         char = await db.get(AudiobookCharacter, sentence.character_id)
-        if char and char.voice_design_prompt:
-            voice_prompt = char.voice_design_prompt
+        if char:
+            voice_prompt = char.voice_prompt or voice_prompt
+            voice_id = _voice_id_for_provider(settings, char)
 
-    audio_bytes = await _call_omnivoice(
-        endpoint,
-        voice_prompt,
-        sentence.tagged_text or sentence.original_text,
+    audio_bytes = await synthesize_speech(
+        settings,
+        TTSRequest(
+            text=sentence.tagged_text or sentence.original_text,
+            voice_prompt=voice_prompt,
+            voice_id=voice_id,
+        ),
     )
     out_path = _snippet_path(book_id, sentence.id)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,14 +89,14 @@ async def generate_audio_for_sentence(
     if sentence.character_id is None:
         raise RuntimeError("Assign a speaker before generating sentence audio.")
 
-    endpoint = await _get_tts_endpoint(db)
-    await _generate_sentence_clip(endpoint, book_id, sentence, db)
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    await _generate_sentence_clip(settings, book_id, sentence, db)
     await crud.audiobook.flag_chapter_for_reassembly(db, chapter.id)
 
 
 async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
-    """Phase 4: iterate ready_for_audio sentences and call OmniVoice for each."""
-    endpoint = await _get_tts_endpoint(db)
+    """Phase 4: iterate ready_for_audio sentences and call the configured TTS provider."""
+    settings = await crud.audiobook.get_audiobook_settings(db)
 
     # Ensure snippets directory exists
     snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
@@ -170,11 +125,11 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
 
             logger.debug("Generating audio for sentence %s (book %s).", sentence.id, book_id)
             try:
-                await _generate_sentence_clip(endpoint, book_id, sentence, db)
+                await _generate_sentence_clip(settings, book_id, sentence, db)
             except httpx.HTTPStatusError as exc:
                 response_text = exc.response.text[:200] if exc.response is not None else ""
                 logger.error(
-                    "OmniVoice error for sentence %s: %s %s",
+                    "TTS provider error for sentence %s: %s %s",
                     sentence.id,
                     exc.response.status_code if exc.response is not None else "unknown",
                     response_text,
@@ -242,7 +197,7 @@ async def generate_audio_for_chapter_preview(
     if any(sentence.character_id is None for sentence in sentences):
         raise RuntimeError("Assign a speaker to every chapter sentence before generating a preview.")
 
-    endpoint = await _get_tts_endpoint(db)
+    settings = await crud.audiobook.get_audiobook_settings(db)
 
     snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
@@ -261,7 +216,7 @@ async def generate_audio_for_chapter_preview(
             continue
 
         try:
-            await _generate_sentence_clip(endpoint, book_id, sentence, db)
+            await _generate_sentence_clip(settings, book_id, sentence, db)
         except Exception:
             await crud.audiobook.mark_sentence_error(db, sentence.id)
             raise

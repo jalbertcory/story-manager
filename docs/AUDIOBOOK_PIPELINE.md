@@ -6,9 +6,9 @@ This pipeline converts any stored EPUB into an EPUB 3 Media Overlay audiobook. T
 
 The five pipeline phases are:
 1. **Ingestion** — parse EPUB, inject sentence `<span>` IDs, seed the database
-2. **Roster Generation** — LLM extracts named characters and assigns OmniVoice voice profiles
+2. **Roster Generation** — LLM extracts named characters and assigns provider-neutral voice profiles
 3. **Diarization** — LLM assigns a speaker and non-verbal tags to every sentence
-4. **Audio Generation** — OmniVoice TTS produces an MP3 snippet per sentence
+4. **Audio Generation** — the configured TTS provider produces an MP3 snippet per sentence
 5. **Assembly** — MP3 snippets are concatenated per chapter; SMIL timing files and the final EPUB 3 Media Overlay package are generated
 
 ---
@@ -54,7 +54,7 @@ AudiobookQueue.enqueue(book_id)
 │  Phase 4 – TTS (status="audio_gen")                      │
 │    audiobook_tts.generate_audio_for_book(book_id)        │
 │    • for each "ready_for_audio" sentence:                │
-│      POST omnivoice_endpoint {voice_prompt, tagged_text} │
+│      call configured provider {voice profile/id, text}   │
 │      save mp3 to library/audiobooks/{id}/snippets/       │
 │      UPDATE sentence: audio_file_path, duration_ms,     │
 │                        status="audio_generated"          │
@@ -117,7 +117,11 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | llm_api_key | String | Stored plaintext; masked on GET |
 | llm_base_url | String | Override for custom/local LLMs |
 | llm_model | String | e.g. `"gpt-4o"`, `"claude-opus-4-7"` |
-| omnivoice_endpoint | String | Base URL of OmniVoice worker |
+| tts_provider | String | `"stub"`, `"omnivoice"`, `"openai-compatible"`, `"openai"`, or `"elevenlabs"` |
+| tts_api_key | String | Optional provider credential; masked on GET |
+| tts_base_url | String | Provider base URL; required for local servers |
+| tts_model | String | Provider model name, when applicable |
+| tts_default_voice | String | Default fixed voice ID, when applicable |
 | roster_prompt_template | Text | Override default roster extraction prompt |
 | diarization_prompt_template | Text | Override default diarization prompt |
 
@@ -142,7 +146,9 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | series_character_id | FK → audiobook_series_characters SET NULL | Shared series voice/profile link |
 | name | String | |
 | description | Text | LLM-generated summary |
-| voice_design_prompt | String | OmniVoice params e.g. `[gender-male][pitch-low]` |
+| voice_prompt | String | Provider-neutral attributes e.g. `[gender-male][pitch-low]` |
+| tts_voice_id | String | Optional provider voice ID overriding the global default |
+| tts_voice_provider | String | Provider that owns `tts_voice_id`; mismatched IDs are ignored |
 | is_narrator | Boolean | |
 
 **`audiobook_series_characters`** (migration 0021) — the canonical character and voice profile roster shared by
@@ -183,17 +189,35 @@ Values: `None` (idle), `ingesting`, `roster_gen`, `diarizing`, `audio_gen`, `ass
 
 Migration `0020_audiobook_observability.py` also adds chapter summaries, character aliases/evidence, and sentence
 confidence/rationales. Migration `0021_series_roster_and_chapter_previews.py` adds the shared series roster links and
-durable manual chapter-preview state.
+durable manual chapter-preview state. Migration `0022_provider_neutral_tts.py` preserves existing OmniVoice settings
+and voice profiles while renaming them and adding provider, model, API key, default voice, and per-character voice ID
+fields.
 
 ---
 
-## OmniVoice TTS Integration
+## TTS Provider Integration
+
+The audiobook pipeline routes a common request—text, descriptive voice profile, and optional fixed voice ID—to the
+selected provider:
+
+| Provider | HTTP contract | Voice selection |
+|---|---|---|
+| `omnivoice` | `POST {base_url}/generate` | Descriptive `voice_prompt`; expression tags preserved |
+| `openai-compatible` | `POST {base_url}/v1/audio/speech` | Character/default voice ID; compatible core fields only |
+| `openai` | `POST /v1/audio/speech` | Character/default voice ID; instructions on supported models |
+| `elevenlabs` | `POST /v1/text-to-speech/{voice_id}` | Character/default voice ID |
+| `stub` | No network request | Timed silent MP3 |
+
+For providers without Story Manager expression-tag support, known tags are removed so they are not spoken aloud.
+The compact speed profile maps to the provider's speed parameter. A character voice ID overrides
+`tts_default_voice`.
+
+### OmniVoice HTTP Contract
 
 OmniVoice is a self-hosted TTS worker. The endpoint URL is configured in `audiobook_settings`.
 
-### HTTP Contract
 ```
-POST {omnivoice_endpoint}/generate
+POST {tts_base_url}/generate
 Content-Type: application/json
 Accept: audio/mpeg
 
@@ -207,8 +231,9 @@ Content-Type: audio/mpeg
 Body: raw MP3 bytes
 ```
 
-### Voice Design Prompt Schema
-The LLM roster prompt instructs the model to produce voice design strings using these parameters:
+### Voice Profile Schema
+
+The LLM roster prompt produces provider-neutral voice profile strings using these parameters:
 
 ```
 [gender-{male|female|neutral}]
@@ -224,6 +249,14 @@ Examples:
 
 Users can manually edit these values in the Character Roster UI.
 
+Provider voice IDs are scoped to the provider selected when they are saved. Switching providers leaves the old ID
+available for reference but does not send it to the new provider. Provider changes also clear the stored TTS API key
+so credentials are never reused against a different service.
+
+When synthesis settings change, completed books and unfinished books that already have at least 80% of their sentence
+audio remain untouched. For unfinished books below 80%, generated sentence clips are reset to `ready_for_audio` so
+the next run uses the new provider settings without redoing ingestion or speaker analysis.
+
 ### Official Local OmniVoice
 
 Story Manager includes a native adapter for the official
@@ -238,7 +271,8 @@ curl http://127.0.0.1:8001/health
 
 The isolated service environment lives under `services/omnivoice/.venv`. The first start downloads about 3.3 GB of
 public model weights. CUDA, Intel XPU, Apple MPS, and CPU are auto-detected; Apple Silicon uses native MPS with the
-upstream audio tokenizer on CPU. Configure `http://127.0.0.1:8001` as the OmniVoice endpoint in **Audio Settings**.
+upstream audio tokenizer on CPU. Choose **OmniVoice** and configure `http://127.0.0.1:8001` as its base URL in
+**Audio Settings**.
 The `stub` LLM provider may remain selected for deterministic local roster generation and diarization while the
 OmniVoice adapter produces real speech.
 
@@ -248,14 +282,14 @@ The defaults use 16 diffusion steps for interactive local throughput. Set `OMNIV
 
 ## Deterministic Local Harness
 
-The pipeline works without API keys or network services. When no settings row exists—or when the LLM provider is
-`stub`—it creates a single Narrator, assigns every sentence to that narrator, and generates timed silent placeholder
-MP3s through the installed `ffmpeg` binary. This exercises ingestion, durable state transitions, surgical rebuilds,
-chapter assembly, SMIL generation, and final EPUB packaging end to end.
+The pipeline works without API keys or network services. The `stub` LLM creates a single Narrator and assigns every
+sentence to it. Independently, the `stub` TTS provider generates timed silent placeholder MP3s through the installed
+`ffmpeg` binary. Selecting both exercises ingestion, durable state transitions, surgical rebuilds, chapter assembly,
+SMIL generation, and final EPUB packaging end to end.
 
 Choose **Deterministic local harness** in Audio Settings to make this mode explicit. To switch to real generation,
-choose an LLM provider and configure an OmniVoice-compatible endpoint. The harness is intentionally deterministic;
-it is a validation and UI-development path, not synthetic speech.
+choose an LLM provider and configure any supported TTS provider. The harness is intentionally deterministic; it is
+a validation and UI-development path, not synthetic speech.
 
 ## Recommended Local LLM (Ollama)
 
@@ -360,6 +394,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | GET | `/api/audiobook/settings` | Get LLM/TTS config (API key masked) |
 | PUT | `/api/audiobook/settings` | Upsert LLM/TTS config |
 | POST | `/api/audiobook/settings/test-llm` | Validate the saved model with a structured-output request |
+| POST | `/api/audiobook/settings/test-tts` | Generate a short sample through the saved TTS provider |
 
 ---
 
@@ -372,10 +407,12 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `backend/alembic/versions/0019_audiobook_pipeline_controls.py` | Review, pause, and error-state migration |
 | `backend/alembic/versions/0020_audiobook_observability.py` | Progress, summaries, evidence, confidence, and batch controls |
 | `backend/alembic/versions/0021_series_roster_and_chapter_previews.py` | Shared series profiles and chapter-preview state |
+| `backend/alembic/versions/0022_provider_neutral_tts.py` | Provider-neutral TTS configuration and voice IDs |
 | `backend/app/crud/audiobook.py` | DB queries for all new tables |
 | `backend/app/services/audiobook_ingestion.py` | Phase 1: EPUB parse + span injection |
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |
-| `backend/app/services/audiobook_tts.py` | Phase 4: OmniVoice TTS per sentence |
+| `backend/app/services/audiobook_tts.py` | Phase 4: provider-neutral TTS orchestration per sentence |
+| `backend/app/services/tts_providers.py` | OmniVoice, OpenAI-compatible, OpenAI, ElevenLabs, and stub clients |
 | `backend/app/services/audiobook_assembly.py` | Phase 5: MP3 concat + SMIL + EPUB repackage |
 | `backend/app/services/audiobook_queue.py` | Async worker queue (mirrors `web_import_queue.py`) |
 | `backend/app/routers/audiobook.py` | All API endpoints |
@@ -403,7 +440,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 
 **`pyproject.toml`** (core):
 - `spacy>=3.7,<4` — sentence tokenization
-- `httpx2==2.5.0` — HTTP client for LLM and OmniVoice calls (exports the `httpx` module)
+- `httpx2==2.5.0` — HTTP client for LLM and TTS provider calls (exports the `httpx` module)
 - `mutagen>=1.47` — MP3 duration extraction
 
 **`Dockerfile`**:

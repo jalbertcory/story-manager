@@ -16,14 +16,16 @@ const ACTIVE_STATUSES = new Set([
 
 function CharacterCard({ character, bookId }) {
   const queryClient = useQueryClient();
-  const [voicePrompt, setVoicePrompt] = useState(
-    character.voice_design_prompt || "",
-  );
+  const [voicePrompt, setVoicePrompt] = useState(character.voice_prompt || "");
+  const [voiceId, setVoiceId] = useState(character.tts_voice_id || "");
+  const [voiceIdDirty, setVoiceIdDirty] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const mutation = useMutation({
     mutationFn: (data) => updateCharacter(character.id, data),
-    onSuccess: () => {
+    onSuccess: (updatedCharacter) => {
+      setVoiceId(updatedCharacter.tts_voice_id || "");
+      setVoiceIdDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       queryClient.invalidateQueries({
@@ -34,7 +36,13 @@ function CharacterCard({ character, bookId }) {
   });
 
   const handleSave = () => {
-    mutation.mutate({ voice_design_prompt: voicePrompt });
+    const payload = {
+      voice_prompt: voicePrompt || null,
+    };
+    if (voiceIdDirty) {
+      payload.tts_voice_id = voiceId || null;
+    }
+    mutation.mutate(payload);
   };
 
   return (
@@ -80,7 +88,7 @@ function CharacterCard({ character, bookId }) {
         </details>
       )}
       <label className="character-voice-label">
-        Voice Design Prompt
+        Voice Profile
         <input
           type="text"
           value={voicePrompt}
@@ -94,6 +102,25 @@ function CharacterCard({ character, bookId }) {
         <code>[speed-slow|normal|fast]</code>{" "}
         <code>[age-young|middle|old]</code>{" "}
         <code>[accent-british|american|…]</code>
+      </p>
+      <label className="character-voice-label">
+        Provider Voice ID
+        <input
+          type="text"
+          value={voiceId}
+          onChange={(e) => {
+            setVoiceId(e.target.value);
+            setVoiceIdDirty(true);
+          }}
+          placeholder="Optional; overrides the provider default voice"
+        />
+      </label>
+      <p className="character-voice-hint">
+        Used by fixed-voice providers such as OpenAI-compatible APIs and
+        ElevenLabs. OmniVoice uses the descriptive profile above.
+        {character.tts_voice_provider
+          ? ` Saved for ${character.tts_voice_provider}.`
+          : ""}
       </p>
       {mutation.isError && (
         <p className="error">{mutation.error?.message || "Save failed"}</p>

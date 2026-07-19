@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookSettings,
   testAudiobookLlm,
+  testAudiobookTts,
   updateAudiobookSettings,
 } from "../api/audiobook";
 
@@ -23,7 +24,11 @@ function AudiobookSettings() {
   const [llmApiKey, setLlmApiKey] = useState("");
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
   const [llmModel, setLlmModel] = useState("");
-  const [omnivoiceEndpoint, setOmnivoiceEndpoint] = useState("");
+  const [ttsProvider, setTtsProvider] = useState("stub");
+  const [ttsApiKey, setTtsApiKey] = useState("");
+  const [ttsBaseUrl, setTtsBaseUrl] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
+  const [ttsDefaultVoice, setTtsDefaultVoice] = useState("");
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [initialised, setInitialised] = useState(false);
@@ -33,7 +38,10 @@ function AudiobookSettings() {
       setLlmProvider(settings.llm_provider || "stub");
       setLlmBaseUrl(settings.llm_base_url || "");
       setLlmModel(settings.llm_model || "");
-      setOmnivoiceEndpoint(settings.omnivoice_endpoint || "");
+      setTtsProvider(settings.tts_provider || "stub");
+      setTtsBaseUrl(settings.tts_base_url || "");
+      setTtsModel(settings.tts_model || "");
+      setTtsDefaultVoice(settings.tts_default_voice || "");
       setRosterPrompt(settings.roster_prompt_template || "");
       setDiarizationPrompt(settings.diarization_prompt_template || "");
       setInitialised(true);
@@ -43,6 +51,7 @@ function AudiobookSettings() {
   const saveMutation = useMutation({
     mutationFn: (data) => updateAudiobookSettings(data),
     onSuccess: () => {
+      setTtsApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -52,12 +61,18 @@ function AudiobookSettings() {
       llm_provider: llmProvider || null,
       llm_base_url: llmBaseUrl || null,
       llm_model: llmModel || null,
-      omnivoice_endpoint: omnivoiceEndpoint || null,
+      tts_provider: ttsProvider || "stub",
+      tts_base_url: ttsBaseUrl || null,
+      tts_model: ttsModel || null,
+      tts_default_voice: ttsDefaultVoice || null,
       roster_prompt_template: rosterPrompt || null,
       diarization_prompt_template: diarizationPrompt || null,
     };
     if (llmApiKey) {
       payload.llm_api_key = llmApiKey;
+    }
+    if (ttsApiKey) {
+      payload.tts_api_key = ttsApiKey;
     }
     return payload;
   };
@@ -68,6 +83,18 @@ function AudiobookSettings() {
       return testAudiobookLlm();
     },
     onSuccess: () => {
+      setTtsApiKey("");
+      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    },
+  });
+
+  const testTtsMutation = useMutation({
+    mutationFn: async () => {
+      await updateAudiobookSettings(buildPayload());
+      return testAudiobookTts();
+    },
+    onSuccess: () => {
+      setTtsApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -169,40 +196,171 @@ function AudiobookSettings() {
         </section>
 
         <section className="settings-section">
-          <h3>OmniVoice TTS</h3>
+          <h3>Text-to-Speech Provider</h3>
           <label>
-            Endpoint URL
-            <input
-              type="url"
-              value={omnivoiceEndpoint}
-              onChange={(e) => setOmnivoiceEndpoint(e.target.value)}
-              placeholder="http://your-omnivoice-server:port"
-            />
+            Provider
+            <select
+              value={ttsProvider}
+              onChange={(e) => {
+                setTtsProvider(e.target.value);
+                setTtsApiKey("");
+              }}
+            >
+              <option value="omnivoice">OmniVoice</option>
+              <option value="openai-compatible">
+                OpenAI-compatible (Kokoro / local)
+              </option>
+              <option value="openai">OpenAI</option>
+              <option value="elevenlabs">ElevenLabs</option>
+              <option value="stub">Deterministic local harness</option>
+            </select>
           </label>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setOmnivoiceEndpoint("http://127.0.0.1:8001")}
-          >
-            Use Local OmniVoice Adapter
-          </button>
+          {ttsProvider !== "stub" && (
+            <label>
+              API Key
+              <input
+                type="password"
+                value={ttsApiKey}
+                onChange={(e) => setTtsApiKey(e.target.value)}
+                placeholder={
+                  settings?.tts_api_key_set
+                    ? "••••••••  (set — enter new key to change)"
+                    : ttsProvider === "omnivoice" ||
+                        ttsProvider === "openai-compatible"
+                      ? "Optional for local servers"
+                      : "Enter API key"
+                }
+              />
+            </label>
+          )}
+          {ttsProvider !== "stub" && (
+            <label>
+              Base URL
+              <input
+                type="url"
+                value={ttsBaseUrl}
+                onChange={(e) => setTtsBaseUrl(e.target.value)}
+                placeholder={
+                  ttsProvider === "omnivoice"
+                    ? "http://your-omnivoice-server:8001"
+                    : ttsProvider === "openai-compatible"
+                      ? "http://your-tts-server:8880"
+                      : "Leave blank for the provider default"
+                }
+              />
+            </label>
+          )}
+          {["openai", "openai-compatible", "elevenlabs"].includes(
+            ttsProvider,
+          ) && (
+            <label>
+              Model
+              <input
+                type="text"
+                value={ttsModel}
+                onChange={(e) => setTtsModel(e.target.value)}
+                placeholder={
+                  ttsProvider === "openai-compatible"
+                    ? "e.g. kokoro"
+                    : ttsProvider === "openai"
+                      ? "tts-1"
+                      : "eleven_multilingual_v2"
+                }
+              />
+            </label>
+          )}
+          {["openai", "openai-compatible", "elevenlabs"].includes(
+            ttsProvider,
+          ) && (
+            <label>
+              Default Voice ID
+              <input
+                type="text"
+                value={ttsDefaultVoice}
+                onChange={(e) => setTtsDefaultVoice(e.target.value)}
+                placeholder={
+                  ttsProvider === "openai-compatible"
+                    ? "e.g. af_heart"
+                    : ttsProvider === "openai"
+                      ? "e.g. alloy"
+                      : "ElevenLabs voice ID"
+                }
+              />
+            </label>
+          )}
+          <div className="settings-actions-inline">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setTtsProvider("omnivoice");
+                setTtsApiKey("");
+                setTtsBaseUrl("http://127.0.0.1:8001");
+                setTtsModel("");
+                setTtsDefaultVoice("");
+              }}
+            >
+              Use Local OmniVoice
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setTtsProvider("openai-compatible");
+                setTtsApiKey("");
+                setTtsBaseUrl("http://127.0.0.1:8880");
+                setTtsModel("kokoro");
+                setTtsDefaultVoice("af_heart");
+              }}
+            >
+              Use Local Kokoro
+            </button>
+            <button
+              type="button"
+              onClick={() => testTtsMutation.mutate()}
+              disabled={testTtsMutation.isPending}
+            >
+              {testTtsMutation.isPending ? "Testing…" : "Save & Test TTS"}
+            </button>
+          </div>
+          {testTtsMutation.isSuccess && (
+            <p className="success">
+              Connected to {testTtsMutation.data.provider}
+              {testTtsMutation.data.model
+                ? ` / ${testTtsMutation.data.model}`
+                : ""}
+              .
+            </p>
+          )}
+          {testTtsMutation.isError && (
+            <p className="error">
+              {testTtsMutation.error?.message || "TTS test failed"}
+            </p>
+          )}
           <p className="settings-hint">
-            OmniVoice receives <code>POST /generate</code> with{" "}
-            <code>
-              {'{ "voice": "[gender-male][pitch-low]", "text": "..." }'}
-            </code>{" "}
-            and returns raw MP3 bytes.
+            OmniVoice uses descriptive voice profiles and expression tags.
+            OpenAI-compatible and hosted APIs use voice IDs; set a default here
+            and optionally override it on individual characters.
           </p>
-          <p className="settings-hint">
-            For real local speech, run <code>make run-omnivoice</code>, choose
-            the local adapter above, and save settings. The first start
-            downloads the official model.
-          </p>
-          <p className="settings-hint">
-            For offline validation, choose the deterministic local harness and
-            leave this blank. It generates silent placeholder MP3s with
-            realistic timing.
-          </p>
+          {ttsProvider === "omnivoice" && (
+            <p className="settings-hint">
+              Run <code>make run-omnivoice</code> for the bundled local adapter.
+              It receives <code>POST /generate</code> and returns MP3 audio.
+            </p>
+          )}
+          {ttsProvider === "openai-compatible" && (
+            <p className="settings-hint">
+              Compatible servers must implement{" "}
+              <code>POST /v1/audio/speech</code>. Kokoro FastAPI is supported by
+              the local preset.
+            </p>
+          )}
+          {ttsProvider === "stub" && (
+            <p className="settings-hint">
+              The deterministic harness generates silent placeholder MP3s with
+              realistic timing for offline validation.
+            </p>
+          )}
         </section>
 
         <section className="settings-section">

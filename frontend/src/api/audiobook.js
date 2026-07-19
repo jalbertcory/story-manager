@@ -157,3 +157,10 @@ export function testAudiobookLlm() {
     fallbackMessage: "Failed to connect to the configured LLM",
   });
 }
+
+export function testAudiobookTts() {
+  return sendWithoutBody("/api/audiobook/settings/test-tts", {
+    method: "POST",
+    fallbackMessage: "Failed to connect to the configured TTS provider",
+  });
+}

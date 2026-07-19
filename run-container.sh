@@ -46,16 +46,10 @@ export DATABASE_URL="postgresql+psycopg://postgres@localhost:5432/story_manager?
 PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
 echo "--- Database migrations complete ---"
 
-# APScheduler and the in-process queues require a single application process.
-WORKERS=${WEB_CONCURRENCY:-1}
-if [ "$WORKERS" != "1" ]; then
-  echo "ERROR: WEB_CONCURRENCY must be 1 until background jobs support distributed coordination." >&2
-  exit 1
-fi
-
-# Start uvicorn serving both the API and the pre-built frontend
-echo "--- Starting application (workers=$WORKERS) ---"
-PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers "$WORKERS" &
+# APScheduler and the in-process queues require exactly one application process.
+# This is an application invariant, not a deployment setting.
+echo "--- Starting application (workers=1) ---"
+PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1 &
 APP_PID=$!
 
 echo "--- Application started (PID: $APP_PID) ---"

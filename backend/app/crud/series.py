@@ -207,8 +207,11 @@ async def _merge_audiobook_series_rosters(db: AsyncSession, source: str, target:
         existing.evidence = [*(existing.evidence or []), *(profile.evidence or [])][:6]
         if not existing.description:
             existing.description = profile.description
-        if not existing.voice_design_prompt:
-            existing.voice_design_prompt = profile.voice_design_prompt
+        if not existing.voice_prompt:
+            existing.voice_prompt = profile.voice_prompt
+        if not existing.tts_voice_id:
+            existing.tts_voice_id = profile.tts_voice_id
+            existing.tts_voice_provider = profile.tts_voice_provider
         await db.delete(profile)
 
 

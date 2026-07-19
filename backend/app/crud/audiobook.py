@@ -397,7 +397,9 @@ def _copy_series_profile_to_book_character(
     character.series_character_id = profile.id
     character.name = profile.name
     character.description = profile.description
-    character.voice_design_prompt = profile.voice_design_prompt
+    character.voice_prompt = profile.voice_prompt
+    character.tts_voice_id = profile.tts_voice_id
+    character.tts_voice_provider = profile.tts_voice_provider
     character.is_narrator = profile.is_narrator
     character.aliases = profile.aliases or []
     character.evidence = profile.evidence or []
@@ -426,7 +428,9 @@ async def sync_book_roster_with_series(
                 canonical_name=canonical,
                 name=character.name,
                 description=character.description,
-                voice_design_prompt=character.voice_design_prompt,
+                voice_prompt=character.voice_prompt,
+                tts_voice_id=character.tts_voice_id,
+                tts_voice_provider=character.tts_voice_provider,
                 is_narrator=character.is_narrator,
                 aliases=character.aliases or [],
                 evidence=character.evidence or [],
@@ -486,7 +490,9 @@ async def propagate_character_profile_across_series(
     profile.canonical_name = canonical
     profile.name = character.name
     profile.description = character.description
-    profile.voice_design_prompt = character.voice_design_prompt
+    profile.voice_prompt = character.voice_prompt
+    profile.tts_voice_id = character.tts_voice_id
+    profile.tts_voice_provider = character.tts_voice_provider
     profile.is_narrator = character.is_narrator
     profile.aliases = character.aliases or []
     profile.evidence = character.evidence or []
@@ -532,6 +538,65 @@ async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
     await db.commit()
     for book_id in book_ids:
         await invalidate_packaged_audiobook(db, book_id)
+
+
+async def invalidate_generated_audio_for_tts_change(
+    db: AsyncSession,
+    *,
+    completion_threshold: float = 0.8,
+) -> list[int]:
+    """Reset generated clips only for unfinished books below the threshold."""
+    result = await db.execute(
+        select(
+            Book.id,
+            func.count(AudiobookSentence.id),
+            func.count(AudiobookSentence.id).filter(AudiobookSentence.status == "audio_generated"),
+        )
+        .join(AudiobookChapter, AudiobookChapter.book_id == Book.id)
+        .join(AudiobookSentence, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(
+            Book.audiobook_enabled.is_(True),
+            or_(Book.audiobook_pipeline_status.is_(None), Book.audiobook_pipeline_status != "complete"),
+        )
+        .group_by(Book.id)
+    )
+    book_ids = [
+        book_id
+        for book_id, total, generated in result.all()
+        if generated and total and generated / total < completion_threshold
+    ]
+    if not book_ids:
+        return []
+
+    chapter_result = await db.execute(
+        select(AudiobookSentence.chapter_id)
+        .join(AudiobookChapter, AudiobookSentence.chapter_id == AudiobookChapter.id)
+        .where(
+            AudiobookChapter.book_id.in_(book_ids),
+            AudiobookSentence.status == "audio_generated",
+        )
+        .distinct()
+    )
+    chapter_ids = [chapter_id for (chapter_id,) in chapter_result.all()]
+
+    await db.execute(
+        update(AudiobookSentence)
+        .where(
+            AudiobookSentence.chapter_id.in_(chapter_ids),
+            AudiobookSentence.status == "audio_generated",
+        )
+        .values(status="ready_for_audio", audio_file_path=None, audio_duration_ms=None)
+    )
+    if chapter_ids:
+        await db.execute(
+            update(AudiobookChapter)
+            .where(AudiobookChapter.id.in_(chapter_ids))
+            .values(needs_reassembly=True, preview_status=None, preview_error=None)
+        )
+    await db.commit()
+    for book_id in book_ids:
+        await invalidate_packaged_audiobook(db, book_id)
+    return book_ids
 
 
 async def delete_characters_for_book(db: AsyncSession, book_id: int) -> None:

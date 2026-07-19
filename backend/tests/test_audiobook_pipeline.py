@@ -48,7 +48,7 @@ async def _seed_audio_chapter(db, book_id: int, *, sentence_status: str = "ready
             {
                 "name": "Narrator",
                 "description": "Primary narrator",
-                "voice_design_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
                 "is_narrator": True,
             }
         ],
@@ -550,15 +550,18 @@ async def test_pause_is_cooperative_and_status_exposes_error_context(db):
 async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db, monkeypatch):
     book = await _make_book(db)
     chapter, _character, _sentence = await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
-    settings = models.AudiobookSettings(omnivoice_endpoint="http://tts.example.test")
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://tts.example.test",
+    )
     db.add(settings)
     await db.commit()
 
-    async def fail_omnivoice(endpoint, voice_prompt, tagged_text):
-        request = httpx.Request("POST", endpoint)
+    async def fail_tts(_settings, _request):
+        request = httpx.Request("POST", "http://tts.example.test/generate")
         raise httpx.ConnectError("connection failed", request=request)
 
-    monkeypatch.setattr(audiobook_tts, "_call_omnivoice", fail_omnivoice)
+    monkeypatch.setattr(audiobook_tts, "synthesize_speech", fail_tts)
 
     with pytest.raises(RuntimeError, match="TTS failed"):
         await audiobook_tts.generate_audio_for_book(book.id, db)
@@ -569,6 +572,134 @@ async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db,
     assert book.audiobook_pipeline_status == "error"
     assert sentence.status == "error"
     assert sentence.audio_file_path is None
+
+
+@pytest.mark.asyncio
+async def test_provider_change_clears_stored_tts_api_key(db):
+    settings = models.AudiobookSettings(
+        tts_provider="openai",
+        tts_api_key="openai-secret",
+        tts_model="tts-1",
+        tts_default_voice="alloy",
+    )
+    db.add(settings)
+    await db.commit()
+
+    response = await audiobook_router.update_settings(
+        audiobook_router.SettingsUpdate(
+            tts_provider="openai-compatible",
+            tts_base_url="http://127.0.0.1:8880",
+            tts_model="kokoro",
+            tts_default_voice="af_heart",
+        ),
+        db,
+    )
+    await db.refresh(settings)
+
+    assert response.tts_provider == "openai-compatible"
+    assert response.tts_api_key_set is False
+    assert settings.tts_api_key is None
+
+
+@pytest.mark.asyncio
+async def test_character_voice_id_is_tagged_and_used_only_for_its_provider(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    settings = models.AudiobookSettings(
+        tts_provider="elevenlabs",
+        tts_api_key="secret",
+        tts_default_voice="default-id",
+    )
+    db.add(settings)
+    await db.commit()
+
+    updated = await audiobook_router.update_character(
+        character.id,
+        audiobook_router.CharacterUpdate(tts_voice_id="character-id"),
+        db,
+    )
+    await db.refresh(character)
+
+    assert updated.tts_voice_provider == "elevenlabs"
+    assert character.tts_voice_provider == "elevenlabs"
+    assert audiobook_tts._voice_id_for_provider(settings, character) == "character-id"
+
+    settings.tts_provider = "openai"
+    assert audiobook_tts._voice_id_for_provider(settings, character) is None
+
+
+@pytest.mark.asyncio
+async def test_tts_settings_invalidate_only_unfinished_books_below_eighty_percent(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+
+    async def seed_book(title: str, pipeline_status: str, generated: int):
+        book = await _make_book(
+            db,
+            title=title,
+            audiobook_enabled=True,
+            audiobook_pipeline_status=pipeline_status,
+        )
+        chapter = await crud.audiobook.create_chapter(
+            db,
+            book_id=book.id,
+            chapter_number=1,
+            content_file_name="Text/chapter.xhtml",
+        )
+        chapter.needs_reassembly = False
+        await crud.audiobook.create_sentences_bulk(
+            db,
+            chapter.id,
+            [
+                {
+                    "html_element_id": f"{book.id}-{index}",
+                    "sequence_order": index,
+                    "original_text": f"Sentence {index}.",
+                    "tagged_text": f"Sentence {index}.",
+                    "status": "audio_generated" if index < generated else "ready_for_audio",
+                    "audio_file_path": f"library/audiobooks/{book.id}/snippets/{index}.mp3" if index < generated else None,
+                    "audio_duration_ms": 1000 if index < generated else None,
+                }
+                for index in range(5)
+            ],
+        )
+        return book, chapter
+
+    low_book, low_chapter = await seed_book("Low Progress", "paused", 3)
+    edge_book, edge_chapter = await seed_book("Edge Progress", "paused", 4)
+    complete_book, complete_chapter = await seed_book("Complete Book", "complete", 3)
+
+    invalidated = await crud.audiobook.invalidate_generated_audio_for_tts_change(db)
+
+    assert invalidated == [low_book.id]
+    assert await crud.audiobook.count_sentences_by_status(db, low_book.id) == {"ready_for_audio": 5}
+    assert await crud.audiobook.count_sentences_by_status(db, edge_book.id) == {
+        "audio_generated": 4,
+        "ready_for_audio": 1,
+    }
+    assert await crud.audiobook.count_sentences_by_status(db, complete_book.id) == {
+        "audio_generated": 3,
+        "ready_for_audio": 2,
+    }
+    await db.refresh(low_chapter)
+    await db.refresh(edge_chapter)
+    await db.refresh(complete_chapter)
+    assert low_chapter.needs_reassembly is True
+    assert edge_chapter.needs_reassembly is False
+    assert complete_chapter.needs_reassembly is False
 
 
 def test_smil_uses_real_epub_content_file_name():
@@ -739,7 +870,7 @@ async def test_roster_keeps_first_person_protagonist_separate_from_narrator(db, 
                         "aliases": ["Narrator"],
                         "description": "First-person protagonist.",
                         "evidence": ["John speaks."],
-                        "voice_design_prompt": "[gender-male][pitch-medium][speed-normal]",
+                        "voice_prompt": "[gender-male][pitch-medium][speed-normal]",
                         "is_narrator": True,
                     }
                 ],
@@ -775,7 +906,9 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
                 {
                     "name": "Captain Vale",
                     "description": "Series captain.",
-                    "voice_design_prompt": "[gender-female][pitch-low][speed-normal]",
+                    "voice_prompt": "[gender-female][pitch-low][speed-normal]",
+                    "tts_voice_id": "captain",
+                    "tts_voice_provider": "elevenlabs",
                     "is_narrator": False,
                     "aliases": ["Vale"],
                     "evidence": [],
@@ -791,7 +924,9 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
                 {
                     "name": "Captain Vale",
                     "description": "Book-specific guess.",
-                    "voice_design_prompt": "[gender-neutral][pitch-high][speed-fast]",
+                    "voice_prompt": "[gender-neutral][pitch-high][speed-fast]",
+                    "tts_voice_id": "wrong-voice",
+                    "tts_voice_provider": "openai",
                     "is_narrator": False,
                     "aliases": [],
                     "evidence": [],
@@ -805,15 +940,21 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     await db.refresh(second_character)
 
     assert second_character.series_character_id == first_character.series_character_id
-    assert second_character.voice_design_prompt == "[gender-female][pitch-low][speed-normal]"
+    assert second_character.voice_prompt == "[gender-female][pitch-low][speed-normal]"
+    assert second_character.tts_voice_id == "captain"
+    assert second_character.tts_voice_provider == "elevenlabs"
 
-    first_character.voice_design_prompt = "[gender-female][pitch-medium][speed-slow]"
+    first_character.voice_prompt = "[gender-female][pitch-medium][speed-slow]"
+    first_character.tts_voice_id = "captain-v2"
+    first_character.tts_voice_provider = "elevenlabs"
     await db.commit()
     linked = await crud.audiobook.propagate_character_profile_across_series(db, first_character)
     await db.refresh(second_character)
 
     assert {character.book_id for character in linked} == {first.id, second.id}
-    assert second_character.voice_design_prompt == "[gender-female][pitch-medium][speed-slow]"
+    assert second_character.voice_prompt == "[gender-female][pitch-medium][speed-slow]"
+    assert second_character.tts_voice_id == "captain-v2"
+    assert second_character.tts_voice_provider == "elevenlabs"
 
     # Renaming onto an existing canonical identity merges the shared profiles
     # instead of violating the series/name uniqueness constraint.
@@ -824,7 +965,7 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
             [
                 {
                     "name": "Commander Vale",
-                    "voice_design_prompt": "[gender-female][pitch-high][speed-normal]",
+                    "voice_prompt": "[gender-female][pitch-high][speed-normal]",
                     "is_narrator": False,
                 }
             ],
