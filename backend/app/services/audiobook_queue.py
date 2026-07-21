@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
+import os
 from typing import Optional
 
 from .. import crud
 from ..database import SessionLocal
 from .audiobook_ingestion import ingest_epub
 from .audiobook_llm import generate_character_roster, diarize_sentences
-from .audiobook_tts import generate_audio_for_book, generate_audio_for_sentence
-from .audiobook_tts import generate_audio_for_chapter_preview
+from .audiobook_tts import (
+    TTS_BATCH_SIZE,
+    generate_audio_for_book,
+    generate_audio_for_chapter_preview,
+    generate_audio_for_sentence,
+    generate_audio_for_sentences,
+)
 from .audiobook_assembly import assemble_book, assemble_chapter_preview
 
 logger = logging.getLogger(__name__)
@@ -31,6 +38,10 @@ class AudiobookQueue:
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[Optional[int | tuple[str, int, int]]] = asyncio.Queue()
+        self._background_audio_queue: asyncio.PriorityQueue[tuple[int, int, tuple[int, list[int], bool]]] = (
+            asyncio.PriorityQueue()
+        )
+        self._background_audio_sequence = itertools.count()
         self._queued_book_ids: set[int] = set()
         # A pipeline mutation may arrive while a book is already running. Keep
         # one follow-up job so the mutation is not lost when the current worker
@@ -39,22 +50,40 @@ class AudiobookQueue:
         self._queued_preview_ids: set[int] = set()
         self._queued_sentence_ids: set[int] = set()
         self._worker_task: Optional[asyncio.Task[None]] = None
+        self._background_audio_tasks: list[asyncio.Task[None]] = []
+        self._background_audio_ids: dict[int, set[int]] = {}
+        self._background_audio_condition = asyncio.Condition()
 
     async def start(self) -> None:
         if self._worker_task and not self._worker_task.done():
             return
         self._worker_task = asyncio.create_task(self._run(), name="audiobook-worker")
+        worker_count = max(1, int(os.getenv("AUDIOBOOK_TTS_WORKERS", "1")))
+        self._background_audio_tasks = [
+            asyncio.create_task(
+                self._run_background_audio(),
+                name=f"audiobook-tts-worker-{index + 1}",
+            )
+            for index in range(worker_count)
+        ]
 
     async def stop(self) -> None:
         if not self._worker_task:
             return
-        await self._queue.put(None)
-        await self._worker_task
+        tasks = [self._worker_task, *self._background_audio_tasks]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._worker_task = None
+        self._background_audio_tasks.clear()
+        self._queue = asyncio.Queue()
+        self._background_audio_queue = asyncio.PriorityQueue()
+        self._background_audio_sequence = itertools.count()
         self._queued_book_ids.clear()
         self._rerun_book_ids.clear()
         self._queued_preview_ids.clear()
         self._queued_sentence_ids.clear()
+        self._background_audio_ids.clear()
 
     async def enqueue(self, book_id: int) -> bool:
         if book_id in self._queued_book_ids:
@@ -79,8 +108,128 @@ class AudiobookQueue:
         if sentence_id in self._queued_sentence_ids:
             return False
         self._queued_sentence_ids.add(sentence_id)
-        await self._queue.put(("sentence", book_id, sentence_id))
+        await self._background_audio_queue.put((0, next(self._background_audio_sequence), (book_id, [sentence_id], True)))
         return True
+
+    async def enqueue_background_audio(self, book_id: int, sentence_ids: list[int]) -> None:
+        """Queue durable, analyzed sentences for the pipelined TTS lane."""
+        async with self._background_audio_condition:
+            queued_ids = self._background_audio_ids.setdefault(book_id, set())
+            new_ids = []
+            for sentence_id in sentence_ids:
+                if sentence_id in queued_ids:
+                    continue
+                queued_ids.add(sentence_id)
+                new_ids.append(sentence_id)
+            for start in range(0, len(new_ids), TTS_BATCH_SIZE):
+                batch_ids = new_ids[slice(start, start + TTS_BATCH_SIZE)]
+                await self._background_audio_queue.put(
+                    (
+                        1,
+                        next(self._background_audio_sequence),
+                        (book_id, batch_ids, False),
+                    )
+                )
+
+    async def _wait_for_background_audio(self, book_id: int) -> None:
+        """Wait for pipelined TTS while publishing phase-accurate progress."""
+        while True:
+            async with self._background_audio_condition:
+                queued_count = len(self._background_audio_ids.get(book_id, ()))
+                if not queued_count:
+                    return
+
+            async with SessionLocal() as db:
+                counts = await crud.audiobook.count_sentences_by_status(db, book_id)
+                generated_count = counts.get("audio_generated", 0)
+                total_count = sum(counts.values())
+                await crud.audiobook.update_book_pipeline_progress(
+                    db,
+                    book_id,
+                    current=generated_count,
+                    total=total_count,
+                    detail=(f"Generating speech: {generated_count:,} of {total_count:,} clips " f"({queued_count:,} queued)"),
+                )
+
+            async with self._background_audio_condition:
+                await self._background_audio_condition.wait_for(
+                    lambda: len(self._background_audio_ids.get(book_id, ())) < queued_count
+                )
+
+    async def _run_background_audio(self) -> None:
+        while True:
+            _priority, _sequence, item = await self._background_audio_queue.get()
+            try:
+                book_id, sentence_ids, manual_request = item
+                eligible_ids = []
+                try:
+                    async with SessionLocal() as db:
+                        from ..models import AudiobookSentence, Book
+
+                        book = await db.get(Book, book_id)
+                        if book is None:
+                            continue
+                        if not manual_request and (
+                            book.audiobook_pause_requested or book.audiobook_pipeline_status not in ("diarizing", "audio_gen")
+                        ):
+                            continue
+                        for sentence_id in sentence_ids:
+                            sentence = await db.get(AudiobookSentence, sentence_id)
+                            if sentence is None:
+                                continue
+                            allowed_statuses = (
+                                ("ready_for_audio", "audio_queued", "audio_generating")
+                                if manual_request
+                                else ("ready_for_audio",)
+                            )
+                            if sentence.status not in allowed_statuses:
+                                continue
+                            await crud.audiobook.set_sentence_status(
+                                db,
+                                sentence_id,
+                                "audio_generating",
+                            )
+                            eligible_ids.append(sentence_id)
+                        if not eligible_ids:
+                            continue
+                        if manual_request:
+                            await generate_audio_for_sentence(book_id, eligible_ids[0], db)
+                            failures = {}
+                        else:
+                            failures = await generate_audio_for_sentences(
+                                book_id,
+                                eligible_ids,
+                                db,
+                            )
+                        for sentence_id, error in failures.items():
+                            logger.error(
+                                "Pipelined TTS failed for sentence %s in book %s: %s",
+                                sentence_id,
+                                book_id,
+                                error,
+                            )
+                            await crud.audiobook.mark_sentence_error(db, sentence_id)
+                except Exception:
+                    logger.exception(
+                        "Pipelined TTS batch failed for sentences %s in book %s.",
+                        eligible_ids or sentence_ids,
+                        book_id,
+                    )
+                    async with SessionLocal() as db:
+                        for sentence_id in eligible_ids:
+                            await crud.audiobook.mark_sentence_error(db, sentence_id)
+            finally:
+                book_id, sentence_ids, manual_request = item
+                if manual_request:
+                    self._queued_sentence_ids.difference_update(sentence_ids)
+                async with self._background_audio_condition:
+                    queued_ids = self._background_audio_ids.get(book_id)
+                    if queued_ids is not None:
+                        queued_ids.difference_update(sentence_ids)
+                        if not queued_ids:
+                            self._background_audio_ids.pop(book_id, None)
+                    self._background_audio_condition.notify_all()
+                self._background_audio_queue.task_done()
 
     async def requeue_in_progress(self) -> int:
         async with SessionLocal() as db:
@@ -190,8 +339,69 @@ class AudiobookQueue:
                 elif phase == "roster_gen":
                     await generate_character_roster(book_id, db)
                 elif phase == "diarizing":
-                    await diarize_sentences(book_id, db)
+                    recovered = await crud.audiobook.reset_error_sentences_for_book(
+                        db,
+                        book_id,
+                    )
+                    if recovered:
+                        logger.warning(
+                            "Book %s: automatically retrying %d failed speech clips.",
+                            book_id,
+                            recovered,
+                        )
+                    ready_sentences = await crud.audiobook.get_sentences_ready_for_audio(
+                        db,
+                        book_id,
+                        limit=100_000,
+                    )
+                    await self.enqueue_background_audio(
+                        book_id,
+                        [
+                            sentence.id
+                            for sentence in sorted(
+                                ready_sentences,
+                                key=lambda sentence: len(sentence.tagged_text or sentence.original_text),
+                            )
+                        ],
+                    )
+                    await diarize_sentences(
+                        book_id,
+                        db,
+                        on_sentences_ready=lambda sentence_ids: self.enqueue_background_audio(
+                            book_id,
+                            sentence_ids,
+                        ),
+                    )
                 elif phase == "audio_gen":
+                    # A process restart can resume directly in this phase, after
+                    # the in-memory TTS queue has been lost. Rebuild it from
+                    # durable sentence state and preserve length bucketing.
+                    ready_sentences = await crud.audiobook.get_sentences_ready_for_audio(
+                        db,
+                        book_id,
+                        limit=100_000,
+                    )
+                    await self.enqueue_background_audio(
+                        book_id,
+                        [
+                            sentence.id
+                            for sentence in sorted(
+                                ready_sentences,
+                                key=lambda sentence: len(sentence.tagged_text or sentence.original_text),
+                            )
+                        ],
+                    )
+                    await self._wait_for_background_audio(book_id)
+                    recovered = await crud.audiobook.reset_error_sentences_for_book(
+                        db,
+                        book_id,
+                    )
+                    if recovered:
+                        logger.warning(
+                            "Book %s: retrying %d failed speech clips before assembly.",
+                            book_id,
+                            recovered,
+                        )
                     await generate_audio_for_book(book_id, db)
                 elif phase == "assembling":
                     await assemble_book(book_id, db)

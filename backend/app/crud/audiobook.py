@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import LIBRARY_PATH
+from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..models import (
     AudiobookSettings,
     AudiobookChapter,
@@ -775,6 +775,31 @@ async def update_sentence_diarization(
     await db.commit()
 
 
+async def mark_sentences_as_narration(
+    db: AsyncSession,
+    sentence_ids: list[int],
+    narrator_id: Optional[int],
+) -> None:
+    """Bulk-complete sentences known to be prose outside a dialogue span."""
+    if not sentence_ids:
+        return
+    await db.execute(
+        update(AudiobookSentence)
+        .where(
+            AudiobookSentence.id.in_(sentence_ids),
+            AudiobookSentence.status == "pending_diarization",
+        )
+        .values(
+            character_id=narrator_id,
+            tagged_text=AudiobookSentence.original_text,
+            speaker_confidence=1.0,
+            speaker_reason="Deterministic prose outside dialogue",
+            status="ready_for_audio",
+        )
+    )
+    await db.commit()
+
+
 async def update_sentence_audio(db: AsyncSession, sentence_id: int, audio_file_path: str, audio_duration_ms: int) -> None:
     await db.execute(
         update(AudiobookSentence)
@@ -921,8 +946,10 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     total = sum(counts.values())
     if total > 0 and counts.get("audio_generated", 0) == total:
         pending_chapters = await get_chapters_pending_assembly(db, book_id)
-        packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
-        return "assembling" if pending_chapters or not packaged_epub.is_file() else "complete"
+        output_dir = LIBRARY_PATH / "audiobooks" / str(book_id)
+        packaged_epub = output_dir / "audiobook.epub"
+        assembly_marker = output_dir / AUDIOBOOK_ASSEMBLY_MARKER
+        return "assembling" if pending_chapters or not packaged_epub.is_file() or not assembly_marker.is_file() else "complete"
 
     return "ingesting"
 
