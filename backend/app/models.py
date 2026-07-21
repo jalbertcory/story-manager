@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     Integer,
@@ -70,6 +71,18 @@ class Book(Base):
     audiobook_pipeline_updated_at = Column(DateTime(timezone=True), nullable=True)
     audiobook_batch_limit = Column(Integer, nullable=True)
     audiobook_llm_requests = Column(Integer, nullable=False, default=0, server_default="0")
+    # Reader-facing audiobook publication state. These fields describe the
+    # last atomically published modular rendition, independently of work that
+    # may still be in progress in the generation pipeline.
+    audiobook_revision = Column(Integer, nullable=False, default=0, server_default="0")
+    audiobook_source_content_version = Column(Integer, nullable=True)
+    audiobook_text_content_version = Column(Integer, nullable=True)
+    audiobook_pending_content_version = Column(Integer, nullable=True)
+    audiobook_publication_state = Column(String, nullable=True)
+    audiobook_text_file_path = Column(String, nullable=True)
+    audiobook_text_size_bytes = Column(BigInteger, nullable=True)
+    audiobook_text_sha256 = Column(String(64), nullable=True)
+    audiobook_publication_error = Column(Text, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -213,6 +226,7 @@ class AudiobookSettings(Base):
 
 class AudiobookChapter(Base):
     __tablename__ = "audiobook_chapters"
+    __table_args__ = (UniqueConstraint("book_id", "stable_chapter_key", name="uq_audiobook_chapter_stable_key"),)
 
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -227,6 +241,20 @@ class AudiobookChapter(Base):
     # Values: None, queued, generating, ready, error.
     preview_status = Column(String, nullable=True)
     preview_error = Column(Text, nullable=True)
+    stable_chapter_key = Column(String, nullable=True)
+    source_href = Column(String, nullable=True)
+    source_content_hash = Column(String(64), nullable=True)
+    title = Column(String, nullable=True)
+    spine_order = Column(Integer, nullable=True)
+    generation_state = Column(String, nullable=False, default="pending", server_default="pending")
+    audio_revision = Column(Integer, nullable=False, default=0, server_default="0")
+    reader_audio_file_path = Column(String, nullable=True)
+    reader_smil_file_path = Column(String, nullable=True)
+    audio_size_bytes = Column(BigInteger, nullable=True)
+    audio_sha256 = Column(String(64), nullable=True)
+    smil_size_bytes = Column(BigInteger, nullable=True)
+    smil_sha256 = Column(String(64), nullable=True)
+    duration_ms = Column(BigInteger, nullable=True)
 
 
 class AudiobookSeriesCharacter(Base):

@@ -13,7 +13,14 @@ from mutagen.mp3 import MP3
 
 from backend.app import crud, models
 from backend.app.routers import audiobook as audiobook_router
-from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_llm, audiobook_tts
+from backend.app.services import (
+    audiobook_assembly,
+    audiobook_ingestion,
+    audiobook_llm,
+    audiobook_publication,
+    audiobook_tts,
+    web_novel,
+)
 from backend.app.services import audiobook_queue
 from backend.app.services.audiobook_queue import AudiobookQueue
 
@@ -651,11 +658,71 @@ async def test_requeue_candidates_only_include_enabled_audiobooks(db):
     disabled.audiobook_pipeline_status = "audio_gen"
     enabled = await _make_book(db, title="Enabled Audio", audiobook_enabled=True)
     enabled.audiobook_pipeline_status = "audio_gen"
+    refreshed = await _make_book(
+        db,
+        title="Refreshed Audio",
+        audiobook_enabled=True,
+        audiobook_pipeline_status="complete",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, refreshed)
     await db.commit()
 
     pending = await crud.audiobook.get_in_progress_audiobook_books(db)
 
-    assert [book.id for book in pending] == [enabled.id]
+    assert [book.id for book in pending] == [enabled.id, refreshed.id]
+    assert refreshed.audiobook_pending_content_version == refreshed.content_version
+
+
+@pytest.mark.asyncio
+async def test_queue_restarts_ingestion_for_refresh_received_during_generation(db, sqlite_sessionmaker, monkeypatch):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+
+    restarted = await AudiobookQueue()._restart_for_pending_content(book.id)
+
+    await db.refresh(book)
+    assert restarted is True
+    assert book.audiobook_pipeline_status == "ingesting"
+    assert book.audiobook_pending_content_version == book.content_version
+
+
+@pytest.mark.asyncio
+async def test_web_refresh_enqueues_enabled_audiobook_without_duplicate_active_job(db, monkeypatch):
+    queued_book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="complete",
+        audiobook_source_content_version=1,
+    )
+    active_book = await _make_book(
+        db,
+        title="Already Building",
+        audiobook_enabled=True,
+        audiobook_pipeline_status="diarizing",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, queued_book)
+    await crud.touch_book_content(db, active_book)
+    await db.commit()
+    queue = _FakeQueue(active_book_ids={active_book.id})
+    monkeypatch.setattr(audiobook_queue, "get_audiobook_queue", lambda: queue)
+
+    await web_novel._enqueue_audiobook_refresh(queued_book, db)
+    await web_novel._enqueue_audiobook_refresh(active_book, db)
+
+    await db.refresh(queued_book)
+    await db.refresh(active_book)
+    assert queued_book.audiobook_pipeline_status == "ingesting"
+    assert active_book.audiobook_pipeline_status == "diarizing"
+    assert queue.enqueued == [queued_book.id]
 
 
 @pytest.mark.asyncio
@@ -1165,6 +1232,53 @@ def _write_nested_epub(path: Path) -> None:
     epub.write_epub(path, book, {})
 
 
+def _write_incremental_epub(path: Path, chapters: list[tuple[str, str, str]]) -> None:
+    book = epub.EpubBook()
+    book.set_identifier("incremental-test")
+    book.set_title("Incremental")
+    book.set_language("en")
+    book.add_author("Author")
+    spine = ["nav"]
+    toc = []
+    for index, (href, title, content) in enumerate(chapters, start=1):
+        chapter = epub.EpubHtml(title=title, file_name=href, lang="en")
+        chapter.content = f"<html><body><h1>{title}</h1><p>{content}</p></body></html>"
+        book.add_item(chapter)
+        spine.append(chapter)
+        toc.append(epub.Link(href, title, f"chapter-{index}"))
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = spine
+    book.toc = tuple(toc)
+    epub.write_epub(path, book, {})
+
+
+async def _mark_incremental_chapter_ready(db, library_path: Path, chapter, revision: int) -> tuple[Path, Path]:
+    chapter_dir = library_path / "audiobooks" / str(chapter.book_id) / "seed" / chapter.stable_chapter_key
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = chapter_dir / "audio.mp3"
+    smil_path = chapter_dir / "overlay.smil"
+    audio_path.write_bytes(f"audio-{chapter.id}".encode())
+    smil_path.write_text("<smil/>", encoding="utf-8")
+    chapter.audio_file_path = str(audio_path.relative_to(library_path.parent))
+    chapter.smil_file_path = str(smil_path.relative_to(library_path.parent))
+    chapter.reader_audio_file_path = chapter.audio_file_path
+    chapter.reader_smil_file_path = chapter.smil_file_path
+    chapter.audio_revision = revision
+    chapter.generation_state = "ready"
+    chapter.audio_size_bytes = audio_path.stat().st_size
+    chapter.audio_sha256 = "a" * 64
+    chapter.smil_size_bytes = smil_path.stat().st_size
+    chapter.smil_sha256 = "b" * 64
+    chapter.duration_ms = 1000
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    for sentence in sentences:
+        sentence.status = "audio_generated"
+        sentence.audio_duration_ms = 1000
+    await db.commit()
+    return audio_path, smil_path
+
+
 def _simple_sentence_split(text: str) -> list[str]:
     if "." not in text:
         return [text.strip()]
@@ -1183,6 +1297,7 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
         current_path=str(epub_path.relative_to(library_path.parent)),
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -1202,8 +1317,143 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
     assert soup.find("p") is not None
     assert soup.find("em") is not None
     assert soup.find("a", href="next.xhtml") is not None
-    assert soup.find("span", id="ch1_s0") is not None
-    assert soup.find("span", id="ch1_s1") is not None
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapters[0].id)
+    assert len(sentences) >= 2
+    assert all(sentence.html_element_id.startswith(f"{chapters[0].stable_chapter_key}-") for sentence in sentences)
+    assert all(soup.find("span", id=sentence.html_element_id) is not None for sentence in sentences)
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_appends_chapter_without_invalidating_ready_audio(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    original_state = []
+    for revision, chapter in enumerate(original, start=4):
+        await _mark_incremental_chapter_ready(db, library_path, chapter, revision)
+        sentence_ids = [
+            sentence.html_element_id for sentence in await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        ]
+        original_state.append((chapter.id, chapter.stable_chapter_key, revision, chapter.audio_file_path, sentence_ids))
+
+    _write_incremental_epub(
+        epub_path,
+        [*initial, ("Text/three.xhtml", "Three", "A newly appended sentence.")],
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert len(chapters) == 3
+    for chapter, expected in zip(chapters[:2], original_state, strict=True):
+        chapter_id, key, revision, audio_path, sentence_ids = expected
+        assert (chapter.id, chapter.stable_chapter_key, chapter.audio_revision) == (chapter_id, key, revision)
+        assert chapter.audio_file_path == audio_path
+        assert chapter.generation_state == "ready"
+        assert [
+            sentence.html_element_id for sentence in await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        ] == sentence_ids
+    assert chapters[2].generation_state == "pending"
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_invalidates_only_edited_chapter(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    first_assets = await _mark_incremental_chapter_ready(db, library_path, original[0], 7)
+    edited_assets = await _mark_incremental_chapter_ready(db, library_path, original[1], 8)
+
+    _write_incremental_epub(
+        epub_path,
+        [initial[0], ("Text/two.xhtml", "Two", "This sentence was edited.")],
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert chapters[0].id == original[0].id
+    assert chapters[0].audio_revision == 7
+    assert chapters[0].generation_state == "ready"
+    assert all(path.exists() for path in first_assets)
+    assert chapters[1].id == original[1].id
+    assert chapters[1].audio_revision == 8
+    assert chapters[1].generation_state == "pending"
+    assert chapters[1].audio_file_path is None
+    assert chapters[1].reader_audio_file_path is None
+    assert all(not path.exists() for path in edited_assets)
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_removes_deleted_chapter_and_assets(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    await _mark_incremental_chapter_ready(db, library_path, original[0], 2)
+    removed_assets = await _mark_incremental_chapter_ready(db, library_path, original[1], 3)
+
+    _write_incremental_epub(epub_path, initial[:1])
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert [chapter.id for chapter in chapters] == [original[0].id]
+    assert chapters[0].generation_state == "ready"
+    assert all(not path.exists() for path in removed_assets)
 
 
 @pytest.mark.asyncio
@@ -1514,7 +1764,7 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         immutable_path=str(epub_path.relative_to(library_path.parent)),
         current_path=str(epub_path.relative_to(library_path.parent)),
     )
-    for module in (audiobook_ingestion, audiobook_tts, audiobook_assembly):
+    for module in (audiobook_ingestion, audiobook_publication, audiobook_tts, audiobook_assembly):
         monkeypatch.setattr(module, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 

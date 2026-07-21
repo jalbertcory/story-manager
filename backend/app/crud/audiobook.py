@@ -224,7 +224,16 @@ async def get_in_progress_audiobook_books(db: AsyncSession) -> list[Book]:
     result = await db.execute(
         select(Book).where(
             Book.audiobook_enabled.is_(True),
-            Book.audiobook_pipeline_status.in_(active_statuses),
+            or_(
+                Book.audiobook_pipeline_status.in_(active_statuses),
+                and_(
+                    Book.audiobook_pending_content_version.is_not(None),
+                    or_(
+                        Book.audiobook_source_content_version.is_(None),
+                        Book.audiobook_pending_content_version > Book.audiobook_source_content_version,
+                    ),
+                ),
+            ),
         )
     )
     return list(result.scalars().all())
@@ -252,6 +261,34 @@ async def get_chapters_for_book(db: AsyncSession, book_id: int) -> list[Audioboo
         select(AudiobookChapter).where(AudiobookChapter.book_id == book_id).order_by(AudiobookChapter.chapter_number)
     )
     return list(result.scalars().all())
+
+
+async def get_chapters_for_books(db: AsyncSession, book_ids: list[int]) -> dict[int, list[AudiobookChapter]]:
+    if not book_ids:
+        return {}
+    result = await db.execute(
+        select(AudiobookChapter)
+        .where(AudiobookChapter.book_id.in_(book_ids))
+        .order_by(
+            AudiobookChapter.book_id,
+            AudiobookChapter.spine_order,
+            AudiobookChapter.chapter_number,
+        )
+    )
+    grouped: dict[int, list[AudiobookChapter]] = {book_id: [] for book_id in book_ids}
+    for chapter in result.scalars().all():
+        grouped.setdefault(chapter.book_id, []).append(chapter)
+    return grouped
+
+
+async def get_chapter_by_stable_key(db: AsyncSession, book_id: int, stable_chapter_key: str) -> Optional[AudiobookChapter]:
+    result = await db.execute(
+        select(AudiobookChapter).where(
+            AudiobookChapter.book_id == book_id,
+            AudiobookChapter.stable_chapter_key == stable_chapter_key,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_chapters_needing_reassembly(db: AsyncSession, book_id: int) -> list[AudiobookChapter]:

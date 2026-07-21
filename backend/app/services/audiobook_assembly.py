@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..models import AudiobookChapter
+from .audiobook_publication import publish_reader_audiobook
 
 logger = logging.getLogger(__name__)
 
@@ -360,6 +361,7 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     epub.write_epub(str(temporary_epub_path), ebook)
     temporary_epub_path.replace(audiobook_epub_path)
     assembly_marker.write_text("EPUB 3 media-overlay package with frame-copy audio\n", encoding="utf-8")
+    await publish_reader_audiobook(db, book_id)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
     if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):

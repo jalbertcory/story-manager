@@ -308,6 +308,23 @@ class AudiobookQueue:
             await crud.audiobook.set_sentence_status(db, sentence_id, "audio_generating")
             await generate_audio_for_sentence(book_id, sentence_id, db)
 
+    async def _restart_for_pending_content(self, book_id: int) -> bool:
+        """Move a refresh received mid-build to the next durable boundary."""
+        async with SessionLocal() as db:
+            from ..models import Book
+
+            book = await db.get(Book, book_id)
+            if book is None or book.audiobook_pending_content_version is None:
+                return False
+            if (
+                book.audiobook_source_content_version is not None
+                and book.audiobook_pending_content_version <= book.audiobook_source_content_version
+            ):
+                return False
+            book.audiobook_pipeline_status = "ingesting"
+            await db.commit()
+            return True
+
     async def _process(self, book_id: int) -> None:
         """Run the pipeline from the book's current status to completion."""
         async with SessionLocal() as db:
@@ -421,6 +438,10 @@ class AudiobookQueue:
                 if await crud.audiobook.pause_book_pipeline_after_phase(db, book_id, phase):
                     logger.info("Book %s stopped for review after phase '%s'.", book_id, phase)
                     return
+
+            if await self._restart_for_pending_content(book_id):
+                logger.info("Book %s: restarting ingestion for pending refreshed content.", book_id)
+                return await self._process(book_id)
 
         logger.info("Audiobook pipeline complete for book %s.", book_id)
 

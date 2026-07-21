@@ -111,6 +111,22 @@ test-migrations:
 	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
 		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM book_metadata_matches) <> 1 THEN RAISE EXCEPTION 'downgrade did not preserve exactly one match'; END IF; END \$$\$$;"; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0022; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "UPDATE books SET audiobook_enabled = true, audiobook_pipeline_status = 'complete', content_version = 3 WHERE title = 'Migration Test';" \
+		-c "INSERT INTO audiobook_chapters (book_id, chapter_number, content_file_name, audio_file_path, smil_file_path, needs_reassembly) SELECT id, 1, 'Text/existing.xhtml', 'library/existing.mp3', 'library/existing.smil', false FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO audiobook_sentences (chapter_id, html_element_id, sequence_order, original_text, audio_duration_ms, status) SELECT id, 'existing-sentence', 0, 'Existing sentence.', 1250, 'audio_generated' FROM audiobook_chapters WHERE content_file_name = 'Text/existing.xhtml';"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE stable_chapter_key IS NOT NULL AND generation_state = 'ready' AND audio_revision = 1 AND duration_ms = 1250) THEN RAISE EXCEPTION 'existing audiobook chapter was not backfilled'; END IF; IF NOT EXISTS (SELECT 1 FROM books WHERE title = 'Migration Test' AND audiobook_publication_state = 'complete' AND audiobook_text_content_version = 3) THEN RAISE EXCEPTION 'existing audiobook book metadata was not backfilled'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0022; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE content_file_name = 'Text/existing.xhtml') THEN RAISE EXCEPTION 'audiobook downgrade removed existing chapter'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
 
 e2e:
