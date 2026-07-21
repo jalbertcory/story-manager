@@ -65,10 +65,7 @@ def _document_ids(ebook) -> dict[str, set[str]]:
     ids_by_name: dict[str, set[str]] = {}
     for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         soup = BeautifulSoup(item.content, "html.parser")
-        ids_by_name[item.get_name()] = {
-            str(node.get("id"))
-            for node in soup.find_all(attrs={"id": True})
-        }
+        ids_by_name[item.get_name()] = {str(node.get("id")) for node in soup.find_all(attrs={"id": True})}
     return ids_by_name
 
 
