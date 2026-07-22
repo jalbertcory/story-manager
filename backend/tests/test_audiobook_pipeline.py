@@ -3,15 +3,24 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from bs4 import BeautifulSoup
 from ebooklib import epub
+from mutagen.mp3 import MP3
 
 from backend.app import crud, models
 from backend.app.routers import audiobook as audiobook_router
-from backend.app.services import audiobook_assembly, audiobook_ingestion, audiobook_llm, audiobook_tts
+from backend.app.services import (
+    audiobook_assembly,
+    audiobook_ingestion,
+    audiobook_llm,
+    audiobook_publication,
+    audiobook_tts,
+    web_novel,
+)
 from backend.app.services import audiobook_queue
 from backend.app.services.audiobook_queue import AudiobookQueue
 
@@ -105,6 +114,42 @@ def test_default_roster_prompt_formats_voice_token_examples():
     assert "A story excerpt." in prompt
 
 
+def test_diarization_schema_keeps_model_output_compact():
+    properties = audiobook_llm.DIARIZATION_SCHEMA["properties"]["assignments"]["items"]["properties"]
+
+    assert set(properties) == {"i", "c", "e"}
+    assert "tagged_text" not in properties
+    assert "confidence" not in properties
+    assert "reason" not in properties
+    assert properties["e"]["enum"] == [None, "laughter", "sigh", "whisper", "shout"]
+    assert "chapter_summary" not in audiobook_llm.DIARIZATION_SCHEMA["properties"]
+
+
+def test_diarization_schema_requires_exact_assignment_count():
+    schema = audiobook_llm._diarization_schema(7)
+    assignments = schema["properties"]["assignments"]
+
+    assert assignments["minItems"] == 7
+    assert assignments["maxItems"] == 7
+    assert "minItems" not in audiobook_llm.DIARIZATION_SCHEMA["properties"]["assignments"]
+
+
+def test_only_quoted_spans_require_model_diarization():
+    sentences = [
+        SimpleNamespace(id=1, original_text="Plain narration."),
+        SimpleNamespace(id=2, original_text="“This dialogue starts"),
+        SimpleNamespace(id=3, original_text="and continues across a sentence"),
+        SimpleNamespace(id=4, original_text="before ending here.”"),
+        SimpleNamespace(id=5, original_text="Narration resumes."),
+    ]
+
+    assert audiobook_llm._sentence_ids_requiring_diarization(sentences) == {
+        2,
+        3,
+        4,
+    }
+
+
 def test_tagged_text_sanitizer_only_accepts_supported_insertions():
     original = "Take your time, I said."
 
@@ -113,6 +158,59 @@ def test_tagged_text_sanitizer_only_accepts_supported_insertions():
     )
     assert audiobook_llm._sanitize_tagged_text(original, "[fade in] Take your time, I said.") == original
     assert audiobook_llm._sanitize_tagged_text(original, "I completely rewrote this sentence.") == original
+
+
+def test_diarization_parser_deduplicates_repeated_sentence_ids():
+    raw = json.dumps(
+        {
+            "assignments": [
+                {"id": 7, "character_id": 1, "confidence": 0.4, "reason": "First"},
+                {"id": 7, "character_id": 2, "confidence": 0.9, "reason": "Better"},
+            ],
+            "chapter_summary": "Summary",
+        }
+    )
+
+    result, missing_ids, salvaged = audiobook_llm._parse_diarization_response(raw, [7])
+
+    assert result["assignments"][0]["id"] == 7
+    assert result["assignments"][0]["character_id"] == 2
+    assert result["assignments"][0]["confidence"] == 0.9
+    assert result["assignments"][0]["reason"] == "Better"
+    assert missing_ids == set()
+    assert salvaged is False
+
+
+def test_diarization_parser_normalizes_compact_wire_keys():
+    raw = json.dumps(
+        {
+            "assignments": [
+                {"i": 7, "c": 11, "e": "whisper"},
+            ]
+        }
+    )
+
+    result, missing_ids, salvaged = audiobook_llm._parse_diarization_response(raw, [7])
+
+    assert result["assignments"][0]["id"] == 7
+    assert result["assignments"][0]["character_id"] == 11
+    assert result["assignments"][0]["expression"] == "whisper"
+    assert missing_ids == set()
+    assert salvaged is False
+
+
+def test_diarization_parser_salvages_complete_assignments_from_truncated_json():
+    raw = (
+        '{"assignments":['
+        '{"id":7,"character_id":1,"tagged_text":null,"confidence":0.9,"reason":"Narration"},'
+        '{"id":8,"character_id":'
+    )
+
+    result, missing_ids, salvaged = audiobook_llm._parse_diarization_response(raw, [7, 8])
+
+    assert [assignment["id"] for assignment in result["assignments"]] == [7]
+    assert missing_ids == {8}
+    assert salvaged is True
 
 
 def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
@@ -199,6 +297,201 @@ async def test_ollama_call_requests_schema_constrained_non_thinking_json(monkeyp
     assert payload["think"] is False
     assert payload["format"] == schema
     assert payload["options"]["temperature"] == 0
+    assert payload["options"]["num_predict"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_ollama_call_streams_progress_when_callback_is_provided(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        is_error = False
+        status_code = 200
+        text = ""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aiter_lines(self):
+            yield json.dumps({"message": {"content": "a" * 1024}, "done": False})
+            yield json.dumps({"message": {"content": "finished"}, "done": True})
+
+        async def aread(self):
+            return b""
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            captured["method"] = method
+            captured["url"] = url
+            captured["request"] = kwargs
+            return FakeResponse()
+
+    monkeypatch.setattr(audiobook_llm.httpx, "AsyncClient", FakeClient)
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_base_url="http://127.0.0.1:11434",
+        llm_model="qwen3.5:9b",
+    )
+    progress = []
+
+    raw = await audiobook_llm._call_llm(
+        settings,
+        [{"role": "user", "content": "stream"}],
+        response_schema={"type": "object"},
+        progress_callback=lambda received: _record_progress(progress, received),
+    )
+
+    assert raw == ("a" * 1024) + "finished"
+    assert progress == [1024, 1032]
+    assert captured["method"] == "POST"
+    assert captured["request"]["json"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_ollama_call_preserves_retryable_http_status(monkeypatch):
+    class FakeResponse:
+        is_error = True
+
+        def raise_for_status(self):
+            request = httpx.Request("POST", "http://ollama.test/api/chat")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(audiobook_llm.httpx, "AsyncClient", FakeClient)
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_base_url="http://ollama.test",
+        llm_model="qwen-test",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await audiobook_llm._call_llm(
+            settings,
+            [{"role": "user", "content": "retry"}],
+        )
+
+    assert exc_info.value.response.status_code == 503
+
+
+async def _record_progress(progress, received):
+    progress.append(received)
+
+
+@pytest.mark.asyncio
+async def test_diarization_retries_truncated_output_with_smaller_batches(db, monkeypatch):
+    monkeypatch.setattr(audiobook_llm, "DIARIZATION_BATCH_SIZE", 40)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="diarizing",
+    )
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_base_url="http://ollama.test",
+        llm_model="qwen-test",
+    )
+    db.add(settings)
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "story.xhtml")
+    narrator = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "description": "Primary narrator",
+                    "voice_prompt": "[gender-neutral][pitch-medium][speed-normal]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": f"story_{index}",
+                "sequence_order": index,
+                "original_text": f"“Story sentence {index}.”",
+                "status": "pending_diarization",
+            }
+            for index in range(80)
+        ],
+    )
+    request_sizes = []
+
+    async def fake_call(_settings, messages, **_kwargs):
+        prompt = messages[0]["content"]
+        sentences_text = prompt.split(
+            "Sentences to process (JSON array with id, text, and its immediate previous/next context):\n",
+            1,
+        )[1].split("\n\nFor each sentence", 1)[0]
+        sentences = json.loads(sentences_text)
+        request_sizes.append(len(sentences))
+        if len(sentences) == 40 and request_sizes.count(40) == 1:
+            return '{"assignments":[{"id":' + str(sentences[0]["id"]) + ',"reason":"truncated'
+        return json.dumps(
+            {
+                "assignments": [
+                    {
+                        "id": sentence["id"],
+                        "character_id": narrator.id,
+                        "tagged_text": None,
+                        "confidence": 0.95,
+                        "reason": "Narration",
+                    }
+                    for sentence in sentences
+                ],
+                "chapter_summary": "The story continues.",
+            }
+        )
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", fake_call)
+    ready_batches = []
+
+    async def record_ready(sentence_ids):
+        ready_batches.append(sentence_ids)
+
+    await audiobook_llm.diarize_sentences(
+        book.id,
+        db,
+        on_sentences_ready=record_ready,
+    )
+
+    await db.refresh(book)
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    assert request_sizes == [40, 20, 40, 20]
+    assert {sentence.status for sentence in sentences} == {"ready_for_audio"}
+    assert {sentence.character_id for sentence in sentences} == {narrator.id}
+    assert book.audiobook_pipeline_status == "audio_gen"
+    assert book.audiobook_llm_requests == 4
+    assert [len(sentence_ids) for sentence_ids in ready_batches] == [20, 40, 20]
 
 
 @pytest.mark.asyncio
@@ -228,6 +521,94 @@ async def test_queue_schedules_one_rerun_for_changes_during_processing(monkeypat
         assert processed == [42, 42]
     finally:
         await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_queue_stop_cancels_long_running_pipeline_work(monkeypatch):
+    queue = AudiobookQueue()
+    started = asyncio.Event()
+    never_finishes = asyncio.Event()
+
+    async def process(_book_id: int) -> None:
+        started.set()
+        await never_finishes.wait()
+
+    monkeypatch.setattr(queue, "_process", process)
+    await queue.start()
+    await queue.enqueue(42)
+    await started.wait()
+
+    await asyncio.wait_for(queue.stop(), timeout=1)
+
+    assert queue._worker_task is None
+    assert queue._background_audio_tasks == []
+
+
+@pytest.mark.asyncio
+async def test_manual_sentence_audio_uses_independent_tts_lane():
+    queue = AudiobookQueue()
+
+    assert await queue.enqueue_sentence_audio(7, 42) is True
+
+    assert queue._queue.empty()
+    assert (await queue._background_audio_queue.get())[2] == (7, [42], True)
+    queue._background_audio_queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_audio_is_queued_in_model_batches(monkeypatch):
+    monkeypatch.setattr(audiobook_queue, "TTS_BATCH_SIZE", 3)
+    queue = AudiobookQueue()
+
+    await queue.enqueue_background_audio(7, [10, 11, 12, 13, 14, 15, 16])
+
+    batches = [(await queue._background_audio_queue.get())[2] for _ in range(3)]
+    assert batches == [
+        (7, [10, 11, 12], False),
+        (7, [13, 14, 15], False),
+        (7, [16], False),
+    ]
+    assert queue._background_audio_ids == {7: {10, 11, 12, 13, 14, 15, 16}}
+    for _ in batches:
+        queue._background_audio_queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_waiting_audio_lane_publishes_phase_accurate_progress(
+    db,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+    )
+    _chapter, _character, sentence = await _seed_audio_chapter(
+        db,
+        book.id,
+        sentence_status="ready_for_audio",
+    )
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+    queue = AudiobookQueue()
+    queue._background_audio_ids = {book.id: {sentence.id}}
+
+    waiter = asyncio.create_task(queue._wait_for_background_audio(book.id))
+    try:
+        for _ in range(50):
+            await db.refresh(book)
+            if book.audiobook_progress_detail and book.audiobook_progress_detail.startswith("Generating speech:"):
+                break
+            await asyncio.sleep(0.01)
+
+        assert book.audiobook_progress_current == 0
+        assert book.audiobook_progress_total == 1
+        assert book.audiobook_progress_detail == "Generating speech: 0 of 1 clips (1 queued)"
+    finally:
+        async with queue._background_audio_condition:
+            queue._background_audio_ids.pop(book.id, None)
+            queue._background_audio_condition.notify_all()
+        await waiter
 
 
 @pytest.mark.asyncio
@@ -277,11 +658,71 @@ async def test_requeue_candidates_only_include_enabled_audiobooks(db):
     disabled.audiobook_pipeline_status = "audio_gen"
     enabled = await _make_book(db, title="Enabled Audio", audiobook_enabled=True)
     enabled.audiobook_pipeline_status = "audio_gen"
+    refreshed = await _make_book(
+        db,
+        title="Refreshed Audio",
+        audiobook_enabled=True,
+        audiobook_pipeline_status="complete",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, refreshed)
     await db.commit()
 
     pending = await crud.audiobook.get_in_progress_audiobook_books(db)
 
-    assert [book.id for book in pending] == [enabled.id]
+    assert [book.id for book in pending] == [enabled.id, refreshed.id]
+    assert refreshed.audiobook_pending_content_version == refreshed.content_version
+
+
+@pytest.mark.asyncio
+async def test_queue_restarts_ingestion_for_refresh_received_during_generation(db, sqlite_sessionmaker, monkeypatch):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+
+    restarted = await AudiobookQueue()._restart_for_pending_content(book.id)
+
+    await db.refresh(book)
+    assert restarted is True
+    assert book.audiobook_pipeline_status == "ingesting"
+    assert book.audiobook_pending_content_version == book.content_version
+
+
+@pytest.mark.asyncio
+async def test_web_refresh_enqueues_enabled_audiobook_without_duplicate_active_job(db, monkeypatch):
+    queued_book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="complete",
+        audiobook_source_content_version=1,
+    )
+    active_book = await _make_book(
+        db,
+        title="Already Building",
+        audiobook_enabled=True,
+        audiobook_pipeline_status="diarizing",
+        audiobook_source_content_version=1,
+    )
+    await crud.touch_book_content(db, queued_book)
+    await crud.touch_book_content(db, active_book)
+    await db.commit()
+    queue = _FakeQueue(active_book_ids={active_book.id})
+    monkeypatch.setattr(audiobook_queue, "get_audiobook_queue", lambda: queue)
+
+    await web_novel._enqueue_audiobook_refresh(queued_book, db)
+    await web_novel._enqueue_audiobook_refresh(active_book, db)
+
+    await db.refresh(queued_book)
+    await db.refresh(active_book)
+    assert queued_book.audiobook_pipeline_status == "ingesting"
+    assert active_book.audiobook_pipeline_status == "diarizing"
+    assert queue.enqueued == [queued_book.id]
 
 
 @pytest.mark.asyncio
@@ -522,6 +963,45 @@ async def test_queue_stops_for_review_after_requested_phase(db, sqlite_sessionma
 
 
 @pytest.mark.asyncio
+async def test_restarted_audio_phase_rebuilds_length_bucketed_background_queue(
+    db,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_stop_after_phase="audio_gen",
+    )
+    _chapter, _character, sentence = await _seed_audio_chapter(
+        db,
+        book.id,
+        sentence_status="ready_for_audio",
+    )
+    queue = AudiobookQueue()
+    enqueued: list[tuple[int, list[int]]] = []
+
+    async def record_background_audio(book_id, sentence_ids):
+        enqueued.append((book_id, sentence_ids))
+
+    async def finish_audio(book_id, phase_db):
+        await crud.audiobook.set_book_pipeline_status(phase_db, book_id, "assembling")
+
+    async def wait_for_audio(_book_id):
+        return None
+
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(queue, "enqueue_background_audio", record_background_audio)
+    monkeypatch.setattr(queue, "_wait_for_background_audio", wait_for_audio)
+    monkeypatch.setattr(audiobook_queue, "generate_audio_for_book", finish_audio)
+
+    await queue._process(book.id)
+
+    assert enqueued == [(book.id, [sentence.id])]
+
+
+@pytest.mark.asyncio
 async def test_pause_is_cooperative_and_status_exposes_error_context(db):
     book = await _make_book(
         db,
@@ -752,6 +1232,53 @@ def _write_nested_epub(path: Path) -> None:
     epub.write_epub(path, book, {})
 
 
+def _write_incremental_epub(path: Path, chapters: list[tuple[str, str, str]]) -> None:
+    book = epub.EpubBook()
+    book.set_identifier("incremental-test")
+    book.set_title("Incremental")
+    book.set_language("en")
+    book.add_author("Author")
+    spine = ["nav"]
+    toc = []
+    for index, (href, title, content) in enumerate(chapters, start=1):
+        chapter = epub.EpubHtml(title=title, file_name=href, lang="en")
+        chapter.content = f"<html><body><h1>{title}</h1><p>{content}</p></body></html>"
+        book.add_item(chapter)
+        spine.append(chapter)
+        toc.append(epub.Link(href, title, f"chapter-{index}"))
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = spine
+    book.toc = tuple(toc)
+    epub.write_epub(path, book, {})
+
+
+async def _mark_incremental_chapter_ready(db, library_path: Path, chapter, revision: int) -> tuple[Path, Path]:
+    chapter_dir = library_path / "audiobooks" / str(chapter.book_id) / "seed" / chapter.stable_chapter_key
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = chapter_dir / "audio.mp3"
+    smil_path = chapter_dir / "overlay.smil"
+    audio_path.write_bytes(f"audio-{chapter.id}".encode())
+    smil_path.write_text("<smil/>", encoding="utf-8")
+    chapter.audio_file_path = str(audio_path.relative_to(library_path.parent))
+    chapter.smil_file_path = str(smil_path.relative_to(library_path.parent))
+    chapter.reader_audio_file_path = chapter.audio_file_path
+    chapter.reader_smil_file_path = chapter.smil_file_path
+    chapter.audio_revision = revision
+    chapter.generation_state = "ready"
+    chapter.audio_size_bytes = audio_path.stat().st_size
+    chapter.audio_sha256 = "a" * 64
+    chapter.smil_size_bytes = smil_path.stat().st_size
+    chapter.smil_sha256 = "b" * 64
+    chapter.duration_ms = 1000
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    for sentence in sentences:
+        sentence.status = "audio_generated"
+        sentence.audio_duration_ms = 1000
+    await db.commit()
+    return audio_path, smil_path
+
+
 def _simple_sentence_split(text: str) -> list[str]:
     if "." not in text:
         return [text.strip()]
@@ -770,6 +1297,7 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
         current_path=str(epub_path.relative_to(library_path.parent)),
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -789,8 +1317,143 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
     assert soup.find("p") is not None
     assert soup.find("em") is not None
     assert soup.find("a", href="next.xhtml") is not None
-    assert soup.find("span", id="ch1_s0") is not None
-    assert soup.find("span", id="ch1_s1") is not None
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapters[0].id)
+    assert len(sentences) >= 2
+    assert all(sentence.html_element_id.startswith(f"{chapters[0].stable_chapter_key}-") for sentence in sentences)
+    assert all(soup.find("span", id=sentence.html_element_id) is not None for sentence in sentences)
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_appends_chapter_without_invalidating_ready_audio(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    original_state = []
+    for revision, chapter in enumerate(original, start=4):
+        await _mark_incremental_chapter_ready(db, library_path, chapter, revision)
+        sentence_ids = [
+            sentence.html_element_id for sentence in await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        ]
+        original_state.append((chapter.id, chapter.stable_chapter_key, revision, chapter.audio_file_path, sentence_ids))
+
+    _write_incremental_epub(
+        epub_path,
+        [*initial, ("Text/three.xhtml", "Three", "A newly appended sentence.")],
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert len(chapters) == 3
+    for chapter, expected in zip(chapters[:2], original_state, strict=True):
+        chapter_id, key, revision, audio_path, sentence_ids = expected
+        assert (chapter.id, chapter.stable_chapter_key, chapter.audio_revision) == (chapter_id, key, revision)
+        assert chapter.audio_file_path == audio_path
+        assert chapter.generation_state == "ready"
+        assert [
+            sentence.html_element_id for sentence in await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        ] == sentence_ids
+    assert chapters[2].generation_state == "pending"
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_invalidates_only_edited_chapter(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    first_assets = await _mark_incremental_chapter_ready(db, library_path, original[0], 7)
+    edited_assets = await _mark_incremental_chapter_ready(db, library_path, original[1], 8)
+
+    _write_incremental_epub(
+        epub_path,
+        [initial[0], ("Text/two.xhtml", "Two", "This sentence was edited.")],
+    )
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert chapters[0].id == original[0].id
+    assert chapters[0].audio_revision == 7
+    assert chapters[0].generation_state == "ready"
+    assert all(path.exists() for path in first_assets)
+    assert chapters[1].id == original[1].id
+    assert chapters[1].audio_revision == 8
+    assert chapters[1].generation_state == "pending"
+    assert chapters[1].audio_file_path is None
+    assert chapters[1].reader_audio_file_path is None
+    assert all(not path.exists() for path in edited_assets)
+
+
+@pytest.mark.asyncio
+async def test_incremental_ingestion_removes_deleted_chapter_and_assets(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "incremental.epub"
+    initial = [
+        ("Text/one.xhtml", "One", "First original sentence."),
+        ("Text/two.xhtml", "Two", "Second original sentence."),
+    ]
+    _write_incremental_epub(epub_path, initial)
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    original = await crud.audiobook.get_chapters_for_book(db, book.id)
+    await _mark_incremental_chapter_ready(db, library_path, original[0], 2)
+    removed_assets = await _mark_incremental_chapter_ready(db, library_path, original[1], 3)
+
+    _write_incremental_epub(epub_path, initial[:1])
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert [chapter.id for chapter in chapters] == [original[0].id]
+    assert chapters[0].generation_state == "ready"
+    assert all(not path.exists() for path in removed_assets)
 
 
 @pytest.mark.asyncio
@@ -1043,7 +1706,21 @@ async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, mon
     library_path = tmp_path / "library"
     library_path.mkdir()
     book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="complete")
-    chapter, _character, _sentence = await _seed_audio_chapter(db, book.id)
+    chapter, character, _sentence = await _seed_audio_chapter(db, book.id)
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": "ch1_s1",
+                "sequence_order": 1,
+                "original_text": "A second sentence verifies concatenated timing.",
+                "tagged_text": "A second sentence verifies concatenated timing.",
+                "character_id": character.id,
+                "status": "ready_for_audio",
+            }
+        ],
+    )
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_assembly, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
@@ -1052,13 +1729,24 @@ async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, mon
     packaged_epub.write_bytes(b"stale package")
 
     await audiobook_tts.generate_audio_for_chapter_preview(book.id, chapter.id, db)
+    legacy_sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    for legacy_sentence in legacy_sentences:
+        legacy_sentence.audio_duration_ms += 50
+    await db.commit()
     await audiobook_assembly.assemble_chapter_preview(book.id, chapter.id, db)
     await db.refresh(chapter)
     await db.refresh(book)
 
     assert chapter.audio_file_path
-    assert (library_path.parent / chapter.audio_file_path).exists()
+    chapter_audio_path = library_path.parent / chapter.audio_file_path
+    assert chapter_audio_path.exists()
     assert chapter.smil_file_path
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    expected_duration_ms = sum(sentence.audio_duration_ms for sentence in sentences)
+    actual_duration_ms = round(MP3(chapter_audio_path).info.length * 1000)
+    assert abs(actual_duration_ms - expected_duration_ms) <= 1
+    smil_xml = (library_path.parent / chapter.smil_file_path).read_text(encoding="utf-8")
+    assert f'clipEnd="{audiobook_assembly._ms_to_clock(expected_duration_ms)}"' in smil_xml
     assert packaged_epub.exists() is False
     assert book.audiobook_pipeline_status == "paused"
 
@@ -1076,7 +1764,7 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         immutable_path=str(epub_path.relative_to(library_path.parent)),
         current_path=str(epub_path.relative_to(library_path.parent)),
     )
-    for module in (audiobook_ingestion, audiobook_tts, audiobook_assembly):
+    for module in (audiobook_ingestion, audiobook_publication, audiobook_tts, audiobook_assembly):
         monkeypatch.setattr(module, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
@@ -1099,9 +1787,13 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         names = archive.namelist()
         assert "EPUB/ch0001.mp3" in names
         assert "EPUB/ch0001.smil" in names
+        assert "EPUB/nav.xhtml" in names
         package = archive.read("EPUB/content.opf").decode("utf-8")
         assert 'media-type="application/smil+xml"' in package
         assert 'media-overlay="smil_ch0001"' in package
+        assert 'properties="nav"' in package
+        assert package.count('property="media:duration"') == 3
+        assert 'property="media:duration">00:00:' in package
 
     monkeypatch.setattr(audiobook_router, "LIBRARY_PATH", library_path)
     response = await audiobook_router.download_audiobook(book.id, db)

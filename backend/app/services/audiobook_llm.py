@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import logging
 import re
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -17,6 +20,8 @@ from ..models import AudiobookSettings, Book
 logger = logging.getLogger(__name__)
 
 STUB_PROVIDER = "stub"
+DIARIZATION_BATCH_SIZE = 40
+STORY_CHAPTER_MIN_SENTENCES = 40
 
 DEFAULT_ROSTER_PROMPT = """\
 You are a literary analyst preparing a cast list for an audiobook. Analyze the sampled excerpts from across the \
@@ -71,22 +76,18 @@ Chapter summary so far:
 Previous context (last 8 sentences):
 {context}
 
-Sentences to process (JSON array with id and text):
+Sentences to process (JSON array with id, text, and its immediate previous/next context):
 {sentences_json}
 
-For each sentence return:
-- id: the sentence id (integer)
-- character_id: the character id from the roster (use the narrator's id for narration; null if uncertain)
-- tagged_text: the sentence text with optional non-verbal tags like [laughter], [sigh], [whisper], [shout], or null
-  when no tag is needed (do not repeat unchanged text)
-- confidence: a number from 0 to 1 for the speaker assignment
-- reason: a brief evidence-based reason, such as an adjacent dialogue tag or turn-taking context
+For each sentence return (exactly {assignment_count} assignments total, one per input sentence in the same order;
+do not omit or duplicate an id). Assign only the `text`; use `previous_text` and `next_text` solely to resolve
+speaker attribution:
+- i: the sentence id (integer)
+- c: the character id from the roster (use the narrator's id for narration; null if uncertain)
+- e: one of "laughter", "sigh", "whisper", "shout", or null. Do not repeat the sentence text.
 
-Also return chapter_summary: an updated spoiler-light summary incorporating this batch and the prior summary.
-The roster descriptions are identity hints only and may be inaccurate. Ground the chapter summary exclusively in the
-sentence text and prior chapter summary; never import plot events, body changes, relationships, or backstory from a
-character description.
-Return JSON with keys assignments and chapter_summary. No markdown or explanation.
+Return minified, single-line JSON with the key assignments. Do not add whitespace, markdown, explanation, repeated
+sentence text, or chapter summary.
 """
 
 _ALLOWED_EXPRESSION_TAGS = {"laughter", "sigh", "whisper", "shout"}
@@ -99,6 +100,14 @@ _NARRATION_REASON_RE = re.compile(
     r"\b(?:narrat(?:or|ion|ive)|internal|reflection|action description|monologue|observation|recounting)\b",
     re.IGNORECASE,
 )
+_DIARIZATION_REASON_LABELS = {
+    "explicit_attribution": "Explicit dialogue attribution",
+    "adjacent_attribution": "Adjacent dialogue attribution",
+    "turn_taking": "Conversational turn-taking",
+    "narration": "Narrative prose",
+    "minor_speaker": "Unnamed or one-scene speaker",
+    "uncertain": "Model was uncertain",
+}
 
 ROSTER_SCHEMA = {
     "type": "object",
@@ -147,18 +156,58 @@ DIARIZATION_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "integer"},
-                    "character_id": {"type": ["integer", "null"]},
-                    "tagged_text": {"type": ["string", "null"]},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                    "reason": {"type": "string"},
+                    "i": {"type": "integer"},
+                    "c": {"type": ["integer", "null"]},
+                    "e": {
+                        "type": ["string", "null"],
+                        "enum": [None, "laughter", "sigh", "whisper", "shout"],
+                    },
                 },
-                "required": ["id", "character_id", "tagged_text", "confidence", "reason"],
+                "required": ["i", "c", "e"],
             },
         },
-        "chapter_summary": {"type": "string"},
     },
-    "required": ["assignments", "chapter_summary"],
+    "required": ["assignments"],
+}
+
+
+def _diarization_schema(assignment_count: int) -> dict[str, Any]:
+    """Constrain structured output to one result per requested sentence."""
+    schema = copy.deepcopy(DIARIZATION_SCHEMA)
+    assignments = schema["properties"]["assignments"]
+    assignments["minItems"] = assignment_count
+    assignments["maxItems"] = assignment_count
+    return schema
+
+
+def _sentence_ids_requiring_diarization(sentences: list[Any]) -> set[int]:
+    """Keep quoted spans for the model; prose outside them is narrator-owned."""
+    in_dialogue = False
+    requiring_model: set[int] = set()
+    for sentence in sentences:
+        starts_in_dialogue = in_dialogue
+        contains_quote = False
+        for character in sentence.original_text:
+            if character == "“":
+                in_dialogue = True
+                contains_quote = True
+            elif character == "”":
+                in_dialogue = False
+                contains_quote = True
+            elif character == '"':
+                in_dialogue = not in_dialogue
+                contains_quote = True
+        if starts_in_dialogue or contains_quote or in_dialogue:
+            requiring_model.add(sentence.id)
+    return requiring_model
+
+
+CHAPTER_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 1200},
+    },
+    "required": ["summary"],
 }
 
 
@@ -167,6 +216,7 @@ async def _call_llm(
     messages: list[dict[str, Any]],
     *,
     response_schema: dict[str, Any] | None = None,
+    progress_callback: Callable[[int], Awaitable[None]] | None = None,
 ) -> str:
     """Route to the configured LLM provider and return the text response."""
     provider = (settings.llm_provider or "openai").lower()
@@ -182,17 +232,45 @@ async def _call_llm(
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": progress_callback is not None,
             "think": False,
             "format": response_schema or "json",
-            "options": {"temperature": 0, "num_ctx": 32768, "num_predict": 4096},
+            # A structured batch response can legitimately exceed 4K tokens.
+            # Keep enough headroom to close the JSON document; the
+            # diarization loop also shrinks the batch if a provider still
+            # returns malformed or incomplete output.
+            "options": {"temperature": 0, "num_ctx": 32768, "num_predict": 8192},
             "keep_alive": "30m",
         }
         timeout = httpx.Timeout(600.0, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
+            if progress_callback is not None:
+                chunks: list[str] = []
+                received_chars = 0
+                last_reported_chars = 0
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.is_error:
+                        await resp.aread()
+                        resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            logger.warning("Ignoring malformed Ollama stream event: %s", line[:200])
+                            continue
+                        content = event.get("message", {}).get("content") or ""
+                        if content:
+                            chunks.append(content)
+                            received_chars += len(content)
+                        if received_chars - last_reported_chars >= 1024 or event.get("done"):
+                            await progress_callback(received_chars)
+                            last_reported_chars = received_chars
+                return "".join(chunks)
             resp = await client.post(url, json=payload, headers=headers)
             if resp.is_error:
-                raise RuntimeError(f"Ollama returned HTTP {resp.status_code}: {resp.text[:1000]}")
+                resp.raise_for_status()
             data = resp.json()
         return data["message"]["content"]
 
@@ -242,6 +320,116 @@ def _extract_json(raw: str) -> Any:
         # Drop first and last fence lines
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
     return json.loads(text)
+
+
+class _DiarizationResponseError(ValueError):
+    """The model response cannot safely be applied to a diarization batch."""
+
+
+def _salvage_complete_assignments(raw: str) -> list[dict[str, Any]]:
+    """Recover complete assignment objects from a truncated JSON array."""
+    match = re.search(r'"assignments"\s*:\s*\[', raw)
+    if match is None:
+        return []
+
+    assignments: list[dict[str, Any]] = []
+    object_start: int | None = None
+    object_depth = 0
+    in_string = False
+    escaped = False
+    for index in range(match.end(), len(raw)):
+        char = raw[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if object_depth == 0:
+                object_start = index
+            object_depth += 1
+            continue
+        if char != "}" or object_depth == 0:
+            continue
+        object_depth -= 1
+        if object_depth or object_start is None:
+            continue
+        object_end = index + 1
+        try:
+            assignment = json.loads(raw[object_start:object_end])
+        except json.JSONDecodeError:
+            object_start = None
+            continue
+        if isinstance(assignment, dict):
+            assignments.append(assignment)
+        object_start = None
+    return assignments
+
+
+def _parse_diarization_response(
+    raw: str,
+    expected_ids: list[int],
+) -> tuple[dict[str, Any], set[int], bool]:
+    """Parse, de-duplicate, and salvage any safe diarization assignments."""
+    salvaged = False
+    try:
+        result = _extract_json(raw)
+    except json.JSONDecodeError as exc:
+        assignments = _salvage_complete_assignments(raw)
+        if not assignments:
+            raise _DiarizationResponseError(str(exc)) from exc
+        result = {"assignments": assignments, "chapter_summary": None}
+        salvaged = True
+
+    if isinstance(result, list):
+        result = {"assignments": result, "chapter_summary": None}
+    if not isinstance(result, dict) or not isinstance(result.get("assignments"), list):
+        raise _DiarizationResponseError(f"expected an assignments array, got {type(result).__name__}")
+
+    expected_id_set = set(expected_ids)
+    by_id: dict[int, dict[str, Any]] = {}
+    for assignment in result["assignments"]:
+        if not isinstance(assignment, dict):
+            continue
+        sentence_id = assignment.get("id", assignment.get("i"))
+        if not isinstance(sentence_id, int) or sentence_id not in expected_id_set:
+            continue
+        normalized = {
+            **assignment,
+            "id": sentence_id,
+            "character_id": assignment.get(
+                "character_id",
+                assignment.get("c"),
+            ),
+            "expression": assignment.get(
+                "expression",
+                assignment.get("e"),
+            ),
+        }
+        current = by_id.get(sentence_id)
+        try:
+            candidate_confidence = float(normalized.get("confidence") or 0)
+        except (TypeError, ValueError):
+            candidate_confidence = 0
+        try:
+            current_confidence = float(current.get("confidence") or 0) if current else -1
+        except (TypeError, ValueError):
+            current_confidence = 0
+        if current is None or candidate_confidence >= current_confidence:
+            by_id[sentence_id] = normalized
+
+    if not by_id:
+        raise _DiarizationResponseError("response did not contain any requested sentence ids")
+
+    result["assignments"] = [by_id[sentence_id] for sentence_id in expected_ids if sentence_id in by_id]
+    missing_ids = expected_id_set - set(by_id)
+    return result, missing_ids, salvaged
 
 
 def _sanitize_tagged_text(original: str, tagged: Any) -> str:
@@ -732,7 +920,94 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
 
 
-async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
+def _chapter_summary_excerpt(chapter_sentences: list[Any], max_chars: int = 12_000) -> str:
+    """Sample contiguous beginning, middle, and ending text for one summary call."""
+    texts = [sentence.original_text for sentence in chapter_sentences if sentence.original_text.strip()]
+    complete = "\n".join(texts)
+    if len(complete) <= max_chars:
+        return complete
+
+    section_chars = max_chars // 3
+
+    def take_section(section: list[str], *, reverse: bool = False) -> str:
+        selected = []
+        used = 0
+        items = reversed(section) if reverse else iter(section)
+        for text in items:
+            if selected and used + len(text) + 1 > section_chars:
+                break
+            selected.append(text)
+            used += len(text) + 1
+        if reverse:
+            selected.reverse()
+        return "\n".join(selected)
+
+    midpoint = len(texts) // 2
+    middle_start = max(0, midpoint - len(texts) // 6)
+    return "\n\n[...]\n\n".join(
+        [
+            take_section(texts),
+            take_section(texts[middle_start:]),
+            take_section(texts, reverse=True),
+        ]
+    )
+
+
+async def _generate_chapter_summary(
+    settings: AudiobookSettings,
+    chapter: Any,
+    chapter_sentences: list[Any],
+    db: AsyncSession,
+    *,
+    book_id: int,
+    processed: int,
+    total: int,
+) -> None:
+    """Generate one non-critical chapter summary after attribution completes."""
+    excerpt = _chapter_summary_excerpt(chapter_sentences)
+    if not excerpt:
+        return
+    prompt = (
+        "Write a spoiler-light 2-4 sentence summary grounded only in the chapter text below. "
+        "Do not use character-roster descriptions or outside knowledge. Return JSON with the key summary.\n\n"
+        f"Chapter text:\n{excerpt}"
+    )
+    await crud.audiobook.update_book_pipeline_progress(
+        db,
+        book_id,
+        current=processed,
+        total=total,
+        detail=f"Summarizing chapter {chapter.chapter_number}",
+        llm_request_increment=1,
+    )
+    try:
+        raw = await _call_llm(
+            settings,
+            [{"role": "user", "content": prompt}],
+            response_schema=CHAPTER_SUMMARY_SCHEMA,
+        )
+        result = _extract_json(raw)
+        summary = str(result.get("summary") or "").strip() if isinstance(result, dict) else ""
+        if summary:
+            await crud.audiobook.update_chapter_summary(db, chapter.id, summary[:4000])
+            chapter.summary = summary[:4000]
+    except Exception as exc:
+        # Summaries help review but are not required to synthesize or assemble
+        # the audiobook, so never strand a completed attribution phase here.
+        logger.warning(
+            "Unable to summarize book %s chapter %s; continuing conversion: %s",
+            book_id,
+            chapter.chapter_number,
+            exc,
+        )
+
+
+async def diarize_sentences(
+    book_id: int,
+    db: AsyncSession,
+    *,
+    on_sentences_ready: Callable[[list[int]], Awaitable[None]] | None = None,
+) -> None:
     """Phase 3: batch-assign speakers and expression tags to all pending sentences."""
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = (settings.llm_provider or STUB_PROVIDER).lower() if settings else STUB_PROVIDER
@@ -751,7 +1026,9 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
     counts = await crud.audiobook.count_sentences_by_status(db, book_id)
     total = sum(counts.values())
     processed = total - counts.get("pending_diarization", 0)
-    batch_size = 40
+    batch_size = DIARIZATION_BATCH_SIZE
+    request_batch_size = batch_size
+    singleton_parse_failures = 0
     await crud.audiobook.update_book_pipeline_progress(
         db, book_id, current=processed, total=total, detail="Preparing dialogue attribution"
     )
@@ -763,16 +1040,30 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             return
 
         chapter_sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        sentence_lengths = {sentence.id: len(sentence.tagged_text or sentence.original_text) for sentence in chapter_sentences}
         pending = [sentence for sentence in chapter_sentences if sentence.status == "pending_diarization"]
         if not pending:
+            if provider != STUB_PROVIDER and chapter.summary is None and chapter_sentences:
+                await _generate_chapter_summary(
+                    settings,
+                    chapter,
+                    chapter_sentences,
+                    db,
+                    book_id=book_id,
+                    processed=processed,
+                    total=total,
+                )
             continue
 
         # Treat short files before the first substantial chapter as front matter.
         # Once the story begins, retain short chapters and only skip tiny dividers.
-        if len(chapter_sentences) >= batch_size:
+        if len(chapter_sentences) >= STORY_CHAPTER_MIN_SENTENCES:
             story_started = True
-        is_front_matter = (not story_started and len(chapter_sentences) < batch_size) or len(chapter_sentences) < 20
+        is_front_matter = (not story_started and len(chapter_sentences) < STORY_CHAPTER_MIN_SENTENCES) or len(
+            chapter_sentences
+        ) < 20
         if is_front_matter:
+            ready_sentence_ids = []
             for sentence in pending:
                 await crud.audiobook.update_sentence_diarization(
                     db,
@@ -782,6 +1073,10 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     speaker_confidence=0.99,
                     speaker_reason="Front matter narration",
                 )
+                ready_sentence_ids.append(sentence.id)
+            if on_sentences_ready and ready_sentence_ids:
+                ready_sentence_ids.sort(key=sentence_lengths.get)
+                await on_sentences_ready(ready_sentence_ids)
             processed += len(pending)
             await crud.audiobook.update_chapter_summary(db, chapter.id, "Front matter or section divider.")
             await crud.audiobook.update_book_pipeline_progress(
@@ -793,18 +1088,69 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             )
             continue
 
+        if provider != STUB_PROVIDER:
+            model_sentence_ids = _sentence_ids_requiring_diarization(chapter_sentences)
+            narration_ids = [sentence.id for sentence in pending if sentence.id not in model_sentence_ids]
+            if narration_ids:
+                narration_ids.sort(key=sentence_lengths.get)
+                await crud.audiobook.mark_sentences_as_narration(
+                    db,
+                    narration_ids,
+                    narrator_id,
+                )
+                if on_sentences_ready:
+                    await on_sentences_ready(narration_ids)
+                processed += len(narration_ids)
+                pending = [sentence for sentence in pending if sentence.id in model_sentence_ids]
+                await crud.audiobook.update_book_pipeline_progress(
+                    db,
+                    book_id,
+                    current=processed,
+                    total=total,
+                    detail=(
+                        f"Chapter {chapter.chapter_number}: attributed "
+                        f"{len(narration_ids)} deterministic narration sentences"
+                    ),
+                )
+
+        chapter_positions = {sentence.id: index for index, sentence in enumerate(chapter_sentences)}
         context_window = [
             sentence.original_text for sentence in chapter_sentences if sentence.status != "pending_diarization"
         ][-8:]
         while True:
+            if await crud.audiobook.pause_book_pipeline_if_requested(
+                db,
+                book_id,
+            ):
+                logger.info(
+                    "Book %s paused before the next diarization batch.",
+                    book_id,
+                )
+                return
             batch = await crud.audiobook.get_sentences_pending_diarization(
-                db, book_id, limit=batch_size, chapter_id=chapter.id
+                db, book_id, limit=request_batch_size, chapter_id=chapter.id
             )
             if not batch:
                 break
 
             sentences_json = json.dumps(
-                [{"id": s.id, "text": s.original_text} for s in batch],
+                [
+                    {
+                        "id": sentence.id,
+                        "text": sentence.original_text,
+                        "previous_text": (
+                            chapter_sentences[chapter_positions[sentence.id] - 1].original_text
+                            if chapter_positions[sentence.id] > 0
+                            else None
+                        ),
+                        "next_text": (
+                            chapter_sentences[chapter_positions[sentence.id] + 1].original_text
+                            if chapter_positions[sentence.id] + 1 < len(chapter_sentences)
+                            else None
+                        ),
+                    }
+                    for sentence in batch
+                ],
                 ensure_ascii=False,
             )
             context_str = "\n".join(context_window[-8:]) if context_window else "(none)"
@@ -840,58 +1186,182 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     chapter_summary=chapter.summary or "(none yet)",
                     context=context_str,
                     sentences_json=sentences_json,
+                    assignment_count=len(batch),
                 )
                 logger.debug("Diarizing %d sentences for book %s.", len(batch), book_id)
-                await crud.audiobook.update_book_pipeline_progress(
-                    db,
-                    book_id,
-                    current=processed,
-                    total=total,
-                    detail=f"Waiting for {settings.llm_model or provider}: chapter {chapter.chapter_number}",
-                    llm_request_increment=1,
-                )
-                raw = await _call_llm(
-                    settings,
-                    [{"role": "user", "content": prompt}],
-                    response_schema=DIARIZATION_SCHEMA,
-                )
+                raw = None
+                for request_attempt in range(1, 4):
+                    await crud.audiobook.update_book_pipeline_progress(
+                        db,
+                        book_id,
+                        current=processed,
+                        total=total,
+                        detail=(
+                            f"Waiting for {settings.llm_model or provider}: chapter "
+                            f"{chapter.chapter_number}, request {request_attempt}"
+                        ),
+                        llm_request_increment=1,
+                    )
+                    try:
+                        raw = await _call_llm(
+                            settings,
+                            [{"role": "user", "content": prompt}],
+                            response_schema=_diarization_schema(len(batch)),
+                            progress_callback=lambda received_chars: crud.audiobook.update_book_pipeline_progress(
+                                db,
+                                book_id,
+                                current=processed,
+                                total=total,
+                                detail=(
+                                    f"Chapter {chapter.chapter_number}: receiving " f"{received_chars:,} response characters"
+                                ),
+                            ),
+                        )
+                        break
+                    except httpx.HTTPError as exc:
+                        status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else 0
+                        if request_attempt == 3 or (status_code and status_code < 500 and status_code != 429):
+                            raise
+                        logger.warning(
+                            "Transient LLM request failure for book %s chapter %s (%d/3): %s",
+                            book_id,
+                            chapter.chapter_number,
+                            request_attempt,
+                            exc,
+                        )
+                        await crud.audiobook.update_book_pipeline_progress(
+                            db,
+                            book_id,
+                            current=processed,
+                            total=total,
+                            detail=(
+                                f"Chapter {chapter.chapter_number}: model connection failed; "
+                                f"retrying request {request_attempt + 1} of 3"
+                            ),
+                        )
+                        await asyncio.sleep(2 ** (request_attempt - 1))
+                if raw is None:
+                    raise RuntimeError("LLM request completed without a response.")
                 try:
-                    batch_result = _extract_json(raw)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError(f"LLM returned invalid JSON for diarization: {exc}\nRaw: {raw[:500]}") from exc
+                    batch_result, missing_ids, salvaged = _parse_diarization_response(
+                        raw,
+                        [sentence.id for sentence in batch],
+                    )
+                except _DiarizationResponseError as exc:
+                    if len(batch) > 1:
+                        request_batch_size = max(1, len(batch) // 2)
+                        singleton_parse_failures = 0
+                        logger.warning(
+                            "Invalid diarization response for book %s chapter %s (%d sentences): %s. "
+                            "Retrying with batches of %d.",
+                            book_id,
+                            chapter.chapter_number,
+                            len(batch),
+                            exc,
+                            request_batch_size,
+                        )
+                        await crud.audiobook.update_book_pipeline_progress(
+                            db,
+                            book_id,
+                            current=processed,
+                            total=total,
+                            detail=(
+                                f"Model response was incomplete; retrying chapter {chapter.chapter_number} "
+                                f"with {request_batch_size}-sentence batches"
+                            ),
+                        )
+                        continue
 
-            if isinstance(batch_result, list):
-                batch_result = {"assignments": batch_result, "chapter_summary": chapter.summary}
-            if not isinstance(batch_result, dict) or not isinstance(batch_result.get("assignments"), list):
-                raise RuntimeError(f"Expected a JSON object from diarization, got: {type(batch_result)}")
+                    singleton_parse_failures += 1
+                    if singleton_parse_failures < 2:
+                        logger.warning(
+                            "Invalid diarization response for sentence %s: %s. Retrying once.",
+                            batch[0].id,
+                            exc,
+                        )
+                        continue
+                    logger.error(
+                        "Falling back to narrator for sentence %s after repeated invalid model responses: %s",
+                        batch[0].id,
+                        exc,
+                    )
+                    batch_result = {
+                        "assignments": [
+                            {
+                                "id": batch[0].id,
+                                "character_id": narrator_id,
+                                "tagged_text": None,
+                                "confidence": 0,
+                                "reason": "Fallback after repeated invalid model responses",
+                                "_fallback": True,
+                            }
+                        ],
+                        "chapter_summary": chapter.summary,
+                    }
+                    missing_ids = set()
+                    salvaged = False
+
+                if missing_ids:
+                    request_batch_size = max(1, min(len(missing_ids), request_batch_size // 2))
+                    logger.warning(
+                        "Diarization response for book %s chapter %s was %s and omitted %d sentence(s). "
+                        "Persisting %d valid assignment(s) and retrying the remainder in batches of %d.",
+                        book_id,
+                        chapter.chapter_number,
+                        "truncated" if salvaged else "incomplete",
+                        len(missing_ids),
+                        len(batch_result["assignments"]),
+                        request_batch_size,
+                    )
+                elif request_batch_size < batch_size:
+                    # A smaller batch succeeded, so cautiously reclaim
+                    # throughput instead of throttling the rest of the book
+                    # because of one malformed or incomplete response.
+                    request_batch_size = min(
+                        batch_size,
+                        request_batch_size * 2,
+                    )
+
+            singleton_parse_failures = 0
             results = batch_result["assignments"]
 
             result_map = {r["id"]: r for r in results if isinstance(r, dict) and isinstance(r.get("id"), int)}
 
+            completed_count = 0
+            ready_sentence_ids = []
             for sentence_index, sentence in enumerate(batch):
-                result = result_map.get(sentence.id, {})
+                result = result_map.get(sentence.id)
+                if result is None:
+                    continue
                 char_id = result.get("character_id")
                 if char_id not in character_ids:
                     char_id = narrator_id
-                tagged = _sanitize_tagged_text(sentence.original_text, result.get("tagged_text"))
-                confidence = result.get("confidence")
+                expression = result.get("expression")
+                if expression in _ALLOWED_EXPRESSION_TAGS:
+                    tagged = f"[{expression}] {sentence.original_text}"
+                else:
+                    tagged = _sanitize_tagged_text(sentence.original_text, result.get("tagged_text"))
+                confidence = result.get("confidence", 0.9)
                 try:
                     confidence = max(0.0, min(1.0, float(confidence)))
                 except (TypeError, ValueError):
                     confidence = 0.0
-                reason = str(result.get("reason") or "No model rationale returned")[:500]
-                next_text = batch[sentence_index + 1].original_text if sentence_index + 1 < len(batch) else ""
-                char_id, reason, guardrail_confidence = _apply_speaker_guardrails(
-                    text=sentence.original_text,
-                    next_text=next_text,
-                    character_id=char_id,
-                    narrator_id=narrator_id,
-                    minor_female_id=minor_female_id,
-                    minor_male_id=minor_male_id,
-                    reason=reason,
-                )
-                if guardrail_confidence is not None:
-                    confidence = guardrail_confidence
+                raw_reason = str(result.get("reason") or "Model speaker assignment")
+                reason = _DIARIZATION_REASON_LABELS.get(raw_reason, raw_reason)[:500]
+                position = chapter_positions[sentence.id]
+                next_text = chapter_sentences[position + 1].original_text if position + 1 < len(chapter_sentences) else ""
+                if not result.get("_fallback"):
+                    char_id, reason, guardrail_confidence = _apply_speaker_guardrails(
+                        text=sentence.original_text,
+                        next_text=next_text,
+                        character_id=char_id,
+                        narrator_id=narrator_id,
+                        minor_female_id=minor_female_id,
+                        minor_male_id=minor_male_id,
+                        reason=reason,
+                    )
+                    if guardrail_confidence is not None:
+                        confidence = guardrail_confidence
                 await crud.audiobook.update_sentence_diarization(
                     db,
                     sentence.id,
@@ -901,11 +1371,17 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
                     speaker_reason=reason,
                 )
                 context_window.append(sentence.original_text)
+                completed_count += 1
+                ready_sentence_ids.append(sentence.id)
+
+            if on_sentences_ready and ready_sentence_ids:
+                ready_sentence_ids.sort(key=sentence_lengths.get)
+                await on_sentences_ready(ready_sentence_ids)
 
             chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:4000]
             await crud.audiobook.update_chapter_summary(db, chapter.id, chapter_summary or None)
             chapter.summary = chapter_summary or None
-            processed += len(batch)
+            processed += completed_count
             await crud.audiobook.update_book_pipeline_progress(
                 db,
                 book_id,
@@ -916,6 +1392,17 @@ async def diarize_sentences(book_id: int, db: AsyncSession) -> None:
             if await crud.audiobook.consume_book_batch_limit(db, book_id):
                 logger.info("Book %s paused after one diarization batch.", book_id)
                 return
+
+        if provider != STUB_PROVIDER and chapter.summary is None:
+            await _generate_chapter_summary(
+                settings,
+                chapter,
+                chapter_sentences,
+                db,
+                book_id=book_id,
+                processed=processed,
+                total=total,
+            )
 
     logger.info("Diarization complete for book %s.", book_id)
     if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):

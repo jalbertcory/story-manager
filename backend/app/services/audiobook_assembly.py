@@ -9,14 +9,20 @@ import shutil
 import tempfile
 from xml.etree import ElementTree as ET
 
+from bs4 import BeautifulSoup
 from ebooklib import epub
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
-from ..config import LIBRARY_PATH
+from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..models import AudiobookChapter
+from .audiobook_publication import publish_reader_audiobook
 
 logger = logging.getLogger(__name__)
+
+_DC_NAMESPACE = "http://purl.org/dc/elements/1.1/"
+_OPF_NAMESPACE = "http://www.idpf.org/2007/opf"
+_CALIBRE_NAMESPACE = "http://calibre.kovidgoyal.net/2009/metadata"
 
 
 def _relative_path(full_path: Path) -> str:
@@ -42,6 +48,57 @@ def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
                 section.uid = uid
             if len(item) > 1:
                 _ensure_toc_link_ids(item[1], uid)
+
+
+def _sanitize_epub3_metadata(ebook) -> None:
+    """Remove EPUB 2-only metadata syntax that is invalid in an EPUB 3 package."""
+    ebook.metadata.pop(_CALIBRE_NAMESPACE, None)
+    for entries in ebook.metadata.get(_DC_NAMESPACE, {}).values():
+        for _, attributes in entries:
+            if not attributes:
+                continue
+            for name in list(attributes):
+                if name.startswith(f"{{{_OPF_NAMESPACE}}}"):
+                    del attributes[name]
+
+
+def _document_ids(ebook) -> dict[str, set[str]]:
+    ids_by_name: dict[str, set[str]] = {}
+    for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        soup = BeautifulSoup(item.content, "html.parser")
+        ids_by_name[item.get_name()] = {str(node.get("id")) for node in soup.find_all(attrs={"id": True})}
+    return ids_by_name
+
+
+def _sanitize_toc_targets(toc_items, ids_by_name: dict[str, set[str]]) -> None:
+    """Strip only fragments that do not exist in their target XHTML document."""
+    for item in toc_items or []:
+        target = item[0] if isinstance(item, (tuple, list)) and item else item
+        if isinstance(target, (epub.Link, epub.Section)) and "#" in target.href:
+            file_name, fragment = target.href.split("#", 1)
+            if file_name in ids_by_name and fragment not in ids_by_name[file_name]:
+                target.href = file_name
+        if isinstance(item, (tuple, list)) and len(item) > 1:
+            _sanitize_toc_targets(item[1], ids_by_name)
+
+
+def _prepare_epub3_documents(ebook) -> None:
+    """Supply required document titles and declare embedded SVG content."""
+    fallback_title = ebook.title or "Audiobook"
+    for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        if isinstance(item, epub.EpubNav):
+            continue
+        soup = BeautifulSoup(item.content, "html.parser")
+        if not item.title:
+            heading = soup.find(["h1", "h2", "h3"])
+            item.title = heading.get_text(" ", strip=True) if heading else fallback_title
+        if soup.find("svg") is not None and "svg" not in item.properties:
+            item.properties.append("svg")
+
+
+def _ensure_epub3_navigation(ebook) -> None:
+    if not any(isinstance(item, epub.EpubNav) for item in ebook.get_items()):
+        ebook.add_item(epub.EpubNav(uid="nav", file_name="nav.xhtml", title="Navigation"))
 
 
 def _build_smil(chapter, sentences: list, audio_filename: str) -> str:
@@ -96,6 +153,32 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
             raise RuntimeError(f"Snippet file missing for sentence {sentence.id}: {snippet_full}")
         snippet_paths.append(snippet_full)
 
+    # Treat the MP3 artifacts as authoritative. Older pipeline versions trusted
+    # provider-reported durations, which accumulated into visibly incorrect
+    # SMIL timelines. Rounding cumulative frame durations preserves both every
+    # intermediate boundary and the exact rounded chapter total.
+    from mutagen.mp3 import MP3
+
+    cumulative_exact_ms = 0.0
+    previous_boundary_ms = 0
+    corrected_durations = 0
+    for sentence, snippet_path in zip(sentences, snippet_paths, strict=True):
+        snippet = MP3(str(snippet_path))
+        cumulative_exact_ms += snippet.info.length * 1000
+        next_boundary_ms = round(cumulative_exact_ms)
+        duration_ms = next_boundary_ms - previous_boundary_ms
+        if sentence.audio_duration_ms != duration_ms:
+            sentence.audio_duration_ms = duration_ms
+            corrected_durations += 1
+        previous_boundary_ms = next_boundary_ms
+    if corrected_durations:
+        await db.commit()
+        logger.info(
+            "Corrected %d legacy sentence duration(s) in chapter %s.",
+            corrected_durations,
+            chapter.id,
+        )
+
     audio_filename = f"ch{chapter.chapter_number:04d}.mp3"
     audio_path = output_dir / audio_filename
     ffmpeg = shutil.which("ffmpeg")
@@ -117,9 +200,7 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
             "-i",
             manifest.name,
             "-codec:a",
-            "libmp3lame",
-            "-b:a",
-            "64k",
+            "copy",
             "-y",
             str(audio_path),
             stdout=asyncio.subprocess.PIPE,
@@ -177,7 +258,13 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         raise RuntimeError(f"Cannot assemble book {book_id}: not all sentences have generated audio.")
 
     audiobook_epub_path = output_dir / "audiobook.epub"
-    chapters = await crud.audiobook.get_chapters_pending_assembly(db, book_id)
+    assembly_marker = output_dir / AUDIOBOOK_ASSEMBLY_MARKER
+    if assembly_marker.is_file():
+        chapters = await crud.audiobook.get_chapters_pending_assembly(db, book_id)
+    else:
+        # Existing outputs were assembled with timeline-shortening re-encoding.
+        # Rebuild every chapter once with frame-copy concatenation.
+        chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     if chapters:
         # Once chapter state changes, an older package is no longer a valid
         # completion marker. Removing it makes an interrupted package step
@@ -213,8 +300,13 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         raise RuntimeError(f"Working EPUB not found for book {book_id}; run ingestion again.")
 
     ebook = epub.read_epub(str(working_epub_path))
+    _sanitize_epub3_metadata(ebook)
+    _prepare_epub3_documents(ebook)
+    _sanitize_toc_targets(ebook.toc, _document_ids(ebook))
+    _ensure_epub3_navigation(ebook)
 
     all_chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
+    total_duration_ms = 0
     for chapter in all_chapters:
         if not chapter.smil_file_path:
             raise RuntimeError(f"Missing SMIL path for book {book_id}, chapter {chapter.id}.")
@@ -240,17 +332,36 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
         )
         ebook.add_item(smil_item)
 
+        sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        chapter_duration_ms = sum(sentence.audio_duration_ms or 0 for sentence in sentences)
+        total_duration_ms += chapter_duration_ms
+        ebook.add_metadata(
+            "OPF",
+            "meta",
+            _ms_to_clock(chapter_duration_ms),
+            {"property": "media:duration", "refines": f"#{smil_item.id}"},
+        )
+
         # Attach media-overlay to the matching spine item
         for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             if item.get_name() == chapter.content_file_name:
                 item.media_overlay = smil_item.id
                 break
 
+    ebook.add_metadata(
+        "OPF",
+        "meta",
+        _ms_to_clock(total_duration_ms),
+        {"property": "media:duration"},
+    )
+
     temporary_epub_path = output_dir / "audiobook.tmp.epub"
     temporary_epub_path.unlink(missing_ok=True)
     _ensure_toc_link_ids(ebook.toc)
     epub.write_epub(str(temporary_epub_path), ebook)
     temporary_epub_path.replace(audiobook_epub_path)
+    assembly_marker.write_text("EPUB 3 media-overlay package with frame-copy audio\n", encoding="utf-8")
+    await publish_reader_audiobook(db, book_id)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 
     if not await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):

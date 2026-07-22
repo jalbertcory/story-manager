@@ -2,7 +2,9 @@
 
 This service wraps the official Apache-2.0
 [`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 model in Story Manager's
-`POST /generate` HTTP contract. It keeps the model loaded between sentence requests and returns MP3 bytes.
+`POST /generate` HTTP contract. It keeps the model loaded between sentence requests and returns MP3 bytes. It also
+offers `POST /generate-batch` for accelerators where native model batching improves throughput; Story Manager falls
+back to isolated sentence requests if a batch fails.
 
 ## Run
 
@@ -60,7 +62,13 @@ The image is rebuilt and published only when files under `services/omnivoice/` o
 | `OMNIVOICE_DEVICE` | `auto` | Force `mps`, `cuda`, `xpu`, or `cpu` |
 | `OMNIVOICE_NUM_STEPS` | `16` | Diffusion steps; use `32` for higher quality/slower output |
 | `OMNIVOICE_MP3_BITRATE` | `96k` | Returned MP3 bitrate |
+| `OMNIVOICE_MAX_BATCH_SIZE` | `8` | Maximum items accepted by `POST /generate-batch` |
 | `OMNIVOICE_PORT` | `8001` | Port used by the Make target |
+
+Story Manager controls submitted batch size with `AUDIOBOOK_TTS_BATCH_SIZE` (default `4`) and length-buckets
+independent clips before submission. Bucketing matters on Apple MPS because every native batch is padded to its
+longest item; mixed-length batches can be slower than single inference. `AUDIOBOOK_TTS_WORKERS` defaults to `1`;
+analysis and speech still run concurrently in separate pipeline lanes.
 
 Legacy Story Manager profiles such as `[gender-female][pitch-low][speed-normal]` are translated into the official
 comma-separated voice-design attributes. Official instructions such as `female, middle-aged, low pitch` are also

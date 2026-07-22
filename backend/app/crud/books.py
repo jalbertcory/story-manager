@@ -198,6 +198,11 @@ async def detach_book_source(db: AsyncSession, book: models.Book) -> models.Book
 async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
     book.content_updated_at = datetime.now(timezone.utc)
     book.content_version = (book.content_version or 0) + 1
+    if book.audiobook_enabled:
+        book.audiobook_pending_content_version = max(
+            book.audiobook_pending_content_version or 0,
+            book.content_version,
+        )
 
 
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:

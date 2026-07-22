@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from dataclasses import dataclass
 import re
 import shutil
@@ -32,6 +34,12 @@ class TTSRequest:
     text: str
     voice_prompt: str = DEFAULT_VOICE_PROMPT
     voice_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TTSResult:
+    audio_bytes: bytes
+    duration_ms: int | None = None
 
 
 def _profile_tokens(prompt: str) -> dict[str, str]:
@@ -216,3 +224,49 @@ async def synthesize_speech(
         )
         response.raise_for_status()
         return response.content
+
+
+async def synthesize_speech_batch(
+    settings: AudiobookSettings | None,
+    requests: list[TTSRequest],
+) -> list[TTSResult]:
+    """Generate a true model batch when supported, with a sequential fallback."""
+    if not requests:
+        return []
+    if tts_provider_name(settings) != "omnivoice":
+        return [TTSResult(await synthesize_speech(settings, request)) for request in requests]
+    if settings is None or not settings.tts_base_url:
+        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+
+    root = settings.tts_base_url.rstrip("/")
+    if root.endswith("/generate"):
+        root = root[: -len("/generate")]
+    url = f"{root}/generate-batch"
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            url,
+            json={"requests": [{"voice": request.voice_prompt, "text": request.text} for request in requests]},
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    items = payload.get("items")
+    if not isinstance(items, list) or len(items) != len(requests):
+        raise RuntimeError(
+            f"OmniVoice returned {len(items) if isinstance(items, list) else 0} "
+            f"batch results for {len(requests)} requests."
+        )
+
+    results: list[TTSResult] = []
+    for item in items:
+        try:
+            audio_bytes = base64.b64decode(item["audio_base64"], validate=True)
+            duration_ms = int(item["duration_ms"])
+        except (KeyError, TypeError, ValueError, binascii.Error) as exc:
+            raise RuntimeError("OmniVoice returned an invalid batch result.") from exc
+        if not audio_bytes or duration_ms <= 0:
+            raise RuntimeError("OmniVoice returned an empty batch result.")
+        results.append(TTSResult(audio_bytes=audio_bytes, duration_ms=duration_ms))
+    return results

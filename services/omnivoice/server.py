@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from io import BytesIO
 import logging
@@ -13,16 +14,16 @@ import threading
 # long audiobook run. This must be set before importing torch.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-import numpy as np
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
-from omnivoice import OmniVoice
-from omnivoice.utils.common import get_best_device
-from pydantic import BaseModel, Field
-from pydub import AudioSegment
-import torch
+import numpy as np  # noqa: E402
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi.responses import Response  # noqa: E402
+from omnivoice import OmniVoice  # noqa: E402
+from omnivoice.utils.common import get_best_device  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+from pydub import AudioSegment  # noqa: E402
+import torch  # noqa: E402
 
-from .prompt import translate_generation_prompt
+from .prompt import translate_generation_prompt  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,39 @@ MODEL_ID = os.getenv("OMNIVOICE_MODEL", "k2-fsa/OmniVoice")
 DEVICE = os.getenv("OMNIVOICE_DEVICE", "auto")
 NUM_STEPS = int(os.getenv("OMNIVOICE_NUM_STEPS", "16"))
 MP3_BITRATE = os.getenv("OMNIVOICE_MP3_BITRATE", "96k")
+MAX_BATCH_SIZE = max(1, int(os.getenv("OMNIVOICE_MAX_BATCH_SIZE", "8")))
 
 
 class GenerateRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     voice: str | None = None
     language: str | None = None
+
+
+class BatchGenerateRequest(BaseModel):
+    requests: list[GenerateRequest] = Field(min_length=1, max_length=MAX_BATCH_SIZE)
+
+
+class BatchGenerateItem(BaseModel):
+    audio_base64: str
+    duration_ms: int
+
+
+class BatchGenerateResponse(BaseModel):
+    items: list[BatchGenerateItem]
+
+
+def _encode_audio(audio: np.ndarray, sampling_rate: int) -> tuple[bytes, int]:
+    pcm = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
+    segment = AudioSegment(
+        pcm.tobytes(),
+        frame_rate=sampling_rate,
+        sample_width=2,
+        channels=1,
+    )
+    output = BytesIO()
+    segment.export(output, format="mp3", bitrate=MP3_BITRATE)
+    return output.getvalue(), len(segment)
 
 
 class OmniVoiceRuntime:
@@ -56,31 +84,25 @@ class OmniVoiceRuntime:
         logger.info("OmniVoice ready at %s Hz.", self.model.sampling_rate)
 
     def generate(self, request: GenerateRequest) -> tuple[bytes, int]:
+        return self.generate_batch([request])[0]
+
+    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int]]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
-        prompt = translate_generation_prompt(request.voice, request.text)
+        prompts = [translate_generation_prompt(request.voice, request.text) for request in requests]
         with self._generate_lock:
-            audio = self.model.generate(
-                text=prompt.text,
-                language=request.language,
-                instruct=prompt.instruct,
-                speed=prompt.speed,
+            audios = self.model.generate(
+                text=[prompt.text for prompt in prompts],
+                language=[request.language for request in requests],
+                instruct=[prompt.instruct for prompt in prompts],
+                speed=[prompt.speed for prompt in prompts],
                 num_step=NUM_STEPS,
                 class_temperature=0.0,
                 postprocess_output=True,
-            )[0]
+            )
 
-        pcm = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
-        segment = AudioSegment(
-            pcm.tobytes(),
-            frame_rate=self.model.sampling_rate,
-            sample_width=2,
-            channels=1,
-        )
-        output = BytesIO()
-        segment.export(output, format="mp3", bitrate=MP3_BITRATE)
-        return output.getvalue(), len(segment)
+        return [_encode_audio(audio, self.model.sampling_rate) for audio in audios]
 
 
 runtime = OmniVoiceRuntime()
@@ -102,6 +124,7 @@ async def health() -> dict[str, object]:
         "model": MODEL_ID,
         "device": runtime.device,
         "num_steps": NUM_STEPS,
+        "max_batch_size": MAX_BATCH_SIZE,
     }
 
 
@@ -119,4 +142,22 @@ async def generate(request: GenerateRequest) -> Response:
             "X-Audio-Duration-Ms": str(duration_ms),
             "X-OmniVoice-Device": runtime.device,
         },
+    )
+
+
+@app.post("/generate-batch", response_model=BatchGenerateResponse)
+async def generate_batch(request: BatchGenerateRequest) -> BatchGenerateResponse:
+    try:
+        generated = await asyncio.to_thread(runtime.generate_batch, request.requests)
+    except Exception as exc:
+        logger.exception("OmniVoice batch generation failed.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return BatchGenerateResponse(
+        items=[
+            BatchGenerateItem(
+                audio_base64=base64.b64encode(audio).decode("ascii"),
+                duration_ms=duration_ms,
+            )
+            for audio, duration_ms in generated
+        ]
     )

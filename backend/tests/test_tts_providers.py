@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 
 from backend.app import models
@@ -10,6 +12,20 @@ class _Response:
 
     def raise_for_status(self):
         return None
+
+    def json(self):
+        return {
+            "items": [
+                {
+                    "audio_base64": base64.b64encode(b"first-mp3").decode(),
+                    "duration_ms": 1100,
+                },
+                {
+                    "audio_base64": base64.b64encode(b"second-mp3").decode(),
+                    "duration_ms": 2200,
+                },
+            ]
+        }
 
 
 class _Client:
@@ -56,6 +72,35 @@ async def test_omnivoice_uses_descriptive_profile_and_expression_tags():
     assert request["json"] == {
         "voice": "[gender-female][pitch-low][speed-slow]",
         "text": "[whisper] Keep quiet.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_batches_multiple_sentences_in_one_model_request():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+
+    results = await tts_providers.synthesize_speech_batch(
+        settings,
+        [
+            TTSRequest(text="First.", voice_prompt="[gender-female]"),
+            TTSRequest(text="Second.", voice_prompt="[gender-male]"),
+        ],
+    )
+
+    assert [(result.audio_bytes, result.duration_ms) for result in results] == [
+        (b"first-mp3", 1100),
+        (b"second-mp3", 2200),
+    ]
+    url, request = _Client.calls[0]
+    assert url == "http://omnivoice:8001/generate-batch"
+    assert request["json"] == {
+        "requests": [
+            {"voice": "[gender-female]", "text": "First."},
+            {"voice": "[gender-male]", "text": "Second."},
+        ]
     }
 
 

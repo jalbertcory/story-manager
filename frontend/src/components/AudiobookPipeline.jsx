@@ -16,6 +16,7 @@ import ScriptEditor from "./audiobook/ScriptEditor";
 import ChapterAssembly from "./audiobook/ChapterAssembly";
 import AnalysisOverview from "./audiobook/AnalysisOverview";
 import AudiobookReader from "./audiobook/AudiobookReader";
+import ProgressDashboard from "./audiobook/ProgressDashboard";
 
 const PIPELINE_STEPS = [
   { status: "ingesting", label: "Ingesting" },
@@ -111,6 +112,7 @@ function JobInspector({ statusData, totalSentences, doneCount }) {
 }
 
 const SUB_TABS = [
+  "Progress",
   "Analysis",
   "Characters",
   "Script Editor",
@@ -121,7 +123,7 @@ const SUB_TABS = [
 function AudiobookPipeline({ book }) {
   const bookId = book.id;
   const queryClient = useQueryClient();
-  const [subTab, setSubTab] = useState("Analysis");
+  const [subTab, setSubTab] = useState("Progress");
   const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   const isActive = (status) => ACTIVE_STATUSES.has(status);
@@ -131,7 +133,9 @@ function AudiobookPipeline({ book }) {
     queryFn: () => getAudiobookStatus(bookId),
     refetchInterval: ({ state }) => {
       const s = state.data?.pipeline_status;
-      return s && isActive(s) ? 3000 : false;
+      const audioStillFinishing =
+        (state.data?.sentence_counts?.audio_generating ?? 0) > 0;
+      return (s && isActive(s)) || audioStillFinishing ? 1000 : false;
     },
   });
 
@@ -148,7 +152,11 @@ function AudiobookPipeline({ book }) {
       const previewActive = state.data?.some((chapter) =>
         ["queued", "generating"].includes(chapter.preview_status),
       );
-      return (s && isActive(s)) || previewActive ? 3000 : false;
+      const audioStillFinishing =
+        (statusData?.sentence_counts?.audio_generating ?? 0) > 0;
+      return (s && isActive(s)) || previewActive || audioStillFinishing
+        ? 1000
+        : false;
     },
   });
 
@@ -242,7 +250,10 @@ function AudiobookPipeline({ book }) {
             <span className="badge badge--warning">Pause requested…</span>
           )}
           {statusData?.last_error && (
-            <p className="error">{statusData.last_error}</p>
+            <details className="pipeline-error-summary">
+              <summary>Last pipeline error</summary>
+              <pre>{statusData.last_error}</pre>
+            </details>
           )}
         </div>
 
@@ -367,6 +378,9 @@ function AudiobookPipeline({ book }) {
       </nav>
 
       <div className="sub-tab-content">
+        {subTab === "Progress" && (
+          <ProgressDashboard status={statusData} chapters={chapters} />
+        )}
         {subTab === "Analysis" && (
           <AnalysisOverview status={statusData} chapters={chapters} />
         )}

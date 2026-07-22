@@ -35,6 +35,28 @@ logger = logging.getLogger(__name__)
 _fff_lock = asyncio.Lock()
 
 
+async def _enqueue_audiobook_refresh(book: models.Book, db) -> None:
+    """Persist and enqueue refreshed content without losing an active build."""
+    if not book.audiobook_enabled:
+        return
+    await db.refresh(book)
+    content_version = book.content_version or 1
+    book.audiobook_pending_content_version = max(
+        book.audiobook_pending_content_version or 0,
+        content_version,
+    )
+    active_statuses = {"ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"}
+    if book.audiobook_pipeline_status not in active_statuses:
+        book.audiobook_pipeline_status = "ingesting"
+    await db.commit()
+
+    from .audiobook_queue import get_audiobook_queue
+
+    queue = get_audiobook_queue()
+    if not queue.has_book_job(book.id):
+        await queue.enqueue(book.id)
+
+
 def _run_fff_main(args: List[str]) -> int:
     """Wrapper for fff_main that converts SystemExit into a return code."""
     from fanficfare.cli import main as fff_main
@@ -318,6 +340,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
         await crud.create_book_log(db, log_entry)
         await db.refresh(db_book)
         await epub_editor.apply_book_cleaning(db_book, db)
+        await _enqueue_audiobook_refresh(db_book, db)
         await queue_metadata_sync_job(db, trigger="new_book", book_ids=[db_book.id])
 
 
@@ -378,6 +401,7 @@ async def run_book_refresh(book_id: int) -> None:
                 )
                 await crud.create_book_log(db, log_entry)
                 await epub_editor.apply_book_cleaning(updated_book, db)
+                await _enqueue_audiobook_refresh(updated_book, db)
                 await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
 
                 updated_book.refresh_status = None
@@ -426,6 +450,7 @@ async def run_book_refresh(book_id: int) -> None:
             await db.refresh(updated_book)
 
             await epub_editor.apply_book_cleaning(updated_book, db)
+            await _enqueue_audiobook_refresh(updated_book, db)
             await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
 
             updated_book.refresh_status = None
@@ -509,8 +534,6 @@ async def update_web_novels() -> None:
                     )
                     book.master_word_count = new_word_count
                     book.current_word_count = new_word_count
-                    await crud.touch_book_content(db, book)
-                    await db.commit()
                 else:
                     logger.info(f"No new chapters for {book.title}.")
                     log_entry = schemas.BookLogCreate(
@@ -520,8 +543,13 @@ async def update_web_novels() -> None:
                         new_chapter_count=new_chapter_count,
                         words_added=0,
                     )
+                book.master_word_count = new_word_count
+                book.current_word_count = new_word_count
+                await crud.touch_book_content(db, book)
+                await db.commit()
                 await crud.create_book_log(db, log_entry)
                 await epub_editor.apply_book_cleaning(book, db)
+                await _enqueue_audiobook_refresh(book, db)
             except Exception as e:
                 had_book_failures = True
                 logger.error(f"Failed to update {book.title}: {e}\n{traceback.format_exc()}")

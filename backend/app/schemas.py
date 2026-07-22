@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
 
@@ -256,6 +256,46 @@ class SeriesMetadataSummary(BaseModel):
     user_genre_tags: List[str] = Field(default_factory=list)
 
 
+class ReaderAudiobookCapability(BaseModel):
+    status: Literal["processing", "partial", "complete", "error"]
+    revision: int
+    source_content_version: int
+    text_content_version: int
+    ready_chapter_count: int
+    total_chapter_count: int
+    ready_audio_bytes: int
+    manifest_url: str
+
+
+class ReaderAudiobookTextAsset(BaseModel):
+    content_version: int
+    size_bytes: int
+    sha256: str
+    url: str
+
+
+class ReaderAudiobookChapter(BaseModel):
+    key: str
+    title: Optional[str] = None
+    href: str
+    state: Literal["pending", "processing", "ready", "error"]
+    audio_version: Optional[int] = None
+    duration_ms: Optional[int] = None
+    audio_size_bytes: Optional[int] = None
+    audio_sha256: Optional[str] = None
+    smil_size_bytes: Optional[int] = None
+    smil_sha256: Optional[str] = None
+    audio_url: Optional[str] = None
+    smil_url: Optional[str] = None
+
+
+class ReaderAudiobookManifest(BaseModel):
+    revision: int
+    source_content_version: int
+    text: ReaderAudiobookTextAsset
+    chapters: List[ReaderAudiobookChapter]
+
+
 class ReaderBook(BaseModel):
     id: int
     title: str
@@ -270,6 +310,7 @@ class ReaderBook(BaseModel):
     effective_genre_tags: List[str] = Field(default_factory=list)
     download_url: str
     cover_url: Optional[str] = None
+    audiobook: Optional[ReaderAudiobookCapability] = None
 
 
 class ReaderSeriesSummary(BaseModel):

@@ -52,8 +52,8 @@ describe("AudiobookPipeline", () => {
     renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
 
     expect(
-      await screen.findByText("EPUB contains no narratable text."),
-    ).toBeInTheDocument();
+      await screen.findAllByText("EPUB contains no narratable text."),
+    ).toHaveLength(2);
     fireEvent.click(
       screen.getByRole("button", { name: "Run Next Stage: Ingesting" }),
     );
@@ -77,7 +77,10 @@ describe("AudiobookPipeline", () => {
               pause_requested: false,
               stop_after_phase: null,
               last_error: null,
-              sentence_counts: { pending_diarization: 100 },
+              sentence_counts: {
+                pending_diarization: 60,
+                ready_for_audio: 40,
+              },
               review_counts: {
                 low_confidence: 2,
                 unassigned: 100,
@@ -133,6 +136,9 @@ describe("AudiobookPipeline", () => {
     renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
 
     expect(await screen.findByText("ollama / qwen3.5:27b")).toBeInTheDocument();
+    expect(screen.getByText("Speaker analysis")).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Analysis" }));
     expect(screen.getAllByText("A test story summary.")).toHaveLength(2);
     expect(screen.getByText("The story begins.")).toBeInTheDocument();
     expect(
