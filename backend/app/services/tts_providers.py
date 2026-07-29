@@ -24,7 +24,7 @@ SUPPORTED_TTS_PROVIDERS = {
 
 _PROFILE_TOKEN_RE = re.compile(r"\[([a-z]+)-([^\]]+)\]", re.IGNORECASE)
 _EXPRESSION_TAG_RE = re.compile(
-    r"\[(?:laughter|laugh|sigh|whisper|shout)\]",
+    r"\[(?:laughter|laugh|sigh|whisper|shout|surprise-oh|dissatisfaction-hnn|confirmation-en)\]",
     re.IGNORECASE,
 )
 

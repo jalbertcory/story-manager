@@ -178,6 +178,9 @@ frontend/dist/
 # Docker Compose persistent data
 pgdata/
 
+# Detached local development service logs and PID files
+.run/
+
 .idea
 test-results
 frontend/playwright-report

@@ -6,6 +6,9 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+import re
+import shutil
+import tempfile
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, AudiobookSettings
+from .audiobook_text import split_speech_segments
 from .tts_providers import (
     DEFAULT_VOICE_PROMPT,
     TTSRequest,
@@ -24,6 +28,10 @@ from .tts_providers import (
 
 logger = logging.getLogger(__name__)
 TTS_BATCH_SIZE = max(1, int(os.getenv("AUDIOBOOK_TTS_BATCH_SIZE", "4")))
+_LEADING_EXPRESSION_RE = re.compile(
+    r"^((?:\[(?:laughter|sigh|whisper|surprise-oh|dissatisfaction-hnn|confirmation-en)\]\s*)+)",
+    re.IGNORECASE,
+)
 
 
 def _snippet_path(book_id: int, sentence_id: int) -> Path:
@@ -55,9 +63,11 @@ async def _generate_sentence_clip(
     book_id: int,
     sentence: AudiobookSentence,
     db: AsyncSession,
+    requests: list[TTSRequest] | None = None,
 ) -> None:
-    request = await _build_sentence_request(settings, sentence, db)
-    audio_bytes = await _synthesize_with_retries(settings, sentence.id, request)
+    requests = requests or await _build_sentence_requests(settings, sentence, db)
+    audio_parts = [await _synthesize_with_retries(settings, sentence.id, request) for request in requests]
+    audio_bytes = await _concatenate_mp3_parts(audio_parts, sentence.id)
     await _persist_sentence_audio(
         book_id,
         sentence,
@@ -71,19 +81,112 @@ async def _build_sentence_request(
     sentence: AudiobookSentence,
     db: AsyncSession,
 ) -> TTSRequest:
-    voice_prompt = DEFAULT_VOICE_PROMPT
-    voice_id = None
-    if sentence.character_id is not None:
-        char = await db.get(AudiobookCharacter, sentence.character_id)
-        if char:
-            voice_prompt = char.voice_prompt or voice_prompt
-            voice_id = _voice_id_for_provider(settings, char)
+    """Compatibility helper for callers that require a single request."""
+    requests = await _build_sentence_requests(settings, sentence, db)
+    return requests[0]
 
-    return TTSRequest(
-        text=sentence.tagged_text or sentence.original_text,
-        voice_prompt=voice_prompt,
-        voice_id=voice_id,
-    )
+
+def _request_for_character(
+    settings: AudiobookSettings | None,
+    character: AudiobookCharacter | None,
+    text: str,
+) -> TTSRequest:
+    voice_prompt = character.voice_prompt if character and character.voice_prompt else DEFAULT_VOICE_PROMPT
+    voice_id = _voice_id_for_provider(settings, character) if character else None
+    return TTSRequest(text=text, voice_prompt=voice_prompt, voice_id=voice_id)
+
+
+async def _build_sentence_requests(
+    settings: AudiobookSettings | None,
+    sentence: AudiobookSentence,
+    db: AsyncSession,
+) -> list[TTSRequest]:
+    """Render dialogue with its character and attribution prose with Narrator."""
+
+    character = await db.get(AudiobookCharacter, sentence.character_id) if sentence.character_id is not None else None
+    full_text = sentence.tagged_text or sentence.original_text
+    if character is None or character.is_narrator:
+        return [_request_for_character(settings, character, full_text)]
+
+    segments, _quote_state = split_speech_segments(sentence.original_text)
+    spoken_segments = [segment for segment in segments if segment.has_speech]
+    roles = {segment.is_dialogue for segment in spoken_segments}
+    if len(spoken_segments) < 2 or roles != {False, True}:
+        return [_request_for_character(settings, character, full_text)]
+
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    narrator = None
+    if chapter is not None:
+        narrator = next(
+            (
+                candidate
+                for candidate in await crud.audiobook.get_characters_for_book(db, chapter.book_id)
+                if candidate.is_narrator
+            ),
+            None,
+        )
+
+    expression_match = _LEADING_EXPRESSION_RE.match(full_text)
+    expression_prefix = expression_match.group(1).strip() if expression_match else ""
+    expression_applied = False
+    requests: list[TTSRequest] = []
+    for segment in spoken_segments:
+        text = segment.text
+        if segment.is_dialogue and expression_prefix and not expression_applied:
+            text = f"{expression_prefix} {text}"
+            expression_applied = True
+        requests.append(
+            _request_for_character(
+                settings,
+                character if segment.is_dialogue else narrator,
+                text,
+            )
+        )
+    return requests
+
+
+async def _concatenate_mp3_parts(parts: list[bytes], sentence_id: int) -> bytes:
+    if len(parts) == 1:
+        return parts[0]
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to combine dialogue and narrator audio.")
+
+    with tempfile.TemporaryDirectory(prefix=f"story-manager-sentence-{sentence_id}-") as directory:
+        root = Path(directory)
+        manifest_path = root / "parts.txt"
+        output_path = root / "combined.mp3"
+        input_paths = []
+        for index, part in enumerate(parts):
+            input_path = root / f"part-{index}.mp3"
+            input_path.write_bytes(part)
+            input_paths.append(input_path)
+        manifest_path.write_text(
+            "".join(f"file '{path}'\n" for path in input_paths),
+            encoding="utf-8",
+        )
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(manifest_path),
+            "-codec:a",
+            "copy",
+            "-y",
+            str(output_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode:
+            message = stderr.decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"Unable to combine sentence {sentence_id} voice segments: {message}")
+        return output_path.read_bytes()
 
 
 async def _synthesize_with_retries(
@@ -158,16 +261,21 @@ async def _generate_sentence_clips(
     """Generate a provider-native batch and isolate any batch failure by sentence."""
     if not sentences:
         return {}
-    if len(sentences) == 1 or tts_provider_name(settings) != "omnivoice":
+    request_groups = [await _build_sentence_requests(settings, sentence, db) for sentence in sentences]
+    if (
+        len(sentences) == 1
+        or tts_provider_name(settings) != "omnivoice"
+        or any(len(requests) > 1 for requests in request_groups)
+    ):
         failures = {}
-        for sentence in sentences:
+        for sentence, requests in zip(sentences, request_groups, strict=True):
             try:
-                await _generate_sentence_clip(settings, book_id, sentence, db)
+                await _generate_sentence_clip(settings, book_id, sentence, db, requests)
             except Exception as exc:
                 failures[sentence.id] = exc
         return failures
 
-    requests = [await _build_sentence_request(settings, sentence, db) for sentence in sentences]
+    requests = [group[0] for group in request_groups]
     results = None
     for attempt in range(1, 4):
         try:

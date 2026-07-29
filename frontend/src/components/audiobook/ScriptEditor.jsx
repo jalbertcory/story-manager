@@ -6,6 +6,7 @@ import {
   updateSentence,
   getSentenceAudioUrl,
 } from "../../api/audiobook";
+import { chapterLabel } from "../../lib/audiobook";
 
 const STATUS_ICONS = {
   pending_diarization: { icon: "⏳", label: "Pending diarization" },
@@ -249,7 +250,7 @@ function ScriptEditor({
             <option value="">All</option>
             {chapters.map((chapter) => (
               <option key={chapter.id} value={chapter.id}>
-                {chapter.chapter_number} · {chapter.processed_sentence_count}/
+                {chapterLabel(chapter)} · {chapter.processed_sentence_count}/
                 {chapter.sentence_count}
               </option>
             ))}

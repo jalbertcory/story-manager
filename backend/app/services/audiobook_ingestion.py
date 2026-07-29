@@ -22,6 +22,7 @@ from .audiobook_publication import (
     stable_chapter_key,
     stage_reader_text_rendition,
 )
+from .audiobook_text import SpeechSegment, split_speech_segments
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,38 @@ def _tokenize_text(text: str) -> list[str]:
     nlp = _get_nlp()
     doc = nlp(text)
     return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+
+
+def _tokenize_speech_units(
+    text: str,
+    quote_state: str | None = None,
+) -> tuple[list[SpeechSegment], str | None]:
+    """Tokenize within quote-aware speaker spans instead of across them."""
+
+    segments, ending_quote_state = split_speech_segments(text, quote_state)
+    units: list[SpeechSegment] = []
+    for segment in segments:
+        tokenized = _tokenize_text(segment.text) if segment.has_speech else []
+        if not tokenized:
+            if units:
+                previous = units[-1]
+                units[-1] = SpeechSegment(
+                    text=f"{previous.text} {segment.text}".strip(),
+                    is_dialogue=previous.is_dialogue,
+                    starts_quote=previous.starts_quote,
+                    ends_quote=segment.ends_quote or previous.ends_quote,
+                )
+            continue
+        for index, value in enumerate(tokenized):
+            units.append(
+                SpeechSegment(
+                    text=value,
+                    is_dialogue=segment.is_dialogue,
+                    starts_quote=segment.starts_quote and index == 0,
+                    ends_quote=segment.ends_quote and index == len(tokenized) - 1,
+                )
+            )
+    return units, ending_quote_state
 
 
 def _span_for_sentence(span_id: str, text: str):
@@ -99,7 +132,8 @@ def _inject_spans_into_text_node(
     start_seq: int,
     occurrences: Counter[str],
     existing_ids: list[str] | None = None,
-) -> tuple[int, list[dict]]:
+    quote_state: str | None = None,
+) -> tuple[int, list[dict], str | None]:
     """Wrap one text node's sentences without disturbing surrounding markup.
 
     Returns (next_sequence_number, list_of_sentence_dicts).
@@ -110,11 +144,11 @@ def _inject_spans_into_text_node(
     raw_text = str(text_node)
     stripped = raw_text.strip()
     if not stripped or _should_skip_text_node(text_node):
-        return seq, sentences_data
+        return seq, sentences_data, quote_state
 
-    sentences = _tokenize_text(stripped)
-    if not sentences:
-        return seq, sentences_data
+    speech_units, quote_state = _tokenize_speech_units(stripped, quote_state)
+    if not speech_units:
+        return seq, sentences_data, quote_state
 
     leading_whitespace = raw_text[: len(raw_text) - len(raw_text.lstrip())]
     trailing_start = len(raw_text.rstrip())
@@ -123,7 +157,8 @@ def _inject_spans_into_text_node(
     if leading_whitespace:
         replacement_nodes.append(NavigableString(leading_whitespace))
 
-    for index, sent_text in enumerate(sentences):
+    for index, speech_unit in enumerate(speech_units):
+        sent_text = speech_unit.text
         if index > 0:
             replacement_nodes.append(NavigableString(" "))
         normalized = " ".join(sent_text.split()).casefold()
@@ -151,14 +186,44 @@ def _inject_spans_into_text_node(
         replacement_nodes.append(NavigableString(trailing_whitespace))
 
     _replace_text_node(text_node, replacement_nodes)
-    return seq, sentences_data
+    return seq, sentences_data, quote_state
 
 
 def _source_content_hash(soup: BeautifulSoup) -> str:
     return hashlib.sha256(str(soup).encode("utf-8")).hexdigest()
 
 
-def _chapter_title(item, soup: BeautifulSoup, chapter_number: int) -> str:
+def _toc_title_map(toc_items) -> dict[str, str]:
+    titles: dict[str, str] = {}
+
+    def visit(items) -> None:
+        for item in items or []:
+            if isinstance(item, (tuple, list)):
+                if item:
+                    visit([item[0]])
+                if len(item) > 1:
+                    visit(item[1])
+                continue
+            href = (getattr(item, "href", None) or "").partition("#")[0]
+            title = (getattr(item, "title", None) or "").strip()
+            if href and title:
+                key = normalize_resource_href(href).casefold()
+                titles.setdefault(key, title[:500])
+
+    visit(toc_items)
+    return titles
+
+
+def _chapter_title(
+    item,
+    soup: BeautifulSoup,
+    chapter_number: int,
+    toc_titles: dict[str, str] | None = None,
+) -> str:
+    href = normalize_resource_href(getattr(item, "file_name", None) or item.get_name()).casefold()
+    toc_title = (toc_titles or {}).get(href, "").strip()
+    if toc_title:
+        return toc_title
     title = (getattr(item, "title", None) or "").strip()
     if title:
         return title
@@ -172,11 +237,13 @@ def _chapter_title(item, soup: BeautifulSoup, chapter_number: int) -> str:
 
 def _sentence_texts(soup: BeautifulSoup) -> list[str]:
     texts: list[str] = []
+    quote_state: str | None = None
     container = soup.body or soup
     for text_node in list(container.find_all(string=True)):
         stripped = str(text_node).strip()
         if stripped and not _should_skip_text_node(text_node):
-            texts.extend(_tokenize_text(stripped))
+            units, quote_state = _tokenize_speech_units(stripped, quote_state)
+            texts.extend(unit.text for unit in units)
     return texts
 
 
@@ -218,6 +285,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         ebook = epub.read_epub(str(source_snapshot))
     finally:
         source_snapshot.unlink(missing_ok=True)
+    toc_titles = _toc_title_map(ebook.toc)
     existing_chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     existing_chapter_ids = {chapter.id for chapter in existing_chapters}
     existing_sentences = {
@@ -277,7 +345,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
                 stable_chapter_key=key,
                 source_href=href,
                 source_content_hash=content_hash,
-                title=_chapter_title(item, soup, chapter_num),
+                title=_chapter_title(item, soup, chapter_num, toc_titles),
                 spine_order=chapter_num - 1,
                 generation_state="pending",
                 needs_reassembly=True,
@@ -303,17 +371,19 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         chapter_sentences: list[dict] = []
         seq = 0
         occurrences: Counter[str] = Counter()
+        quote_state: str | None = None
 
         # Process text nodes in document order. This preserves existing block and
         # inline structure while adding stable sentence-level anchors.
         container = soup.body or soup
         for text_node in list(container.find_all(string=True)):
-            seq, new_sentences = _inject_spans_into_text_node(
+            seq, new_sentences, quote_state = _inject_spans_into_text_node(
                 text_node,
                 key,
                 seq,
                 occurrences,
                 existing_ids,
+                quote_state,
             )
             chapter_sentences.extend(new_sentences)
 
@@ -329,7 +399,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         chapter.stable_chapter_key = key
         chapter.source_href = href
         chapter.source_content_hash = content_hash
-        chapter.title = _chapter_title(item, soup, chapter_num)
+        chapter.title = _chapter_title(item, soup, chapter_num, toc_titles)
         chapter.spine_order = chapter_num - 1
 
         if not unchanged:

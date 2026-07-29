@@ -159,6 +159,7 @@ describe("AudiobookPipeline", () => {
     const chapter = {
       id: 9,
       chapter_number: 1,
+      title: "Opening Night",
       sentence_count: 2,
       processed_sentence_count: 2,
       audio_generated_count: 0,
@@ -238,6 +239,7 @@ describe("AudiobookPipeline", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Chapter Assembly" }),
     );
+    expect(screen.getByText("Opening Night")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rebuild Preview" }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -247,6 +249,9 @@ describe("AudiobookPipeline", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Listen & Read" }));
+    expect(
+      (await screen.findAllByText("Opening Night")).length,
+    ).toBeGreaterThan(0);
     expect(
       await screen.findByText("Avery opened the door."),
     ).toBeInTheDocument();
