@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { chapterLabel } from "../../lib/audiobook";
 
 const ACTIVE_STATUSES = new Set([
   "ingesting",
@@ -194,7 +195,7 @@ function ProgressDashboard({ status, chapters = [] }) {
         <div className="progress-chapter-list">
           {chapters.map((chapter) => (
             <article className="progress-chapter-row" key={chapter.id}>
-              <strong>Chapter {chapter.chapter_number}</strong>
+              <strong>{chapterLabel(chapter)}</strong>
               <div>
                 <span>
                   Analysis{" "}

@@ -104,6 +104,7 @@ class ChapterResponse(BaseModel):
     id: int
     book_id: int
     chapter_number: int
+    title: Optional[str]
     content_file_name: Optional[str]
     smil_file_path: Optional[str]
     audio_file_path: Optional[str]
@@ -536,6 +537,7 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> lis
                 id=chapter.id,
                 book_id=chapter.book_id,
                 chapter_number=chapter.chapter_number,
+                title=chapter.title,
                 content_file_name=chapter.content_file_name,
                 smil_file_path=chapter.smil_file_path,
                 audio_file_path=chapter.audio_file_path,

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { getChapterAudioUrl, getSentences } from "../../api/audiobook";
+import { chapterLabel } from "../../lib/audiobook";
 
 function AudiobookReader({ chapters = [], characters = [], bookId }) {
   const playable = useMemo(
@@ -56,7 +57,7 @@ function AudiobookReader({ chapters = [], characters = [], bookId }) {
             className={chapter.id === chapterId ? "active" : ""}
             onClick={() => setChapterId(chapter.id)}
           >
-            Chapter {chapter.chapter_number}
+            {chapterLabel(chapter)}
             <small>{chapter.sentence_count} sentences</small>
           </button>
         ))}
@@ -65,7 +66,7 @@ function AudiobookReader({ chapters = [], characters = [], bookId }) {
         <div className="audiobook-reader-heading">
           <div>
             <span className="metric-label">Listen & read</span>
-            <h3>Chapter {selected?.chapter_number}</h3>
+            <h3>{chapterLabel(selected)}</h3>
           </div>
           <div className="audiobook-reader-nav">
             <button

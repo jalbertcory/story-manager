@@ -18,6 +18,7 @@ from backend.app.services import (
     audiobook_ingestion,
     audiobook_llm,
     audiobook_publication,
+    audiobook_text,
     audiobook_tts,
     web_novel,
 )
@@ -121,7 +122,15 @@ def test_diarization_schema_keeps_model_output_compact():
     assert "tagged_text" not in properties
     assert "confidence" not in properties
     assert "reason" not in properties
-    assert properties["e"]["enum"] == [None, "laughter", "sigh", "whisper", "shout"]
+    assert properties["e"]["enum"] == [
+        None,
+        "laughter",
+        "sigh",
+        "whisper",
+        "surprise-oh",
+        "dissatisfaction-hnn",
+        "confirmation-en",
+    ]
     assert "chapter_summary" not in audiobook_llm.DIARIZATION_SCHEMA["properties"]
 
 
@@ -150,6 +159,110 @@ def test_only_quoted_spans_require_model_diarization():
     }
 
 
+def test_quote_aware_segments_separate_dialogue_from_attribution_prose():
+    segments, quote_state = audiobook_text.split_speech_segments(
+        "“Be right with you,” she muttered, by way of a Pavlovian response."
+    )
+
+    assert [(segment.text, segment.is_dialogue) for segment in segments] == [
+        ("“Be right with you,”", True),
+        ("she muttered, by way of a Pavlovian response.", False),
+    ]
+    assert quote_state is None
+
+
+def test_quote_groups_and_speaker_overrides_keep_long_quote_on_one_voice():
+    sentences = [
+        SimpleNamespace(
+            id=188,
+            original_text="“Paragraph two: I understand the agreement.",
+            character_id=30,
+        ),
+        SimpleNamespace(
+            id=189,
+            original_text="I may not refuse service.”",
+            character_id=20,
+        ),
+    ]
+
+    assert audiobook_text.quote_groups(sentences) == [[188, 189]]
+    assert audiobook_llm._quote_speaker_overrides(
+        sentences,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+    ) == {188: 20, 189: 20}
+
+
+def test_quote_speaker_override_uses_attribution_before_continued_quote():
+    sentences = [
+        SimpleNamespace(
+            id=1518,
+            original_text="“Fah,” Thomas said. “",
+            character_id=207,
+        ),
+        SimpleNamespace(id=1519, original_text="I played golf with most of them.", character_id=203),
+        SimpleNamespace(id=1520, original_text="They would have been all for it.", character_id=207),
+        SimpleNamespace(id=1521, original_text="Did anyone else have anything surprising?”", character_id=203),
+    ]
+
+    assert audiobook_llm._quote_speaker_overrides(
+        sentences,
+        narrator_id=202,
+        minor_female_id=220,
+        minor_male_id=221,
+        character_aliases={203: ["John Perry", "John"], 207: ["Thomas Jane", "Thomas"]},
+    ) == {1519: 207, 1520: 207, 1521: 207}
+
+
+def test_quote_speaker_override_prefers_resolved_opening_boundary_over_next_turn():
+    sentences = [
+        SimpleNamespace(
+            id=1171,
+            original_text="“Don’t listen to him,” said the woman. “",
+            character_id=210,
+        ),
+        SimpleNamespace(id=1172, original_text="Tom is trying to take your food.", character_id=203),
+        SimpleNamespace(id=1173, original_text="That’s how I lost my sausage.”", character_id=210),
+        SimpleNamespace(
+            id=1174,
+            original_text="“That accusation is true,” Thomas said. “",
+            character_id=207,
+        ),
+    ]
+
+    assert audiobook_llm._quote_speaker_overrides(
+        sentences,
+        narrator_id=202,
+        minor_female_id=220,
+        minor_male_id=221,
+        character_aliases={207: ["Thomas Jane", "Thomas"], 210: ["Susan Reardon", "Susan"]},
+    ) == {1172: 210, 1173: 210}
+
+
+def test_quote_speaker_override_does_not_overwrite_two_quote_bridge_sentence():
+    sentences = [
+        SimpleNamespace(id=1, original_text="This is Earth.", character_id=203),
+        SimpleNamespace(
+            id=2,
+            original_text="And this”\u2014he pointed\u2014“is Colonial Station.",
+            character_id=203,
+        ),
+        SimpleNamespace(id=3, original_text="It is very far away.", character_id=221),
+        SimpleNamespace(id=4, original_text="Farther than the moon.”", character_id=203),
+    ]
+
+    overrides = audiobook_llm._quote_speaker_overrides(
+        sentences,
+        narrator_id=202,
+        minor_female_id=220,
+        minor_male_id=221,
+    )
+
+    assert 2 not in overrides
+    assert overrides == {3: 203, 4: 203}
+
+
 def test_tagged_text_sanitizer_only_accepts_supported_insertions():
     original = "Take your time, I said."
 
@@ -158,6 +271,36 @@ def test_tagged_text_sanitizer_only_accepts_supported_insertions():
     )
     assert audiobook_llm._sanitize_tagged_text(original, "[fade in] Take your time, I said.") == original
     assert audiobook_llm._sanitize_tagged_text(original, "I completely rewrote this sentence.") == original
+
+
+def test_expression_tags_require_explicit_nearby_evidence():
+    assert (
+        audiobook_llm._grounded_expression(
+            "whisper",
+            text="“Be right with you.”",
+            previous_text="",
+            next_text="she muttered without looking up.",
+        )
+        == "whisper"
+    )
+    assert (
+        audiobook_llm._grounded_expression(
+            None,
+            text="“Be right with you,” she muttered.",
+            previous_text="",
+            next_text="The door opened.",
+        )
+        == "whisper"
+    )
+    assert (
+        audiobook_llm._grounded_expression(
+            "dissatisfaction-hnn",
+            text="I agree to the terms of service.",
+            previous_text="Paragraph two.",
+            next_text="I signed.",
+        )
+        is None
+    )
 
 
 def test_diarization_parser_deduplicates_repeated_sentence_ids():
@@ -241,10 +384,32 @@ def test_speaker_guardrails_keep_prose_on_narrator_and_route_unnamed_dialogue():
         minor_male_id=40,
         reason="Narration setting up dialogue.",
     )
+    wrong_gender = audiobook_llm._apply_speaker_guardrails(
+        text="Be right with you,” she muttered.",
+        next_text="",
+        character_id=20,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Turn taking",
+        character_genders={20: "male", 30: "female"},
+    )
+    first_person_before_new_turn = audiobook_llm._apply_speaker_guardrails(
+        text="“I’m gratified to hear that,” I said.",
+        next_text="“We can continue,” she said.",
+        character_id=20,
+        narrator_id=10,
+        minor_female_id=30,
+        minor_male_id=40,
+        reason="Explicit first-person attribution",
+        character_genders={20: "male", 30: "female"},
+    )
 
     assert prose == (10, "Deterministic prose/narration guardrail", 0.98)
     assert dialogue == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
     assert setup == (10, "Narration setting up dialogue.", None)
+    assert wrong_gender == (30, "Deterministic she dialogue attribution to minor voice", 0.98)
+    assert first_person_before_new_turn == (20, "Explicit first-person attribution", None)
 
 
 @pytest.mark.asyncio
@@ -1121,6 +1286,51 @@ async def test_character_voice_id_is_tagged_and_used_only_for_its_provider(db):
 
 
 @pytest.mark.asyncio
+async def test_mixed_dialogue_tts_uses_character_then_narrator_voice(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    narrator, speaker = await crud.audiobook.create_characters_bulk(
+        db,
+        book.id,
+        [
+            {
+                "name": "Narrator",
+                "voice_prompt": "narrator voice",
+                "is_narrator": True,
+            },
+            {
+                "name": "Recruiter",
+                "voice_prompt": "recruiter voice",
+                "is_narrator": False,
+            },
+        ],
+    )
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "chapter.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": "mixed-1",
+                "sequence_order": 0,
+                "original_text": "Be right with you,” she muttered by the door.",
+                "tagged_text": "[whisper] Be right with you,” she muttered by the door.",
+                "character_id": speaker.id,
+                "status": "ready_for_audio",
+            }
+        ],
+    )
+    sentence = (await crud.audiobook.get_sentences_for_chapter(db, chapter.id))[0]
+
+    requests = await audiobook_tts._build_sentence_requests(None, sentence, db)
+
+    assert [(request.text, request.voice_prompt) for request in requests] == [
+        ("[whisper] Be right with you,”", "recruiter voice"),
+        ("she muttered by the door.", "narrator voice"),
+    ]
+    assert narrator.is_narrator is True
+
+
+@pytest.mark.asyncio
 async def test_tts_settings_invalidate_only_unfinished_books_below_eighty_percent(db, tmp_path, monkeypatch):
     library_path = tmp_path / "library"
     library_path.mkdir()
@@ -1307,6 +1517,7 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
         "Text/chapter_1.xhtml",
         "Text/chapter_2.xhtml",
     ]
+    assert [chapter.title for chapter in chapters] == ["One", "Two"]
 
     working_epub = library_path / "audiobooks" / str(book.id) / "working.epub"
     parsed = epub.read_epub(str(working_epub))

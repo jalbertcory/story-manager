@@ -1,4 +1,4 @@
-.PHONY: help setup setup-omnivoice run-omnivoice pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -6,6 +6,8 @@ OMNIVOICE_PORT ?= 8001
 
 help:
 	@echo "Story Manager commands:"
+	@echo "  make start            Start all missing local services"
+	@echo "  make services-status  Show local service health"
 	@echo "  make setup            Install project dependencies"
 	@echo "  make ensure-db        Create or start the local PostgreSQL container"
 	@echo "  make migrate          Run Alembic migrations"
@@ -18,6 +20,14 @@ help:
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
 	@echo "  make e2e-debug        Run Playwright E2E tests in debug mode"
+
+start: start-services
+
+start-services:
+	./scripts/start-services.sh start
+
+services-status:
+	./scripts/start-services.sh status
 
 setup:
 	pyenv install -s

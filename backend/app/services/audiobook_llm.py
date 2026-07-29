@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..models import AudiobookSettings, Book
+from .audiobook_text import quote_group_ids, quote_groups
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,10 @@ You are a script editor. Assign each sentence to a speaker from the character ro
 expression tags where appropriate.
 
 Assign quoted dialogue to the person speaking it, even when the attribution (for example, "she asked") is in an
-adjacent sentence. Keep attribution and action prose on Narrator. If an unnamed or one-scene speaker is absent from
-the recurring roster, use "Minor Female Voice" or "Minor Male Voice" when present instead of Narrator.
+adjacent sentence. Sentences with the same non-null `quote_group` are continuations of one uninterrupted quotation
+and MUST receive the same character id. Keep attribution and action prose on Narrator. If an unnamed or one-scene
+speaker is absent from the recurring roster, use "Minor Female Voice" or "Minor Male Voice" when present instead
+of Narrator.
 
 Character roster (JSON):
 {roster_json}
@@ -84,16 +87,43 @@ do not omit or duplicate an id). Assign only the `text`; use `previous_text` and
 speaker attribution:
 - i: the sentence id (integer)
 - c: the character id from the roster (use the narrator's id for narration; null if uncertain)
-- e: one of "laughter", "sigh", "whisper", "shout", or null. Do not repeat the sentence text.
+- e: one of "laughter", "sigh", "whisper", "surprise-oh", "dissatisfaction-hnn", "confirmation-en", or null.
+  Use a non-null value ONLY when the sentence or its immediate context explicitly names that delivery (for example,
+  laughed, sighed, whispered, gasped, grunted, or nodded). Do not infer a sound from the topic, punctuation, mood, or
+  character personality; otherwise use null. Do not repeat the sentence text.
 
 Return minified, single-line JSON with the key assignments. Do not add whitespace, markdown, explanation, repeated
 sentence text, or chapter summary.
 """
 
-_ALLOWED_EXPRESSION_TAGS = {"laughter", "sigh", "whisper", "shout"}
+_EXPRESSION_TAG_CHOICES = (
+    "laughter",
+    "sigh",
+    "whisper",
+    "surprise-oh",
+    "dissatisfaction-hnn",
+    "confirmation-en",
+)
+_ALLOWED_EXPRESSION_TAGS = set(_EXPRESSION_TAG_CHOICES)
+_EXPRESSION_CUES = {
+    "laughter": re.compile(r"\b(?:laugh|chuckl|giggl|snicker)\w*\b", re.IGNORECASE),
+    "sigh": re.compile(r"\bsigh\w*\b", re.IGNORECASE),
+    "whisper": re.compile(r"\b(?:whisper|murmur|mutter)\w*\b|under (?:his|her|their) breath", re.IGNORECASE),
+    "surprise-oh": re.compile(r"\b(?:surpris|gasp|startl|exclaim)\w*\b", re.IGNORECASE),
+    "dissatisfaction-hnn": re.compile(
+        r"\b(?:dissatisf|disapprov|grunt|grumbl|annoy|irritat)\w*\b",
+        re.IGNORECASE,
+    ),
+    "confirmation-en": re.compile(r"\b(?:confirm|nod|affirm)\w*\b", re.IGNORECASE),
+}
 _BRACKET_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
+_VOICE_GENDER_RE = re.compile(r"\[gender-(male|female|neutral)\]", re.IGNORECASE)
 _GENDERED_ATTRIBUTION_RE = re.compile(
     r"\b(she|he)\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b",
+    re.IGNORECASE,
+)
+_FIRST_PERSON_ATTRIBUTION_RE = re.compile(
+    r"\bI\s+(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)\b",
     re.IGNORECASE,
 )
 _NARRATION_REASON_RE = re.compile(
@@ -160,7 +190,7 @@ DIARIZATION_SCHEMA = {
                     "c": {"type": ["integer", "null"]},
                     "e": {
                         "type": ["string", "null"],
-                        "enum": [None, "laughter", "sigh", "whisper", "shout"],
+                        "enum": [None, *_EXPRESSION_TAG_CHOICES],
                     },
                 },
                 "required": ["i", "c", "e"],
@@ -200,6 +230,114 @@ def _sentence_ids_requiring_diarization(sentences: list[Any]) -> set[int]:
         if starts_in_dialogue or contains_quote or in_dialogue:
             requiring_model.add(sentence.id)
     return requiring_model
+
+
+def _quote_speaker_overrides(
+    sentences: list[Any],
+    *,
+    narrator_id: int | None,
+    minor_female_id: int | None,
+    minor_male_id: int | None,
+    character_aliases: dict[int, list[str]] | None = None,
+) -> dict[int, int]:
+    """Choose one grounded speaker when a continuous quote is inconsistent."""
+
+    by_id = {sentence.id: sentence for sentence in sentences}
+    overrides: dict[int, int] = {}
+    minor_ids = {minor_female_id, minor_male_id} - {None}
+    sentence_positions = {sentence.id: index for index, sentence in enumerate(sentences)}
+
+    def named_attribution(text: str) -> int | None:
+        for character_id, aliases in (character_aliases or {}).items():
+            for alias in sorted(aliases, key=len, reverse=True):
+                if not alias.strip():
+                    continue
+                name = re.escape(alias.strip())
+                verb = r"(?:said|asked|replied|yelled|shouted|whispered|muttered|added|continued|answered|snapped)"
+                if re.search(rf"\b(?:{name})\s+{verb}\b|\b{verb}\s+(?:{name})\b", text, re.IGNORECASE):
+                    return character_id
+        return None
+
+    groups = quote_groups(sentences)
+    membership_counts = Counter(sentence_id for group in groups for sentence_id in group)
+
+    for sentence_ids in groups:
+        # A sentence such as `"This"—he pointed—"is Earth"` belongs to two
+        # distinct quote spans. Its row-level speaker cannot represent both
+        # spans, so leave that bridge sentence alone and only harmonize the
+        # unambiguous continuation rows around it.
+        harmonized_ids = [sentence_id for sentence_id in sentence_ids if membership_counts[sentence_id] == 1]
+        if len(harmonized_ids) < 2:
+            continue
+        members = [by_id[sentence_id] for sentence_id in harmonized_ids]
+        candidates = [member.character_id for member in members if member.character_id is not None]
+        if len(set(candidates)) < 2:
+            continue
+
+        first_position = sentence_positions[harmonized_ids[0]]
+        last_position_in_chapter = sentence_positions[harmonized_ids[-1]]
+        previous = sentences[first_position - 1] if first_position > 0 else None
+        following = sentences[last_position_in_chapter + 1] if last_position_in_chapter + 1 < len(sentences) else None
+        boundary_members = [members[0], *(members[-1:] if len(members) > 1 else [])]
+        starts_here = members[0].original_text.lstrip().startswith(("“", '"'))
+        attribution_window_start = max(0, first_position - 4)
+        prior_attribution_candidates = (
+            list(reversed(sentences[attribution_window_start:first_position])) if not starts_here else []
+        )
+        attribution_sentences = [*prior_attribution_candidates, *boundary_members]
+        if starts_here and following is not None:
+            attribution_sentences.append(following)
+        attribution_context = " ".join(sentence.original_text for sentence in attribution_sentences)
+
+        anchored: int | None = next(
+            (
+                character_id
+                for sentence in attribution_sentences
+                if (character_id := named_attribution(sentence.original_text)) is not None
+            ),
+            None,
+        )
+        if (
+            anchored is None
+            and not starts_here
+            and previous is not None
+            and previous.character_id is not None
+            and previous.character_id != narrator_id
+            and previous.original_text.rstrip().endswith(("“", '"'))
+        ):
+            anchored = previous.character_id
+        for member in attribution_sentences:
+            if (
+                anchored is None
+                and _FIRST_PERSON_ATTRIBUTION_RE.search(member.original_text)
+                and member.character_id is not None
+                and member.character_id != narrator_id
+            ):
+                anchored = member.character_id
+                break
+
+        gendered = _GENDERED_ATTRIBUTION_RE.search(attribution_context)
+        if anchored is None and gendered:
+            anchored = minor_female_id if gendered.group(1).casefold() == "she" else minor_male_id
+
+        if anchored is None:
+            counts = Counter(candidates)
+            last_position = {candidate: index for index, candidate in enumerate(candidates)}
+
+            def rank(candidate: int) -> tuple[int, int, int]:
+                # Recurring named characters are more grounded than a minor
+                # fallback when the text contains no gendered attribution.
+                specificity = 1 if candidate not in minor_ids and candidate != narrator_id else 0
+                if candidate == narrator_id:
+                    specificity = -1
+                return counts[candidate], specificity, last_position[candidate]
+
+            anchored = max(counts, key=rank)
+
+        if anchored is not None:
+            overrides.update({sentence_id: anchored for sentence_id in harmonized_ids})
+
+    return overrides
 
 
 CHAPTER_SUMMARY_SCHEMA = {
@@ -453,6 +591,27 @@ def _sanitize_tagged_text(original: str, tagged: Any) -> str:
     return cleaned
 
 
+def _grounded_expression(
+    expression: Any,
+    *,
+    text: str,
+    previous_text: str,
+    next_text: str,
+) -> str | None:
+    """Reject model-added sounds that lack an explicit nearby textual cue."""
+
+    evidence = f"{text} {next_text}"
+    if expression in _ALLOWED_EXPRESSION_TAGS:
+        cue = _EXPRESSION_CUES.get(expression)
+        if cue and cue.search(evidence):
+            return expression
+    for candidate in _EXPRESSION_TAG_CHOICES:
+        cue = _EXPRESSION_CUES[candidate]
+        if cue.search(evidence):
+            return candidate
+    return None
+
+
 def _apply_speaker_guardrails(
     *,
     text: str,
@@ -462,18 +621,29 @@ def _apply_speaker_guardrails(
     minor_female_id: int | None,
     minor_male_id: int | None,
     reason: str,
+    character_genders: dict[int, str] | None = None,
 ) -> tuple[int | None, str, float | None]:
     """Correct two common local-model ID errors without inventing named speakers."""
     has_closing_quote = "”" in text or ('"' in text and not text.rstrip().endswith('"'))
     starts_with_quote = text.lstrip().startswith(("“", '"'))
     has_dialogue = has_closing_quote or starts_with_quote
 
-    if character_id == narrator_id and has_dialogue:
-        attribution = _GENDERED_ATTRIBUTION_RE.search(f"{text} {next_text}")
+    if has_dialogue:
+        attribution = _GENDERED_ATTRIBUTION_RE.search(text)
+        if (
+            attribution is None
+            and not _FIRST_PERSON_ATTRIBUTION_RE.search(text)
+            and not any(quote in next_text for quote in ("“", "”", '"'))
+        ):
+            attribution = _GENDERED_ATTRIBUTION_RE.search(next_text)
         if attribution:
             gender = attribution.group(1).casefold()
             fallback_id = minor_female_id if gender == "she" else minor_male_id
-            if fallback_id is not None:
+            selected_gender = (character_genders or {}).get(character_id)
+            gender_conflict = selected_gender in {"male", "female"} and selected_gender != (
+                "female" if gender == "she" else "male"
+            )
+            if fallback_id is not None and (character_id == narrator_id or gender_conflict):
                 return fallback_id, f"Deterministic {gender} dialogue attribution to minor voice", 0.98
 
     if character_id != narrator_id and not has_dialogue and _NARRATION_REASON_RE.search(reason):
@@ -1014,11 +1184,29 @@ async def diarize_sentences(
 
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
     character_ids = {character.id for character in characters}
+    character_names = {character.id: character.name for character in characters}
+    character_genders = {}
+    character_aliases = {
+        character.id: [character.name, *(character.aliases or [])] for character in characters if not character.is_narrator
+    }
+    for character in characters:
+        gender_match = _VOICE_GENDER_RE.search(character.voice_prompt or "")
+        if gender_match:
+            character_genders[character.id] = gender_match.group(1).casefold()
     narrator_id = next((character.id for character in characters if character.is_narrator), None)
     minor_female_id = next((character.id for character in characters if character.name == "Minor Female Voice"), None)
     minor_male_id = next((character.id for character in characters if character.name == "Minor Male Voice"), None)
     roster_json = json.dumps(
-        [{"id": c.id, "name": c.name, "description": c.description, "is_narrator": c.is_narrator} for c in characters],
+        [
+            {
+                "id": c.id,
+                "name": c.name,
+                "aliases": c.aliases or [],
+                "description": c.description,
+                "is_narrator": c.is_narrator,
+            }
+            for c in characters
+        ],
         ensure_ascii=False,
     )
 
@@ -1114,9 +1302,19 @@ async def diarize_sentences(
                 )
 
         chapter_positions = {sentence.id: index for index, sentence in enumerate(chapter_sentences)}
+        chapter_quote_group_ids = quote_group_ids(chapter_sentences)
+        multi_sentence_quote_ids = {
+            sentence_id
+            for sentence_ids in quote_groups(chapter_sentences)
+            if len(sentence_ids) > 1
+            for sentence_id in sentence_ids
+        }
         context_window = [
-            sentence.original_text for sentence in chapter_sentences if sentence.status != "pending_diarization"
+            f"[{character_names.get(sentence.character_id, 'Unassigned')}] {sentence.original_text}"
+            for sentence in chapter_sentences
+            if sentence.status != "pending_diarization"
         ][-8:]
+        chapter_dialogue_ready_ids: list[int] = []
         while True:
             if await crud.audiobook.pause_book_pipeline_if_requested(
                 db,
@@ -1148,6 +1346,13 @@ async def diarize_sentences(
                             if chapter_positions[sentence.id] + 1 < len(chapter_sentences)
                             else None
                         ),
+                        "previous_speaker_id": (
+                            chapter_sentences[chapter_positions[sentence.id] - 1].character_id
+                            if chapter_positions[sentence.id] > 0
+                            and chapter_sentences[chapter_positions[sentence.id] - 1].status != "pending_diarization"
+                            else None
+                        ),
+                        "quote_group": chapter_quote_group_ids.get(sentence.id),
                     }
                     for sentence in batch
                 ],
@@ -1336,8 +1541,16 @@ async def diarize_sentences(
                 char_id = result.get("character_id")
                 if char_id not in character_ids:
                     char_id = narrator_id
-                expression = result.get("expression")
-                if expression in _ALLOWED_EXPRESSION_TAGS:
+                position = chapter_positions[sentence.id]
+                previous_text = chapter_sentences[position - 1].original_text if position > 0 else ""
+                next_text = chapter_sentences[position + 1].original_text if position + 1 < len(chapter_sentences) else ""
+                expression = _grounded_expression(
+                    result.get("expression"),
+                    text=sentence.original_text,
+                    previous_text=previous_text,
+                    next_text=next_text,
+                )
+                if expression:
                     tagged = f"[{expression}] {sentence.original_text}"
                 else:
                     tagged = _sanitize_tagged_text(sentence.original_text, result.get("tagged_text"))
@@ -1348,8 +1561,6 @@ async def diarize_sentences(
                     confidence = 0.0
                 raw_reason = str(result.get("reason") or "Model speaker assignment")
                 reason = _DIARIZATION_REASON_LABELS.get(raw_reason, raw_reason)[:500]
-                position = chapter_positions[sentence.id]
-                next_text = chapter_sentences[position + 1].original_text if position + 1 < len(chapter_sentences) else ""
                 if not result.get("_fallback"):
                     char_id, reason, guardrail_confidence = _apply_speaker_guardrails(
                         text=sentence.original_text,
@@ -1359,6 +1570,7 @@ async def diarize_sentences(
                         minor_female_id=minor_female_id,
                         minor_male_id=minor_male_id,
                         reason=reason,
+                        character_genders=character_genders,
                     )
                     if guardrail_confidence is not None:
                         confidence = guardrail_confidence
@@ -1370,13 +1582,18 @@ async def diarize_sentences(
                     speaker_confidence=confidence,
                     speaker_reason=reason,
                 )
-                context_window.append(sentence.original_text)
+                context_window.append(f"[{character_names.get(char_id, 'Unassigned')}] {sentence.original_text}")
                 completed_count += 1
                 ready_sentence_ids.append(sentence.id)
 
-            if on_sentences_ready and ready_sentence_ids:
-                ready_sentence_ids.sort(key=sentence_lengths.get)
-                await on_sentences_ready(ready_sentence_ids)
+            delayed_ready_ids = [sentence_id for sentence_id in ready_sentence_ids if sentence_id in multi_sentence_quote_ids]
+            immediate_ready_ids = [
+                sentence_id for sentence_id in ready_sentence_ids if sentence_id not in multi_sentence_quote_ids
+            ]
+            chapter_dialogue_ready_ids.extend(delayed_ready_ids)
+            if on_sentences_ready and immediate_ready_ids:
+                immediate_ready_ids.sort(key=sentence_lengths.get)
+                await on_sentences_ready(immediate_ready_ids)
 
             chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:4000]
             await crud.audiobook.update_chapter_summary(db, chapter.id, chapter_summary or None)
@@ -1392,6 +1609,31 @@ async def diarize_sentences(
             if await crud.audiobook.consume_book_batch_limit(db, book_id):
                 logger.info("Book %s paused after one diarization batch.", book_id)
                 return
+
+        refreshed_sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+        speaker_overrides = _quote_speaker_overrides(
+            refreshed_sentences,
+            narrator_id=narrator_id,
+            minor_female_id=minor_female_id,
+            minor_male_id=minor_male_id,
+            character_aliases=character_aliases,
+        )
+        for sentence in refreshed_sentences:
+            corrected_character_id = speaker_overrides.get(sentence.id)
+            if corrected_character_id is None or corrected_character_id == sentence.character_id:
+                continue
+            await crud.audiobook.update_sentence_diarization(
+                db,
+                sentence.id,
+                corrected_character_id,
+                sentence.tagged_text or sentence.original_text,
+                speaker_confidence=0.96,
+                speaker_reason="Deterministic continuation of uninterrupted quoted dialogue",
+            )
+
+        if on_sentences_ready and chapter_dialogue_ready_ids:
+            ready_ids = sorted(set(chapter_dialogue_ready_ids), key=sentence_lengths.get)
+            await on_sentences_ready(ready_ids)
 
         if provider != STUB_PROVIDER and chapter.summary is None:
             await _generate_chapter_summary(

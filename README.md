@@ -254,15 +254,19 @@ uv pip install -e ".[dev]"
 cd frontend && npm ci && cd ..
 ```
 
-Start PostgreSQL and run the app:
+Start every local service with one command:
 
 ```bash
-make ensure-db
-make run-api
-make run-ui
+make start
 ```
 
-The development UI runs at `http://localhost:5173`; the API runs at `http://localhost:8000`.
+The command starts only missing services: PostgreSQL, Ollama, the API, the UI, and OmniVoice. It waits for health
+checks, leaves healthy existing processes alone, and runs detached services with logs under `.run/logs/`. Check
+their current state at any time with `make services-status`.
+
+The development UI runs at `http://localhost:5173`; the API runs at `http://localhost:8000`. The first OmniVoice
+setup can take several minutes. If the recommended Ollama model is missing, install it with
+`make pull-ollama-model`.
 
 Useful commands:
 

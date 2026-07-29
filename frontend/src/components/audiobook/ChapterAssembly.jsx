@@ -3,6 +3,7 @@ import {
   generateChapterPreview,
   getChapterAudioUrl,
 } from "../../api/audiobook";
+import { chapterLabel } from "../../lib/audiobook";
 
 function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
   const queryClient = useQueryClient();
@@ -47,7 +48,7 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
               chapter.audio_file_path && !chapter.needs_reassembly;
             return (
               <tr key={chapter.id}>
-                <td>Chapter {chapter.chapter_number}</td>
+                <td>{chapterLabel(chapter)}</td>
                 <td>
                   {previewBusy ? (
                     <span className="badge badge--warning">
