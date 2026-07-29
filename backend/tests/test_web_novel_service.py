@@ -63,8 +63,66 @@ def set_dc_source(filepath: Path, source_url: str):
     temp_path.replace(filepath)
 
 
+def test_build_lossless_chapter_merge_preserves_stubbed_chapters_and_appends_new_ones():
+    existing_urls = [f"https://example.com/chapter/{chapter}" for chapter in range(1, 7)]
+    existing_data = {url: {"chapterorigtitle": f"Chapter {index}"} for index, url in enumerate(existing_urls, start=1)}
+    remote_chapters = [
+        {"title": f"Chapter {chapter}", "url": f"https://example.com/chapter/{chapter}"} for chapter in (1, 2, 5, 6, 7)
+    ]
+
+    merge = web_novel._build_lossless_chapter_merge(
+        existing_urls=existing_urls,
+        existing_data=existing_data,
+        remote_chapters=remote_chapters,
+        normalize_url=lambda url: url,
+    )
+
+    assert [chapter["url"] for chapter in merge.chapters] == [
+        f"https://example.com/chapter/{chapter}" for chapter in range(1, 8)
+    ]
+    assert len(merge.historical_ids) == 2
+    assert len(merge.new_ids) == 1
+
+
+def test_build_lossless_chapter_merge_refuses_unrelated_source():
+    with pytest.raises(web_novel.LosslessChapterUpdateError, match="no chapters in common"):
+        web_novel._build_lossless_chapter_merge(
+            existing_urls=["https://example.com/chapter/1"],
+            existing_data={},
+            remote_chapters=[{"title": "Other", "url": "https://other.example/chapter/2"}],
+            normalize_url=lambda url: url,
+        )
+
+
+def test_realign_adapter_chapter_index_after_historical_insert():
+    class IndexedAdapter:
+        def __init__(self):
+            self.chapterUrls = [
+                {"url": "https://example.com/chapter/1"},
+                {"url": "https://example.com/chapter/3"},
+            ]
+            self.chapterURLIndex = {"1": 0, "3": 1}
+
+        def normalize_chapterurl(self, url):
+            chapter_id = url.rsplit("/", 1)[-1]
+            index = self.chapterURLIndex.get(chapter_id)
+            return self.chapterUrls[index]["url"] if index is not None else url
+
+    adapter = IndexedAdapter()
+    remote = list(adapter.chapterUrls)
+    merged = [
+        remote[0],
+        {"url": "https://example.com/chapter/2"},
+        remote[1],
+    ]
+
+    web_novel._realign_adapter_chapter_index(adapter, remote, merged)
+
+    assert adapter.chapterURLIndex == {"1": 0, "3": 2}
+
+
 @pytest.mark.asyncio
-async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config(tmp_path, monkeypatch, mocker):
+async def test_download_web_novel_existing_epub_uses_lossless_updater_and_user_config(tmp_path, monkeypatch, mocker):
     library_path = tmp_path / "library"
     library_path.mkdir()
     monkeypatch.setattr(web_novel, "LIBRARY_PATH", library_path)
@@ -77,16 +135,23 @@ async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config
     create_dummy_epub(existing_epub, "Before", "Author")
     set_dc_source(existing_epub, "https://www.royalroadcdn.com/public/covers-large/33600-stray-cat-strut.jpg?time=1666088451")
 
-    captured_args = {}
+    captured_update = {}
     repaired_source = {}
 
-    def fake_fff_main(args):
-        captured_args["args"] = list(args)
+    def fake_lossless_update(source_url, epub_path, config_paths, overwrite):
+        captured_update["source_url"] = source_url
+        captured_update["epub_path"] = epub_path
+        captured_update["config_paths"] = list(config_paths)
+        captured_update["overwrite"] = overwrite
         repaired_source["value"] = web_novel._get_epub_source_url(existing_epub)
         create_dummy_epub(existing_epub, "After", "Updated Author")
-        return 0
+        return web_novel._LosslessUpdateResult(
+            changed=True,
+            preserved_chapter_count=0,
+            new_chapter_count=1,
+        )
 
-    mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+    mocker.patch("backend.app.services.web_novel._run_fff_lossless_update", side_effect=fake_lossless_update)
     normalize_mock = mocker.patch("backend.app.services.web_novel.normalize_epub_prose_blocks")
 
     result = await web_novel.download_web_novel(
@@ -99,15 +164,44 @@ async def test_download_web_novel_existing_epub_uses_update_mode_and_user_config
     assert epub_path == existing_epub
     assert metadata == {"title": "After", "author": "Updated Author", "series": None}
 
-    args = captured_args["args"]
-    assert args.count("-c") == 2
-    assert str(fanficfare_config.APP_DIR / "personal.ini") in args
-    assert str(user_ini) in args
-    assert "-u" in args
-    assert "-U" not in args
-    assert str(existing_epub) == args[-1]
+    assert captured_update == {
+        "source_url": "https://example.com/story/1",
+        "epub_path": existing_epub.resolve(),
+        "config_paths": [fanficfare_config.APP_DIR / "personal.ini", user_ini],
+        "overwrite": False,
+    }
     assert repaired_source["value"] == "https://example.com/story/1"
     normalize_mock.assert_called_once_with(existing_epub)
+
+
+@pytest.mark.asyncio
+async def test_download_web_novel_unchanged_lossless_update_returns_none(tmp_path, monkeypatch, mocker):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    monkeypatch.setattr(web_novel, "LIBRARY_PATH", library_path)
+    monkeypatch.delenv("FFF_USER_CONFIG_PATH", raising=False)
+
+    existing_epub = library_path / "existing.epub"
+    create_dummy_epub(existing_epub, "Before", "Author")
+    set_dc_source(existing_epub, "https://example.com/story/1")
+
+    mocker.patch(
+        "backend.app.services.web_novel._run_fff_lossless_update",
+        return_value=web_novel._LosslessUpdateResult(
+            changed=False,
+            preserved_chapter_count=3,
+            new_chapter_count=0,
+        ),
+    )
+    normalize_mock = mocker.patch("backend.app.services.web_novel.normalize_epub_prose_blocks")
+
+    result = await web_novel.download_web_novel(
+        "https://example.com/story/1",
+        existing_epub_path=existing_epub,
+    )
+
+    assert result is None
+    normalize_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
