@@ -1403,6 +1403,120 @@
   min-width: 0;
 }
 
+.audiobook-sources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.audiobook-source-upload,
+.audiobook-ai-source,
+.imported-edition-card {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.audiobook-source-upload h3,
+.audiobook-ai-source h3,
+.imported-edition-card h3 {
+  margin: 0.15rem 0 0;
+}
+
+.audiobook-source-upload p,
+.audiobook-ai-source p,
+.imported-edition-card p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.audiobook-source-upload label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.audiobook-selected-files {
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+
+.imported-edition-card {
+  grid-column: 1 / -1;
+}
+
+.imported-edition-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.import-progress {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.import-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.alignment-note {
+  padding: 0.7rem 0.8rem;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+
+.imported-edition-card summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.imported-track-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+.imported-track-list label {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.imported-track-list label > span {
+  display: grid;
+}
+
+.imported-track-list small {
+  color: var(--text-muted);
+}
+
+.imported-edition-delete {
+  justify-self: start;
+  margin-top: 0.25rem;
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .audiobook-sources {
+    grid-template-columns: 1fr;
+  }
+
+  .imported-track-list label {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sub-tab-content {
   min-width: 0;
 }
@@ -1902,6 +2016,39 @@
   display: grid;
   grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
   gap: 1rem;
+}
+
+.audiobook-edition-reader {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.audiobook-edition-select {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: fit-content;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.audiobook-reader-text span {
+  border-radius: 0.2rem;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.audiobook-reader-text span:hover {
+  background: rgba(98, 114, 234, 0.08);
+}
+
+.audiobook-reader-text .audiobook-sentence--active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface));
+  box-shadow: 0 0 0 0.15rem
+    color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .audiobook-reader-chapters {

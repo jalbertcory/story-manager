@@ -1,0 +1,290 @@
+"""Human-narrated audiobook import tests."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import zipfile
+
+import pytest
+from sqlalchemy import select
+
+from backend.app.models import (
+    AudiobookChapter,
+    AudiobookSentence,
+    AudiobookSettings,
+    Book,
+    ImportedAudiobook,
+    ImportedAudiobookCue,
+    ImportedAudiobookTrack,
+)
+from backend.app.routers import audiobook as audiobook_router
+from backend.app.services import audiobook_import
+
+
+async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
+    book = Book(
+        title="Import Test",
+        author="Narrator",
+        immutable_path="library/import-test-immutable.epub",
+        current_path="library/import-test.epub",
+    )
+    db.add(book)
+    await db.flush()
+    chapter = AudiobookChapter(
+        book_id=book.id,
+        chapter_number=1,
+        title="1",
+        content_file_name="text/chapter1.xhtml",
+        stable_chapter_key="src-import-test",
+        spine_order=0,
+    )
+    db.add(chapter)
+    await db.flush()
+    db.add_all(
+        [
+            AudiobookSentence(
+                chapter_id=chapter.id,
+                html_element_id="sentence-1",
+                sequence_order=0,
+                original_text="The first sentence.",
+            ),
+            AudiobookSentence(
+                chapter_id=chapter.id,
+                html_element_id="sentence-2",
+                sequence_order=1,
+                original_text="This second sentence is quite a bit longer than the first.",
+            ),
+        ]
+    )
+    await db.commit()
+    return book, chapter
+
+
+@pytest.mark.asyncio
+async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg and ffprobe are required")
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
+    book, chapter = await _seed_book_text(db)
+    edition = ImportedAudiobook(
+        book_id=book.id,
+        name="Libation edition",
+        status="queued",
+        original_filenames=["Import Test [B012345678].zip"],
+        asin="B012345678",
+    )
+    db.add(edition)
+    await db.commit()
+    await db.refresh(edition)
+
+    source_mp3 = tmp_path / "source.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=24000:cl=mono",
+            "-t",
+            "2",
+            "-q:a",
+            "9",
+            str(source_mp3),
+        ],
+        check=True,
+    )
+    archive_path = audiobook_import.imported_audiobook_dir(book.id, edition.id) / "incoming" / "book.zip"
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+        archive.write(source_mp3, "Book/Import Test.mp3")
+        archive.writestr(
+            "Book/Import Test.cue",
+            'FILE "Import Test.mp3" MP3\n'
+            "TRACK 1 AUDIO\n"
+            '  TITLE "Chapter 1"\n'
+            "  INDEX 01 0:00:00\n"
+            "TRACK 2 AUDIO\n"
+            '  TITLE "End Credits"\n'
+            "  INDEX 01 0:01:00\n",
+        )
+
+    await audiobook_import.process_import(edition.id, db)
+    await db.refresh(edition)
+    tracks = list(
+        (
+            await db.execute(
+                select(ImportedAudiobookTrack)
+                .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+                .order_by(ImportedAudiobookTrack.sequence_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cues = list((await db.execute(select(ImportedAudiobookCue))).scalars().all())
+
+    assert edition.status == "ready"
+    assert edition.source_type == "libation"
+    assert len(tracks) == 2
+    assert tracks[0].matched_chapter_id == chapter.id
+    assert tracks[1].matched_chapter_id is None
+    assert len(cues) == 2
+    assert cues[0].clip_begin_ms == 0
+    assert cues[-1].clip_end_ms == tracks[0].source_end_ms
+
+
+@pytest.mark.asyncio
+async def test_manual_track_rematch_rebuilds_cues(db):
+    book, chapter = await _seed_book_text(db)
+    edition = ImportedAudiobook(book_id=book.id, name="Manual", status="ready")
+    db.add(edition)
+    await db.flush()
+    track = ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        sequence_order=1,
+        title="Track One",
+        audio_file_path="library/audio.mp3",
+        media_type="audio/mpeg",
+        source_start_ms=1_000,
+        source_end_ms=11_000,
+        duration_ms=10_000,
+    )
+    db.add(track)
+    await db.commit()
+    await db.refresh(track)
+
+    cue_count = await audiobook_import.rematch_track(track, chapter.id, db)
+    cues = list(
+        (
+            await db.execute(
+                select(ImportedAudiobookCue)
+                .where(ImportedAudiobookCue.track_id == track.id)
+                .order_by(ImportedAudiobookCue.sequence_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert cue_count == 2
+    assert cues[0].clip_begin_ms == 1_000
+    assert cues[-1].clip_end_ms == 11_000
+
+
+def test_prepare_sources_reuses_extracted_files_on_retry(tmp_path, monkeypatch):
+    edition_dir = tmp_path / "edition"
+    incoming_dir = edition_dir / "incoming"
+    source_dir = edition_dir / "source"
+    incoming_dir.mkdir(parents=True)
+    source_dir.mkdir()
+    extracted_audio = source_dir / "existing.m4b"
+    extracted_cue = source_dir / "existing.cue"
+    extracted_audio.write_bytes(b"audio")
+    extracted_cue.write_text('TITLE "Existing"\n', encoding="utf-8")
+    (incoming_dir / "original.zip").write_bytes(b"the retained upload")
+
+    def fail_if_reextracted(*_args):
+        raise AssertionError("retry should reuse already extracted source files")
+
+    monkeypatch.setattr(audiobook_import, "_extract_archive_sources", fail_if_reextracted)
+
+    audio_paths, cue_paths = audiobook_import._prepare_sources(edition_dir)
+
+    assert audio_paths == [extracted_audio]
+    assert cue_paths == [extracted_cue]
+
+
+@pytest.mark.asyncio
+async def test_upload_endpoint_streams_large_format_to_staging(
+    app_client,
+    sqlite_sessionmaker,
+    tmp_path,
+    monkeypatch,
+):
+    class FakeQueue:
+        async def enqueue(self, _edition_id):
+            return True
+
+    async with sqlite_sessionmaker() as db:
+        book, _chapter = await _seed_book_text(db)
+        book_id = book.id
+    monkeypatch.setattr(
+        audiobook_router,
+        "imported_audiobook_dir",
+        lambda selected_book_id, edition_id: tmp_path / str(selected_book_id) / str(edition_id),
+    )
+    monkeypatch.setattr(audiobook_router, "get_audiobook_import_queue", lambda: FakeQueue())
+
+    response = app_client.post(
+        f"/api/books/{book_id}/audiobook/imports",
+        files={"files": ("Import Test [B012345678].m4b", b"not-buffered-by-the-handler", "audio/mp4")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["asin"] == "B012345678"
+    assert payload["name"] == "Import Test"
+    assert (
+        tmp_path / str(book_id) / str(payload["id"]) / "incoming" / "Import Test [B012345678].m4b"
+    ).read_bytes() == b"not-buffered-by-the-handler"
+
+
+@pytest.mark.asyncio
+async def test_alignment_endpoint_durably_queues_ready_edition(
+    app_client,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    class FakeAlignmentQueue:
+        queued = []
+
+        async def enqueue(self, edition_id):
+            self.queued.append(edition_id)
+            return True
+
+    queue = FakeAlignmentQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_alignment_queue", lambda: queue)
+    async with sqlite_sessionmaker() as db:
+        book, chapter = await _seed_book_text(db)
+        db.add(
+            ImportedAudiobook(
+                book_id=book.id,
+                name="Ready edition",
+                status="ready",
+                alignment_method="estimated",
+            )
+        )
+        await db.flush()
+        edition = (await db.execute(select(ImportedAudiobook).where(ImportedAudiobook.book_id == book.id))).scalar_one()
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=edition.id,
+                matched_chapter_id=chapter.id,
+                sequence_order=1,
+                title="Chapter 1",
+                audio_file_path="library/audio.m4b",
+                media_type="audio/mp4",
+                source_start_ms=0,
+                source_end_ms=10_000,
+                duration_ms=10_000,
+            )
+        )
+        db.add(
+            AudiobookSettings(
+                transcription_provider="whisperx",
+                transcription_base_url="http://whisper:8002",
+            )
+        )
+        await db.commit()
+        edition_id = edition.id
+
+    response = app_client.post(f"/api/imported-audiobooks/{edition_id}/align")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "aligning"
+    assert response.json()["progress_total"] == 1
+    assert queue.queued == [edition_id]

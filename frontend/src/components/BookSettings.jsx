@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AudiobookPipeline from "./AudiobookPipeline";
 
@@ -244,12 +244,6 @@ function BookSettings({ book: initialBook, onBack }) {
 
   const [coverUrl, setCoverUrl] = useState("");
 
-  useEffect(() => {
-    if (!book.audiobook_enabled && bookTab === "audiobook") {
-      setBookTab("details");
-    }
-  }, [book.audiobook_enabled, bookTab]);
-
   // Cover files live at a deterministic URL (/api/covers/{book_id}), so the
   // browser happily caches them. Whenever any cover mutation succeeds we bump
   // `coverVersion` and append it as a cache-busting query param on the <img>,
@@ -347,7 +341,7 @@ function BookSettings({ book: initialBook, onBack }) {
   return (
     <div
       className={`book-settings${
-        book.audiobook_enabled && bookTab === "audiobook"
+        bookTab === "audiobook"
           ? " book-settings--wide"
           : ""
       }`}
@@ -378,18 +372,19 @@ function BookSettings({ book: initialBook, onBack }) {
         >
           Details
         </button>
-        {book.audiobook_enabled && (
-          <button
-            className={`book-settings-tab${bookTab === "audiobook" ? " book-settings-tab--active" : ""}`}
-            onClick={() => setBookTab("audiobook")}
-          >
-            Audiobook Pipeline
-          </button>
-        )}
+        <button
+          className={`book-settings-tab${bookTab === "audiobook" ? " book-settings-tab--active" : ""}`}
+          onClick={() => setBookTab("audiobook")}
+        >
+          {book.audiobook_enabled ? "Audiobook Pipeline" : "Audiobooks"}
+        </button>
       </nav>
 
-      {book.audiobook_enabled && bookTab === "audiobook" && (
-        <AudiobookPipeline book={book} />
+      {bookTab === "audiobook" && (
+        <AudiobookPipeline
+          book={book}
+          onEnableAi={() => enableAudiobookMutation.mutate()}
+        />
       )}
 
       {bookTab === "details" && (
@@ -572,19 +567,23 @@ function BookSettings({ book: initialBook, onBack }) {
         <section className="settings-section">
           <h3>Audiobook</h3>
           <p className="hint">
-            Generate an EPUB 3 audiobook with synchronized sentence-level
-            narration. Enabling this creates processing records for this book;
-            it does not start generation until you ask it to.
+            Import an existing human-narrated audiobook, or optionally generate
+            one with synchronized sentence-level AI narration.
           </p>
-          <button
-            type="button"
-            onClick={() => enableAudiobookMutation.mutate()}
-            disabled={enableAudiobookMutation.isPending}
-          >
-            {enableAudiobookMutation.isPending
-              ? "Enabling…"
-              : "Enable Audiobook Pipeline"}
-          </button>
+          <div className="settings-actions">
+            <button type="button" onClick={() => setBookTab("audiobook")}>
+              Import Existing Audiobook
+            </button>
+            <button
+              type="button"
+              onClick={() => enableAudiobookMutation.mutate()}
+              disabled={enableAudiobookMutation.isPending}
+            >
+              {enableAudiobookMutation.isPending
+                ? "Enabling…"
+                : "Enable Audiobook Pipeline"}
+            </button>
+          </div>
           {enableAudiobookMutation.isError && (
             <p className="error">
               {enableAudiobookMutation.error?.message ||

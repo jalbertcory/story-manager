@@ -3,21 +3,48 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from xml.etree import ElementTree as ET
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, Book
+from ..models import (
+    AudiobookChapter,
+    AudiobookCharacter,
+    AudiobookSentence,
+    Book,
+    ImportedAudiobook,
+    ImportedAudiobookCue,
+    ImportedAudiobookTrack,
+)
+from ..services.audiobook_import import (
+    IMPORT_EXTENSIONS,
+    MAX_AUDIOBOOK_UPLOAD_BYTES,
+    asin_from_names,
+    display_name_from_filename,
+    imported_audiobook_dir,
+    rematch_track,
+    safe_import_filename,
+    stream_upload_to_path,
+)
+from ..services.audiobook_import_queue import get_audiobook_import_queue
+from ..services.audiobook_alignment_queue import get_audiobook_alignment_queue
 from ..services.audiobook_queue import get_audiobook_queue
 from ..services import audiobook_llm
+from ..services.transcription_providers import (
+    transcription_provider_name,
+    transcription_service_health,
+)
 from ..services.tts_providers import TTSRequest, synthesize_speech, tts_provider_name
 
 logger = logging.getLogger(__name__)
@@ -132,6 +159,11 @@ class SettingsResponse(BaseModel):
     tts_base_url: Optional[str]
     tts_model: Optional[str]
     tts_default_voice: Optional[str]
+    transcription_provider: str
+    transcription_api_key_set: bool
+    transcription_base_url: Optional[str]
+    transcription_model: Optional[str]
+    transcription_language: Optional[str]
     roster_prompt_template: Optional[str]
     diarization_prompt_template: Optional[str]
 
@@ -146,6 +178,11 @@ class SettingsUpdate(BaseModel):
     tts_base_url: Optional[str] = None
     tts_model: Optional[str] = None
     tts_default_voice: Optional[str] = None
+    transcription_provider: Optional[str] = None
+    transcription_api_key: Optional[str] = None
+    transcription_base_url: Optional[str] = None
+    transcription_model: Optional[str] = None
+    transcription_language: Optional[str] = None
     roster_prompt_template: Optional[str] = None
     diarization_prompt_template: Optional[str] = None
 
@@ -155,6 +192,56 @@ class SentenceListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class ImportedCueResponse(BaseModel):
+    sentence_id: int
+    html_element_id: str
+    text: str
+    clip_begin_ms: int
+    clip_end_ms: int
+    confidence: Optional[float]
+    method: str
+
+
+class ImportedTrackResponse(BaseModel):
+    id: int
+    sequence_order: int
+    title: str
+    matched_chapter_id: Optional[int]
+    matched_chapter_title: Optional[str]
+    source_start_ms: int
+    source_end_ms: int
+    duration_ms: int
+    media_type: str
+    cue_count: int
+    alignment_score: Optional[float]
+    audio_url: str
+    cues_url: str
+    smil_url: str
+
+
+class ImportedAudiobookResponse(BaseModel):
+    id: int
+    book_id: int
+    name: str
+    source_type: str
+    asin: Optional[str]
+    status: str
+    alignment_method: Optional[str]
+    original_filenames: list[str]
+    duration_ms: Optional[int]
+    progress_current: int
+    progress_total: int
+    progress_detail: Optional[str]
+    error: Optional[str]
+    alignment_error: Optional[str]
+    created_at: datetime
+    tracks: list[ImportedTrackResponse]
+
+
+class ImportedTrackMatchUpdate(BaseModel):
+    chapter_id: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +268,331 @@ def _resolve_path(relative_path: Optional[str]) -> Optional[Path]:
         return None
     path = (LIBRARY_PATH.parent / relative_path).resolve()
     return path if path.is_relative_to(LIBRARY_PATH.resolve()) else None
+
+
+async def _imported_audiobook_response(
+    edition: ImportedAudiobook,
+    db: AsyncSession,
+) -> ImportedAudiobookResponse:
+    result = await db.execute(
+        select(ImportedAudiobookTrack)
+        .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+        .order_by(ImportedAudiobookTrack.sequence_order)
+    )
+    tracks = list(result.scalars().all())
+    chapter_ids = {track.matched_chapter_id for track in tracks if track.matched_chapter_id is not None}
+    chapters = {}
+    if chapter_ids:
+        chapter_result = await db.execute(select(AudiobookChapter).where(AudiobookChapter.id.in_(chapter_ids)))
+        chapters = {chapter.id: chapter for chapter in chapter_result.scalars().all()}
+    cue_counts = {}
+    if tracks:
+        cue_result = await db.execute(
+            select(ImportedAudiobookCue.track_id, func.count(ImportedAudiobookCue.id))
+            .where(ImportedAudiobookCue.track_id.in_([track.id for track in tracks]))
+            .group_by(ImportedAudiobookCue.track_id)
+        )
+        cue_counts = {track_id: count for track_id, count in cue_result.all()}
+    return ImportedAudiobookResponse(
+        id=edition.id,
+        book_id=edition.book_id,
+        name=edition.name,
+        source_type=edition.source_type,
+        asin=edition.asin,
+        status=edition.status,
+        alignment_method=edition.alignment_method,
+        original_filenames=edition.original_filenames or [],
+        duration_ms=edition.duration_ms,
+        progress_current=edition.progress_current or 0,
+        progress_total=edition.progress_total or 0,
+        progress_detail=edition.progress_detail,
+        error=edition.error,
+        alignment_error=edition.alignment_error,
+        created_at=edition.created_at,
+        tracks=[
+            ImportedTrackResponse(
+                id=track.id,
+                sequence_order=track.sequence_order,
+                title=track.title,
+                matched_chapter_id=track.matched_chapter_id,
+                matched_chapter_title=(
+                    chapters[track.matched_chapter_id].title
+                    if track.matched_chapter_id is not None and track.matched_chapter_id in chapters
+                    else None
+                ),
+                source_start_ms=track.source_start_ms,
+                source_end_ms=track.source_end_ms,
+                duration_ms=track.duration_ms,
+                media_type=track.media_type,
+                cue_count=cue_counts.get(track.id, 0),
+                alignment_score=track.alignment_score,
+                audio_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio",
+                cues_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/cues",
+                smil_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/smil",
+            )
+            for track in tracks
+        ],
+    )
+
+
+async def _get_imported_track_or_404(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession,
+) -> tuple[ImportedAudiobook, ImportedAudiobookTrack]:
+    edition = await db.get(ImportedAudiobook, edition_id)
+    track = await db.get(ImportedAudiobookTrack, track_id)
+    if edition is None or track is None or track.imported_audiobook_id != edition.id:
+        raise HTTPException(status_code=404, detail="Imported audiobook track not found")
+    await _get_book_or_404(edition.book_id, db)
+    return edition, track
+
+
+# ---------------------------------------------------------------------------
+# Human-narrated audiobook imports
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/api/books/{book_id}/audiobook/imports",
+    response_model=list[ImportedAudiobookResponse],
+)
+async def list_imported_audiobooks(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[ImportedAudiobookResponse]:
+    await _get_book_or_404(book_id, db)
+    result = await db.execute(
+        select(ImportedAudiobook)
+        .where(ImportedAudiobook.book_id == book_id)
+        .order_by(ImportedAudiobook.created_at.desc(), ImportedAudiobook.id.desc())
+    )
+    return [await _imported_audiobook_response(edition, db) for edition in result.scalars().all()]
+
+
+@router.post(
+    "/api/books/{book_id}/audiobook/imports",
+    response_model=ImportedAudiobookResponse,
+)
+async def upload_imported_audiobook(
+    book_id: int,
+    files: list[UploadFile] = File(...),
+    name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    await _get_book_or_404(book_id, db)
+    filenames = [file.filename or "" for file in files]
+    if not files or any(Path(filename).suffix.lower() not in IMPORT_EXTENSIONS for filename in filenames):
+        supported = ", ".join(sorted(IMPORT_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Upload audiobook audio, CUE, or ZIP files ({supported}).")
+    edition = ImportedAudiobook(
+        book_id=book_id,
+        name=(name or "").strip() or display_name_from_filename(filenames[0]),
+        asin=asin_from_names(filenames),
+        status="queued",
+        original_filenames=filenames,
+        progress_detail="Receiving upload",
+    )
+    db.add(edition)
+    await db.commit()
+    await db.refresh(edition)
+    edition_dir = imported_audiobook_dir(book_id, edition.id)
+    incoming_dir = edition_dir / "incoming"
+    remaining = MAX_AUDIOBOOK_UPLOAD_BYTES
+    try:
+        for upload in files:
+            destination = incoming_dir / safe_import_filename(upload.filename or "audiobook")
+            if destination.exists():
+                destination = incoming_dir / f"{destination.stem}-{len(list(incoming_dir.glob('*'))) + 1}{destination.suffix}"
+            written = await stream_upload_to_path(upload, destination, remaining)
+            remaining -= written
+        edition.progress_detail = "Queued for import"
+        await db.commit()
+        await get_audiobook_import_queue().enqueue(edition.id)
+    except Exception as exc:
+        edition.status = "error"
+        edition.error = str(exc)
+        edition.progress_detail = "Upload failed"
+        await db.commit()
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return await _imported_audiobook_response(edition, db)
+
+
+@router.post(
+    "/api/imported-audiobooks/{edition_id}/retry",
+    response_model=ImportedAudiobookResponse,
+)
+async def retry_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    await _get_book_or_404(edition.book_id, db)
+    if edition.status not in ("error", "queued"):
+        raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not retryable")
+    edition.status = "queued"
+    edition.error = None
+    edition.progress_detail = "Queued for retry"
+    await db.commit()
+    await get_audiobook_import_queue().enqueue(edition.id)
+    return await _imported_audiobook_response(edition, db)
+
+
+@router.post(
+    "/api/imported-audiobooks/{edition_id}/align",
+    response_model=ImportedAudiobookResponse,
+)
+async def align_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    await _get_book_or_404(edition.book_id, db)
+    if edition.status == "aligning":
+        return await _imported_audiobook_response(edition, db)
+    if edition.status != "ready":
+        raise HTTPException(status_code=409, detail=f"Audiobook is {edition.status}, not ready for alignment")
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    if settings is None or transcription_provider_name(settings) == "none":
+        raise HTTPException(status_code=409, detail="Configure a transcription provider in Audio Settings first.")
+    matched_count = await db.scalar(
+        select(func.count(ImportedAudiobookTrack.id)).where(
+            ImportedAudiobookTrack.imported_audiobook_id == edition.id,
+            ImportedAudiobookTrack.matched_chapter_id.is_not(None),
+        )
+    )
+    if not matched_count:
+        raise HTTPException(status_code=409, detail="Match at least one audio track to a book chapter first.")
+    edition.status = "aligning"
+    edition.alignment_error = None
+    edition.progress_current = 0
+    edition.progress_total = matched_count
+    edition.progress_detail = "Queued for timestamp alignment"
+    await db.commit()
+    await get_audiobook_alignment_queue().enqueue(edition.id)
+    return await _imported_audiobook_response(edition, db)
+
+
+@router.delete("/api/imported-audiobooks/{edition_id}", status_code=204)
+async def delete_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    await _get_book_or_404(edition.book_id, db)
+    edition_dir = imported_audiobook_dir(edition.book_id, edition.id)
+    await db.delete(edition)
+    await db.commit()
+    shutil.rmtree(edition_dir, ignore_errors=True)
+    return Response(status_code=204)
+
+
+@router.get(
+    "/api/imported-audiobooks/{edition_id}/tracks/{track_id}/cues",
+    response_model=list[ImportedCueResponse],
+)
+async def get_imported_track_cues(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[ImportedCueResponse]:
+    _edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    result = await db.execute(
+        select(ImportedAudiobookCue, AudiobookSentence)
+        .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
+        .where(ImportedAudiobookCue.track_id == track.id)
+        .order_by(ImportedAudiobookCue.sequence_order)
+    )
+    return [
+        ImportedCueResponse(
+            sentence_id=sentence.id,
+            html_element_id=sentence.html_element_id,
+            text=sentence.original_text,
+            clip_begin_ms=cue.clip_begin_ms,
+            clip_end_ms=cue.clip_end_ms,
+            confidence=cue.confidence,
+            method=cue.method,
+        )
+        for cue, sentence in result.all()
+    ]
+
+
+@router.put(
+    "/api/imported-audiobooks/{edition_id}/tracks/{track_id}/match",
+    response_model=ImportedTrackResponse,
+)
+async def match_imported_track(
+    edition_id: int,
+    track_id: int,
+    body: ImportedTrackMatchUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedTrackResponse:
+    edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    try:
+        await rematch_track(track, body.chapter_id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    refreshed = await _imported_audiobook_response(edition, db)
+    return next(item for item in refreshed.tracks if item.id == track.id)
+
+
+@router.get("/api/imported-audiobooks/{edition_id}/tracks/{track_id}/audio")
+async def get_imported_track_audio(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    _edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    full_path = _resolve_path(track.audio_file_path)
+    if full_path is None or not full_path.exists():
+        raise HTTPException(status_code=404, detail="Imported audiobook audio not found on disk")
+    return FileResponse(str(full_path), media_type=track.media_type)
+
+
+@router.get("/api/imported-audiobooks/{edition_id}/tracks/{track_id}/smil")
+async def get_imported_track_smil(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    if track.matched_chapter_id is None:
+        raise HTTPException(status_code=404, detail="Track is not matched to book text")
+    chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
+    result = await db.execute(
+        select(ImportedAudiobookCue, AudiobookSentence)
+        .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
+        .where(ImportedAudiobookCue.track_id == track.id)
+        .order_by(ImportedAudiobookCue.sequence_order)
+    )
+    root = ET.Element("smil", {"xmlns": "http://www.w3.org/ns/SMIL", "version": "3.0"})
+    body = ET.SubElement(root, "body")
+    seq = ET.SubElement(body, "seq")
+    for cue, sentence in result.all():
+        par = ET.SubElement(seq, "par")
+        ET.SubElement(
+            par,
+            "text",
+            {"src": f"{chapter.content_file_name}#{sentence.html_element_id}"},
+        )
+        ET.SubElement(
+            par,
+            "audio",
+            {
+                "src": f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio",
+                "clipBegin": f"{cue.clip_begin_ms / 1000:.3f}s",
+                "clipEnd": f"{cue.clip_end_ms / 1000:.3f}s",
+            },
+        )
+    ET.indent(root, space="  ")
+    payload = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+    return Response(payload, media_type="application/smil+xml")
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +938,7 @@ async def get_sentence_audio(sentence_id: int, db: AsyncSession = Depends(get_db
 
 @router.get("/api/books/{book_id}/audiobook/chapters", response_model=list[ChapterResponse])
 async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[ChapterResponse]:
-    await _get_audiobook_book_or_404(book_id, db)
+    await _get_book_or_404(book_id, db)
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     response = []
     for chapter in chapters:
@@ -633,6 +1045,11 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
             tts_base_url=None,
             tts_model=None,
             tts_default_voice=None,
+            transcription_provider="none",
+            transcription_api_key_set=False,
+            transcription_base_url=None,
+            transcription_model=None,
+            transcription_language=None,
             roster_prompt_template=None,
             diarization_prompt_template=None,
         )
@@ -647,6 +1064,11 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
         tts_base_url=settings.tts_base_url,
         tts_model=settings.tts_model,
         tts_default_voice=settings.tts_default_voice,
+        transcription_provider=settings.transcription_provider or "none",
+        transcription_api_key_set=bool(settings.transcription_api_key),
+        transcription_base_url=settings.transcription_base_url,
+        transcription_model=settings.transcription_model,
+        transcription_language=settings.transcription_language,
         roster_prompt_template=settings.roster_prompt_template,
         diarization_prompt_template=settings.diarization_prompt_template,
     )
@@ -660,6 +1082,10 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
     next_provider = str(data.get("tts_provider") or previous_provider).strip().lower()
     if next_provider != previous_provider and "tts_api_key" not in data:
         data["tts_api_key"] = None
+    previous_transcription_provider = transcription_provider_name(previous)
+    next_transcription_provider = str(data.get("transcription_provider") or previous_transcription_provider).strip().lower()
+    if next_transcription_provider != previous_transcription_provider and "transcription_api_key" not in data:
+        data["transcription_api_key"] = None
 
     previous_tts = {
         "tts_provider": previous_provider,
@@ -684,6 +1110,11 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         tts_base_url=settings.tts_base_url,
         tts_model=settings.tts_model,
         tts_default_voice=settings.tts_default_voice,
+        transcription_provider=settings.transcription_provider or "none",
+        transcription_api_key_set=bool(settings.transcription_api_key),
+        transcription_base_url=settings.transcription_base_url,
+        transcription_model=settings.transcription_model,
+        transcription_language=settings.transcription_language,
         roster_prompt_template=settings.roster_prompt_template,
         diarization_prompt_template=settings.diarization_prompt_template,
     )
@@ -731,4 +1162,21 @@ async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
         "provider": provider,
         "model": settings.tts_model if settings else None,
         "audio_bytes": len(audio),
+    }
+
+
+@router.post("/api/audiobook/settings/test-transcription")
+async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    if settings is None:
+        raise HTTPException(status_code=409, detail="Configure a transcription provider first.")
+    try:
+        payload = await transcription_service_health(settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "status": payload.get("status"),
+        "provider": settings.transcription_provider,
+        "model": payload.get("model"),
+        "device": payload.get("device"),
     }

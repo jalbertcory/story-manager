@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookSettings,
   testAudiobookLlm,
+  testAudiobookTranscription,
   testAudiobookTts,
   updateAudiobookSettings,
 } from "../api/audiobook";
@@ -29,6 +30,11 @@ function AudiobookSettings() {
   const [ttsBaseUrl, setTtsBaseUrl] = useState("");
   const [ttsModel, setTtsModel] = useState("");
   const [ttsDefaultVoice, setTtsDefaultVoice] = useState("");
+  const [transcriptionProvider, setTranscriptionProvider] = useState("none");
+  const [transcriptionApiKey, setTranscriptionApiKey] = useState("");
+  const [transcriptionBaseUrl, setTranscriptionBaseUrl] = useState("");
+  const [transcriptionModel, setTranscriptionModel] = useState("");
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState("auto");
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [initialised, setInitialised] = useState(false);
@@ -42,6 +48,10 @@ function AudiobookSettings() {
       setTtsBaseUrl(settings.tts_base_url || "");
       setTtsModel(settings.tts_model || "");
       setTtsDefaultVoice(settings.tts_default_voice || "");
+      setTranscriptionProvider(settings.transcription_provider || "none");
+      setTranscriptionBaseUrl(settings.transcription_base_url || "");
+      setTranscriptionModel(settings.transcription_model || "");
+      setTranscriptionLanguage(settings.transcription_language || "auto");
       setRosterPrompt(settings.roster_prompt_template || "");
       setDiarizationPrompt(settings.diarization_prompt_template || "");
       setInitialised(true);
@@ -52,6 +62,7 @@ function AudiobookSettings() {
     mutationFn: (data) => updateAudiobookSettings(data),
     onSuccess: () => {
       setTtsApiKey("");
+      setTranscriptionApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -65,6 +76,10 @@ function AudiobookSettings() {
       tts_base_url: ttsBaseUrl || null,
       tts_model: ttsModel || null,
       tts_default_voice: ttsDefaultVoice || null,
+      transcription_provider: transcriptionProvider || "none",
+      transcription_base_url: transcriptionBaseUrl || null,
+      transcription_model: transcriptionModel || null,
+      transcription_language: transcriptionLanguage || null,
       roster_prompt_template: rosterPrompt || null,
       diarization_prompt_template: diarizationPrompt || null,
     };
@@ -73,6 +88,9 @@ function AudiobookSettings() {
     }
     if (ttsApiKey) {
       payload.tts_api_key = ttsApiKey;
+    }
+    if (transcriptionApiKey) {
+      payload.transcription_api_key = transcriptionApiKey;
     }
     return payload;
   };
@@ -84,6 +102,7 @@ function AudiobookSettings() {
     },
     onSuccess: () => {
       setTtsApiKey("");
+      setTranscriptionApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -95,6 +114,18 @@ function AudiobookSettings() {
     },
     onSuccess: () => {
       setTtsApiKey("");
+      setTranscriptionApiKey("");
+      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    },
+  });
+
+  const testTranscriptionMutation = useMutation({
+    mutationFn: async () => {
+      await updateAudiobookSettings(buildPayload());
+      return testAudiobookTranscription();
+    },
+    onSuccess: () => {
+      setTranscriptionApiKey("");
       queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     },
   });
@@ -359,6 +390,122 @@ function AudiobookSettings() {
             <p className="settings-hint">
               The deterministic harness generates silent placeholder MP3s with
               realistic timing for offline validation.
+            </p>
+          )}
+        </section>
+
+        <section className="settings-section">
+          <h3>Speech-to-Text Alignment</h3>
+          <p className="settings-hint">
+            Transcribe imported human narration into forced-aligned word
+            timestamps, then fuzzy-match those words to EPUB sentences for
+            accurate highlighting and SMIL timing.
+          </p>
+          <label>
+            Provider
+            <select
+              value={transcriptionProvider}
+              onChange={(e) => {
+                setTranscriptionProvider(e.target.value);
+                setTranscriptionApiKey("");
+              }}
+            >
+              <option value="whisperx">WhisperX service</option>
+              <option value="none">Not configured</option>
+            </select>
+          </label>
+          {transcriptionProvider !== "none" && (
+            <>
+              <label>
+                API Key
+                <input
+                  type="password"
+                  value={transcriptionApiKey}
+                  onChange={(e) => setTranscriptionApiKey(e.target.value)}
+                  placeholder={
+                    settings?.transcription_api_key_set
+                      ? "••••••••  (set — enter new key to change)"
+                      : "Optional for a trusted local service"
+                  }
+                />
+              </label>
+              <label>
+                Base URL
+                <input
+                  type="url"
+                  value={transcriptionBaseUrl}
+                  onChange={(e) => setTranscriptionBaseUrl(e.target.value)}
+                  placeholder="http://your-whisper-server:8002"
+                />
+              </label>
+              <label>
+                Model
+                <input
+                  type="text"
+                  value={transcriptionModel}
+                  onChange={(e) => setTranscriptionModel(e.target.value)}
+                  placeholder="large-v3"
+                />
+              </label>
+              <label>
+                Language
+                <input
+                  type="text"
+                  value={transcriptionLanguage}
+                  onChange={(e) => setTranscriptionLanguage(e.target.value)}
+                  placeholder="auto or en"
+                />
+              </label>
+            </>
+          )}
+          <div className="settings-actions-inline">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setTranscriptionProvider("whisperx");
+                setTranscriptionApiKey("");
+                setTranscriptionBaseUrl("http://127.0.0.1:8002");
+                setTranscriptionModel("large-v3");
+                setTranscriptionLanguage("en");
+              }}
+            >
+              Use Local WhisperX
+            </button>
+            <button
+              type="button"
+              onClick={() => testTranscriptionMutation.mutate()}
+              disabled={
+                transcriptionProvider === "none" ||
+                testTranscriptionMutation.isPending
+              }
+            >
+              {testTranscriptionMutation.isPending
+                ? "Testing…"
+                : "Save & Test Transcription"}
+            </button>
+          </div>
+          {testTranscriptionMutation.isSuccess && (
+            <p className="success">
+              Connected to {testTranscriptionMutation.data.provider} /{" "}
+              {testTranscriptionMutation.data.model}
+              {testTranscriptionMutation.data.device
+                ? ` on ${testTranscriptionMutation.data.device}`
+                : ""}
+              .
+            </p>
+          )}
+          {testTranscriptionMutation.isError && (
+            <p className="error">
+              {testTranscriptionMutation.error?.message ||
+                "Transcription service test failed"}
+            </p>
+          )}
+          {transcriptionProvider === "whisperx" && (
+            <p className="settings-hint">
+              Run <code>make run-transcription</code> locally or use the
+              published <code>story-manager-transcription</code> container. The
+              bundled image includes FFmpeg.
             </p>
           )}
         </section>

@@ -1,4 +1,4 @@
-import { getJson, sendJson, sendWithoutBody } from "./client";
+import { getJson, sendForm, sendJson, sendWithoutBody } from "./client";
 
 // Pipeline control
 export function getAudiobookStatus(bookId) {
@@ -135,6 +135,62 @@ export function getAudiobookDownloadUrl(bookId) {
   return `/api/books/${bookId}/audiobook/download`;
 }
 
+// Human-narrated audiobook editions
+export function getImportedAudiobooks(bookId) {
+  return getJson(
+    `/api/books/${bookId}/audiobook/imports`,
+    "Failed to fetch imported audiobooks",
+  );
+}
+
+export function uploadImportedAudiobook(bookId, files, name = "") {
+  const body = new FormData();
+  files.forEach((file) => body.append("files", file));
+  if (name.trim()) body.append("name", name.trim());
+  return sendForm(`/api/books/${bookId}/audiobook/imports`, body, {
+    fallbackMessage: "Failed to upload audiobook",
+  });
+}
+
+export function retryImportedAudiobook(editionId) {
+  return sendWithoutBody(`/api/imported-audiobooks/${editionId}/retry`, {
+    method: "POST",
+    fallbackMessage: "Failed to retry audiobook import",
+  });
+}
+
+export function alignImportedAudiobook(editionId) {
+  return sendWithoutBody(`/api/imported-audiobooks/${editionId}/align`, {
+    method: "POST",
+    fallbackMessage: "Failed to start audiobook timestamp alignment",
+  });
+}
+
+export function deleteImportedAudiobook(editionId) {
+  return sendWithoutBody(`/api/imported-audiobooks/${editionId}`, {
+    method: "DELETE",
+    fallbackMessage: "Failed to delete imported audiobook",
+  });
+}
+
+export function matchImportedAudiobookTrack(editionId, trackId, chapterId) {
+  return sendJson(
+    `/api/imported-audiobooks/${editionId}/tracks/${trackId}/match`,
+    {
+      method: "PUT",
+      body: { chapter_id: chapterId },
+      fallbackMessage: "Failed to match audiobook track",
+    },
+  );
+}
+
+export function getImportedTrackCues(editionId, trackId) {
+  return getJson(
+    `/api/imported-audiobooks/${editionId}/tracks/${trackId}/cues`,
+    "Failed to fetch audiobook timing",
+  );
+}
+
 // Settings
 export function getAudiobookSettings() {
   return getJson(
@@ -162,5 +218,12 @@ export function testAudiobookTts() {
   return sendWithoutBody("/api/audiobook/settings/test-tts", {
     method: "POST",
     fallbackMessage: "Failed to connect to the configured TTS provider",
+  });
+}
+
+export function testAudiobookTranscription() {
+  return sendWithoutBody("/api/audiobook/settings/test-transcription", {
+    method: "POST",
+    fallbackMessage: "Failed to connect to the transcription service",
   });
 }

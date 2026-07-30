@@ -10,6 +10,7 @@ import {
   pausePipeline,
   rebuildPipeline,
   getAudiobookDownloadUrl,
+  getImportedAudiobooks,
 } from "../api/audiobook";
 import CharacterRoster from "./audiobook/CharacterRoster";
 import ScriptEditor from "./audiobook/ScriptEditor";
@@ -17,6 +18,7 @@ import ChapterAssembly from "./audiobook/ChapterAssembly";
 import AnalysisOverview from "./audiobook/AnalysisOverview";
 import AudiobookReader from "./audiobook/AudiobookReader";
 import ProgressDashboard from "./audiobook/ProgressDashboard";
+import AudiobookSources from "./audiobook/AudiobookSources";
 
 const PIPELINE_STEPS = [
   { status: "ingesting", label: "Ingesting" },
@@ -111,19 +113,21 @@ function JobInspector({ statusData, totalSentences, doneCount }) {
   );
 }
 
-const SUB_TABS = [
+const AI_SUB_TABS = [
   "Progress",
   "Analysis",
   "Characters",
   "Script Editor",
-  "Listen & Read",
   "Chapter Assembly",
 ];
 
-function AudiobookPipeline({ book }) {
+function AudiobookPipeline({ book, onEnableAi }) {
   const bookId = book.id;
+  const aiEnabled = book.audiobook_enabled !== false;
   const queryClient = useQueryClient();
-  const [subTab, setSubTab] = useState("Progress");
+  const [subTab, setSubTab] = useState(
+    book.audiobook_enabled === undefined ? "Progress" : "Sources",
+  );
   const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   const isActive = (status) => ACTIVE_STATUSES.has(status);
@@ -131,6 +135,7 @@ function AudiobookPipeline({ book }) {
   const { data: statusData } = useQuery({
     queryKey: ["audiobook-status", bookId],
     queryFn: () => getAudiobookStatus(bookId),
+    enabled: aiEnabled,
     refetchInterval: ({ state }) => {
       const s = state.data?.pipeline_status;
       const audioStillFinishing =
@@ -142,7 +147,21 @@ function AudiobookPipeline({ book }) {
   const { data: characters = [] } = useQuery({
     queryKey: ["audiobook-characters", bookId],
     queryFn: () => getCharacters(bookId),
+    enabled: aiEnabled,
   });
+
+  const { data: imports = [] } = useQuery({
+    queryKey: ["audiobook-imports", bookId],
+    queryFn: () => getImportedAudiobooks(bookId),
+    refetchInterval: ({ state }) =>
+      Array.isArray(state.data) &&
+      state.data.some((edition) =>
+        ["queued", "importing", "aligning"].includes(edition.status),
+      )
+        ? 1000
+        : false,
+  });
+  const importedAudiobooks = Array.isArray(imports) ? imports : [];
 
   const { data: chapters = [] } = useQuery({
     queryKey: ["audiobook-chapters", bookId],
@@ -217,7 +236,7 @@ function AudiobookPipeline({ book }) {
   // Refresh editor data whenever the durable pipeline state advances so the
   // review screen always reflects the checkpoint that was just reached.
   useEffect(() => {
-    if (pipelineStatus !== undefined) {
+    if (aiEnabled && pipelineStatus !== undefined) {
       queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
@@ -225,10 +244,17 @@ function AudiobookPipeline({ book }) {
         queryKey: ["audiobook-chapters", bookId],
       });
     }
-  }, [bookId, pipelineStatus, queryClient]);
+  }, [aiEnabled, bookId, pipelineStatus, queryClient]);
+
+  const subTabs = [
+    "Sources",
+    "Listen & Read",
+    ...(aiEnabled ? AI_SUB_TABS : []),
+  ];
 
   return (
     <div className="audiobook-pipeline">
+      {aiEnabled && (
       <div className="pipeline-header">
         <PipelineProgress status={progressStatus} />
 
@@ -364,9 +390,10 @@ function AudiobookPipeline({ book }) {
           </p>
         )}
       </div>
+      )}
 
       <nav className="sub-tabs">
-        {SUB_TABS.map((t) => (
+        {subTabs.map((t) => (
           <button
             key={t}
             className={`sub-tab${subTab === t ? " sub-tab--active" : ""}`}
@@ -378,6 +405,15 @@ function AudiobookPipeline({ book }) {
       </nav>
 
       <div className="sub-tab-content">
+        {subTab === "Sources" && (
+          <AudiobookSources
+            bookId={bookId}
+            chapters={chapters}
+            imports={importedAudiobooks}
+            aiEnabled={aiEnabled}
+            onEnableAi={onEnableAi}
+          />
+        )}
         {subTab === "Progress" && (
           <ProgressDashboard status={statusData} chapters={chapters} />
         )}
@@ -412,6 +448,8 @@ function AudiobookPipeline({ book }) {
             chapters={chapters}
             characters={characters}
             bookId={bookId}
+            imports={importedAudiobooks}
+            aiEnabled={aiEnabled}
           />
         )}
       </div>

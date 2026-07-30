@@ -10,6 +10,9 @@ LOG_DIR="$RUNTIME_DIR/logs"
 PID_DIR="$RUNTIME_DIR/pids"
 LAUNCHER_DIR="$RUNTIME_DIR/launchers"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
+TRANSCRIPTION_MODEL="${WHISPER_MODEL:-large-v3}"
+TRANSCRIPTION_LANGUAGE="${WHISPER_LANGUAGE:-en}"
+TRANSCRIPTION_MODEL_CACHE="${WHISPER_MODEL_CACHE:-$RUNTIME_DIR/models/whisperx}"
 
 mkdir -p "$LOG_DIR" "$PID_DIR" "$LAUNCHER_DIR"
 
@@ -287,6 +290,44 @@ ensure_omnivoice() {
         --port 8001
 }
 
+ensure_transcription() {
+    local transcription_uvicorn="$PROJECT_DIR/services/transcription/.venv/bin/uvicorn"
+
+    if url_ready "http://127.0.0.1:8002/health"; then
+        info "READY   WhisperX (http://127.0.0.1:8002/health) — already running"
+        return 0
+    fi
+
+    if [ ! -x "$transcription_uvicorn" ]; then
+        if ! command -v uv >/dev/null 2>&1; then
+            error "uv is required to install WhisperX."
+            return 1
+        fi
+
+        info "SETUP   WhisperX (first setup may take several minutes)"
+        if ! make -C "$PROJECT_DIR" setup-transcription; then
+            error "WhisperX setup failed."
+            return 1
+        fi
+    fi
+
+    mkdir -p "$TRANSCRIPTION_MODEL_CACHE"
+    ensure_http_service \
+        "WhisperX" \
+        "transcription" \
+        "http://127.0.0.1:8002/health" \
+        "8002" \
+        "1800" \
+        env \
+        WHISPER_MODEL="$TRANSCRIPTION_MODEL" \
+        WHISPER_LANGUAGE="$TRANSCRIPTION_LANGUAGE" \
+        WHISPER_MODEL_CACHE="$TRANSCRIPTION_MODEL_CACHE" \
+        "$transcription_uvicorn" \
+        services.transcription.server:app \
+        --host 127.0.0.1 \
+        --port 8002
+}
+
 print_status() {
     local missing=0
 
@@ -325,6 +366,13 @@ print_status() {
         missing=$((missing + 1))
     fi
 
+    if url_ready "http://127.0.0.1:8002/health"; then
+        info "READY   WhisperX (http://127.0.0.1:8002)"
+    else
+        info "MISSING WhisperX (http://127.0.0.1:8002)"
+        missing=$((missing + 1))
+    fi
+
     [ "$missing" -eq 0 ]
 }
 
@@ -353,6 +401,7 @@ case "${1:-start}" in
 
         ensure_ui || failures=$((failures + 1))
         ensure_omnivoice || failures=$((failures + 1))
+        ensure_transcription || failures=$((failures + 1))
         check_ollama_model || failures=$((failures + 1))
 
         printf '\n'
