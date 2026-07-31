@@ -223,6 +223,8 @@ function SchedulerStatus({ onBack }) {
     mutationFn: () =>
       fetch("/api/scheduler/trigger", { method: "POST" }).then((r) => r.json()),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
@@ -372,13 +374,15 @@ function SchedulerStatus({ onBack }) {
           onClick={() => triggerMutation.mutate()}
           disabled={isRunning || triggerMutation.isPending}
         >
-          {triggerMutation.isPending ? "Triggering..." : "Run Now"}
+          {triggerMutation.isPending ? "Queueing..." : "Queue Run Now"}
         </button>
         {triggerMutation.isError && (
           <p className="error">Failed: {triggerMutation.error.message}</p>
         )}
         {triggerMutation.isSuccess && !isRunning && (
-          <p className="hint">Update triggered.</p>
+          <p className="job-queued-notice">
+            Library refresh queued. <a href="/processing">View processing</a>
+          </p>
         )}
       </section>
 

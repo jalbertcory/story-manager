@@ -20,6 +20,7 @@ from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata
 from ..services.library_paths import build_book_paths
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import SeriesBook, detect_series_from_books
+from ..services.processing_queue import queue_audio_reconciliation
 from ..upload_validation import MAX_UPLOAD_BYTES, read_and_validate_upload, read_upload_limited, validate_upload
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,9 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
         await db.commit()
         await db.refresh(existing)
-        await epub_editor.apply_book_cleaning(existing, db)
+        changed = await epub_editor.apply_book_cleaning(existing, db)
+        if changed:
+            await queue_audio_reconciliation(existing, db)
         return existing
 
     immutable_path, current_path = build_book_paths(f"{title} - {author}.epub", author)

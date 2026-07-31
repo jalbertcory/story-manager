@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,9 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..services.cover_collectors import collect_cover
 from ..services.cover_images import save_cover_from_url
-from ..services.epub_utils import get_and_save_epub_cover
+from ..services.processing_queue import queue_processing_job
 from ..upload_validation import MAX_IMAGE_BYTES, detect_image_extension, read_upload_limited, validate_image_upload
 
 logger = logging.getLogger(__name__)
@@ -69,24 +68,24 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
 
 
 @router.post("/api/books/{book_id}/retry-cover", response_model=schemas.Book)
-async def retry_cover(book_id: int, db: AsyncSession = Depends(get_db)):
-    """Re-extracts the cover from the EPUB, falling back to scraping the source URL."""
+async def retry_cover(book_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    """Queue cover extraction from the EPUB with source scraping as fallback."""
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     if not db_book.immutable_path:
         raise HTTPException(status_code=400, detail="Book has no EPUB file to extract cover from")
 
-    epub_path = LIBRARY_PATH.parent / db_book.immutable_path
-    cover_path = get_and_save_epub_cover(epub_path=epub_path, book_id=book_id)
-    if cover_path is None and db_book.source_url:
-        cover_path = await collect_cover(db_book.source_url, book_id)
-    if cover_path is None:
-        raise HTTPException(status_code=400, detail="Could not extract or scrape a cover image")
-
-    db_book.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
-    await db.commit()
-    await db.refresh(db_book)
+    job = await queue_processing_job(
+        db=db,
+        job_type="retry_cover",
+        book_id=db_book.id,
+        target_type="book",
+        target_id=db_book.id,
+        dedupe_key=f"retry_cover:book:{db_book.id}",
+        progress_detail="Queued from Re-extract Cover",
+    )
+    response.headers["X-Processing-Job-Id"] = str(job.id)
     return db_book
 
 

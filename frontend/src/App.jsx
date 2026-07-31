@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
@@ -11,6 +12,8 @@ import CleaningConfigs from "./components/CleaningConfigs.jsx";
 import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
+import ProcessingJobs from "./components/ProcessingJobs.jsx";
+import { getProcessingJobs } from "./api/processing";
 import useDebouncedValue from "./hooks/useDebouncedValue";
 import useLibraryCatalog from "./hooks/useLibraryCatalog";
 import {
@@ -133,6 +136,13 @@ function App() {
     enabled: Boolean(authStatus?.authenticated),
   });
 
+  const { data: activeProcessingJobs = [] } = useQuery({
+    queryKey: ["active-processing-jobs"],
+    queryFn: () => getProcessingJobs({ statuses: "queued,running", limit: 100 }),
+    enabled: Boolean(authStatus?.authenticated),
+    refetchInterval: 3000,
+  });
+
   const handleClearSearch = () => {
     setQ("");
   };
@@ -227,6 +237,8 @@ function App() {
         return <CleaningConfigs />;
       case "scheduler":
         return <SchedulerStatus />;
+      case "processing":
+        return <ProcessingJobs />;
       case "logs":
         return <Logs />;
       case "utilities":
@@ -334,6 +346,9 @@ function App() {
             aria-current={activeTab === tab.key ? "page" : undefined}
           >
             {tab.label}
+            {tab.key === "processing" && activeProcessingJobs.length > 0 && (
+              <span className="nav-job-count">{activeProcessingJobs.length}</span>
+            )}
           </button>
         ))}
       </nav>

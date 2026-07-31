@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from ..services.catalog import build_book_catalog, normalize_genre_tags
 from ..services.chapter_history import build_chapter_update_history
 from ..services.library_paths import remove_empty_parent_dirs
 from ..services.metadata_jobs import queue_metadata_sync_job
+from ..services.processing_queue import queue_processing_job
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,10 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)) -> models.B
 
 @router.put("/api/books/{book_id}", response_model=schemas.Book)
 async def update_book_details(
-    book_id: int, book_update: schemas.BookUpdate, db: AsyncSession = Depends(get_db)
+    book_id: int,
+    book_update: schemas.BookUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
 ) -> models.Book:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -248,7 +252,17 @@ async def update_book_details(
     update_dict = book_update.model_dump(exclude_unset=True)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=book_update)
     if "content_selectors" in update_dict or "removed_chapters" in update_dict:
-        await epub_editor.apply_book_cleaning(updated_book, db)
+        job = await queue_processing_job(
+            db=db,
+            job_type="clean_book",
+            book_id=updated_book.id,
+            target_type="book",
+            target_id=updated_book.id,
+            target_content_version=updated_book.content_version,
+            dedupe_key=f"clean_book:book:{updated_book.id}",
+            progress_detail="Queued after changing book cleaning rules",
+        )
+        response.headers["X-Processing-Job-Id"] = str(job.id)
     if (
         updated_book.title != previous_title
         or updated_book.author != previous_author

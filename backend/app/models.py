@@ -91,6 +91,33 @@ class Book(Base):
     content_version = Column(Integer, nullable=False, server_default="1")
 
 
+class ProcessingJob(Base):
+    """Durable ledger entry for user-visible background work."""
+
+    __tablename__ = "processing_jobs"
+
+    id = Column(Integer, primary_key=True)
+    job_type = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="queued", server_default="queued", index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=True, index=True)
+    target_type = Column(String, nullable=True)
+    target_id = Column(Integer, nullable=True)
+    target_content_version = Column(Integer, nullable=True)
+    parent_job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True)
+    payload = Column(JSON, nullable=True)
+    dedupe_key = Column(String, nullable=True, index=True)
+    progress_current = Column(Integer, nullable=False, default=0, server_default="0")
+    progress_total = Column(Integer, nullable=False, default=0, server_default="0")
+    progress_detail = Column(String, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0, server_default="0")
+    cancel_requested = Column(Boolean, nullable=False, default=False, server_default="false")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+
 class SeriesMetadata(Base):
     __tablename__ = "series_metadata"
 
@@ -340,6 +367,7 @@ class ImportedAudiobook(Base):
     progress_detail = Column(String, nullable=True)
     error = Column(Text, nullable=True)
     alignment_error = Column(Text, nullable=True)
+    matched_content_version = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 

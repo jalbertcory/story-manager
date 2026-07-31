@@ -83,6 +83,19 @@ from .api_keys import (  # noqa: F401
     get_api_keys,
     revoke_api_key,
 )
+from .processing import (  # noqa: F401
+    complete_processing_job,
+    create_processing_job,
+    fail_processing_job,
+    get_pending_processing_jobs,
+    get_processing_job,
+    get_processing_jobs,
+    is_processing_job_cancel_requested,
+    mark_processing_job_running,
+    request_processing_job_cancel,
+    retry_processing_job,
+    update_processing_job_progress,
+)
 from .metadata import (  # noqa: F401
     complete_metadata_sync_job,
     create_metadata_sync_job,

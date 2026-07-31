@@ -3,12 +3,13 @@
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, schemas
 from ..database import get_db
 from ..services import update_scheduler
+from ..services.processing_queue import queue_processing_job
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,15 @@ async def update_scheduler_config(config: schemas.SchedulerConfigUpdate, db: Asy
 
 
 @router.post("/api/scheduler/trigger", status_code=202)
-async def trigger_scheduler(background_tasks: BackgroundTasks):
-    background_tasks.add_task(update_scheduler.run_web_novel_update, "manual")
-    return {"message": "Update triggered"}
+async def trigger_scheduler(db: AsyncSession = Depends(get_db)):
+    job = await queue_processing_job(
+        db=db,
+        job_type="refresh_all",
+        payload={"trigger": "manual"},
+        dedupe_key="refresh_all",
+        progress_detail="Queued from Run Now",
+    )
+    return {"message": "Update queued", "processing_job_id": job.id}
 
 
 @router.get("/api/scheduler/history", response_model=List[schemas.UpdateTask])

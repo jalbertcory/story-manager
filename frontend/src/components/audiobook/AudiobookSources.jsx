@@ -29,6 +29,7 @@ function AudiobookSources({
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [name, setName] = useState("");
+  const [jobNotice, setJobNotice] = useState("");
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
@@ -37,6 +38,7 @@ function AudiobookSources({
   const uploadMutation = useMutation({
     mutationFn: () => uploadImportedAudiobook(bookId, files, name),
     onSuccess: () => {
+      setJobNotice("Human audiobook import and matching queued.");
       setFiles([]);
       setName("");
       if (inputRef.current) inputRef.current.value = "";
@@ -45,7 +47,10 @@ function AudiobookSources({
   });
   const retryMutation = useMutation({
     mutationFn: retryImportedAudiobook,
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setJobNotice("Human audiobook import retry queued.");
+      invalidate();
+    },
   });
   const deleteMutation = useMutation({
     mutationFn: deleteImportedAudiobook,
@@ -53,7 +58,10 @@ function AudiobookSources({
   });
   const alignMutation = useMutation({
     mutationFn: alignImportedAudiobook,
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setJobNotice("Human audiobook timestamp alignment queued.");
+      invalidate();
+    },
   });
   const matchMutation = useMutation({
     mutationFn: ({ editionId, trackId, chapterId }) =>
@@ -137,7 +145,7 @@ function AudiobookSources({
         <p className="empty-state">No human-narrated editions imported yet.</p>
       ) : (
         imports.map((edition) => {
-          const active = ["queued", "importing", "aligning"].includes(
+          const active = ["stale", "queued", "importing", "aligning"].includes(
             edition.status,
           );
           const matched = edition.tracks.filter(
@@ -270,6 +278,11 @@ function AudiobookSources({
             </section>
           );
         })
+      )}
+      {jobNotice && (
+        <p className="job-queued-notice" role="status">
+          {jobNotice} <a href="/processing">View processing</a>
+        </p>
       )}
       {(retryMutation.isError ||
         alignMutation.isError ||

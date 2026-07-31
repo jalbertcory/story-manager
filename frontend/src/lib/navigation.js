@@ -2,6 +2,7 @@ export const TABS = [
   { key: "library", label: "Library", path: "/" },
   { key: "configs", label: "Cleaning Configs", path: "/configs" },
   { key: "scheduler", label: "Scheduler", path: "/scheduler" },
+  { key: "processing", label: "Processing", path: "/processing" },
   { key: "logs", label: "Logs", path: "/logs" },
   { key: "utilities", label: "Utilities", path: "/utilities" },
   { key: "audio-settings", label: "Audio Settings", path: "/audio-settings" },

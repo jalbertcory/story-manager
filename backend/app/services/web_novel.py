@@ -320,25 +320,27 @@ def _run_fff_lossless_update(
 
 
 async def _enqueue_audiobook_refresh(book: models.Book, db) -> None:
-    """Persist and enqueue refreshed content without losing an active build."""
-    if not book.audiobook_enabled:
-        return
+    """Queue every audio derivative affected by refreshed or cleaned content."""
     await db.refresh(book)
-    content_version = book.content_version or 1
-    book.audiobook_pending_content_version = max(
-        book.audiobook_pending_content_version or 0,
-        content_version,
-    )
-    active_statuses = {"ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"}
-    if book.audiobook_pipeline_status not in active_statuses:
-        book.audiobook_pipeline_status = "ingesting"
-    await db.commit()
+    if book.audiobook_enabled:
+        content_version = book.content_version or 1
+        book.audiobook_pending_content_version = max(
+            book.audiobook_pending_content_version or 0,
+            content_version,
+        )
+        active_statuses = {"ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"}
+        if book.audiobook_pipeline_status not in active_statuses:
+            book.audiobook_pipeline_status = "ingesting"
+        await db.commit()
 
-    from .audiobook_queue import get_audiobook_queue
+        from .audiobook_queue import AudiobookQueue, get_audiobook_queue
 
-    queue = get_audiobook_queue()
-    if not queue.has_book_job(book.id):
-        await queue.enqueue(book.id)
+        legacy_queue = get_audiobook_queue()
+        if not isinstance(legacy_queue, AudiobookQueue) and not legacy_queue.has_book_job(book.id):
+            await legacy_queue.enqueue(book.id)
+    from .processing_queue import queue_audio_reconciliation
+
+    await queue_audio_reconciliation(book, db)
 
 
 def _run_fff_main(args: List[str]) -> int:

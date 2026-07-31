@@ -137,6 +137,7 @@ function BookSettings({ book: initialBook, onBack }) {
   } = useBookSettingsForm(initialBook);
   const [previewedChapter, setPreviewedChapter] = useState(null);
   const [bookTab, setBookTab] = useState("details");
+  const [jobNotice, setJobNotice] = useState("");
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
@@ -195,6 +196,7 @@ function BookSettings({ book: initialBook, onBack }) {
   const processMutation = useMutation({
     mutationFn: () => processBook(book.id),
     onSuccess: () => {
+      setJobNotice("EPUB cleaning job queued.");
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({
         queryKey: ["cleaned-chapters", book.id],
@@ -209,6 +211,7 @@ function BookSettings({ book: initialBook, onBack }) {
   const refreshMutation = useMutation({
     mutationFn: () => refreshBook(book.id),
     onSuccess: (updatedBook) => {
+      setJobNotice("Source refresh job queued.");
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({
@@ -262,9 +265,8 @@ function BookSettings({ book: initialBook, onBack }) {
   const retryCoverMutation = useMutation({
     mutationFn: () => retryBookCover(book.id),
     onSuccess: () => {
-      bumpCoverVersion();
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
+      setJobNotice("Cover re-extraction job queued.");
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
     },
   });
 
@@ -523,7 +525,7 @@ function BookSettings({ book: initialBook, onBack }) {
                   coverUrlMutation.isPending
                 }
               >
-                {retryCoverMutation.isPending ? "Retrying…" : "Re-extract"}
+                {retryCoverMutation.isPending ? "Queueing…" : "Queue re-extract"}
               </button>
             )}
             <div className="cover-url-row">
@@ -789,8 +791,8 @@ function BookSettings({ book: initialBook, onBack }) {
             title="Save changes and rebuild the EPUB file with current cleaning rules"
           >
             {processMutation.isPending
-              ? "Rebuilding..."
-              : "Rebuild EPUB from saved edits"}
+              ? "Queueing..."
+              : "Queue EPUB rebuild from saved edits"}
           </button>
           {book.source_type === "web" && (
             <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
@@ -804,6 +806,11 @@ function BookSettings({ book: initialBook, onBack }) {
             </button>
           )}
         </div>
+        {jobNotice && (
+          <p className="job-queued-notice" role="status">
+            {jobNotice} <a href="/processing">View processing</a>
+          </p>
+        )}
         <p className="hint actions-hint">
           <strong>Save Metadata</strong> updates the database only.{" "}
           <strong>Rebuild EPUB</strong> saves edits and regenerates the file

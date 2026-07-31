@@ -53,10 +53,25 @@ async def queue_metadata_sync_job(
     trigger: str,
     book_ids: Optional[list[int]] = None,
 ) -> models.MetadataSyncJob:
-    from .metadata_sync_queue import get_metadata_sync_queue
+    from .processing_queue import queue_processing_job
 
     job = await create_metadata_sync_job_request(db, trigger=trigger, book_ids=book_ids)
-    await get_metadata_sync_queue().enqueue(job.id)
+    await queue_processing_job(
+        db=db,
+        job_type="metadata_sync",
+        target_type="metadata_sync_job",
+        target_id=job.id,
+        payload={"metadata_job_id": job.id, "trigger": trigger},
+        dedupe_key=f"metadata_sync:metadata_sync_job:{job.id}",
+        progress_detail=f"Queued metadata sync ({trigger})",
+    )
+    # Keep the former queue getter as a compatibility extension hook without
+    # running the retired in-memory worker in production.
+    from .metadata_sync_queue import MetadataSyncQueue, get_metadata_sync_queue
+
+    legacy_queue = get_metadata_sync_queue()
+    if not isinstance(legacy_queue, MetadataSyncQueue):
+        await legacy_queue.enqueue(job.id)
     return job
 
 

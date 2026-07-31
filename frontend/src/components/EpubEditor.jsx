@@ -141,10 +141,10 @@ function EpubEditor({ book, onBack }) {
         disabled={saveMutation.isPending || processMutation.isPending}
       >
         {processMutation.isPending
-          ? "Processing..."
+          ? "Queueing..."
           : saveMutation.isPending
             ? "Saving..."
-            : "Process Book"}
+            : "Queue Book Processing"}
       </button>
 
       {saveMutation.isError && (

@@ -167,6 +167,18 @@ def get_next_run_time_for_task(
     return calculate_next_run_time(get_last_run_anchor(task), now=now_utc)
 
 
+async def queue_scheduled_web_novel_update() -> None:
+    """Record scheduled refresh work in the durable processing ledger."""
+    from .processing_queue import queue_processing_job
+
+    await queue_processing_job(
+        job_type="refresh_all",
+        payload={"trigger": "scheduled"},
+        dedupe_key="refresh_all",
+        progress_detail="Queued by the web novel schedule",
+    )
+
+
 async def schedule_next_web_novel_update() -> datetime:
     async with SessionLocal() as db:
         latest_task = await crud.get_latest_update_task(db)
@@ -174,7 +186,7 @@ async def schedule_next_web_novel_update() -> datetime:
 
     next_run_at = get_next_run_time_for_task(latest_task, schedule_settings=schedule_settings)
     _scheduler.add_job(
-        run_web_novel_update,
+        queue_scheduled_web_novel_update,
         "date",
         id=WEB_NOVEL_UPDATE_JOB_ID,
         replace_existing=True,

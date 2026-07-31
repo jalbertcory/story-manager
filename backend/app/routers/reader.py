@@ -141,7 +141,7 @@ def _reader_book_payload(
 
 
 def _reader_audiobook_status(book: models.Book, ready: int, total: int) -> str:
-    if book.audiobook_publication_state in {"processing", "partial", "complete", "error"}:
+    if book.audiobook_publication_state in {"stale", "processing", "partial", "complete", "error"}:
         return book.audiobook_publication_state
     if book.audiobook_pipeline_status == "error":
         return "error"
@@ -488,6 +488,8 @@ async def reader_audiobook_manifest(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     book = await _reader_audiobook_book(book_id, db)
+    if book.audiobook_publication_state == "stale":
+        raise HTTPException(status_code=409, detail="Audiobook is being regenerated for updated book content")
     text_path = text_reader_path(book)
     if text_path is None:
         raise HTTPException(status_code=404, detail="Audiobook text rendition is not available")
