@@ -41,10 +41,12 @@ async def _series_metadata_map(
 def serialize_catalog_book(
     book: models.Book,
     *,
+    audiobook_types: list[schemas.AudiobookType] | None = None,
     series_user_genre_tags: list[str] | None = None,
     effective_series_genre_tags: list[str] | None = None,
 ) -> schemas.BookCatalogEntry:
     payload = schemas.BookCatalogEntry.model_validate(book).model_dump()
+    payload["audiobook_types"] = audiobook_types or []
     payload["series_user_genre_tags"] = series_user_genre_tags or []
     payload["effective_genre_tags"] = effective_genre_tags(book, series_user_genre_tags)
     payload["effective_series_genre_tags"] = effective_series_genre_tags or []
@@ -60,6 +62,7 @@ async def build_book_catalog(
 ) -> list[schemas.BookCatalogEntry]:
     books = await crud.get_book_catalog(db, q=q, sort_by=sort_by, sort_order=sort_order)
     metadata_map = await _series_metadata_map(db, books)
+    human_audiobook_book_ids = await crud.audiobook.get_human_audiobook_book_ids(db, [book.id for book in books])
 
     series_books: dict[str, list[models.Book]] = {}
     for book in books:
@@ -74,6 +77,10 @@ async def build_book_catalog(
     return [
         serialize_catalog_book(
             book,
+            audiobook_types=[
+                *(["ai_generated"] if book.audiobook_enabled else []),
+                *(["human_narrated"] if book.id in human_audiobook_book_ids else []),
+            ],
             series_user_genre_tags=(metadata_map.get(book.series).user_genre_tags if book.series in metadata_map else []),
             effective_series_genre_tags=effective_series_tags.get(book.series, []) if book.series else [],
         )

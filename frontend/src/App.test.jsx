@@ -424,7 +424,7 @@ describe("App", () => {
     });
   });
 
-  it("shows, filters, and sorts audiobook-enabled books", async () => {
+  it("shows and filters AI-generated and human audiobook badges", async () => {
     const mockBooks = [
       {
         id: 31,
@@ -438,6 +438,16 @@ describe("App", () => {
       },
       {
         id: 32,
+        title: "Human Audio",
+        author: "Narrator B",
+        current_word_count: 1000,
+        source_type: "epub",
+        series: null,
+        audiobook_enabled: false,
+        audiobook_types: ["human_narrated"],
+      },
+      {
+        id: 33,
         title: "Text Only",
         author: "Author B",
         current_word_count: 900,
@@ -470,13 +480,17 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
 
     expect(await screen.findByTitle("Audiobook: paused")).toBeInTheDocument();
-    expect(screen.getByText("Showing 2 of 2 books")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Human-narrated audiobook"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Showing 3 of 3 books")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Audiobook"), {
       target: { value: "enabled" },
     });
-    expect(screen.getByText("Showing 1 of 2 books")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 3 books")).toBeInTheDocument();
     expect(screen.getByText("Audio Ready")).toBeInTheDocument();
+    expect(screen.getByText("Human Audio")).toBeInTheDocument();
     expect(screen.queryByText("Text Only")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Sort library by"), {
@@ -487,5 +501,56 @@ describe("App", () => {
         "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc",
       );
     });
+  });
+
+  it("keeps the book section and audiobook tab in the URL", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/books/44/audiobooks?tab=characters",
+    );
+    const book = {
+      id: 44,
+      title: "Routed Audio",
+      author: "Author",
+      source_type: "epub",
+      immutable_path: "library/source.epub",
+      current_path: "library/current.epub",
+      removed_chapters: [],
+      content_selectors: [],
+      content_version: 1,
+      audiobook_enabled: true,
+    };
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/books/44") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(book) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<App />);
+
+    const characters = await screen.findByRole("button", {
+      name: "Characters",
+    });
+    expect(characters).toHaveClass("sub-tab--active");
+    expect(window.location.pathname).toBe("/books/44/audiobooks");
+    expect(window.location.search).toBe("?tab=characters");
+
+    fireEvent.click(screen.getByRole("button", { name: "Analysis" }));
+    expect(window.location.search).toBe("?tab=analysis");
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(window.location.pathname).toBe("/books/44/details");
+    expect(window.location.search).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Audiobook Pipeline" }));
+    expect(window.location.pathname).toBe("/books/44/audiobooks");
+    expect(window.location.search).toBe("?tab=analysis");
+
+    fireEvent.click(screen.getByRole("button", { name: /back/i }));
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("#series");
+    expect(await screen.findByText("No books found.")).toBeInTheDocument();
   });
 });

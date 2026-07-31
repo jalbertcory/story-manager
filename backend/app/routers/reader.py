@@ -120,8 +120,10 @@ def _reader_book_payload(
     *,
     series_user_genre_tags: list[str] | None = None,
     audiobook_chapters: list[models.AudiobookChapter] | None = None,
+    has_human_audiobook: bool = False,
 ) -> dict:
     base_url = str(request.base_url).rstrip("/")
+    generated_audiobook = _reader_audiobook_capability(book, audiobook_chapters or [])
     return {
         "id": book.id,
         "title": book.title,
@@ -136,7 +138,11 @@ def _reader_book_payload(
         "effective_genre_tags": _effective_genre_tags(book, series_user_genre_tags),
         "download_url": f"{base_url}/reader/books/{book.id}/download",
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
-        "audiobook": _reader_audiobook_capability(book, audiobook_chapters or []),
+        "audiobook": generated_audiobook,
+        "audiobook_types": [
+            *(["ai_generated"] if generated_audiobook is not None else []),
+            *(["human_narrated"] if has_human_audiobook else []),
+        ],
     }
 
 
@@ -353,6 +359,7 @@ async def _series_metadata_map(db: AsyncSession, books: list[models.Book]) -> di
 async def _reader_books_response(books: list[models.Book], request: Request, db: AsyncSession) -> list[schemas.ReaderBook]:
     metadata_map = await _series_metadata_map(db, books)
     chapters_by_book = await crud.audiobook.get_chapters_for_books(db, [book.id for book in books])
+    human_audiobook_book_ids = await crud.audiobook.get_human_audiobook_book_ids(db, [book.id for book in books])
     return [
         schemas.ReaderBook.model_validate(
             _reader_book_payload(
@@ -362,6 +369,7 @@ async def _reader_books_response(books: list[models.Book], request: Request, db:
                     metadata_map[book.series].user_genre_tags if book.series and book.series in metadata_map else None
                 ),
                 audiobook_chapters=chapters_by_book.get(book.id, []),
+                has_human_audiobook=book.id in human_audiobook_book_ids,
             )
         )
         for book in books

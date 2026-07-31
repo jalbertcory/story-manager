@@ -88,6 +88,13 @@ async def test_reader_audiobook_capability_and_assets(
             )
         )
         db.add(
+            models.ImportedAudiobook(
+                book_id=839,
+                name="Human narration",
+                status="ready",
+            )
+        )
+        db.add(
             models.Book(
                 id=840,
                 title="Complete Standalone Audio",
@@ -141,7 +148,8 @@ async def test_reader_audiobook_capability_and_assets(
     }
     for url, expected_book_id in listing_urls.items():
         payload = app_client.get(url, auth=auth).json()
-        audiobook = next(item for item in payload if item["id"] == expected_book_id)["audiobook"]
+        listed_book = next(item for item in payload if item["id"] == expected_book_id)
+        audiobook = listed_book["audiobook"]
         assert audiobook == {
             "status": "complete",
             "revision": 7,
@@ -152,8 +160,12 @@ async def test_reader_audiobook_capability_and_assets(
             "ready_audio_bytes": len(audio_content),
             "manifest_url": f"/reader/books/{expected_book_id}/audiobook/manifest",
         }
+        assert listed_book["audiobook_types"] == (
+            ["ai_generated", "human_narrated"] if expected_book_id == 839 else ["ai_generated"]
+        )
     single = app_client.get("/reader/books/839", auth=auth).json()
     assert single["audiobook"]["status"] == "complete"
+    assert single["audiobook_types"] == ["ai_generated", "human_narrated"]
 
     manifest_response = app_client.get(protected_urls[0], auth=auth)
     assert manifest_response.status_code == 200
@@ -246,7 +258,40 @@ async def test_reader_book_omits_audiobook_for_legacy_book(app_client, sqlite_se
     auth = ("reader", key_response.json()["token"])
     book = app_client.get("/reader/books/all", auth=auth).json()[0]
     assert book["audiobook"] is None
+    assert book["audiobook_types"] == []
     assert app_client.get(f"/reader/books/{book['id']}/audiobook/manifest", auth=auth).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        book = models.Book(
+            title="Human Audio Book",
+            author="Reader",
+            source_type=models.SourceType.epub,
+            immutable_path="library/human-source.epub",
+            current_path="library/human.epub",
+            content_version=1,
+            audiobook_enabled=False,
+        )
+        db.add(book)
+        await db.flush()
+        db.add(
+            models.ImportedAudiobook(
+                book_id=book.id,
+                name="Human narration",
+                status="ready",
+            )
+        )
+        await db.commit()
+        book_id = book.id
+
+    key_response = app_client.post("/api/reader-keys", json={"label": "Human Audio Reader"})
+    auth = ("reader", key_response.json()["token"])
+    payload = app_client.get(f"/reader/books/{book_id}", auth=auth).json()
+
+    assert payload["audiobook"] is None
+    assert payload["audiobook_types"] == ["human_narrated"]
 
 
 def test_reader_audiobook_capability_supports_all_publication_states():

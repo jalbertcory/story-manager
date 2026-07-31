@@ -28,6 +28,8 @@ function App() {
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState("asc");
   const [editingBook, setEditingBook] = useState(null);
+  const [bookSection, setBookSection] = useState("details");
+  const [audiobookTab, setAudiobookTab] = useState("sources");
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
   const [addBookOpen, setAddBookOpen] = useState(false);
@@ -49,9 +51,18 @@ function App() {
   }, []);
 
   const applyLocation = useCallback(
-    async (pathname, hash, stateData = null) => {
-      const parsed = parseLocation(pathname, hash);
+    async (pathname, hash, search, stateData = null) => {
+      const parsed = parseLocation(pathname, hash, search);
       if (parsed.view === "book") {
+        if (parsed.legacyBookPath) {
+          window.history.replaceState(
+            window.history.state,
+            "",
+            buildBookPath(parsed.bookId, "details"),
+          );
+        }
+        setBookSection(parsed.bookSection);
+        setAudiobookTab(parsed.audiobookTab);
         if (stateData?.id === parsed.bookId) {
           setEditingBook(stateData);
           return;
@@ -83,8 +94,14 @@ function App() {
 
   const navigate = (view, data = null) => {
     if (view === "book" && data?.id) {
-      window.history.pushState({ view, data }, "", buildBookPath(data.id));
+      window.history.pushState(
+        { view, data },
+        "",
+        buildBookPath(data.id, "details"),
+      );
       setEditingBook(data);
+      setBookSection("details");
+      setAudiobookTab("sources");
     } else {
       const nextPath = buildTabPath(view, libraryView);
       const tab = TABS.find((item) => item.key === view) || TABS[0];
@@ -107,7 +124,11 @@ function App() {
     if (!authStatus?.authenticated) {
       return;
     }
-    void applyLocation(window.location.pathname, window.location.hash);
+    void applyLocation(
+      window.location.pathname,
+      window.location.hash,
+      window.location.search,
+    );
   }, [applyLocation, authStatus?.authenticated]);
 
   useEffect(() => {
@@ -118,6 +139,7 @@ function App() {
       void applyLocation(
         window.location.pathname,
         window.location.hash,
+        window.location.search,
         e.state?.data ?? null,
       );
     };
@@ -161,6 +183,25 @@ function App() {
     if (fullBook) {
       navigate("book", fullBook);
     }
+  };
+
+  const handleBookNavigation = (nextSection, nextAudiobookTab = audiobookTab) => {
+    if (!editingBook) return;
+    const nextPath = buildBookPath(
+      editingBook.id,
+      nextSection,
+      nextAudiobookTab,
+    );
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== nextPath) {
+      window.history.pushState(
+        { view: "book", data: editingBook },
+        "",
+        nextPath,
+      );
+    }
+    setBookSection(nextSection);
+    setAudiobookTab(nextAudiobookTab);
   };
 
   const handleLogout = async () => {
@@ -227,7 +268,13 @@ function App() {
 
   if (editingBook) {
     return (
-      <BookSettings book={editingBook} onBack={() => window.history.back()} />
+      <BookSettings
+        book={editingBook}
+        onBack={() => navigate("library")}
+        bookSection={bookSection}
+        audiobookTab={audiobookTab}
+        onNavigationChange={handleBookNavigation}
+      />
     );
   }
 

@@ -83,8 +83,8 @@ function LibraryFilters({
           onChange={(event) => onAudiobookFilterChange(event.target.value)}
         >
           <option value="">All books</option>
-          <option value="enabled">Enabled</option>
-          <option value="disabled">Not enabled</option>
+          <option value="enabled">Available</option>
+          <option value="disabled">No audiobook</option>
         </select>
       </label>
     </div>
@@ -189,10 +189,13 @@ function BookList({
   const filteredBooks = useMemo(
     () =>
       books.filter((book) => {
-        if (audiobookFilter === "enabled" && !book.audiobook_enabled) {
+        const hasAudiobook = Boolean(
+          book.audiobook_types?.length || book.audiobook_enabled,
+        );
+        if (audiobookFilter === "enabled" && !hasAudiobook) {
           return false;
         }
-        if (audiobookFilter === "disabled" && book.audiobook_enabled) {
+        if (audiobookFilter === "disabled" && hasAudiobook) {
           return false;
         }
         if (reviewFilter === "missing-series") {

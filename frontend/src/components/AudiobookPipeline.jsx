@@ -19,6 +19,7 @@ import AnalysisOverview from "./audiobook/AnalysisOverview";
 import AudiobookReader from "./audiobook/AudiobookReader";
 import ProgressDashboard from "./audiobook/ProgressDashboard";
 import AudiobookSources from "./audiobook/AudiobookSources";
+import { AUDIOBOOK_TABS } from "../lib/navigation";
 
 const PIPELINE_STEPS = [
   { status: "ingesting", label: "Ingesting" },
@@ -113,20 +114,25 @@ function JobInspector({ statusData, totalSentences, doneCount }) {
   );
 }
 
-const AI_SUB_TABS = [
-  "Progress",
-  "Analysis",
-  "Characters",
-  "Script Editor",
-  "Chapter Assembly",
-];
+const AI_SUB_TAB_KEYS = new Set([
+  "progress",
+  "analysis",
+  "characters",
+  "script-editor",
+  "chapter-assembly",
+]);
 
-function AudiobookPipeline({ book, onEnableAi }) {
+function AudiobookPipeline({
+  book,
+  onEnableAi,
+  audiobookTab,
+  onAudiobookTabChange,
+}) {
   const bookId = book.id;
   const aiEnabled = book.audiobook_enabled !== false;
   const queryClient = useQueryClient();
-  const [subTab, setSubTab] = useState(
-    book.audiobook_enabled === undefined ? "Progress" : "Sources",
+  const [internalSubTab, setInternalSubTab] = useState(
+    book.audiobook_enabled === undefined ? "progress" : "sources",
   );
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [lastQueuedJob, setLastQueuedJob] = useState(null);
@@ -257,11 +263,17 @@ function AudiobookPipeline({ book, onEnableAi }) {
     }
   }, [aiEnabled, bookId, pipelineStatus, queryClient]);
 
-  const subTabs = [
-    "Sources",
-    "Listen & Read",
-    ...(aiEnabled ? AI_SUB_TABS : []),
-  ];
+  const subTabs = AUDIOBOOK_TABS.filter(
+    (tab) => !AI_SUB_TAB_KEYS.has(tab.key) || aiEnabled,
+  );
+  const requestedSubTab = audiobookTab || internalSubTab;
+  const subTab = subTabs.some((tab) => tab.key === requestedSubTab)
+    ? requestedSubTab
+    : "sources";
+  const selectSubTab = (tab) => {
+    setInternalSubTab(tab);
+    onAudiobookTabChange?.(tab);
+  };
 
   return (
     <div className="audiobook-pipeline">
@@ -411,19 +423,19 @@ function AudiobookPipeline({ book, onEnableAi }) {
       )}
 
       <nav className="sub-tabs">
-        {subTabs.map((t) => (
+        {subTabs.map((tab) => (
           <button
-            key={t}
-            className={`sub-tab${subTab === t ? " sub-tab--active" : ""}`}
-            onClick={() => setSubTab(t)}
+            key={tab.key}
+            className={`sub-tab${subTab === tab.key ? " sub-tab--active" : ""}`}
+            onClick={() => selectSubTab(tab.key)}
           >
-            {t}
+            {tab.label}
           </button>
         ))}
       </nav>
 
       <div className="sub-tab-content">
-        {subTab === "Sources" && (
+        {subTab === "sources" && (
           <AudiobookSources
             bookId={bookId}
             chapters={chapters}
@@ -432,13 +444,13 @@ function AudiobookPipeline({ book, onEnableAi }) {
             onEnableAi={onEnableAi}
           />
         )}
-        {subTab === "Progress" && (
+        {subTab === "progress" && (
           <ProgressDashboard status={statusData} chapters={chapters} />
         )}
-        {subTab === "Analysis" && (
+        {subTab === "analysis" && (
           <AnalysisOverview status={statusData} chapters={chapters} />
         )}
-        {subTab === "Characters" && (
+        {subTab === "characters" && (
           <CharacterRoster
             characters={characters}
             bookId={bookId}
@@ -446,7 +458,7 @@ function AudiobookPipeline({ book, onEnableAi }) {
             series={book.series}
           />
         )}
-        {subTab === "Script Editor" && (
+        {subTab === "script-editor" && (
           <ScriptEditor
             bookId={bookId}
             characters={characters}
@@ -454,14 +466,14 @@ function AudiobookPipeline({ book, onEnableAi }) {
             pipelineActive={isActive(pipelineStatus)}
           />
         )}
-        {subTab === "Chapter Assembly" && (
+        {subTab === "chapter-assembly" && (
           <ChapterAssembly
             chapters={chapters}
             bookId={bookId}
             pipelineActive={isActive(pipelineStatus)}
           />
         )}
-        {subTab === "Listen & Read" && (
+        {subTab === "listen-read" && (
           <AudiobookReader
             chapters={chapters}
             characters={characters}

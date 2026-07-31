@@ -1,4 +1,5 @@
 import { getCoverUrl } from "./catalogDisplay";
+import { buildBookPath } from "../../lib/navigation";
 
 const NO_COVER_SVG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='250'%3E%3Crect width='200' height='250' fill='%23e0e0e0'/%3E%3Ctext x='100' y='125' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='14' fill='%23888'%3ENo Cover%3C/text%3E%3C/svg%3E";
@@ -24,16 +25,30 @@ export function GenreTagList({ tags, className = "" }) {
 }
 
 export function AudiobookBadge({ book }) {
-  if (!book.audiobook_enabled) return null;
+  const audiobookTypes = book.audiobook_types?.length
+    ? book.audiobook_types
+    : book.audiobook_enabled
+      ? ["ai_generated"]
+      : [];
+  if (!audiobookTypes.length) return null;
   const status = book.audiobook_pipeline_status;
   return (
-    <span
-      className="badge-audiobook"
-      title={status ? `Audiobook: ${status}` : "Audiobook enabled"}
-    >
-      <span aria-hidden="true">🎧</span>{" "}
-      {status === "complete" ? "Audiobook ready" : "Audiobook"}
-    </span>
+    <>
+      {audiobookTypes.includes("ai_generated") && (
+        <span
+          className="badge-audiobook"
+          title={status ? `Audiobook: ${status}` : "Audiobook enabled"}
+        >
+          <span aria-hidden="true">🎧</span>{" "}
+          {status === "complete" ? "Audiobook ready" : "Audiobook"}
+        </span>
+      )}
+      {audiobookTypes.includes("human_narrated") && (
+        <span className="badge-audiobook" title="Human-narrated audiobook">
+          <span aria-hidden="true">🎧</span> Human audiobook
+        </span>
+      )}
+    </>
   );
 }
 
@@ -96,7 +111,7 @@ export function BookCard({ book, onEdit }) {
 
   return (
     <a
-      href={isPending ? undefined : `/books/${book.id}`}
+      href={isPending ? undefined : buildBookPath(book.id, "details")}
       className={`book-card${isPending ? " book-card--pending" : ""}${isError ? " book-card--error" : ""}`}
       onClick={handleClick}
     >
@@ -160,7 +175,7 @@ export function BookRow({
   return (
     <div className="book-row">
       <a
-        href={`/books/${book.id}`}
+        href={buildBookPath(book.id, "details")}
         className="book-row-main"
         onClick={handleClick}
       >
