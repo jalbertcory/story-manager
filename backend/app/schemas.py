@@ -4,6 +4,8 @@ from typing import Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
 
+AudiobookType = Literal["ai_generated", "human_narrated"]
+
 
 # Base Pydantic model for a book, defining common attributes.
 class BookBase(BaseModel):
@@ -86,6 +88,7 @@ class BookCatalogEntry(BaseModel):
     refresh_status: Optional[str] = None
     audiobook_enabled: bool = False
     audiobook_pipeline_status: Optional[str] = None
+    audiobook_types: List[AudiobookType] = Field(default_factory=list)
 
 
 # Pydantic model for creating a new book log.
@@ -311,6 +314,7 @@ class ReaderBook(BaseModel):
     download_url: str
     cover_url: Optional[str] = None
     audiobook: Optional[ReaderAudiobookCapability] = None
+    audiobook_types: List[AudiobookType] = Field(default_factory=list)
 
 
 PROCESSING_JOB_TYPES = Literal[

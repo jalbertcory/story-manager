@@ -97,6 +97,38 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
 
 
 @pytest.mark.asyncio
+async def test_book_catalog_includes_generated_and_human_audiobook_types(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Two Audio Editions",
+                author="Catalog Author",
+                immutable_path="two-audio-source.epub",
+                current_path="two-audio.epub",
+                source_type=models.SourceType.epub,
+                audiobook_enabled=True,
+            ),
+        )
+        session.add(
+            models.ImportedAudiobook(
+                book_id=book.id,
+                name="Human edition",
+                status="ready",
+            )
+        )
+        await session.commit()
+
+    response = client.get("/api/books/catalog")
+
+    assert response.status_code == 200
+    assert response.json()[0]["audiobook_types"] == [
+        "ai_generated",
+        "human_narrated",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_book_catalog_sorts_audiobook_enabled_first(db_session):
     async with AsyncTestingSessionLocal() as session:
         enabled = await crud.create_book(

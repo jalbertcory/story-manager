@@ -750,6 +750,9 @@
   border-radius: 999px;
   white-space: nowrap;
 }
+.badge-audiobook + .badge-audiobook {
+  margin-left: 0.35rem;
+}
 .badge-config {
   display: inline-block;
   padding: 0.15em 0.55em;

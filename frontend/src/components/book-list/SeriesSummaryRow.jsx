@@ -108,8 +108,9 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       authors,
       totalWords,
       hasWebNovel: orderedBooks.some((book) => book.source_type === "web"),
-      audiobookCount: orderedBooks.filter((book) => book.audiobook_enabled)
-        .length,
+      audiobookCount: orderedBooks.filter(
+        (book) => book.audiobook_types?.length || book.audiobook_enabled,
+      ).length,
       coverBook,
       coverBooks,
       latestUpdate: latestUpdate.getTime() > 0 ? latestUpdate : null,

@@ -52,7 +52,13 @@ const fetchUpdateHistory = async ({ queryKey }) => {
   return getBookUpdateHistory(bookId);
 };
 
-function BookSettings({ book: initialBook, onBack }) {
+function BookSettings({
+  book: initialBook,
+  onBack,
+  bookSection,
+  audiobookTab,
+  onNavigationChange,
+}) {
   const queryClient = useQueryClient();
   const coverInputRef = useRef(null);
 
@@ -136,7 +142,19 @@ function BookSettings({ book: initialBook, onBack }) {
     getUpdatedFields,
   } = useBookSettingsForm(initialBook);
   const [previewedChapter, setPreviewedChapter] = useState(null);
-  const [bookTab, setBookTab] = useState("details");
+  const [internalBookTab, setInternalBookTab] = useState("details");
+  const bookTab = bookSection
+    ? bookSection === "audiobooks"
+      ? "audiobook"
+      : "details"
+    : internalBookTab;
+  const setBookTab = (tab) => {
+    if (onNavigationChange) {
+      onNavigationChange(tab === "audiobook" ? "audiobooks" : "details");
+    } else {
+      setInternalBookTab(tab);
+    }
+  };
   const [jobNotice, setJobNotice] = useState("");
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
@@ -386,6 +404,10 @@ function BookSettings({ book: initialBook, onBack }) {
         <AudiobookPipeline
           book={book}
           onEnableAi={() => enableAudiobookMutation.mutate()}
+          audiobookTab={audiobookTab}
+          onAudiobookTabChange={(tab) =>
+            onNavigationChange?.("audiobooks", tab)
+          }
         />
       )}
 
