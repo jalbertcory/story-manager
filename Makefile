@@ -1,8 +1,11 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-transcription run-transcription build-transcription-image pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
 OMNIVOICE_PORT ?= 8001
+TRANSCRIPTION_PORT ?= 8002
+WHISPER_LANGUAGE ?= en
+WHISPER_MODEL_CACHE ?= .run/models/whisperx
 
 help:
 	@echo "Story Manager commands:"
@@ -15,6 +18,8 @@ help:
 	@echo "  make run-ui           Run the Vite frontend"
 	@echo "  make setup-omnivoice  Install official OmniVoice in an isolated environment"
 	@echo "  make run-omnivoice    Run the local MPS/CUDA/CPU OmniVoice adapter"
+	@echo "  make run-transcription Run the local WhisperX timestamp service"
+	@echo "  make build-transcription-image Build the production WhisperX image"
 	@echo "  make pull-ollama-model Pull the recommended local audiobook LLM"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
@@ -41,6 +46,21 @@ setup-omnivoice:
 run-omnivoice: setup-omnivoice
 	PYTORCH_ENABLE_MPS_FALLBACK=1 services/omnivoice/.venv/bin/uvicorn \
 		services.omnivoice.server:app --host 127.0.0.1 --port $(OMNIVOICE_PORT)
+
+setup-transcription:
+	uv sync --project services/transcription --python 3.13
+
+run-transcription: setup-transcription
+	mkdir -p $(WHISPER_MODEL_CACHE)
+	WHISPER_LANGUAGE=$(WHISPER_LANGUAGE) \
+		WHISPER_MODEL_CACHE=$(WHISPER_MODEL_CACHE) \
+		services/transcription/.venv/bin/uvicorn \
+		services.transcription.server:app --host 127.0.0.1 --port $(TRANSCRIPTION_PORT)
+
+build-transcription-image:
+	docker build --platform linux/amd64 \
+		-f services/transcription/Dockerfile \
+		-t story-manager-transcription:local .
 
 pull-ollama-model:
 	ollama pull qwen3.5:9b
@@ -137,7 +157,17 @@ test-migrations:
 	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE content_file_name = 'Text/existing.xhtml') THEN RAISE EXCEPTION 'audiobook downgrade removed existing chapter'; END IF; END \$$\$$;"; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-preexisting-audiobook-setup.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-preexisting-audiobook-verify.sql
 
 e2e:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true

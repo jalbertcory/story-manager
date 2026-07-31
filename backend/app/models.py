@@ -220,6 +220,11 @@ class AudiobookSettings(Base):
     tts_base_url = Column(String, nullable=True)
     tts_model = Column(String, nullable=True)
     tts_default_voice = Column(String, nullable=True)
+    transcription_provider = Column(String, nullable=True)
+    transcription_api_key = Column(String, nullable=True)
+    transcription_base_url = Column(String, nullable=True)
+    transcription_model = Column(String, nullable=True)
+    transcription_language = Column(String, nullable=True)
     roster_prompt_template = Column(Text, nullable=True)
     diarization_prompt_template = Column(Text, nullable=True)
 
@@ -313,3 +318,83 @@ class AudiobookSentence(Base):
     speaker_reason = Column(Text, nullable=True)
     # Status values: pending_diarization, ready_for_audio, audio_generated, error
     status = Column(String, nullable=False, server_default="pending_diarization")
+
+
+class ImportedAudiobook(Base):
+    """A human-narrated audiobook edition attached to a library book."""
+
+    __tablename__ = "imported_audiobooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    source_type = Column(String, nullable=False, default="upload", server_default="upload")
+    asin = Column(String, nullable=True, index=True)
+    # Values: queued, importing, ready, aligning, error.
+    status = Column(String, nullable=False, default="queued", server_default="queued", index=True)
+    alignment_method = Column(String, nullable=True)
+    original_filenames = Column(JSON, nullable=True)
+    duration_ms = Column(BigInteger, nullable=True)
+    progress_current = Column(Integer, nullable=False, default=0, server_default="0")
+    progress_total = Column(Integer, nullable=False, default=0, server_default="0")
+    progress_detail = Column(String, nullable=True)
+    error = Column(Text, nullable=True)
+    alignment_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+
+class ImportedAudiobookTrack(Base):
+    """A chapter-like time range in an imported audiobook source file."""
+
+    __tablename__ = "imported_audiobook_tracks"
+    __table_args__ = (UniqueConstraint("imported_audiobook_id", "sequence_order", name="uq_imported_audiobook_track_order"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    imported_audiobook_id = Column(
+        Integer,
+        ForeignKey("imported_audiobooks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    matched_chapter_id = Column(
+        Integer,
+        ForeignKey("audiobook_chapters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    sequence_order = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    audio_file_path = Column(String, nullable=False)
+    media_type = Column(String, nullable=False)
+    source_start_ms = Column(BigInteger, nullable=False, default=0, server_default="0")
+    source_end_ms = Column(BigInteger, nullable=False)
+    duration_ms = Column(BigInteger, nullable=False)
+    transcript_file_path = Column(String, nullable=True)
+    alignment_score = Column(Float, nullable=True)
+
+
+class ImportedAudiobookCue(Base):
+    """Sentence-level media-overlay timing for an imported track."""
+
+    __tablename__ = "imported_audiobook_cues"
+    __table_args__ = (UniqueConstraint("track_id", "sentence_id", name="uq_imported_audiobook_cue_sentence"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    track_id = Column(
+        Integer,
+        ForeignKey("imported_audiobook_tracks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sentence_id = Column(
+        Integer,
+        ForeignKey("audiobook_sentences.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence_order = Column(Integer, nullable=False)
+    clip_begin_ms = Column(BigInteger, nullable=False)
+    clip_end_ms = Column(BigInteger, nullable=False)
+    confidence = Column(Float, nullable=True)
+    method = Column(String, nullable=False, default="estimated", server_default="estimated")

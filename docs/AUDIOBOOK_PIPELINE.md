@@ -1,3 +1,59 @@
+# Audiobooks
+
+## Imported Human Narration
+
+The **Audiobooks** tab on every book accepts existing human-narrated audio as
+an alternative to generated speech. Upload one or more audio files, a
+chaptered M4B, or a ZIP export from Libation. Libation archives work without
+repacking: Story Manager prefers the M4B when an archive contains duplicate
+M4B and MP3 renditions, reads its CUE sheet, and extracts the Audible ASIN from
+the filename when present.
+
+Imports run on a durable background queue and are stored under
+`library/audiobooks/{book_id}/imports/{edition_id}`. The original audio is
+stored once. Tracks backed by one long M4B reference exact source ranges rather
+than creating another split or transcoded copy.
+
+The import workflow is:
+
+1. Select the matching library book and upload the files in **Sources**.
+2. Story Manager reads CUE or embedded chapter boundaries and matches chapter
+   titles/numbers to the EPUB.
+3. Review unmatched tracks in **Track matching** and select a chapter
+   manually when needed. Credits may remain unmatched.
+4. Select the ready human-narrated edition under **Listen & Read**. Playback
+   starts at the exact source boundary, text is highlighted, and any sentence
+   can be clicked to seek.
+
+The EPUB is transformed into the same stable sentence spans used by generated
+audiobooks, but importing narration does not enable or start the AI generation
+pipeline. CUE and embedded chapter boundaries are exact. Initial sentence
+boundaries are estimated from relative text length so the edition is usable
+immediately.
+
+Configure **Speech-to-Text Alignment** under **Audio Settings**, then click
+**Improve Timestamps with Whisper** on a ready edition. Story Manager extracts
+each matched CUE range to a temporary 16 kHz FLAC, sends it to the configured
+WhisperX service, and caches the returned forced-aligned word transcript. An
+order-aware fuzzy aligner matches those words to canonical EPUB tokens,
+tolerating ASR substitutions, contractions, omitted text, and narration
+additions. Grounded sentence boundaries use real word timestamps; uncertain
+gaps are interpolated between anchors and remain marked as `hybrid` or
+`estimated`.
+
+Generated SMIL is exposed by the imported-track API and uses absolute clip
+offsets into the retained source recording. Re-alignment replaces cue rows, so
+the web reader and SMIL endpoint use the improved timing without duplicating or
+repackaging the source audio.
+
+### Bundled WhisperX service
+
+Story Manager publishes
+`ghcr.io/jalbertcory/story-manager-transcription:latest`. Its Docker image
+includes FFmpeg, CUDA 12.8, cuDNN, CPU fallback, and a persistent `/models`
+volume. See [`services/transcription/README.md`](../services/transcription/README.md)
+for deployment and configuration.
+
 # EPUB-to-Audiobook Pipeline
 
 ## Overview
@@ -192,6 +248,11 @@ confidence/rationales. Migration `0021_series_roster_and_chapter_previews.py` ad
 durable manual chapter-preview state. Migration `0022_provider_neutral_tts.py` preserves existing OmniVoice settings
 and voice profiles while renaming them and adding provider, model, API key, default voice, and per-character voice ID
 fields.
+
+Migration `0025_audiobook_transcription_alignment.py` adds WhisperX provider
+settings, alignment errors, cached transcript paths, and per-track alignment
+scores. Imported cue rows continue to hold the active timestamps, method, and
+confidence.
 
 ---
 

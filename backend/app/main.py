@@ -35,6 +35,8 @@ from .routers import (
     web_novels,
 )
 from .services.audiobook_queue import get_audiobook_queue
+from .services.audiobook_import_queue import get_audiobook_import_queue
+from .services.audiobook_alignment_queue import get_audiobook_alignment_queue
 from .services.metadata_sync_queue import get_metadata_sync_queue
 from .services.refresh_queue import get_refresh_queue
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
@@ -63,6 +65,8 @@ _web_import_queue = get_web_import_queue()
 _refresh_queue = get_refresh_queue()
 _metadata_sync_queue = get_metadata_sync_queue()
 _audiobook_queue = get_audiobook_queue()
+_audiobook_import_queue = get_audiobook_import_queue()
+_audiobook_alignment_queue = get_audiobook_alignment_queue()
 
 
 @asynccontextmanager
@@ -81,6 +85,8 @@ async def lifespan(app: FastAPI):
     await _web_import_queue.start()
     await _refresh_queue.start()
     await _audiobook_queue.start()
+    await _audiobook_import_queue.start()
+    await _audiobook_alignment_queue.start()
     if not is_test_app:
         await _metadata_sync_queue.start()
     requeued = await _web_import_queue.requeue_pending_books()
@@ -89,6 +95,12 @@ async def lifespan(app: FastAPI):
     audiobook_requeued = await _audiobook_queue.requeue_in_progress()
     if audiobook_requeued:
         logger.info("Re-queued %s in-flight audiobook pipeline jobs.", audiobook_requeued)
+    audiobook_imports_requeued = await _audiobook_import_queue.requeue_pending()
+    if audiobook_imports_requeued:
+        logger.info("Re-queued %s in-flight audiobook imports.", audiobook_imports_requeued)
+    audiobook_alignments_requeued = await _audiobook_alignment_queue.requeue_pending()
+    if audiobook_alignments_requeued:
+        logger.info("Re-queued %s in-flight audiobook timestamp alignments.", audiobook_alignments_requeued)
     refresh_requeued = await _refresh_queue.requeue_pending_books()
     if refresh_requeued:
         logger.info("Re-queued %s in-flight book refreshes.", refresh_requeued)
@@ -105,6 +117,8 @@ async def lifespan(app: FastAPI):
     await _web_import_queue.stop()
     await _refresh_queue.stop()
     await _audiobook_queue.stop()
+    await _audiobook_import_queue.stop()
+    await _audiobook_alignment_queue.stop()
     if not is_test_app:
         await _metadata_sync_queue.stop()
     if _scheduler.running:

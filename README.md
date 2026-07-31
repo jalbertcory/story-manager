@@ -5,6 +5,8 @@ Story Manager is a self-hosted library manager for EPUBs and web novels. It give
 ## Features
 
 - Manage uploaded EPUBs and tracked web novels in one library.
+- Import human-narrated audiobooks, including Libation ZIP exports, and read
+  along with synchronized EPUB text.
 - Download and refresh supported web novels with FanFicFare.
 - Preserve existing chapters when source sites remove older content.
 - Edit book metadata, covers, chapters, cleaning configs, and series information.
@@ -93,11 +95,36 @@ another container. When the AI services publish ports on Unraid, use the server'
 Ollama:            http://<UNRAID-IP>:11434
 OmniVoice adapter: http://<UNRAID-IP>:8001
 Kokoro FastAPI:    http://<UNRAID-IP>:8880
+WhisperX:          http://<UNRAID-IP>:8002
 ```
 
 As an alternative, put Story Manager and its AI services on the same user-defined Docker network and use their
 container names, such as `http://ollama:11434`, `http://story-manager-omnivoice:8001`, or `http://kokoro:8880`.
 Do not publish local AI endpoints to the internet; they are not authentication boundaries.
+
+### Speech-to-text alignment for imported audiobooks
+
+Imported human narration is immediately playable with estimated sentence
+timing. For accurate highlighting, run the bundled WhisperX service and select
+it under **Audio Settings → Speech-to-Text Alignment**:
+
+```bash
+mkdir -p /mnt/user/appdata/story-manager-transcription/models
+
+docker run -d \
+  --name story-manager-transcription \
+  --restart unless-stopped \
+  --gpus all \
+  -p 8002:8002 \
+  -v /mnt/user/appdata/story-manager-transcription/models:/models \
+  ghcr.io/jalbertcory/story-manager-transcription:latest
+```
+
+Remove `--gpus all` for CPU-only inference. The image includes FFmpeg and
+downloads transcription/alignment models into the mapped directory on first
+startup. Configure `http://<UNRAID-IP>:8002`, model `large-v3`, and language
+`en`, then click **Save & Test Transcription**. Ready imported editions expose
+an **Improve Timestamps with Whisper** action.
 
 ### LLM for audiobook analysis
 
@@ -260,19 +287,23 @@ Start every local service with one command:
 make start
 ```
 
-The command starts only missing services: PostgreSQL, Ollama, the API, the UI, and OmniVoice. It waits for health
-checks, leaves healthy existing processes alone, and runs detached services with logs under `.run/logs/`. Check
-their current state at any time with `make services-status`.
+The command starts only missing services: PostgreSQL, Ollama, the API, the UI,
+OmniVoice, and WhisperX. It waits for health checks, leaves healthy existing
+processes alone, and runs detached services with logs under `.run/logs/`.
+Check their current state at any time with `make services-status`.
 
-The development UI runs at `http://localhost:5173`; the API runs at `http://localhost:8000`. The first OmniVoice
-setup can take several minutes. If the recommended Ollama model is missing, install it with
-`make pull-ollama-model`.
+The development UI runs at `http://localhost:5173`; the API runs at
+`http://localhost:8000`. The first OmniVoice and WhisperX setups can take
+several minutes. WhisperX stores downloaded models under
+`.run/models/whisperx`. If the recommended Ollama model is missing, install it
+with `make pull-ollama-model`.
 
 Useful commands:
 
 ```bash
 make migrate
 make run-omnivoice
+make run-transcription
 make test
 make test-migrations
 make e2e
@@ -280,6 +311,11 @@ make e2e
 
 `make run-omnivoice` installs and runs the optional official local OmniVoice adapter for real audiobook speech.
 See [services/omnivoice/README.md](services/omnivoice/README.md) for hardware notes and configuration.
+
+`make run-transcription` installs and runs the local WhisperX word-timestamp
+service. See
+[services/transcription/README.md](services/transcription/README.md) for model
+and hardware configuration.
 
 For setup notes and testing details, see [docs/development.md](docs/development.md).
 

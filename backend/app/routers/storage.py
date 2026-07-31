@@ -127,6 +127,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
     # (macOS HFS+/APFS) don't cause false orphan detections when the DB
     # stores a different casing than what's on disk.
     tracked: set[str] = set()
+    tracked_directories: set[str] = set()
     for book in books:
         if book.immutable_path:
             tracked.add(str((LIBRARY_PATH.parent / book.immutable_path).resolve()).casefold())
@@ -134,13 +135,16 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             tracked.add(str((LIBRARY_PATH.parent / book.current_path).resolve()).casefold())
         if book.cover_path:
             tracked.add(str((LIBRARY_PATH.parent / book.cover_path).resolve()).casefold())
+        tracked_directories.add(str((LIBRARY_PATH / "audiobooks" / str(book.id)).resolve()).casefold())
 
     orphans = []
     for file in LIBRARY_PATH.rglob("*"):
         if not file.is_file():
             continue
-        path_str = str(file.resolve())
-        if path_str.casefold() not in tracked:
+        resolved = file.resolve()
+        path_str = str(resolved)
+        owned_by_book = any(str(parent).casefold() in tracked_directories for parent in resolved.parents)
+        if path_str.casefold() not in tracked and not owned_by_book:
             size = file.stat().st_size
             orphans.append({"path": str(file.relative_to(LIBRARY_PATH.parent)), "size_bytes": size})
 

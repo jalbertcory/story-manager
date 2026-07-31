@@ -1745,6 +1745,35 @@ async def test_delete_book_by_id_removes_author_folder_when_empty(db_session):
 
 
 @pytest.mark.asyncio
+async def test_delete_book_by_id_removes_owned_audiobook_directory(db_session, tmp_path, monkeypatch):
+    from backend.app.routers import books as books_router
+
+    library_path = (tmp_path / "library").resolve()
+    monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    library_path.mkdir(parents=True)
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Delete Audio",
+                author="Narrator",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    audiobook_dir = library_path / "audiobooks" / str(book.id)
+    source_path = audiobook_dir / "imports" / "1" / "source" / "chapter.m4b"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"large-audio-placeholder")
+
+    response = client.delete(f"/api/books/{book.id}")
+
+    assert response.status_code == 204
+    assert not audiobook_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_remove_all_books_preview_and_delete(db_session):
     library_path = Path("./library").resolve()
     author_one_dir = library_path / "Author One"
@@ -1791,15 +1820,20 @@ async def test_remove_all_books_preview_and_delete(db_session):
         await crud.create_book_log(session, schemas.BookLogCreate(book_id=alpha.id, entry_type="updated"))
         await crud.create_book_log(session, schemas.BookLogCreate(book_id=beta.id, entry_type="added"))
 
+    audiobook_path = library_path / "audiobooks" / str(alpha.id) / "imports" / "1" / "source" / "chapter.m4b"
+    audiobook_path.parent.mkdir(parents=True)
+    audiobook_path.write_bytes(b"audiobook")
+
     preview_response = client.post("/api/books/remove-all?dry_run=true")
 
     assert preview_response.status_code == 200
     preview = preview_response.json()
     assert preview["dry_run"] is True
     assert preview["book_count"] == 2
-    assert preview["file_count"] == 5
+    assert preview["file_count"] == 6
     assert preview["log_count"] == 3
     assert "library/Author One/Alpha.epub" in preview["paths"]
+    assert str(audiobook_path.relative_to(library_path.parent)) in preview["paths"]
     assert any(book["title"] == "Alpha" and book["log_entries"] == 2 for book in preview["books"])
 
     delete_response = client.post("/api/books/remove-all?dry_run=false")
@@ -1809,6 +1843,7 @@ async def test_remove_all_books_preview_and_delete(db_session):
     assert not author_one_dir.exists()
     assert not author_two_dir.exists()
     assert not cover_path.exists()
+    assert not audiobook_path.exists()
 
 
 @pytest.mark.asyncio
@@ -1869,6 +1904,10 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
             ),
         )
 
+    audiobook_path = library_path / "audiobooks" / str(keep_book.id) / "imports" / "1" / "source" / "chapter.m4b"
+    audiobook_path.parent.mkdir(parents=True)
+    audiobook_path.write_bytes(b"active-audiobook")
+
     preview_response = client.post("/api/storage/cleanup?dry_run=true")
 
     assert preview_response.status_code == 200
@@ -1893,6 +1932,7 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
     assert deleted["files"] == [{"path": "library/orphan.epub", "size_bytes": 6}]
     assert len(deleted["books"]) == 1
     assert not orphan_path.exists()
+    assert audiobook_path.read_bytes() == b"active-audiobook"
 
     books_response = client.get("/api/books")
     assert books_response.status_code == 200
