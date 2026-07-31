@@ -388,7 +388,13 @@ async def rebuild_estimated_cues(track: ImportedAudiobookTrack, db: AsyncSession
 
 async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[AudiobookChapter]:
     chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
-    if chapters:
+    content_version = book.content_version or 1
+    chapters_are_current = (
+        chapters
+        and book.audiobook_source_content_version == content_version
+        and book.audiobook_text_content_version == content_version
+    )
+    if chapters_are_current:
         return chapters
     prior_status = book.audiobook_pipeline_status
     await ingest_epub(book.id, db)

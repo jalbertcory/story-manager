@@ -357,17 +357,47 @@ async def _extract_track_clip(track: ImportedAudiobookTrack, destination: Path) 
         raise RuntimeError(f"Could not prepare {track.title!r} for transcription: {message}")
 
 
-def _transcript_cache_matches(payload: dict, provider: str, model: str | None) -> bool:
-    return payload.get("provider") == provider and payload.get("model") == model and isinstance(payload.get("words"), list)
+def _normalized_cache_language(language: str | None) -> str | None:
+    value = (language or "").strip().casefold()
+    return None if not value or value == "auto" else value
 
 
-def _read_transcript_cache(path: Path, provider: str, model: str | None) -> TranscriptResult | None:
+def _normalized_service_root(base_url: str | None) -> str | None:
+    value = (base_url or "").strip().rstrip("/")
+    if value.endswith("/transcribe"):
+        value = value[: -len("/transcribe")]
+    return value or None
+
+
+def _transcript_cache_matches(
+    payload: dict,
+    provider: str,
+    model: str | None,
+    language: str | None,
+    service_root: str | None,
+) -> bool:
+    return (
+        payload.get("provider") == provider
+        and payload.get("model") == model
+        and payload.get("request_language") == _normalized_cache_language(language)
+        and payload.get("service_root") == _normalized_service_root(service_root)
+        and isinstance(payload.get("words"), list)
+    )
+
+
+def _read_transcript_cache(
+    path: Path,
+    provider: str,
+    model: str | None,
+    language: str | None,
+    service_root: str | None,
+) -> TranscriptResult | None:
     if not path.is_file():
         return None
     try:
         with gzip.open(path, "rt", encoding="utf-8") as handle:
             payload = json.load(handle)
-        if not _transcript_cache_matches(payload, provider, model):
+        if not _transcript_cache_matches(payload, provider, model, language, service_root):
             return None
         return TranscriptResult(
             language=payload.get("language"),
@@ -384,11 +414,15 @@ def _write_transcript_cache(
     result: TranscriptResult,
     provider: str,
     model: str | None,
+    language: str | None,
+    service_root: str | None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "provider": provider,
         "model": model,
+        "request_language": _normalized_cache_language(language),
+        "service_root": _normalized_service_root(service_root),
         "language": result.language,
         "duration_ms": result.duration_ms,
         "words": [asdict(word) for word in result.words],
@@ -444,7 +478,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
             await db.commit()
 
             cache_path = edition_dir / "alignment" / "transcripts" / f"track-{track.id}.json.gz"
-            transcript = _read_transcript_cache(cache_path, provider, settings.transcription_model)
+            transcript = _read_transcript_cache(
+                cache_path,
+                provider,
+                settings.transcription_model,
+                settings.transcription_language,
+                settings.transcription_base_url,
+            )
             if transcript is None:
                 clip_path = edition_dir / "alignment" / "clips" / f"track-{track.id}.flac"
                 await _extract_track_clip(track, clip_path)
@@ -452,7 +492,14 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
                     transcript = await transcribe_file(settings, clip_path)
                 finally:
                     clip_path.unlink(missing_ok=True)
-                _write_transcript_cache(cache_path, transcript, provider, settings.transcription_model)
+                _write_transcript_cache(
+                    cache_path,
+                    transcript,
+                    provider,
+                    settings.transcription_model,
+                    settings.transcription_language,
+                    settings.transcription_base_url,
+                )
             track.transcript_file_path = relative_library_path(cache_path)
 
             sentences = await _sentences_for_track(track, db)

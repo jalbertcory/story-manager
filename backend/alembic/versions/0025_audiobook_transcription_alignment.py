@@ -15,18 +15,22 @@ down_revision = "0024"
 branch_labels = None
 depends_on = None
 
+# A schema comment lets downgrade distinguish columns added here from columns
+# that were already present on a populated, historically create_all-managed DB.
+_CREATED_COLUMN_COMMENT = "story-manager:alembic:0025"
 
-def _column_names(conn, table_name: str) -> set[str]:
+
+def _columns(conn, table_name: str) -> dict[str, dict]:
     inspector = sa.inspect(conn)
     if not inspector.has_table(table_name):
-        return set()
-    return {column["name"] for column in inspector.get_columns(table_name)}
+        return {}
+    return {column["name"]: column for column in inspector.get_columns(table_name)}
 
 
 def upgrade():
     conn = op.get_bind()
 
-    settings_columns = _column_names(conn, "audiobook_settings")
+    settings_columns = _columns(conn, "audiobook_settings")
     for name, column_type in (
         ("transcription_provider", sa.String()),
         ("transcription_api_key", sa.String()),
@@ -35,33 +39,45 @@ def upgrade():
         ("transcription_language", sa.String()),
     ):
         if settings_columns and name not in settings_columns:
-            op.add_column("audiobook_settings", sa.Column(name, column_type, nullable=True))
+            op.add_column(
+                "audiobook_settings",
+                sa.Column(name, column_type, nullable=True, comment=_CREATED_COLUMN_COMMENT),
+            )
 
-    edition_columns = _column_names(conn, "imported_audiobooks")
+    edition_columns = _columns(conn, "imported_audiobooks")
     if edition_columns and "alignment_error" not in edition_columns:
-        op.add_column("imported_audiobooks", sa.Column("alignment_error", sa.Text(), nullable=True))
+        op.add_column(
+            "imported_audiobooks",
+            sa.Column("alignment_error", sa.Text(), nullable=True, comment=_CREATED_COLUMN_COMMENT),
+        )
 
-    track_columns = _column_names(conn, "imported_audiobook_tracks")
+    track_columns = _columns(conn, "imported_audiobook_tracks")
     if track_columns and "transcript_file_path" not in track_columns:
-        op.add_column("imported_audiobook_tracks", sa.Column("transcript_file_path", sa.String(), nullable=True))
+        op.add_column(
+            "imported_audiobook_tracks",
+            sa.Column("transcript_file_path", sa.String(), nullable=True, comment=_CREATED_COLUMN_COMMENT),
+        )
     if track_columns and "alignment_score" not in track_columns:
-        op.add_column("imported_audiobook_tracks", sa.Column("alignment_score", sa.Float(), nullable=True))
+        op.add_column(
+            "imported_audiobook_tracks",
+            sa.Column("alignment_score", sa.Float(), nullable=True, comment=_CREATED_COLUMN_COMMENT),
+        )
 
 
 def downgrade():
     conn = op.get_bind()
 
-    track_columns = _column_names(conn, "imported_audiobook_tracks")
-    if "alignment_score" in track_columns:
+    track_columns = _columns(conn, "imported_audiobook_tracks")
+    if track_columns.get("alignment_score", {}).get("comment") == _CREATED_COLUMN_COMMENT:
         op.drop_column("imported_audiobook_tracks", "alignment_score")
-    if "transcript_file_path" in track_columns:
+    if track_columns.get("transcript_file_path", {}).get("comment") == _CREATED_COLUMN_COMMENT:
         op.drop_column("imported_audiobook_tracks", "transcript_file_path")
 
-    edition_columns = _column_names(conn, "imported_audiobooks")
-    if "alignment_error" in edition_columns:
+    edition_columns = _columns(conn, "imported_audiobooks")
+    if edition_columns.get("alignment_error", {}).get("comment") == _CREATED_COLUMN_COMMENT:
         op.drop_column("imported_audiobooks", "alignment_error")
 
-    settings_columns = _column_names(conn, "audiobook_settings")
+    settings_columns = _columns(conn, "audiobook_settings")
     for name in (
         "transcription_language",
         "transcription_model",
@@ -69,5 +85,5 @@ def downgrade():
         "transcription_api_key",
         "transcription_provider",
     ):
-        if name in settings_columns:
+        if settings_columns.get(name, {}).get("comment") == _CREATED_COLUMN_COMMENT:
             op.drop_column("audiobook_settings", name)

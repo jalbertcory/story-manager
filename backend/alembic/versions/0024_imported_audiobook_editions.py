@@ -15,6 +15,20 @@ down_revision = "0023"
 branch_labels = None
 depends_on = None
 
+# Upgrade and downgrade normally run in separate processes, so persist object
+# ownership in PostgreSQL's schema metadata instead of relying on module state.
+_CREATED_TABLE_COMMENT = "story-manager:alembic:0024"
+
+
+def _created_by_this_migration(conn, table_name: str) -> bool:
+    inspector = sa.inspect(conn)
+    if not inspector.has_table(table_name):
+        return False
+    try:
+        return inspector.get_table_comment(table_name).get("text") == _CREATED_TABLE_COMMENT
+    except NotImplementedError:
+        return False
+
 
 def upgrade():
     conn = op.get_bind()
@@ -40,6 +54,7 @@ def upgrade():
             sa.Column("error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+            comment=_CREATED_TABLE_COMMENT,
         )
         op.create_index("ix_imported_audiobooks_id", "imported_audiobooks", ["id"])
         op.create_index("ix_imported_audiobooks_book_id", "imported_audiobooks", ["book_id"])
@@ -75,6 +90,7 @@ def upgrade():
                 "sequence_order",
                 name="uq_imported_audiobook_track_order",
             ),
+            comment=_CREATED_TABLE_COMMENT,
         )
         op.create_index("ix_imported_audiobook_tracks_id", "imported_audiobook_tracks", ["id"])
         op.create_index(
@@ -111,6 +127,7 @@ def upgrade():
             sa.Column("confidence", sa.Float(), nullable=True),
             sa.Column("method", sa.String(), nullable=False, server_default="estimated"),
             sa.UniqueConstraint("track_id", "sentence_id", name="uq_imported_audiobook_cue_sentence"),
+            comment=_CREATED_TABLE_COMMENT,
         )
         op.create_index("ix_imported_audiobook_cues_id", "imported_audiobook_cues", ["id"])
         op.create_index("ix_imported_audiobook_cues_track_id", "imported_audiobook_cues", ["track_id"])
@@ -119,12 +136,9 @@ def upgrade():
 
 def downgrade():
     conn = op.get_bind()
-    inspector = sa.inspect(conn)
-    if inspector.has_table("imported_audiobook_cues"):
+    if _created_by_this_migration(conn, "imported_audiobook_cues"):
         op.drop_table("imported_audiobook_cues")
-    inspector = sa.inspect(conn)
-    if inspector.has_table("imported_audiobook_tracks"):
+    if _created_by_this_migration(conn, "imported_audiobook_tracks"):
         op.drop_table("imported_audiobook_tracks")
-    inspector = sa.inspect(conn)
-    if inspector.has_table("imported_audiobooks"):
+    if _created_by_this_migration(conn, "imported_audiobooks"):
         op.drop_table("imported_audiobooks")

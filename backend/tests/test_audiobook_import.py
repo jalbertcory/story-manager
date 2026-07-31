@@ -28,6 +28,9 @@ async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
         author="Narrator",
         immutable_path="library/import-test-immutable.epub",
         current_path="library/import-test.epub",
+        content_version=1,
+        audiobook_source_content_version=1,
+        audiobook_text_content_version=1,
     )
     db.add(book)
     await db.flush()
@@ -59,6 +62,32 @@ async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
     )
     await db.commit()
     return book, chapter
+
+
+@pytest.mark.asyncio
+async def test_existing_audiobook_text_is_reingested_when_book_content_is_newer(db, monkeypatch):
+    book, chapter = await _seed_book_text(db)
+    book.content_version = 2
+    await db.commit()
+    calls = []
+
+    async def fake_ingest(book_id, selected_db):
+        calls.append(book_id)
+        selected_book = await selected_db.get(Book, book_id)
+        selected_book.audiobook_source_content_version = selected_book.content_version
+        selected_book.audiobook_text_content_version = selected_book.content_version
+        selected_book.audiobook_pipeline_status = "roster_gen"
+        await selected_db.commit()
+
+    monkeypatch.setattr(audiobook_import, "ingest_epub", fake_ingest)
+
+    chapters = await audiobook_import.ensure_span_anchored_text(book, db)
+
+    assert calls == [book.id]
+    assert [item.id for item in chapters] == [chapter.id]
+    assert book.audiobook_pipeline_status is None
+    assert book.audiobook_source_content_version == 2
+    assert book.audiobook_text_content_version == 2
 
 
 @pytest.mark.asyncio

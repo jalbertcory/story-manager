@@ -1,6 +1,7 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +35,11 @@ def _remove_book_files(book: models.Book) -> list[str]:
             removed_paths.append(str(relative_path))
             remove_empty_parent_dirs(full_path)
 
+    audiobook_dir = LIBRARY_PATH / "audiobooks" / str(book.id)
+    if audiobook_dir.exists():
+        removed_paths.extend(str(path.relative_to(LIBRARY_PATH.parent)) for path in audiobook_dir.rglob("*") if path.is_file())
+        shutil.rmtree(audiobook_dir)
+
     return removed_paths
 
 
@@ -47,6 +53,17 @@ def _book_cleanup_preview(book: models.Book) -> dict[str, Any]:
         full_path = LIBRARY_PATH.parent / relative_path
         size_bytes = full_path.stat().st_size if full_path.exists() and full_path.is_file() else 0
         files.append({"path": relative_path, "size_bytes": size_bytes})
+
+    audiobook_dir = LIBRARY_PATH / "audiobooks" / str(book.id)
+    if audiobook_dir.exists():
+        files.extend(
+            {
+                "path": str(path.relative_to(LIBRARY_PATH.parent)),
+                "size_bytes": path.stat().st_size,
+            }
+            for path in audiobook_dir.rglob("*")
+            if path.is_file()
+        )
 
     return {
         "id": book.id,

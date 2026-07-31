@@ -232,7 +232,15 @@ async def test_process_alignment_replaces_estimates_and_caches_transcript(db, tm
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"flac")
 
+    transcription_calls = []
+
     async def fake_transcribe(_settings, _path):
+        transcription_calls.append(
+            (
+                _settings.transcription_language,
+                _settings.transcription_base_url,
+            )
+        )
         return transcription_providers.TranscriptResult(
             language="en",
             duration_ms=5_000,
@@ -269,3 +277,34 @@ async def test_process_alignment_replaces_estimates_and_caches_transcript(db, tm
     assert cues[0].clip_begin_ms == 20_000
     assert cues[-1].clip_end_ms == 25_000
     assert (edition_dir / "alignment" / "transcripts" / f"track-{track.id}.json.gz").is_file()
+    assert transcription_calls == [("en", "http://whisper:8002")]
+
+    edition.status = "aligning"
+    await db.commit()
+
+    await audiobook_alignment.process_alignment(edition.id, db)
+
+    assert transcription_calls == [("en", "http://whisper:8002")]
+
+    settings.transcription_language = "fr"
+    edition.status = "aligning"
+    await db.commit()
+
+    await audiobook_alignment.process_alignment(edition.id, db)
+
+    assert transcription_calls == [
+        ("en", "http://whisper:8002"),
+        ("fr", "http://whisper:8002"),
+    ]
+
+    settings.transcription_base_url = "http://replacement-whisper:8002/transcribe"
+    edition.status = "aligning"
+    await db.commit()
+
+    await audiobook_alignment.process_alignment(edition.id, db)
+
+    assert transcription_calls == [
+        ("en", "http://whisper:8002"),
+        ("fr", "http://whisper:8002"),
+        ("fr", "http://replacement-whisper:8002/transcribe"),
+    ]
