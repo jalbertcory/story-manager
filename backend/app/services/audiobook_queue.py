@@ -232,12 +232,7 @@ class AudiobookQueue:
                 self._background_audio_queue.task_done()
 
     async def requeue_in_progress(self) -> int:
-        async with SessionLocal() as db:
-            books = await crud.audiobook.get_in_progress_audiobook_books(db)
         queued = 0
-        for book in books:
-            if await self.enqueue(book.id):
-                queued += 1
         async with SessionLocal() as db:
             preview_chapters = await crud.audiobook.get_chapters_with_pending_previews(db)
             for chapter in preview_chapters:
@@ -444,6 +439,10 @@ class AudiobookQueue:
                 return await self._process(book_id)
 
         logger.info("Audiobook pipeline complete for book %s.", book_id)
+
+    async def process_book(self, book_id: int) -> None:
+        """Run one pipeline job under the durable processing orchestrator."""
+        await self._process(book_id)
 
 
 _audiobook_queue = AudiobookQueue()

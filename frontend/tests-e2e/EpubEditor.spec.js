@@ -90,16 +90,49 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByPlaceholder("Add CSS selector, e.g. div.note").fill("p");
   await page.getByRole("button", { name: "Add" }).click();
 
-  // Save edits and rebuild the generated EPUB.
-  await page
-    .getByRole("button", { name: /rebuild epub from saved edits/i })
-    .click();
+  // Save edits and queue the generated EPUB rebuild.
+  const [processingResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        /\/api\/books\/\d+\/process$/.test(new URL(response.url()).pathname) &&
+        response.status() === 200,
+    ),
+    page
+      .getByRole("button", { name: /queue epub rebuild from saved edits/i })
+      .click(),
+  ]);
+  const processedBook = await processingResponse.json();
 
-  // Wait for rebuild to finish, then go back to the book list
-  await expect(
-    page.getByRole("button", { name: /rebuild epub from saved edits/i }),
-  ).toBeEnabled();
+  await expect(page.getByRole("status")).toContainText(
+    "EPUB cleaning job queued",
+  );
+
+  // The action returns when durable work is queued. Wait for every cleaning
+  // job for this book to finish before checking its regenerated word count.
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(
+          `/api/processing/jobs?job_type=clean_book&book_id=${processedBook.id}&limit=20`,
+        );
+        if (!response.ok()) return "request-failed";
+        const jobs = await response.json();
+        if (!jobs.length) return "missing";
+        if (jobs.some((job) => ["queued", "running"].includes(job.status))) {
+          return "active";
+        }
+        if (jobs.some((job) => job.status === "error")) return "error";
+        return jobs.every((job) => job.status === "completed")
+          ? "completed"
+          : "terminal";
+      },
+      { timeout: 30000 },
+    )
+    .toBe("completed");
+
+  // Go back to the book list and reload the catalog after processing.
   await page.getByRole("button", { name: /back/i }).click();
+  await page.reload();
   await expect(page.getByText("Story Manager")).toBeVisible();
   await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");
   await page.getByRole("tab", { name: /standalone/i }).click();

@@ -149,6 +149,7 @@ function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
       queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
       queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
       });
@@ -218,6 +219,11 @@ function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
         )}
         {regenerateMutation.isError && (
           <span className="error">{regenerateMutation.error?.message}</span>
+        )}
+        {regenerateMutation.isSuccess && (
+          <span className="success">
+            Roster regeneration queued. <a href="/processing">View processing</a>
+          </span>
         )}
         {shareMutation.isSuccess && (
           <span className="success">

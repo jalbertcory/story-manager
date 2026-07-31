@@ -203,6 +203,8 @@ async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
             book.audiobook_pending_content_version or 0,
             book.content_version,
         )
+        if book.audiobook_revision or book.audiobook_source_content_version is not None:
+            book.audiobook_publication_state = "stale"
 
 
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:

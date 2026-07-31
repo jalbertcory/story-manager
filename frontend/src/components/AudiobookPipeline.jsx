@@ -129,6 +129,7 @@ function AudiobookPipeline({ book, onEnableAi }) {
     book.audiobook_enabled === undefined ? "Progress" : "Sources",
   );
   const [confirmRebuild, setConfirmRebuild] = useState(false);
+  const [lastQueuedJob, setLastQueuedJob] = useState(null);
 
   const isActive = (status) => ACTIVE_STATUSES.has(status);
 
@@ -156,7 +157,7 @@ function AudiobookPipeline({ book, onEnableAi }) {
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
       state.data.some((edition) =>
-        ["queued", "importing", "aligning"].includes(edition.status),
+        ["stale", "queued", "importing", "aligning"].includes(edition.status),
       )
         ? 1000
         : false,
@@ -189,17 +190,26 @@ function AudiobookPipeline({ book, onEnableAi }) {
 
   const startMutation = useMutation({
     mutationFn: () => startPipeline(bookId),
-    onSuccess: invalidateAll,
+    onSuccess: (data) => {
+      setLastQueuedJob(data.processing_job_id || true);
+      invalidateAll();
+    },
   });
 
   const stepMutation = useMutation({
     mutationFn: () => stepPipeline(bookId),
-    onSuccess: invalidateAll,
+    onSuccess: (data) => {
+      setLastQueuedJob(data.processing_job_id || true);
+      invalidateAll();
+    },
   });
 
   const batchMutation = useMutation({
     mutationFn: () => runPipelineBatch(bookId),
-    onSuccess: invalidateAll,
+    onSuccess: (data) => {
+      setLastQueuedJob(data.processing_job_id || true);
+      invalidateAll();
+    },
   });
 
   const pauseMutation = useMutation({
@@ -209,7 +219,8 @@ function AudiobookPipeline({ book, onEnableAi }) {
 
   const rebuildMutation = useMutation({
     mutationFn: () => rebuildPipeline(bookId),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      setLastQueuedJob(data.processing_job_id || true);
       setConfirmRebuild(false);
       invalidateAll();
     },
@@ -362,7 +373,7 @@ function AudiobookPipeline({ book, onEnableAi }) {
                   onClick={() => rebuildMutation.mutate()}
                   disabled={rebuildMutation.isPending}
                 >
-                  {rebuildMutation.isPending ? "Rebuilding…" : "Yes, rebuild"}
+                  {rebuildMutation.isPending ? "Queueing…" : "Yes, queue rebuild"}
                 </button>{" "}
                 <button
                   className="btn-text"
@@ -373,6 +384,13 @@ function AudiobookPipeline({ book, onEnableAi }) {
               </span>
             ))}
         </div>
+
+        {lastQueuedJob && (
+          <p className="job-queued-notice" role="status">
+            Processing job{typeof lastQueuedJob === "number" ? ` #${lastQueuedJob}` : ""} queued.{" "}
+            <a href="/processing">View processing</a>
+          </p>
+        )}
 
         {(startMutation.isError ||
           stepMutation.isError ||

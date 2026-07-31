@@ -454,6 +454,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         matched_count = sum(1 for spec in specs if _chapter_match(spec, chapters))
         edition.status = "ready"
         edition.alignment_method = "estimated"
+        edition.matched_content_version = book.content_version or 1
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
         edition.progress_detail = f"Ready: {matched_count} of {len(specs)} tracks matched"
@@ -469,6 +470,59 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             edition.error = str(exc)
             edition.progress_detail = "Import failed"
             await db.commit()
+
+
+async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
+    """Rematch existing human-audio tracks after the book text changes."""
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise ValueError("Imported audiobook no longer exists.")
+    book = await db.get(Book, edition.book_id)
+    if book is None:
+        raise ValueError("The selected library book no longer exists.")
+
+    edition.status = "importing"
+    edition.alignment_error = None
+    edition.progress_current = 0
+    edition.progress_detail = "Preparing current cleaned book text"
+    await db.commit()
+    chapters = await ensure_span_anchored_text(book, db)
+    result = await db.execute(
+        select(ImportedAudiobookTrack)
+        .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+        .order_by(ImportedAudiobookTrack.sequence_order)
+    )
+    tracks = list(result.scalars().all())
+    edition.progress_total = len(tracks)
+    await db.commit()
+
+    matched_count = 0
+    for index, track in enumerate(tracks, start=1):
+        spec = TrackSpec(
+            sequence_order=track.sequence_order,
+            title=track.title,
+            audio_path=(LIBRARY_PATH.parent / track.audio_file_path).resolve(),
+            start_ms=track.source_start_ms,
+            end_ms=track.source_end_ms,
+            media_type=track.media_type,
+        )
+        matched = _chapter_match(spec, chapters)
+        track.matched_chapter_id = matched.id if matched else None
+        track.alignment_score = None
+        await db.commit()
+        await rebuild_estimated_cues(track, db)
+        matched_count += int(matched is not None)
+        edition.progress_current = index
+        edition.progress_detail = f"Rematched track {index} of {len(tracks)}"
+        await db.commit()
+
+    edition.status = "ready"
+    edition.alignment_method = "estimated"
+    edition.matched_content_version = book.content_version or 1
+    edition.progress_detail = f"Ready: {matched_count} of {len(tracks)} tracks matched"
+    edition.error = None
+    await db.commit()
+    return matched_count
 
 
 async def rematch_track(

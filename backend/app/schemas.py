@@ -257,7 +257,7 @@ class SeriesMetadataSummary(BaseModel):
 
 
 class ReaderAudiobookCapability(BaseModel):
-    status: Literal["processing", "partial", "complete", "error"]
+    status: Literal["stale", "processing", "partial", "complete", "error"]
     revision: int
     source_content_version: int
     text_content_version: int
@@ -311,6 +311,57 @@ class ReaderBook(BaseModel):
     download_url: str
     cover_url: Optional[str] = None
     audiobook: Optional[ReaderAudiobookCapability] = None
+
+
+PROCESSING_JOB_TYPES = Literal[
+    "clean_book",
+    "clean_all",
+    "refresh_book",
+    "refresh_all",
+    "audiobook_pipeline",
+    "import_audiobook",
+    "rematch_imported_audiobook",
+    "align_imported_audiobook",
+    "metadata_sync",
+    "generate_sentence_audio",
+    "generate_chapter_preview",
+    "retry_cover",
+]
+
+
+class ProcessingJobRequest(BaseModel):
+    job_type: PROCESSING_JOB_TYPES
+    book_ids: List[int] = Field(default_factory=list)
+    target_id: Optional[int] = None
+    payload: dict = Field(default_factory=dict)
+
+
+class ProcessingJob(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_type: str
+    status: str
+    book_id: Optional[int] = None
+    book_title: Optional[str] = None
+    target_type: Optional[str] = None
+    target_id: Optional[int] = None
+    target_content_version: Optional[int] = None
+    parent_job_id: Optional[int] = None
+    payload: dict = Field(default_factory=dict)
+    progress_current: int
+    progress_total: int
+    progress_detail: Optional[str] = None
+    attempt_count: int
+    cancel_requested: bool
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class ProcessingJobsCreated(BaseModel):
+    jobs: List[ProcessingJob] = Field(default_factory=list)
 
 
 class ReaderSeriesSummary(BaseModel):

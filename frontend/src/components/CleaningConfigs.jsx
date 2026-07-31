@@ -84,6 +84,7 @@ function CleaningConfigs({ onBack }) {
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [jobNotice, setJobNotice] = useState("");
 
   const [reprocessStatus, setReprocessStatus] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -121,6 +122,7 @@ function CleaningConfigs({ onBack }) {
       return res.json();
     },
     onSuccess: () => {
+      setJobNotice("Library cleaning job queued.");
       setReprocessStatus({ running: true, total: 0, processed: 0, updated: 0 });
       setPolling(true);
     },
@@ -151,6 +153,7 @@ function CleaningConfigs({ onBack }) {
       return res.json();
     },
     onSuccess: () => {
+      setJobNotice("Cleaning config saved; affected book cleaning is queued.");
       queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setCreating(false);
     },
@@ -170,6 +173,7 @@ function CleaningConfigs({ onBack }) {
       return res.json();
     },
     onSuccess: () => {
+      setJobNotice("Cleaning config updated; affected book cleaning is queued.");
       queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setEditingId(null);
       setPolling(true);
@@ -186,8 +190,11 @@ function CleaningConfigs({ onBack }) {
         throw new Error(err.detail || "Delete failed");
       }
     },
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] }),
+    onSuccess: () => {
+      setJobNotice("Cleaning config deleted; restoring affected books is queued.");
+      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+    },
   });
 
   return (
@@ -234,9 +241,14 @@ function CleaningConfigs({ onBack }) {
             {isReprocessing ? "Cleaning..." : "Clean All Books"}
           </button>
         </div>
+        {jobNotice && (
+          <p className="job-queued-notice" role="status">
+            {jobNotice} <a href="/processing">View processing</a>
+          </p>
+        )}
         {isReprocessing && reprocessStatus?.total > 0 && (
           <p className="hint" style={{ marginTop: "0.5rem" }}>
-            {reprocessStatus.processed} / {reprocessStatus.total} books processed ({reprocessStatus.updated} updated)
+            {reprocessStatus.processed} / {reprocessStatus.total} books processed
           </p>
         )}
         {reprocessMutation.isError && (
@@ -246,7 +258,7 @@ function CleaningConfigs({ onBack }) {
         )}
         {!isReprocessing && reprocessStatus && !reprocessStatus.running && reprocessStatus.total > 0 && (
           <p className="hint" style={{ marginTop: "0.5rem" }}>
-            Done. {reprocessStatus.updated} / {reprocessStatus.total} books updated.
+            Cleaning job {reprocessStatus.status || "completed"}.
           </p>
         )}
         {reprocessStatus?.error && (

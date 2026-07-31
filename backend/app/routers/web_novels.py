@@ -2,14 +2,15 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..services.refresh_queue import get_refresh_queue
 from ..services.web_import_queue import get_web_import_queue
+from ..services.processing_queue import queue_processing_job
+from ..services.refresh_queue import RefreshQueue, get_refresh_queue
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +68,18 @@ async def add_web_novel(
     response_model=schemas.Book,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
+async def refresh_book(
+    book_id: int,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> models.Book:
     """Queue a background refresh of a web novel from its source URL.
 
     Returns 202 Accepted immediately with the book's updated ``refresh_status``.
     Clients should poll ``GET /api/books/{book_id}`` until ``refresh_status`` is
     null (success) or ``"error"``. The actual work — re-downloading via
-    FanFicFare, rebuilding the cleaned EPUB, re-syncing metadata — runs on the
-    single-worker :class:`RefreshQueue`, the same lane used by the scheduled
-    daily update job.
+    FanFicFare, rebuilding the cleaned EPUB, re-syncing metadata — runs as a
+    durable processing job in the same flow used by the scheduled update.
     """
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -83,7 +87,6 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
     if not db_book.source_url:
         raise HTTPException(status_code=400, detail="Book does not have a source URL to refresh from.")
 
-    queue = get_refresh_queue()
     # If a refresh is already queued/running for this book, treat the request as a
     # no-op rather than doubling it up — return the current status so the client
     # can begin polling.
@@ -92,7 +95,20 @@ async def refresh_book(book_id: int, db: AsyncSession = Depends(get_db)) -> mode
         await db.commit()
         await db.refresh(db_book)
 
-    await queue.enqueue(db_book.id)
+    job = await queue_processing_job(
+        db=db,
+        job_type="refresh_book",
+        book_id=db_book.id,
+        target_type="book",
+        target_id=db_book.id,
+        target_content_version=db_book.content_version,
+        dedupe_key=f"refresh_book:book:{db_book.id}",
+        progress_detail="Queued from Refresh From Source",
+    )
+    legacy_queue = get_refresh_queue()
+    if not isinstance(legacy_queue, RefreshQueue):
+        await legacy_queue.enqueue(db_book.id)
+    response.headers["X-Processing-Job-Id"] = str(job.id)
     return db_book
 
 
