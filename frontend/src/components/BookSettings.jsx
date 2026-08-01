@@ -380,9 +380,12 @@ function BookSettings({
           }
           style={{ flexShrink: 0 }}
         >
-          ← Back
+          ← Back to library
         </button>
-        <h2>{book.title}</h2>
+        <div className="settings-title-block">
+          <h2>{book.title}</h2>
+          <span>{book.author || "Unknown author"}</span>
+        </div>
       </div>
 
       <nav className="book-settings-tabs">

@@ -10,7 +10,7 @@ describe("Utilities", () => {
     vi.stubGlobal("alert", vi.fn());
   });
 
-  it("renders all utility sections", () => {
+  it("organizes utilities into focused tabs and shows the audit by default", () => {
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
@@ -23,10 +23,25 @@ describe("Utilities", () => {
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
+    expect(screen.getByRole("tab", { name: "Audit" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Series Detection" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Metadata" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Reader Access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Library Audit" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
     expect(screen.getByRole("heading", { name: "Detect Series" })).toBeInTheDocument();
+
+    expect(screen.queryByRole("heading", { name: "Sync Online Metadata" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Metadata" }));
     expect(screen.getByRole("heading", { name: "Sync Online Metadata" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
     expect(screen.getByRole("heading", { name: "Storage Cleanup" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Reader Access" }));
+    expect(screen.getByRole("heading", { name: "Reader API Keys" })).toBeInTheDocument();
   });
 
   it("runs library audit and shows results", async () => {
@@ -281,6 +296,8 @@ describe("Utilities", () => {
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
+    fireEvent.click(screen.getByRole("tab", { name: "Metadata" }));
+
     await waitFor(() => {
       expect(screen.getByText(/2\/10 processed, 1 matched, 1 proposed, 0 applied/)).toBeInTheDocument();
     });
@@ -328,6 +345,8 @@ describe("Utilities", () => {
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
+    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
+
     fireEvent.click(
       screen.getByRole("button", { name: "Detect Series in Library" }),
     );
@@ -357,6 +376,8 @@ describe("Utilities", () => {
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
 
     fireEvent.click(
       screen.getByRole("button", { name: "Detect Series in Library" }),
@@ -390,6 +411,8 @@ describe("Utilities", () => {
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
 
     fireEvent.click(
       screen.getByRole("button", { name: "Scan for Orphaned Files" }),
@@ -432,6 +455,8 @@ describe("Utilities", () => {
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
 
     fireEvent.click(
       screen.getByRole("button", { name: "Scan for Orphaned Files" }),

@@ -205,31 +205,16 @@ function CleaningConfigs({ onBack }) {
           <h2>Cleaning Configs</h2>
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.75rem" }}>
-        <button onClick={() => setCreating(true)} disabled={creating}>
-          + New Config
-        </button>
-      </div>
-
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
 
-      {creating && (
-        <div className="config-editor">
-          <h3>New Config</h3>
-          <ConfigForm
-            onSave={(data) => createMutation.mutate(data)}
-            onCancel={() => setCreating(false)}
-            isSaving={createMutation.isPending}
-          />
-          {createMutation.isError && (
-            <p className="error">{createMutation.error.message}</p>
-          )}
-        </div>
-      )}
-
       <section className="settings-section">
-        <h3>Clean All Books</h3>
+        <div className="cleaning-config-actions-header">
+          <h3>Clean All Books</h3>
+          <button onClick={() => setCreating(true)} disabled={creating}>
+            + New Config
+          </button>
+        </div>
         <p className="hint">
           Re-applies cleaning configs and selectors to every book in the library.
         </p>
@@ -267,6 +252,20 @@ function CleaningConfigs({ onBack }) {
           </p>
         )}
       </section>
+
+      {creating && (
+        <div className="config-editor">
+          <h3>New Config</h3>
+          <ConfigForm
+            onSave={(data) => createMutation.mutate(data)}
+            onCancel={() => setCreating(false)}
+            isSaving={createMutation.isPending}
+          />
+          {createMutation.isError && (
+            <p className="error">{createMutation.error.message}</p>
+          )}
+        </div>
+      )}
 
       <div className="config-list">
         {configs.map((config) => (
