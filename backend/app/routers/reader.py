@@ -434,12 +434,8 @@ async def get_reader_human_audiobooks(
                 "tracks": [
                     track.model_copy(
                         update={
-                            "audio_url": (
-                                f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/audio"
-                            ),
-                            "smil_url": (
-                                f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil"
-                            ),
+                            "audio_url": (f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/audio"),
+                            "smil_url": (f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil"),
                         }
                     )
                     for track in edition.tracks

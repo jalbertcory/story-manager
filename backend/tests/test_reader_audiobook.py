@@ -298,10 +298,13 @@ async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlit
     assert len(editions) == 1
     assert editions[0]["name"] == "Human narration"
     assert editions[0]["status"] == "ready"
-    assert app_client.get(
-        f"/reader/books/{book_id}/human-audiobooks/chapters",
-        auth=auth,
-    ).json() == []
+    assert (
+        app_client.get(
+            f"/reader/books/{book_id}/human-audiobooks/chapters",
+            auth=auth,
+        ).json()
+        == []
+    )
 
 
 def test_reader_audiobook_capability_supports_all_publication_states():
