@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from ..models import AudiobookSettings
+from .endpoint_pool import primary_provider, route_request
 
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"none", "whisperx"}
 
@@ -28,8 +29,7 @@ class TranscriptResult:
 
 
 def transcription_provider_name(settings: AudiobookSettings | None) -> str:
-    provider = (settings.transcription_provider if settings else None) or "none"
-    provider = provider.strip().lower()
+    provider = primary_provider(settings, "transcription", "none")
     if provider not in SUPPORTED_TRANSCRIPTION_PROVIDERS:
         choices = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS))
         raise RuntimeError(f"Unsupported transcription provider {provider!r}. Choose one of: {choices}.")
@@ -52,7 +52,7 @@ def _headers(settings: AudiobookSettings) -> dict[str, str]:
     return headers
 
 
-async def transcription_service_health(settings: AudiobookSettings) -> dict:
+async def _transcription_service_health_endpoint(settings: AudiobookSettings) -> dict:
     if transcription_provider_name(settings) == "none":
         raise RuntimeError("Configure a transcription provider first.")
     timeout = httpx.Timeout(30.0, connect=10.0)
@@ -65,7 +65,19 @@ async def transcription_service_health(settings: AudiobookSettings) -> dict:
     return payload
 
 
-async def transcribe_file(settings: AudiobookSettings, audio_path: Path) -> TranscriptResult:
+async def transcription_service_health(settings: AudiobookSettings) -> dict:
+    routed = await route_request(settings, "transcription", _transcription_service_health_endpoint)
+    payload = dict(routed.value)
+    payload["endpoint"] = {
+        "id": routed.endpoint.get("id"),
+        "name": routed.endpoint.get("name"),
+        "provider": routed.endpoint.get("provider"),
+        "model": routed.endpoint.get("model"),
+    }
+    return payload
+
+
+async def _transcribe_file_endpoint(settings: AudiobookSettings, audio_path: Path) -> TranscriptResult:
     """Send one chapter clip to the configured timestamped ASR service."""
     provider = transcription_provider_name(settings)
     if provider == "none":
@@ -118,3 +130,13 @@ async def transcribe_file(settings: AudiobookSettings, audio_path: Path) -> Tran
         duration_ms=max(duration_ms, words[-1].end_ms),
         words=words,
     )
+
+
+async def transcribe_file(settings: AudiobookSettings, audio_path: Path) -> TranscriptResult:
+    """Transcribe through the first available endpoint."""
+    routed = await route_request(
+        settings,
+        "transcription",
+        lambda endpoint_settings: _transcribe_file_endpoint(endpoint_settings, audio_path),
+    )
+    return routed.value

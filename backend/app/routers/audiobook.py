@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +43,8 @@ from ..services.transcription_providers import (
     transcription_provider_name,
     transcription_service_health,
 )
-from ..services.tts_providers import TTSRequest, synthesize_speech, tts_provider_name
+from ..services.endpoint_pool import configured_endpoints, primary_provider
+from ..services.tts_providers import TTSRequest, synthesize_speech_routed, tts_provider_name
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,17 @@ class ChapterResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EndpointResponse(BaseModel):
+    id: str
+    name: str
+    provider: str
+    api_key_set: bool = False
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    default_voice: Optional[str] = None
+    language: Optional[str] = None
+
+
 class SettingsResponse(BaseModel):
     id: Optional[int]
     llm_provider: Optional[str]
@@ -199,8 +211,22 @@ class SettingsResponse(BaseModel):
     transcription_base_url: Optional[str]
     transcription_model: Optional[str]
     transcription_language: Optional[str]
+    llm_endpoints: list[EndpointResponse]
+    tts_endpoints: list[EndpointResponse]
+    transcription_endpoints: list[EndpointResponse]
     roster_prompt_template: Optional[str]
     diarization_prompt_template: Optional[str]
+
+
+class EndpointUpdate(BaseModel):
+    id: str
+    name: str
+    provider: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    default_voice: Optional[str] = None
+    language: Optional[str] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -218,6 +244,9 @@ class SettingsUpdate(BaseModel):
     transcription_base_url: Optional[str] = None
     transcription_model: Optional[str] = None
     transcription_language: Optional[str] = None
+    llm_endpoints: Optional[list[EndpointUpdate]] = Field(default=None, min_length=1)
+    tts_endpoints: Optional[list[EndpointUpdate]] = Field(default=None, min_length=1)
+    transcription_endpoints: Optional[list[EndpointUpdate]] = Field(default=None, min_length=1)
     roster_prompt_template: Optional[str] = None
     diarization_prompt_template: Optional[str] = None
 
@@ -1169,13 +1198,36 @@ async def download_audiobook(book_id: int, db: AsyncSession = Depends(get_db)) -
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/audiobook/settings", response_model=SettingsResponse)
-async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
-    settings = await crud.audiobook.get_audiobook_settings(db)
+def _default_endpoint(capability: str) -> dict[str, Any]:
+    return {
+        "id": f"default-{capability}",
+        "name": "Primary",
+        "provider": {"llm": "stub", "tts": "stub", "transcription": "none"}[capability],
+    }
+
+
+def _public_endpoints(settings, capability: str) -> list[EndpointResponse]:
+    endpoints = configured_endpoints(settings, capability) if settings is not None else [_default_endpoint(capability)]
+    return [
+        EndpointResponse(
+            id=str(endpoint.get("id") or f"{capability}-{index + 1}"),
+            name=str(endpoint.get("name") or f"Endpoint {index + 1}"),
+            provider=str(endpoint.get("provider") or _default_endpoint(capability)["provider"]),
+            api_key_set=bool(endpoint.get("api_key")),
+            base_url=endpoint.get("base_url"),
+            model=endpoint.get("model"),
+            default_voice=endpoint.get("default_voice"),
+            language=endpoint.get("language"),
+        )
+        for index, endpoint in enumerate(endpoints)
+    ]
+
+
+def _settings_response(settings) -> SettingsResponse:
     if settings is None:
         return SettingsResponse(
             id=None,
-            llm_provider=None,
+            llm_provider="stub",
             llm_api_key_set=False,
             llm_base_url=None,
             llm_model=None,
@@ -1189,6 +1241,9 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
             transcription_base_url=None,
             transcription_model=None,
             transcription_language=None,
+            llm_endpoints=_public_endpoints(None, "llm"),
+            tts_endpoints=_public_endpoints(None, "tts"),
+            transcription_endpoints=_public_endpoints(None, "transcription"),
             roster_prompt_template=None,
             diarization_prompt_template=None,
         )
@@ -1208,22 +1263,96 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
         transcription_base_url=settings.transcription_base_url,
         transcription_model=settings.transcription_model,
         transcription_language=settings.transcription_language,
+        llm_endpoints=_public_endpoints(settings, "llm"),
+        tts_endpoints=_public_endpoints(settings, "tts"),
+        transcription_endpoints=_public_endpoints(settings, "transcription"),
         roster_prompt_template=settings.roster_prompt_template,
         diarization_prompt_template=settings.diarization_prompt_template,
     )
+
+
+def _merge_endpoint_secrets(
+    incoming: list[dict[str, Any]],
+    existing: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing_by_id = {str(endpoint.get("id")): endpoint for endpoint in existing}
+    merged = []
+    for index, endpoint in enumerate(incoming):
+        endpoint = dict(endpoint)
+        endpoint_id = str(endpoint.get("id") or f"endpoint-{index + 1}")
+        previous = existing_by_id.get(endpoint_id, {})
+        if "api_key" not in endpoint:
+            if previous.get("provider") == endpoint.get("provider"):
+                endpoint["api_key"] = previous.get("api_key")
+        elif not endpoint["api_key"]:
+            endpoint["api_key"] = None
+        endpoint["id"] = endpoint_id
+        endpoint["name"] = str(endpoint.get("name") or f"Endpoint {index + 1}").strip()
+        endpoint["provider"] = str(endpoint.get("provider") or "").strip().lower()
+        merged.append(endpoint)
+    return merged
+
+
+def _sync_primary_columns(data: dict[str, Any], capability: str, endpoints: list[dict[str, Any]]) -> None:
+    primary = endpoints[0]
+    prefix = "transcription" if capability == "transcription" else capability
+    for endpoint_field, column_field in (
+        ("provider", f"{prefix}_provider"),
+        ("api_key", f"{prefix}_api_key"),
+        ("base_url", f"{prefix}_base_url"),
+        ("model", f"{prefix}_model"),
+    ):
+        data[column_field] = primary.get(endpoint_field)
+    if capability == "tts":
+        data["tts_default_voice"] = primary.get("default_voice")
+    elif capability == "transcription":
+        data["transcription_language"] = primary.get("language")
+
+
+def _tts_signature(endpoints: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    return [
+        (
+            endpoint.get("provider"),
+            endpoint.get("base_url"),
+            endpoint.get("model"),
+            endpoint.get("default_voice"),
+        )
+        for endpoint in endpoints
+    ]
+
+
+@router.get("/api/audiobook/settings", response_model=SettingsResponse)
+async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    return _settings_response(settings)
 
 
 @router.put("/api/audiobook/settings", response_model=SettingsResponse)
 async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_db)) -> SettingsResponse:
     data = body.model_dump(exclude_unset=True)
     previous = await crud.audiobook.get_audiobook_settings(db)
+    previous_tts_endpoints = configured_endpoints(previous, "tts") if previous else []
+
+    for capability in ("llm", "tts", "transcription"):
+        field = f"{capability}_endpoints"
+        if field not in data:
+            continue
+        existing = configured_endpoints(previous, capability) if previous else []
+        endpoints = _merge_endpoint_secrets(data[field], existing)
+        data[field] = endpoints
+        _sync_primary_columns(data, capability, endpoints)
+
     previous_provider = tts_provider_name(previous)
     next_provider = str(data.get("tts_provider") or previous_provider).strip().lower()
-    if next_provider != previous_provider and "tts_api_key" not in data:
+    if "tts_endpoints" not in data and next_provider != previous_provider and "tts_api_key" not in data:
         data["tts_api_key"] = None
     previous_transcription_provider = transcription_provider_name(previous)
     next_transcription_provider = str(data.get("transcription_provider") or previous_transcription_provider).strip().lower()
-    if next_transcription_provider != previous_transcription_provider and "transcription_api_key" not in data:
+    if (
+        "transcription_endpoints" not in data
+        and next_transcription_provider != previous_transcription_provider
+        and "transcription_api_key" not in data
+    ):
         data["transcription_api_key"] = None
 
     previous_tts = {
@@ -1234,51 +1363,38 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
     }
     next_tts = {name: data.get(name, value) for name, value in previous_tts.items()}
     next_tts["tts_provider"] = next_provider
-    tts_changed = next_tts != previous_tts
+    if "tts_endpoints" in data:
+        tts_changed = _tts_signature(previous_tts_endpoints) != _tts_signature(data["tts_endpoints"])
+    else:
+        tts_changed = next_tts != previous_tts
     settings = await crud.audiobook.upsert_audiobook_settings(db, data)
     if tts_changed:
         await crud.audiobook.invalidate_generated_audio_for_tts_change(db)
-    return SettingsResponse(
-        id=settings.id,
-        llm_provider=settings.llm_provider,
-        llm_api_key_set=bool(settings.llm_api_key),
-        llm_base_url=settings.llm_base_url,
-        llm_model=settings.llm_model,
-        tts_provider=settings.tts_provider or "stub",
-        tts_api_key_set=bool(settings.tts_api_key),
-        tts_base_url=settings.tts_base_url,
-        tts_model=settings.tts_model,
-        tts_default_voice=settings.tts_default_voice,
-        transcription_provider=settings.transcription_provider or "none",
-        transcription_api_key_set=bool(settings.transcription_api_key),
-        transcription_base_url=settings.transcription_base_url,
-        transcription_model=settings.transcription_model,
-        transcription_language=settings.transcription_language,
-        roster_prompt_template=settings.roster_prompt_template,
-        diarization_prompt_template=settings.diarization_prompt_template,
-    )
+    return _settings_response(settings)
 
 
 @router.post("/api/audiobook/settings/test-llm")
 async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None or (settings.llm_provider or "stub").lower() == "stub":
+    if settings is None or primary_provider(settings, "llm", "stub") == "stub":
         return {"status": "ready", "provider": "stub", "model": None, "response": "local harness"}
     schema = {
         "type": "object",
         "properties": {"status": {"type": "string"}},
         "required": ["status"],
     }
-    raw = await audiobook_llm._call_llm(
+    routed = await audiobook_llm._call_llm_routed(
         settings,
         [{"role": "user", "content": "Return JSON with status set to ready."}],
         response_schema=schema,
     )
+    raw = routed.value
     parsed = audiobook_llm._extract_json(raw)
     return {
         "status": parsed.get("status", "unknown") if isinstance(parsed, dict) else "unknown",
-        "provider": settings.llm_provider,
-        "model": settings.llm_model,
+        "endpoint": routed.endpoint.get("name"),
+        "provider": routed.endpoint.get("provider"),
+        "model": routed.endpoint.get("model"),
         "response": parsed,
     }
 
@@ -1286,20 +1402,22 @@ async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
 @router.post("/api/audiobook/settings/test-tts")
 async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
-    provider = (settings.tts_provider or "stub") if settings else "stub"
-    audio = await synthesize_speech(
+    if settings is None:
+        return {"status": "ready", "provider": "stub", "model": None, "audio_bytes": 0}
+    routed = await synthesize_speech_routed(
         settings,
         TTSRequest(
             text="Story Manager text to speech is ready.",
-            voice_id=settings.tts_default_voice if settings else None,
         ),
     )
+    audio = routed.value
     if not audio:
         raise HTTPException(status_code=502, detail="The TTS provider returned an empty response.")
     return {
         "status": "ready",
-        "provider": provider,
-        "model": settings.tts_model if settings else None,
+        "endpoint": routed.endpoint.get("name"),
+        "provider": routed.endpoint.get("provider"),
+        "model": routed.endpoint.get("model"),
         "audio_bytes": len(audio),
     }
 
@@ -1315,7 +1433,8 @@ async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dic
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "status": payload.get("status"),
-        "provider": settings.transcription_provider,
+        "endpoint": payload.get("endpoint", {}).get("name"),
+        "provider": payload.get("endpoint", {}).get("provider"),
         "model": payload.get("model"),
         "device": payload.get("device"),
     }

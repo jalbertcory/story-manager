@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..models import AudiobookSettings, Book
 from .audiobook_text import quote_group_ids, quote_groups
+from .endpoint_pool import RoutedResult, route_request
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +350,7 @@ CHAPTER_SUMMARY_SCHEMA = {
 }
 
 
-async def _call_llm(
+async def _call_llm_endpoint(
     settings: AudiobookSettings,
     messages: list[dict[str, Any]],
     *,
@@ -448,6 +449,42 @@ async def _call_llm(
             resp.raise_for_status()
             data = resp.json()
         return data["choices"][0]["message"]["content"]
+
+
+async def _call_llm_routed(
+    settings: AudiobookSettings,
+    messages: list[dict[str, Any]],
+    *,
+    response_schema: dict[str, Any] | None = None,
+    progress_callback: Callable[[int], Awaitable[None]] | None = None,
+) -> RoutedResult[str]:
+    return await route_request(
+        settings,
+        "llm",
+        lambda endpoint_settings: _call_llm_endpoint(
+            endpoint_settings,
+            messages,
+            response_schema=response_schema,
+            progress_callback=progress_callback,
+        ),
+    )
+
+
+async def _call_llm(
+    settings: AudiobookSettings,
+    messages: list[dict[str, Any]],
+    *,
+    response_schema: dict[str, Any] | None = None,
+    progress_callback: Callable[[int], Awaitable[None]] | None = None,
+) -> str:
+    """Try configured LLM endpoints in priority order."""
+    routed = await _call_llm_routed(
+        settings,
+        messages,
+        response_schema=response_schema,
+        progress_callback=progress_callback,
+    )
+    return routed.value
 
 
 def _extract_json(raw: str) -> Any:

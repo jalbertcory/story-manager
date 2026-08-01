@@ -93,7 +93,12 @@ def _request_for_character(
 ) -> TTSRequest:
     voice_prompt = character.voice_prompt if character and character.voice_prompt else DEFAULT_VOICE_PROMPT
     voice_id = _voice_id_for_provider(settings, character) if character else None
-    return TTSRequest(text=text, voice_prompt=voice_prompt, voice_id=voice_id)
+    return TTSRequest(
+        text=text,
+        voice_prompt=voice_prompt,
+        voice_id=voice_id,
+        voice_provider=character.tts_voice_provider if character else None,
+    )
 
 
 async def _build_sentence_requests(
