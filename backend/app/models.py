@@ -252,6 +252,9 @@ class AudiobookSettings(Base):
     transcription_base_url = Column(String, nullable=True)
     transcription_model = Column(String, nullable=True)
     transcription_language = Column(String, nullable=True)
+    llm_endpoints = Column(JSON, nullable=True)
+    tts_endpoints = Column(JSON, nullable=True)
+    transcription_endpoints = Column(JSON, nullable=True)
     roster_prompt_template = Column(Text, nullable=True)
     diarization_prompt_template = Column(Text, nullable=True)
 

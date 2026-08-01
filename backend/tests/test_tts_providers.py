@@ -136,6 +136,28 @@ async def test_openai_compatible_uses_voice_id_and_compatible_payload():
 
 
 @pytest.mark.asyncio
+async def test_fallback_provider_uses_its_own_default_voice():
+    settings = models.AudiobookSettings(
+        tts_provider="openai-compatible",
+        tts_base_url="http://kokoro:8880",
+        tts_model="kokoro",
+        tts_default_voice="af_heart",
+    )
+
+    await tts_providers.synthesize_speech(
+        settings,
+        TTSRequest(
+            text="Hello.",
+            voice_id="elevenlabs-character-id",
+            voice_provider="elevenlabs",
+        ),
+    )
+
+    _url, request = _Client.calls[0]
+    assert request["json"]["voice"] == "af_heart"
+
+
+@pytest.mark.asyncio
 async def test_openai_instruction_capable_model_receives_voice_profile():
     settings = models.AudiobookSettings(
         tts_provider="openai",

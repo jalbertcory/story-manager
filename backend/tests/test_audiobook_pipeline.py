@@ -1247,6 +1247,66 @@ async def test_provider_change_clears_stored_tts_api_key(db):
 
 
 @pytest.mark.asyncio
+async def test_endpoint_reorder_preserves_secrets_and_syncs_primary_columns(db):
+    settings = models.AudiobookSettings(
+        llm_provider="ollama",
+        llm_api_key="mini-secret",
+        llm_base_url="http://mini:11434",
+        llm_model="qwen3.5:9b",
+        llm_endpoints=[
+            {
+                "id": "mini",
+                "name": "Always-on mini PC",
+                "provider": "ollama",
+                "api_key": "mini-secret",
+                "base_url": "http://mini:11434",
+                "model": "qwen3.5:9b",
+            },
+            {
+                "id": "gaming",
+                "name": "Gaming PC",
+                "provider": "ollama",
+                "api_key": "gaming-secret",
+                "base_url": "http://gaming:11434",
+                "model": "qwen3.5:27b",
+            },
+        ],
+    )
+    db.add(settings)
+    await db.commit()
+
+    response = await audiobook_router.update_settings(
+        audiobook_router.SettingsUpdate(
+            llm_endpoints=[
+                audiobook_router.EndpointUpdate(
+                    id="gaming",
+                    name="Gaming PC",
+                    provider="ollama",
+                    base_url="http://gaming:11434",
+                    model="qwen3.5:27b",
+                ),
+                audiobook_router.EndpointUpdate(
+                    id="mini",
+                    name="Always-on mini PC",
+                    provider="ollama",
+                    base_url="http://mini:11434",
+                    model="qwen3.5:9b",
+                ),
+            ]
+        ),
+        db,
+    )
+    await db.refresh(settings)
+
+    assert [endpoint["id"] for endpoint in settings.llm_endpoints] == ["gaming", "mini"]
+    assert [endpoint["api_key"] for endpoint in settings.llm_endpoints] == ["gaming-secret", "mini-secret"]
+    assert settings.llm_base_url == "http://gaming:11434"
+    assert settings.llm_model == "qwen3.5:27b"
+    assert response.llm_endpoints[0].api_key_set is True
+    assert "api_key" not in response.llm_endpoints[0].model_dump()
+
+
+@pytest.mark.asyncio
 async def test_character_voice_id_is_tagged_and_used_only_for_its_provider(db):
     book = await _make_book(db, audiobook_enabled=True)
     character = (

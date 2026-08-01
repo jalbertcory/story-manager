@@ -25,6 +25,7 @@ from ..models import (
     ImportedAudiobookTrack,
 )
 from .audiobook_import import imported_audiobook_dir, relative_library_path
+from .endpoint_pool import configured_endpoints
 from .transcription_providers import (
     TranscriptResult,
     TranscriptWord,
@@ -431,6 +432,31 @@ def _write_transcript_cache(
         json.dump(payload, handle, ensure_ascii=False)
 
 
+def _transcription_cache_config(settings) -> tuple[str, str | None, str | None, str | None]:
+    """Fingerprint the whole ordered pool because any endpoint may do the work."""
+    if settings.transcription_endpoints is None:
+        return (
+            transcription_provider_name(settings),
+            settings.transcription_model,
+            settings.transcription_language,
+            settings.transcription_base_url,
+        )
+    signature = json.dumps(
+        [
+            {
+                "provider": endpoint.get("provider"),
+                "base_url": endpoint.get("base_url"),
+                "model": endpoint.get("model"),
+                "language": endpoint.get("language"),
+            }
+            for endpoint in configured_endpoints(settings, "transcription")
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "endpoint-pool", signature, None, None
+
+
 async def _sentences_for_track(track: ImportedAudiobookTrack, db: AsyncSession) -> list[AudiobookSentence]:
     result = await db.execute(
         select(AudiobookSentence)
@@ -473,6 +499,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
     try:
         scores = []
         edition_dir = imported_audiobook_dir(edition.book_id, edition.id)
+        cache_provider, cache_model, cache_language, cache_root = _transcription_cache_config(settings)
         for index, track in enumerate(tracks, start=1):
             edition.progress_detail = f"Transcribing {track.title} ({index} of {len(tracks)})"
             await db.commit()
@@ -480,10 +507,10 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
             cache_path = edition_dir / "alignment" / "transcripts" / f"track-{track.id}.json.gz"
             transcript = _read_transcript_cache(
                 cache_path,
-                provider,
-                settings.transcription_model,
-                settings.transcription_language,
-                settings.transcription_base_url,
+                cache_provider,
+                cache_model,
+                cache_language,
+                cache_root,
             )
             if transcript is None:
                 clip_path = edition_dir / "alignment" / "clips" / f"track-{track.id}.flac"
@@ -495,10 +522,10 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
                 _write_transcript_cache(
                     cache_path,
                     transcript,
-                    provider,
-                    settings.transcription_model,
-                    settings.transcription_language,
-                    settings.transcription_base_url,
+                    cache_provider,
+                    cache_model,
+                    cache_language,
+                    cache_root,
                 )
             track.transcript_file_path = relative_library_path(cache_path)
 

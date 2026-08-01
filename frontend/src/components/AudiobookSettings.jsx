@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getAudiobookSettings,
   testAudiobookLlm,
@@ -13,501 +13,464 @@ const DEFAULT_ROSTER_PROMPT_HINT =
 const DEFAULT_DIARIZATION_PROMPT_HINT =
   "Leave blank to use the built-in diarization prompt.";
 
+let endpointSequence = 0;
+
+function endpointId(capability) {
+  endpointSequence += 1;
+  return `${capability}-${Date.now()}-${endpointSequence}`;
+}
+
+const CAPABILITIES = {
+  llm: {
+    title: "LLM Endpoints",
+    description:
+      "Used for character extraction and speaker assignment. Endpoints are tried from top to bottom.",
+    providers: [
+      ["openai", "OpenAI"],
+      ["anthropic", "Anthropic"],
+      ["ollama", "Ollama (local)"],
+      ["custom", "Custom / Local"],
+      ["stub", "Deterministic local harness"],
+    ],
+    defaultProvider: "ollama",
+    modelPlaceholder: "e.g. qwen3.5:9b or gpt-4o",
+    baseUrlPlaceholder: "http://model-host:11434",
+  },
+  tts: {
+    title: "Text-to-Speech Endpoints",
+    description:
+      "Used to render narration. Put a fast, sometimes-available host above an always-on fallback.",
+    providers: [
+      ["omnivoice", "OmniVoice"],
+      ["openai-compatible", "OpenAI-compatible (Kokoro / local)"],
+      ["openai", "OpenAI"],
+      ["elevenlabs", "ElevenLabs"],
+      ["stub", "Deterministic local harness"],
+    ],
+    defaultProvider: "omnivoice",
+    modelPlaceholder: "e.g. kokoro or tts-1",
+    baseUrlPlaceholder: "http://speech-host:8001",
+  },
+  transcription: {
+    title: "Speech-to-Text Endpoints",
+    description:
+      "Used to align imported human narration with EPUB text and word timestamps.",
+    providers: [
+      ["whisperx", "WhisperX service"],
+      ["none", "Not configured"],
+    ],
+    defaultProvider: "whisperx",
+    modelPlaceholder: "e.g. large-v3",
+    baseUrlPlaceholder: "http://whisper-host:8002",
+  },
+};
+
+function legacyEndpoint(settings, capability) {
+  const prefix = capability === "transcription" ? "transcription" : capability;
+  const defaults = { llm: "stub", tts: "stub", transcription: "none" };
+  return {
+    id: `legacy-${capability}`,
+    name: "Primary",
+    provider: settings?.[`${prefix}_provider`] || defaults[capability],
+    api_key_set: Boolean(settings?.[`${prefix}_api_key_set`]),
+    base_url: settings?.[`${prefix}_base_url`] || "",
+    model: settings?.[`${prefix}_model`] || "",
+    default_voice: settings?.tts_default_voice || "",
+    language: settings?.transcription_language || "auto",
+  };
+}
+
+function initialiseEndpoints(settings, capability) {
+  const stored = settings?.[`${capability}_endpoints`];
+  const endpoints = stored?.length ? stored : [legacyEndpoint(settings, capability)];
+  return endpoints.map((endpoint) => ({
+    ...endpoint,
+    base_url: endpoint.base_url || "",
+    model: endpoint.model || "",
+    default_voice: endpoint.default_voice || "",
+    language: endpoint.language || "auto",
+    api_key: "",
+    api_key_dirty: false,
+  }));
+}
+
+function newEndpoint(capability, values = {}) {
+  return {
+    id: endpointId(capability),
+    name: values.name || `New ${capability.toUpperCase()} host`,
+    provider: values.provider || CAPABILITIES[capability].defaultProvider,
+    api_key: "",
+    api_key_set: false,
+    api_key_dirty: false,
+    base_url: values.base_url || "",
+    model: values.model || "",
+    default_voice: values.default_voice || "",
+    language: values.language || "auto",
+  };
+}
+
+function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
+  const config = CAPABILITIES[capability];
+
+  const update = (index, field, value) => {
+    setEndpoints((current) =>
+      current.map((endpoint, endpointIndex) => {
+        if (endpointIndex !== index) return endpoint;
+        if (field === "provider") {
+          return {
+            ...endpoint,
+            provider: value,
+            api_key: "",
+            api_key_set: false,
+            api_key_dirty: true,
+          };
+        }
+        if (field === "api_key") {
+          return { ...endpoint, api_key: value, api_key_dirty: true };
+        }
+        return { ...endpoint, [field]: value };
+      }),
+    );
+  };
+
+  const move = (index, direction) => {
+    setEndpoints((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const reordered = [...current];
+      [reordered[index], reordered[target]] = [
+        reordered[target],
+        reordered[index],
+      ];
+      return reordered;
+    });
+  };
+
+  const addPreset = () => {
+    const presets = {
+      llm: {
+        name: "Local Ollama",
+        provider: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        model: "qwen3.5:9b",
+      },
+      tts: {
+        name: "Local OmniVoice",
+        provider: "omnivoice",
+        base_url: "http://127.0.0.1:8001",
+      },
+      transcription: {
+        name: "Local WhisperX",
+        provider: "whisperx",
+        base_url: "http://127.0.0.1:8002",
+        model: "large-v3",
+        language: "en",
+      },
+    };
+    setEndpoints((current) => [...current, newEndpoint(capability, presets[capability])]);
+  };
+
+  return (
+    <>
+      <div className="endpoint-pool-heading">
+        <div>
+          <h3>{config.title}</h3>
+          <p className="settings-hint">{config.description}</p>
+        </div>
+        <button type="button" className="btn-secondary" onClick={addPreset}>
+          + Add endpoint
+        </button>
+      </div>
+      <div className="endpoint-pool">
+        {endpoints.map((endpoint, index) => {
+          const disabled = ["stub", "none"].includes(endpoint.provider);
+          return (
+            <article className="endpoint-card" key={endpoint.id}>
+              <header className="endpoint-card-header">
+                <span className="endpoint-priority">Priority {index + 1}</span>
+                <div className="endpoint-order-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary endpoint-order-button"
+                    aria-label={`Move ${endpoint.name} up`}
+                    disabled={index === 0}
+                    onClick={() => move(index, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary endpoint-order-button"
+                    aria-label={`Move ${endpoint.name} down`}
+                    disabled={index === endpoints.length - 1}
+                    onClick={() => move(index, 1)}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary endpoint-remove-button"
+                    disabled={endpoints.length === 1}
+                    onClick={() =>
+                      setEndpoints((current) =>
+                        current.filter((_, endpointIndex) => endpointIndex !== index),
+                      )
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              </header>
+              <div className="endpoint-fields">
+                <label>
+                  Name
+                  <input
+                    value={endpoint.name}
+                    onChange={(event) => update(index, "name", event.target.value)}
+                    placeholder="Gaming PC"
+                  />
+                </label>
+                <label>
+                  Provider
+                  <select
+                    value={endpoint.provider}
+                    onChange={(event) => update(index, "provider", event.target.value)}
+                  >
+                    {config.providers.map(([value, label]) => (
+                      <option value={value} key={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {!disabled && (
+                  <label>
+                    API Key
+                    <input
+                      type="password"
+                      value={endpoint.api_key}
+                      onChange={(event) => update(index, "api_key", event.target.value)}
+                      placeholder={
+                        endpoint.api_key_set
+                          ? "••••••••  (set — enter a new key to change)"
+                          : "Optional for trusted local hosts"
+                      }
+                    />
+                  </label>
+                )}
+                {!disabled && (
+                  <label>
+                    Base URL
+                    <input
+                      type="url"
+                      value={endpoint.base_url}
+                      onChange={(event) => update(index, "base_url", event.target.value)}
+                      placeholder={config.baseUrlPlaceholder}
+                    />
+                  </label>
+                )}
+                {!disabled && (
+                  <label>
+                    Model
+                    <input
+                      value={endpoint.model}
+                      onChange={(event) => update(index, "model", event.target.value)}
+                      placeholder={config.modelPlaceholder}
+                    />
+                  </label>
+                )}
+                {capability === "tts" &&
+                  !disabled &&
+                  endpoint.provider !== "omnivoice" && (
+                    <label>
+                      Default Voice ID
+                      <input
+                        value={endpoint.default_voice}
+                        onChange={(event) =>
+                          update(index, "default_voice", event.target.value)
+                        }
+                        placeholder="e.g. af_heart or alloy"
+                      />
+                    </label>
+                  )}
+                {capability === "transcription" && !disabled && (
+                  <label>
+                    Language
+                    <input
+                      value={endpoint.language}
+                      onChange={(event) => update(index, "language", event.target.value)}
+                      placeholder="auto or en"
+                    />
+                  </label>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function serialiseEndpoints(endpoints) {
+  return endpoints.map((endpoint) => {
+    const payload = {
+      id: endpoint.id,
+      name: endpoint.name,
+      provider: endpoint.provider,
+      base_url: endpoint.base_url || null,
+      model: endpoint.model || null,
+      default_voice: endpoint.default_voice || null,
+      language: endpoint.language || null,
+    };
+    if (endpoint.api_key_dirty) payload.api_key = endpoint.api_key || null;
+    return payload;
+  });
+}
+
+function useEndpointTestMutation(testFunction, buildPayload, refreshSettings) {
+  return useMutation({
+    mutationFn: async () => {
+      await updateAudiobookSettings(buildPayload());
+      return testFunction();
+    },
+    onSuccess: refreshSettings,
+  });
+}
+
 function AudiobookSettings() {
   const queryClient = useQueryClient();
-
   const { data: settings, isLoading } = useQuery({
     queryKey: ["audiobook-settings"],
     queryFn: getAudiobookSettings,
   });
 
-  const [llmProvider, setLlmProvider] = useState("");
-  const [llmApiKey, setLlmApiKey] = useState("");
-  const [llmBaseUrl, setLlmBaseUrl] = useState("");
-  const [llmModel, setLlmModel] = useState("");
-  const [ttsProvider, setTtsProvider] = useState("stub");
-  const [ttsApiKey, setTtsApiKey] = useState("");
-  const [ttsBaseUrl, setTtsBaseUrl] = useState("");
-  const [ttsModel, setTtsModel] = useState("");
-  const [ttsDefaultVoice, setTtsDefaultVoice] = useState("");
-  const [transcriptionProvider, setTranscriptionProvider] = useState("none");
-  const [transcriptionApiKey, setTranscriptionApiKey] = useState("");
-  const [transcriptionBaseUrl, setTranscriptionBaseUrl] = useState("");
-  const [transcriptionModel, setTranscriptionModel] = useState("");
-  const [transcriptionLanguage, setTranscriptionLanguage] = useState("auto");
+  const [llmEndpoints, setLlmEndpoints] = useState([]);
+  const [ttsEndpoints, setTtsEndpoints] = useState([]);
+  const [transcriptionEndpoints, setTranscriptionEndpoints] = useState([]);
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [initialised, setInitialised] = useState(false);
 
   useEffect(() => {
     if (settings && !initialised) {
-      setLlmProvider(settings.llm_provider || "stub");
-      setLlmBaseUrl(settings.llm_base_url || "");
-      setLlmModel(settings.llm_model || "");
-      setTtsProvider(settings.tts_provider || "stub");
-      setTtsBaseUrl(settings.tts_base_url || "");
-      setTtsModel(settings.tts_model || "");
-      setTtsDefaultVoice(settings.tts_default_voice || "");
-      setTranscriptionProvider(settings.transcription_provider || "none");
-      setTranscriptionBaseUrl(settings.transcription_base_url || "");
-      setTranscriptionModel(settings.transcription_model || "");
-      setTranscriptionLanguage(settings.transcription_language || "auto");
+      setLlmEndpoints(initialiseEndpoints(settings, "llm"));
+      setTtsEndpoints(initialiseEndpoints(settings, "tts"));
+      setTranscriptionEndpoints(initialiseEndpoints(settings, "transcription"));
       setRosterPrompt(settings.roster_prompt_template || "");
       setDiarizationPrompt(settings.diarization_prompt_template || "");
       setInitialised(true);
     }
   }, [initialised, settings]);
 
+  const buildPayload = () => ({
+    llm_endpoints: serialiseEndpoints(llmEndpoints),
+    tts_endpoints: serialiseEndpoints(ttsEndpoints),
+    transcription_endpoints: serialiseEndpoints(transcriptionEndpoints),
+    roster_prompt_template: rosterPrompt || null,
+    diarization_prompt_template: diarizationPrompt || null,
+  });
+
+  const refreshSettings = () => {
+    const clearTypedSecrets = (current) =>
+      current.map((endpoint) => ({
+        ...endpoint,
+        api_key_set: endpoint.api_key_dirty
+          ? Boolean(endpoint.api_key)
+          : endpoint.api_key_set,
+        api_key: "",
+        api_key_dirty: false,
+      }));
+    setLlmEndpoints(clearTypedSecrets);
+    setTtsEndpoints(clearTypedSecrets);
+    setTranscriptionEndpoints(clearTypedSecrets);
+    queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+  };
+
   const saveMutation = useMutation({
-    mutationFn: (data) => updateAudiobookSettings(data),
-    onSuccess: () => {
-      setTtsApiKey("");
-      setTranscriptionApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
-    },
+    mutationFn: () => updateAudiobookSettings(buildPayload()),
+    onSuccess: refreshSettings,
   });
 
-  const buildPayload = () => {
-    const payload = {
-      llm_provider: llmProvider || null,
-      llm_base_url: llmBaseUrl || null,
-      llm_model: llmModel || null,
-      tts_provider: ttsProvider || "stub",
-      tts_base_url: ttsBaseUrl || null,
-      tts_model: ttsModel || null,
-      tts_default_voice: ttsDefaultVoice || null,
-      transcription_provider: transcriptionProvider || "none",
-      transcription_base_url: transcriptionBaseUrl || null,
-      transcription_model: transcriptionModel || null,
-      transcription_language: transcriptionLanguage || null,
-      roster_prompt_template: rosterPrompt || null,
-      diarization_prompt_template: diarizationPrompt || null,
-    };
-    if (llmApiKey) {
-      payload.llm_api_key = llmApiKey;
-    }
-    if (ttsApiKey) {
-      payload.tts_api_key = ttsApiKey;
-    }
-    if (transcriptionApiKey) {
-      payload.transcription_api_key = transcriptionApiKey;
-    }
-    return payload;
+  const llmTest = useEndpointTestMutation(
+    testAudiobookLlm,
+    buildPayload,
+    refreshSettings,
+  );
+  const ttsTest = useEndpointTestMutation(
+    testAudiobookTts,
+    buildPayload,
+    refreshSettings,
+  );
+  const transcriptionTest = useEndpointTestMutation(
+    testAudiobookTranscription,
+    buildPayload,
+    refreshSettings,
+  );
+
+  const handleSave = (event) => {
+    event.preventDefault();
+    saveMutation.mutate();
   };
 
-  const testMutation = useMutation({
-    mutationFn: async () => {
-      await updateAudiobookSettings(buildPayload());
-      return testAudiobookLlm();
-    },
-    onSuccess: () => {
-      setTtsApiKey("");
-      setTranscriptionApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
-    },
-  });
+  if (isLoading || !initialised) return <p>Loading settings…</p>;
 
-  const testTtsMutation = useMutation({
-    mutationFn: async () => {
-      await updateAudiobookSettings(buildPayload());
-      return testAudiobookTts();
-    },
-    onSuccess: () => {
-      setTtsApiKey("");
-      setTranscriptionApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
-    },
-  });
-
-  const testTranscriptionMutation = useMutation({
-    mutationFn: async () => {
-      await updateAudiobookSettings(buildPayload());
-      return testAudiobookTranscription();
-    },
-    onSuccess: () => {
-      setTranscriptionApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
-    },
-  });
-
-  const handleSave = (e) => {
-    e.preventDefault();
-    saveMutation.mutate(buildPayload());
-  };
-
-  if (isLoading) return <p>Loading settings…</p>;
+  const testStatus = (mutation, label) => (
+    <div className="endpoint-test-status">
+      <button
+        type="button"
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+      >
+        {mutation.isPending ? "Testing pool…" : `Save & Test ${label}`}
+      </button>
+      {mutation.isSuccess && (
+        <p className="success">
+          Connected{mutation.data.endpoint ? ` via ${mutation.data.endpoint}` : ""} to{" "}
+          {mutation.data.provider}
+          {mutation.data.model ? ` / ${mutation.data.model}` : ""}.
+        </p>
+      )}
+      {mutation.isError && (
+        <p className="error">{mutation.error?.message || `${label} test failed`}</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="settings-page">
       <h2>Audio &amp; AI Configuration</h2>
+      <p className="settings-hint endpoint-routing-hint">
+        Requests use the highest-priority available endpoint. Connection or model
+        failures put that endpoint on a 60-second cooldown, then the next request
+        tries it again. No background polling runs when there is no work.
+      </p>
       <form onSubmit={handleSave}>
         <section className="settings-section">
-          <h3>LLM Provider</h3>
-          <label>
-            Provider
-            <select
-              value={llmProvider}
-              onChange={(e) => setLlmProvider(e.target.value)}
-            >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="ollama">Ollama (local)</option>
-              <option value="custom">Custom / Local</option>
-              <option value="stub">Deterministic local harness</option>
-            </select>
-          </label>
-          <label>
-            API Key
-            <input
-              type="password"
-              value={llmApiKey}
-              onChange={(e) => setLlmApiKey(e.target.value)}
-              placeholder={
-                settings?.llm_api_key_set
-                  ? "••••••••  (set — enter new key to change)"
-                  : "Enter API key"
-              }
-            />
-          </label>
-          <label>
-            Base URL
-            <input
-              type="url"
-              value={llmBaseUrl}
-              onChange={(e) => setLlmBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com  (leave blank for provider default)"
-            />
-          </label>
-          <label>
-            Model
-            <input
-              type="text"
-              value={llmModel}
-              onChange={(e) => setLlmModel(e.target.value)}
-              placeholder="e.g. gpt-4o or claude-opus-4-7"
-            />
-          </label>
-          <div className="settings-actions-inline">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setLlmProvider("ollama");
-                setLlmBaseUrl("http://127.0.0.1:11434");
-                setLlmModel("qwen3.5:9b");
-              }}
-            >
-              Use Recommended Local Ollama
-            </button>
-            <button
-              type="button"
-              onClick={() => testMutation.mutate()}
-              disabled={testMutation.isPending}
-            >
-              {testMutation.isPending ? "Testing…" : "Save & Test LLM"}
-            </button>
-          </div>
-          <p className="settings-hint">
-            Recommended local default: <code>qwen3.5:9b</code> (6.6 GB). Run{" "}
-            <code>ollama pull qwen3.5:9b</code> first. Story Manager uses
-            Ollama&apos;s schema-constrained JSON output and disables thinking
-            for predictable extraction latency.
-          </p>
-          {testMutation.isSuccess && (
-            <p className="success">
-              Connected to {testMutation.data.provider} /{" "}
-              {testMutation.data.model || "local harness"}.
-            </p>
-          )}
-          {testMutation.isError && (
-            <p className="error">
-              {testMutation.error?.message || "LLM test failed"}
-            </p>
-          )}
+          <EndpointPoolEditor
+            capability="llm"
+            endpoints={llmEndpoints}
+            setEndpoints={setLlmEndpoints}
+          />
+          {testStatus(llmTest, "LLM")}
         </section>
 
         <section className="settings-section">
-          <h3>Text-to-Speech Provider</h3>
-          <label>
-            Provider
-            <select
-              value={ttsProvider}
-              onChange={(e) => {
-                setTtsProvider(e.target.value);
-                setTtsApiKey("");
-              }}
-            >
-              <option value="omnivoice">OmniVoice</option>
-              <option value="openai-compatible">
-                OpenAI-compatible (Kokoro / local)
-              </option>
-              <option value="openai">OpenAI</option>
-              <option value="elevenlabs">ElevenLabs</option>
-              <option value="stub">Deterministic local harness</option>
-            </select>
-          </label>
-          {ttsProvider !== "stub" && (
-            <label>
-              API Key
-              <input
-                type="password"
-                value={ttsApiKey}
-                onChange={(e) => setTtsApiKey(e.target.value)}
-                placeholder={
-                  settings?.tts_api_key_set
-                    ? "••••••••  (set — enter new key to change)"
-                    : ttsProvider === "omnivoice" ||
-                        ttsProvider === "openai-compatible"
-                      ? "Optional for local servers"
-                      : "Enter API key"
-                }
-              />
-            </label>
-          )}
-          {ttsProvider !== "stub" && (
-            <label>
-              Base URL
-              <input
-                type="url"
-                value={ttsBaseUrl}
-                onChange={(e) => setTtsBaseUrl(e.target.value)}
-                placeholder={
-                  ttsProvider === "omnivoice"
-                    ? "http://your-omnivoice-server:8001"
-                    : ttsProvider === "openai-compatible"
-                      ? "http://your-tts-server:8880"
-                      : "Leave blank for the provider default"
-                }
-              />
-            </label>
-          )}
-          {["openai", "openai-compatible", "elevenlabs"].includes(
-            ttsProvider,
-          ) && (
-            <label>
-              Model
-              <input
-                type="text"
-                value={ttsModel}
-                onChange={(e) => setTtsModel(e.target.value)}
-                placeholder={
-                  ttsProvider === "openai-compatible"
-                    ? "e.g. kokoro"
-                    : ttsProvider === "openai"
-                      ? "tts-1"
-                      : "eleven_multilingual_v2"
-                }
-              />
-            </label>
-          )}
-          {["openai", "openai-compatible", "elevenlabs"].includes(
-            ttsProvider,
-          ) && (
-            <label>
-              Default Voice ID
-              <input
-                type="text"
-                value={ttsDefaultVoice}
-                onChange={(e) => setTtsDefaultVoice(e.target.value)}
-                placeholder={
-                  ttsProvider === "openai-compatible"
-                    ? "e.g. af_heart"
-                    : ttsProvider === "openai"
-                      ? "e.g. alloy"
-                      : "ElevenLabs voice ID"
-                }
-              />
-            </label>
-          )}
-          <div className="settings-actions-inline">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setTtsProvider("omnivoice");
-                setTtsApiKey("");
-                setTtsBaseUrl("http://127.0.0.1:8001");
-                setTtsModel("");
-                setTtsDefaultVoice("");
-              }}
-            >
-              Use Local OmniVoice
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setTtsProvider("openai-compatible");
-                setTtsApiKey("");
-                setTtsBaseUrl("http://127.0.0.1:8880");
-                setTtsModel("kokoro");
-                setTtsDefaultVoice("af_heart");
-              }}
-            >
-              Use Local Kokoro
-            </button>
-            <button
-              type="button"
-              onClick={() => testTtsMutation.mutate()}
-              disabled={testTtsMutation.isPending}
-            >
-              {testTtsMutation.isPending ? "Testing…" : "Save & Test TTS"}
-            </button>
-          </div>
-          {testTtsMutation.isSuccess && (
-            <p className="success">
-              Connected to {testTtsMutation.data.provider}
-              {testTtsMutation.data.model
-                ? ` / ${testTtsMutation.data.model}`
-                : ""}
-              .
-            </p>
-          )}
-          {testTtsMutation.isError && (
-            <p className="error">
-              {testTtsMutation.error?.message || "TTS test failed"}
-            </p>
-          )}
-          <p className="settings-hint">
-            OmniVoice uses descriptive voice profiles and expression tags.
-            OpenAI-compatible and hosted APIs use voice IDs; set a default here
-            and optionally override it on individual characters.
-          </p>
-          {ttsProvider === "omnivoice" && (
-            <p className="settings-hint">
-              Run <code>make run-omnivoice</code> for the bundled local adapter.
-              It receives <code>POST /generate</code> and returns MP3 audio.
-            </p>
-          )}
-          {ttsProvider === "openai-compatible" && (
-            <p className="settings-hint">
-              Compatible servers must implement{" "}
-              <code>POST /v1/audio/speech</code>. Kokoro FastAPI is supported by
-              the local preset.
-            </p>
-          )}
-          {ttsProvider === "stub" && (
-            <p className="settings-hint">
-              The deterministic harness generates silent placeholder MP3s with
-              realistic timing for offline validation.
-            </p>
-          )}
+          <EndpointPoolEditor
+            capability="tts"
+            endpoints={ttsEndpoints}
+            setEndpoints={setTtsEndpoints}
+          />
+          {testStatus(ttsTest, "TTS")}
         </section>
 
         <section className="settings-section">
-          <h3>Speech-to-Text Alignment</h3>
-          <p className="settings-hint">
-            Transcribe imported human narration into forced-aligned word
-            timestamps, then fuzzy-match those words to EPUB sentences for
-            accurate highlighting and SMIL timing.
-          </p>
-          <label>
-            Provider
-            <select
-              value={transcriptionProvider}
-              onChange={(e) => {
-                setTranscriptionProvider(e.target.value);
-                setTranscriptionApiKey("");
-              }}
-            >
-              <option value="whisperx">WhisperX service</option>
-              <option value="none">Not configured</option>
-            </select>
-          </label>
-          {transcriptionProvider !== "none" && (
-            <>
-              <label>
-                API Key
-                <input
-                  type="password"
-                  value={transcriptionApiKey}
-                  onChange={(e) => setTranscriptionApiKey(e.target.value)}
-                  placeholder={
-                    settings?.transcription_api_key_set
-                      ? "••••••••  (set — enter new key to change)"
-                      : "Optional for a trusted local service"
-                  }
-                />
-              </label>
-              <label>
-                Base URL
-                <input
-                  type="url"
-                  value={transcriptionBaseUrl}
-                  onChange={(e) => setTranscriptionBaseUrl(e.target.value)}
-                  placeholder="http://your-whisper-server:8002"
-                />
-              </label>
-              <label>
-                Model
-                <input
-                  type="text"
-                  value={transcriptionModel}
-                  onChange={(e) => setTranscriptionModel(e.target.value)}
-                  placeholder="large-v3"
-                />
-              </label>
-              <label>
-                Language
-                <input
-                  type="text"
-                  value={transcriptionLanguage}
-                  onChange={(e) => setTranscriptionLanguage(e.target.value)}
-                  placeholder="auto or en"
-                />
-              </label>
-            </>
-          )}
-          <div className="settings-actions-inline">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setTranscriptionProvider("whisperx");
-                setTranscriptionApiKey("");
-                setTranscriptionBaseUrl("http://127.0.0.1:8002");
-                setTranscriptionModel("large-v3");
-                setTranscriptionLanguage("en");
-              }}
-            >
-              Use Local WhisperX
-            </button>
-            <button
-              type="button"
-              onClick={() => testTranscriptionMutation.mutate()}
-              disabled={
-                transcriptionProvider === "none" ||
-                testTranscriptionMutation.isPending
-              }
-            >
-              {testTranscriptionMutation.isPending
-                ? "Testing…"
-                : "Save & Test Transcription"}
-            </button>
-          </div>
-          {testTranscriptionMutation.isSuccess && (
-            <p className="success">
-              Connected to {testTranscriptionMutation.data.provider} /{" "}
-              {testTranscriptionMutation.data.model}
-              {testTranscriptionMutation.data.device
-                ? ` on ${testTranscriptionMutation.data.device}`
-                : ""}
-              .
-            </p>
-          )}
-          {testTranscriptionMutation.isError && (
-            <p className="error">
-              {testTranscriptionMutation.error?.message ||
-                "Transcription service test failed"}
-            </p>
-          )}
-          {transcriptionProvider === "whisperx" && (
-            <p className="settings-hint">
-              Run <code>make run-transcription</code> locally or use the
-              published <code>story-manager-transcription</code> container. The
-              bundled image includes FFmpeg.
-            </p>
-          )}
+          <EndpointPoolEditor
+            capability="transcription"
+            endpoints={transcriptionEndpoints}
+            setEndpoints={setTranscriptionEndpoints}
+          />
+          {testStatus(transcriptionTest, "Transcription")}
         </section>
 
         <section className="settings-section">
@@ -517,7 +480,7 @@ function AudiobookSettings() {
             <textarea
               rows={6}
               value={rosterPrompt}
-              onChange={(e) => setRosterPrompt(e.target.value)}
+              onChange={(event) => setRosterPrompt(event.target.value)}
               placeholder={DEFAULT_ROSTER_PROMPT_HINT}
             />
           </label>
@@ -526,19 +489,16 @@ function AudiobookSettings() {
             <textarea
               rows={6}
               value={diarizationPrompt}
-              onChange={(e) => setDiarizationPrompt(e.target.value)}
+              onChange={(event) => setDiarizationPrompt(event.target.value)}
               placeholder={DEFAULT_DIARIZATION_PROMPT_HINT}
             />
           </label>
         </section>
 
         {saveMutation.isError && (
-          <p className="error">
-            {saveMutation.error?.message || "Save failed"}
-          </p>
+          <p className="error">{saveMutation.error?.message || "Save failed"}</p>
         )}
         {saveMutation.isSuccess && <p className="success">Settings saved.</p>}
-
         <button type="submit" disabled={saveMutation.isPending}>
           {saveMutation.isPending ? "Saving…" : "Save Settings"}
         </button>

@@ -63,7 +63,7 @@ describe("AudiobookSettings", () => {
     renderWithClient(<AudiobookSettings />);
 
     const providerSelect = (await screen.findAllByRole("combobox"))[1];
-    const ttsApiKeyInput = screen.getAllByLabelText("API Key")[1];
+    const ttsApiKeyInput = screen.getByLabelText("API Key");
     fireEvent.change(ttsApiKeyInput, { target: { value: "openai-secret" } });
     fireEvent.change(providerSelect, {
       target: { value: "openai-compatible" },
@@ -71,7 +71,57 @@ describe("AudiobookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save & Test TTS" }));
 
     await waitFor(() => expect(updates).toHaveLength(1));
-    expect(updates[0].tts_provider).toBe("openai-compatible");
-    expect(updates[0]).not.toHaveProperty("tts_api_key");
+    expect(updates[0].tts_endpoints[0].provider).toBe("openai-compatible");
+    expect(updates[0].tts_endpoints[0].api_key).toBeNull();
+  });
+
+  it("reorders endpoint priority before saving", async () => {
+    const updates = [];
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/audiobook/settings" && !options) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              llm_endpoints: [
+                {
+                  id: "always-on",
+                  name: "Always-on mini PC",
+                  provider: "ollama",
+                  base_url: "http://mini:11434",
+                  model: "qwen3.5:9b",
+                },
+                {
+                  id: "gaming-pc",
+                  name: "Gaming PC",
+                  provider: "ollama",
+                  base_url: "http://gaming:11434",
+                  model: "qwen3.5:27b",
+                },
+              ],
+              tts_provider: "stub",
+              transcription_provider: "none",
+            }),
+        });
+      }
+      if (url === "/api/audiobook/settings" && options?.method === "PUT") {
+        updates.push(JSON.parse(options.body));
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    renderWithClient(<AudiobookSettings />);
+
+    await screen.findByDisplayValue("Gaming PC");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Gaming PC up" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(updates).toHaveLength(1));
+    expect(updates[0].llm_endpoints.map((endpoint) => endpoint.id)).toEqual([
+      "gaming-pc",
+      "always-on",
+    ]);
   });
 });

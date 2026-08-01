@@ -12,6 +12,7 @@ import shutil
 import httpx
 
 from ..models import AudiobookSettings
+from .endpoint_pool import RoutedResult, primary_provider, route_request
 
 DEFAULT_VOICE_PROMPT = "[gender-neutral][pitch-medium][speed-normal]"
 SUPPORTED_TTS_PROVIDERS = {
@@ -34,6 +35,7 @@ class TTSRequest:
     text: str
     voice_prompt: str = DEFAULT_VOICE_PROMPT
     voice_id: str | None = None
+    voice_provider: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,15 +121,14 @@ async def _stub_speech(text: str) -> bytes:
 
 
 def tts_provider_name(settings: AudiobookSettings | None) -> str:
-    provider = (settings.tts_provider if settings else None) or "stub"
-    provider = provider.strip().lower()
+    provider = primary_provider(settings, "tts", "stub")
     if provider not in SUPPORTED_TTS_PROVIDERS:
         choices = ", ".join(sorted(SUPPORTED_TTS_PROVIDERS))
         raise RuntimeError(f"Unsupported TTS provider {provider!r}. Choose one of: {choices}.")
     return provider
 
 
-async def synthesize_speech(
+async def _synthesize_speech_endpoint(
     settings: AudiobookSettings | None,
     request: TTSRequest,
 ) -> bytes:
@@ -154,7 +155,10 @@ async def synthesize_speech(
             response.raise_for_status()
             return response.content
 
-    voice_id = request.voice_id or settings.tts_default_voice
+    endpoint_voice_id = request.voice_id
+    if request.voice_provider and request.voice_provider != provider:
+        endpoint_voice_id = None
+    voice_id = endpoint_voice_id or settings.tts_default_voice
     if not voice_id:
         raise RuntimeError(
             f"A voice ID is required for the {provider} TTS provider. "
@@ -226,6 +230,28 @@ async def synthesize_speech(
         return response.content
 
 
+async def synthesize_speech_routed(
+    settings: AudiobookSettings,
+    request: TTSRequest,
+) -> RoutedResult[bytes]:
+    return await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _synthesize_speech_endpoint(endpoint_settings, request),
+    )
+
+
+async def synthesize_speech(
+    settings: AudiobookSettings | None,
+    request: TTSRequest,
+) -> bytes:
+    """Generate an MP3 using the first available endpoint."""
+    if settings is None:
+        return await _stub_speech(request.text)
+    routed = await synthesize_speech_routed(settings, request)
+    return routed.value
+
+
 async def synthesize_speech_batch(
     settings: AudiobookSettings | None,
     requests: list[TTSRequest],
@@ -233,9 +259,24 @@ async def synthesize_speech_batch(
     """Generate a true model batch when supported, with a sequential fallback."""
     if not requests:
         return []
+    if settings is None:
+        return [TTSResult(await _stub_speech(request.text)) for request in requests]
+    routed = await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _synthesize_speech_batch_endpoint(endpoint_settings, requests),
+    )
+    return routed.value
+
+
+async def _synthesize_speech_batch_endpoint(
+    settings: AudiobookSettings,
+    requests: list[TTSRequest],
+) -> list[TTSResult]:
+    """Generate one batch against a specific endpoint."""
     if tts_provider_name(settings) != "omnivoice":
-        return [TTSResult(await synthesize_speech(settings, request)) for request in requests]
-    if settings is None or not settings.tts_base_url:
+        return [TTSResult(await _synthesize_speech_endpoint(settings, request)) for request in requests]
+    if not settings.tts_base_url:
         raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
 
     root = settings.tts_base_url.rstrip("/")
