@@ -483,12 +483,11 @@ describe("App", () => {
     expect(
       screen.getByTitle("Human-narrated audiobook"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Showing 3 of 3 books")).toBeInTheDocument();
+    expect(screen.getByText("Text Only")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Audiobook"), {
       target: { value: "enabled" },
     });
-    expect(screen.getByText("Showing 2 of 3 books")).toBeInTheDocument();
     expect(screen.getByText("Audio Ready")).toBeInTheDocument();
     expect(screen.getByText("Human Audio")).toBeInTheDocument();
     expect(screen.queryByText("Text Only")).not.toBeInTheDocument();

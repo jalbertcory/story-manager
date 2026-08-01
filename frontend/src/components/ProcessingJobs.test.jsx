@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProcessingJobs from "./ProcessingJobs";
@@ -69,5 +69,15 @@ describe("ProcessingJobs", () => {
     expect(screen.getByText("33% · 1 / 3")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveValue(1);
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("keeps the dispatch controls collapsed until requested", async () => {
+    renderPage();
+    const summary = await screen.findByText("Queue work");
+    const panel = summary.closest("details");
+
+    expect(panel).not.toHaveAttribute("open");
+    fireEvent.click(summary.closest("summary"));
+    expect(panel).toHaveAttribute("open");
   });
 });

@@ -295,6 +295,9 @@ function App() {
       default:
         return (
           <>
+            <div className="library-page-heading">
+              <h2>Library</h2>
+            </div>
             <div className="search-controls">
               <div className="search-input-wrap">
                 <svg

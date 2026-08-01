@@ -1,23 +1,23 @@
 :root {
-  --bg: #13141a;
-  --surface: #1e2028;
-  --surface-2: #262830;
-  --surface-3: #2e3040;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --text: #dde1f0;
-  --text-muted: #7a7f9a;
-  --accent: #6272ea;
-  --accent-hover: #7b8ef5;
-  --danger: #d94f4f;
-  --danger-hover: #e96060;
-  --success: #4caf7d;
-  --warning: #d68f2c;
-  --radius: 8px;
-  --radius-sm: 5px;
-  --radius-lg: 12px;
+  --bg: #171510;
+  --surface: #1f1c17;
+  --surface-2: #29251e;
+  --surface-3: #332e25;
+  --border: rgba(226, 214, 192, 0.13);
+  --border-strong: rgba(226, 214, 192, 0.28);
+  --text: #eee7d9;
+  --text-muted: #a39989;
+  --accent: #d5836a;
+  --accent-hover: #e59a80;
+  --danger: #e06e67;
+  --danger-hover: #ec847d;
+  --success: #b79a68;
+  --warning: #d9a654;
+  --radius: 1px;
+  --radius-sm: 1px;
+  --radius-lg: 1px;
 
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: "Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: var(--text);
@@ -40,13 +40,14 @@ body {
 }
 
 h1, h2, h3 {
+  font-family: Georgia, "Times New Roman", serif;
   color: var(--text);
   margin: 0;
 }
 
-h1 { font-size: 1.6rem; font-weight: 700; }
-h2 { font-size: 1.25rem; font-weight: 600; }
-h3 { font-size: 1rem; font-weight: 600; }
+h1 { font-size: 1.85rem; font-weight: 500; letter-spacing: -0.025em; }
+h2 { font-size: 1.45rem; font-weight: 500; letter-spacing: -0.02em; }
+h3 { font-size: 1.05rem; font-weight: 500; }
 
 a {
   color: var(--accent);

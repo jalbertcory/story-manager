@@ -115,15 +115,32 @@ function ProcessingJobs() {
     queueMutation.mutate({ jobType: operation, bookIds: selectedIds, payload });
   };
 
+  const runningCount = jobs.filter((job) => job.status === "running").length;
+  const queuedCount = jobs.filter((job) => job.status === "queued").length;
+
   return (
     <div className="processing-page">
-      <section className="settings-section processing-queue-panel">
+      <header className="processing-console-header">
         <div>
-          <h2>Queue processing</h2>
-          <p className="hint">
-            Queue cleaning, source refreshes, or audiobook regeneration for one or more books.
-          </p>
+          <span>PRODUCTION CONSOLE</span>
+          <h2>Processing control</h2>
         </div>
+        <p>Durable work queue · automatic recovery enabled</p>
+      </header>
+      <div className="processing-health-strip" aria-label="Processing system status">
+        <div><span className="processing-health-dot" /><strong>Queue online</strong><small>Workers available</small></div>
+        <div><strong>{runningCount} running</strong><small>{queuedCount} waiting</small></div>
+      </div>
+      <details className="settings-section processing-queue-panel">
+        <summary className="processing-queue-summary">
+          <span className="processing-queue-summary-heading">
+          <span className="processing-section-code">01 / DISPATCH</span>
+            <span className="processing-queue-title">Queue work</span>
+          </span>
+          <span className="hint">
+            Queue cleaning, source refreshes, or audiobook regeneration for one or more books.
+          </span>
+        </summary>
         <div className="processing-quick-actions">
           <button
             onClick={() => queueMutation.mutate({ jobType: "clean_all", bookIds: [], payload: {} })}
@@ -206,11 +223,12 @@ function ProcessingJobs() {
         </div>
         {queueNotice && <p className="job-queued-notice">{queueNotice}</p>}
         {queueMutation.isError && <p className="error">{queueMutation.error.message}</p>}
-      </section>
+      </details>
 
       <section className="settings-section">
         <div className="processing-list-header">
           <div>
+            <span className="processing-section-code">02 / JOB LEDGER</span>
             <h2>Processing jobs</h2>
             <p className="hint">Durable work survives application restarts and can be retried here.</p>
           </div>

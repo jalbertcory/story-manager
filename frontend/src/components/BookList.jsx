@@ -254,9 +254,6 @@ function BookList({
         audiobookFilter={audiobookFilter}
         onAudiobookFilterChange={setAudiobookFilter}
       />
-      <div className="library-results-summary" role="status">
-        Showing {filteredBooks.length} of {books.length} books
-      </div>
       <LibraryViewTabs
         view={libraryView}
         onChange={handleTabChange}

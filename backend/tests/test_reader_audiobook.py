@@ -292,6 +292,16 @@ async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlit
 
     assert payload["audiobook"] is None
     assert payload["audiobook_types"] == ["human_narrated"]
+    human_url = f"/reader/books/{book_id}/human-audiobooks"
+    assert app_client.get(human_url).status_code == 401
+    editions = app_client.get(human_url, auth=auth).json()
+    assert len(editions) == 1
+    assert editions[0]["name"] == "Human narration"
+    assert editions[0]["status"] == "ready"
+    assert app_client.get(
+        f"/reader/books/{book_id}/human-audiobooks/chapters",
+        auth=auth,
+    ).json() == []
 
 
 def test_reader_audiobook_capability_supports_all_publication_states():

@@ -27,6 +27,7 @@ from ..services.audiobook_publication import (
     stable_chapter_key,
     text_reader_path,
 )
+from . import audiobook as audiobook_router
 
 router = APIRouter(dependencies=[Depends(get_reader_api_key)])
 
@@ -418,6 +419,66 @@ async def _reader_audiobook_book(book_id: int, db: AsyncSession) -> models.Book:
     if not book.audiobook_enabled or (not book.audiobook_pipeline_status and not book.audiobook_revision):
         raise HTTPException(status_code=404, detail="Generated audiobook is not available")
     return book
+
+
+@router.get("/reader/books/{book_id}/human-audiobooks")
+async def get_reader_human_audiobooks(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[audiobook_router.ImportedAudiobookResponse]:
+    """Reader-key-safe metadata for ready human-narrated audiobook editions."""
+    editions = await audiobook_router.list_imported_audiobooks(book_id, db)
+    return [
+        edition.model_copy(
+            update={
+                "tracks": [
+                    track.model_copy(
+                        update={
+                            "audio_url": (
+                                f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/audio"
+                            ),
+                            "smil_url": (
+                                f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil"
+                            ),
+                        }
+                    )
+                    for track in edition.tracks
+                ]
+            }
+        )
+        for edition in editions
+    ]
+
+
+@router.get("/reader/books/{book_id}/human-audiobooks/chapters")
+async def get_reader_human_audiobook_chapters(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[audiobook_router.ChapterResponse]:
+    """Chapter ids and hrefs used to match imported tracks to publication resources."""
+    return await audiobook_router.list_chapters(book_id, db)
+
+
+@router.get("/reader/human-audiobooks/{edition_id}/tracks/{track_id}/audio")
+async def get_reader_human_audiobook_audio(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    return await audiobook_router.get_imported_track_audio(edition_id, track_id, db)
+
+
+@router.get("/reader/human-audiobooks/{edition_id}/tracks/{track_id}/smil")
+async def get_reader_human_audiobook_smil(
+    edition_id: int,
+    track_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    response = await audiobook_router.get_imported_track_smil(edition_id, track_id, db)
+    text = response.body.decode("utf-8")
+    admin_audio = f"/api/imported-audiobooks/{edition_id}/tracks/{track_id}/audio"
+    reader_audio = f"/reader/human-audiobooks/{edition_id}/tracks/{track_id}/audio"
+    return Response(text.replace(admin_audio, reader_audio), media_type="application/smil+xml")
 
 
 def _etag(value: str) -> str:

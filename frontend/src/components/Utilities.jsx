@@ -10,6 +10,14 @@ import {
 } from "../api/metadata";
 import ReaderKeys from "./ReaderKeys.jsx";
 
+const utilityTabs = [
+  { key: "audit", label: "Audit" },
+  { key: "series", label: "Series Detection" },
+  { key: "metadata", label: "Metadata" },
+  { key: "storage", label: "Storage" },
+  { key: "reader-access", label: "Reader Access" },
+];
+
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -85,6 +93,7 @@ function formatMetadataMatchOption(match) {
 
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState("audit");
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
@@ -169,7 +178,7 @@ function Utilities({ onBack }) {
   };
 
   return (
-    <div className={onBack ? "book-settings" : undefined}>
+    <div className={`${onBack ? "book-settings " : ""}utilities-page`}>
       {onBack && (
         <div className="settings-header">
           <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
@@ -179,7 +188,24 @@ function Utilities({ onBack }) {
         </div>
       )}
 
-      <section className="settings-section">
+      <nav className="sub-tabs utilities-tabs" aria-label="Utility sections" role="tablist">
+        {utilityTabs.map((tab) => (
+          <button
+            key={tab.key}
+            className={`sub-tab${activeTab === tab.key ? " sub-tab--active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="sub-tab-content utilities-tab-content">
+        {activeTab === "audit" && (
+          <section className="settings-section">
         <h3>Library Audit</h3>
         <p className="hint">
           Checks every book record for missing or broken file paths (EPUB files, covers).
@@ -249,9 +275,11 @@ function Utilities({ onBack }) {
             )}
           </div>
         )}
-      </section>
+          </section>
+        )}
 
-      <section className="settings-section">
+        {activeTab === "series" && (
+          <section className="settings-section">
         <h3>Detect Series</h3>
         <p className="hint">
           Scans all books without a series and attempts to detect one from the title.
@@ -273,9 +301,11 @@ function Utilities({ onBack }) {
               : `Updated ${detectState.updated} book${detectState.updated > 1 ? "s" : ""}: ${detectState.series_detected.join(", ")}`}
           </p>
         )}
-      </section>
+          </section>
+        )}
 
-      <section className="settings-section">
+        {activeTab === "metadata" && (
+          <section className="settings-section">
         <h3>Sync Online Metadata</h3>
         <p className="hint">
           Runs in the background for new books and stale books, then puts uncertain matches into an inbox for approval.
@@ -414,9 +444,11 @@ function Utilities({ onBack }) {
             No metadata approvals are waiting right now.
           </p>
         )}
-      </section>
+          </section>
+        )}
 
-      <section className="settings-section">
+        {activeTab === "storage" && (
+          <section className="settings-section">
         <h3>Storage Cleanup</h3>
         <p className="hint">
           Scans the library directory for orphaned EPUB and cover files, and
@@ -552,9 +584,11 @@ function Utilities({ onBack }) {
             )}
           </div>
         )}
-      </section>
+          </section>
+        )}
 
-      <ReaderKeys />
+        {activeTab === "reader-access" && <ReaderKeys />}
+      </div>
     </div>
   );
 }
