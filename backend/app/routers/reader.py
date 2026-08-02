@@ -434,7 +434,11 @@ async def get_reader_human_audiobooks(
                 "tracks": [
                     track.model_copy(
                         update={
-                            "audio_url": (f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/audio"),
+                            "audio_url": track.audio_url.replace(
+                                "/api/imported-audiobooks/",
+                                "/reader/human-audiobooks/",
+                                1,
+                            ),
                             "smil_url": (f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil"),
                         }
                     )
@@ -472,9 +476,9 @@ async def get_reader_human_audiobook_smil(
 ) -> Response:
     response = await audiobook_router.get_imported_track_smil(edition_id, track_id, db)
     text = response.body.decode("utf-8")
-    admin_audio = f"/api/imported-audiobooks/{edition_id}/tracks/{track_id}/audio"
-    reader_audio = f"/reader/human-audiobooks/{edition_id}/tracks/{track_id}/audio"
-    return Response(text.replace(admin_audio, reader_audio), media_type="application/smil+xml")
+    admin_audio_prefix = f"/api/imported-audiobooks/{edition_id}/tracks/"
+    reader_audio_prefix = f"/reader/human-audiobooks/{edition_id}/tracks/"
+    return Response(text.replace(admin_audio_prefix, reader_audio_prefix), media_type="application/smil+xml")
 
 
 def _etag(value: str) -> str:

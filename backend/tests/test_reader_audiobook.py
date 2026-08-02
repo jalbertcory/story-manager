@@ -42,6 +42,7 @@ async def test_reader_audiobook_capability_and_assets(
     reader_smil = audiobook_publication.reader_smil_bytes(smil_content, "Text/chapter.xhtml")
 
     monkeypatch.setattr(reader, "LIBRARY_PATH", library)
+    monkeypatch.setattr(reader.audiobook_router, "LIBRARY_PATH", library)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library)
 
     async with sqlite_sessionmaker() as db:
@@ -67,6 +68,7 @@ async def test_reader_audiobook_capability_and_assets(
         db.add(book)
         db.add(
             models.AudiobookChapter(
+                id=701,
                 book_id=839,
                 chapter_number=1,
                 stable_chapter_key="src-chapter-one",
@@ -87,12 +89,79 @@ async def test_reader_audiobook_capability_and_assets(
                 duration_ms=1250,
             )
         )
+        db.add_all(
+            [
+                models.AudiobookSentence(
+                    id=702,
+                    chapter_id=701,
+                    html_element_id="sentence-1",
+                    sequence_order=0,
+                    original_text="Chapter one.",
+                ),
+                models.AudiobookSentence(
+                    id=703,
+                    chapter_id=701,
+                    html_element_id="sentence-2",
+                    sequence_order=1,
+                    original_text="Chapter two.",
+                ),
+            ]
+        )
         db.add(
             models.ImportedAudiobook(
+                id=70,
                 book_id=839,
                 name="Human narration",
                 status="ready",
             )
+        )
+        db.add(
+            models.ImportedAudiobookTrack(
+                id=71,
+                imported_audiobook_id=70,
+                matched_chapter_id=701,
+                sequence_order=0,
+                title="Chapter One",
+                audio_file_path=_relative(library, audio_path),
+                media_type="audio/mpeg",
+                source_start_ms=0,
+                source_end_ms=1250,
+                duration_ms=1250,
+            )
+        )
+        db.add(
+            models.ImportedAudiobookTrack(
+                id=72,
+                imported_audiobook_id=70,
+                matched_chapter_id=701,
+                sequence_order=1,
+                title="Chapter Two",
+                audio_file_path=_relative(library, audio_path),
+                media_type="audio/mpeg",
+                source_start_ms=1250,
+                source_end_ms=2500,
+                duration_ms=1250,
+            )
+        )
+        db.add_all(
+            [
+                models.ImportedAudiobookCue(
+                    track_id=71,
+                    sentence_id=702,
+                    sequence_order=0,
+                    clip_begin_ms=0,
+                    clip_end_ms=1250,
+                    method="estimated",
+                ),
+                models.ImportedAudiobookCue(
+                    track_id=72,
+                    sentence_id=703,
+                    sequence_order=0,
+                    clip_begin_ms=1250,
+                    clip_end_ms=2500,
+                    method="estimated",
+                ),
+            ]
         )
         db.add(
             models.Book(
@@ -166,6 +235,20 @@ async def test_reader_audiobook_capability_and_assets(
     single = app_client.get("/reader/books/839", auth=auth).json()
     assert single["audiobook"]["status"] == "complete"
     assert single["audiobook_types"] == ["ai_generated", "human_narrated"]
+    human = app_client.get("/reader/books/839/human-audiobooks", auth=auth).json()
+    assert len(human[0]["tracks"]) == 2
+    assert human[0]["audio_size_bytes"] == len(audio_content)
+    canonical_audio_url = "/reader/human-audiobooks/70/tracks/71/audio"
+    assert {track["audio_url"] for track in human[0]["tracks"]} == {canonical_audio_url}
+    for track in human[0]["tracks"]:
+        imported_smil = app_client.get(track["smil_url"], auth=auth)
+        assert imported_smil.status_code == 200
+        assert f'src="{canonical_audio_url}"'.encode() in imported_smil.content
+    assert b'clipBegin="0.000s" clipEnd="1.250s"' in app_client.get(human[0]["tracks"][0]["smil_url"], auth=auth).content
+    assert b'clipBegin="1.250s" clipEnd="2.500s"' in app_client.get(human[0]["tracks"][1]["smil_url"], auth=auth).content
+    imported_audio = app_client.get(canonical_audio_url, auth=auth)
+    assert imported_audio.content == audio_content
+    assert imported_audio.headers["accept-ranges"] == "bytes"
 
     manifest_response = app_client.get(protected_urls[0], auth=auth)
     assert manifest_response.status_code == 200
