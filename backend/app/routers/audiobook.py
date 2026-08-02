@@ -295,6 +295,7 @@ class ImportedAudiobookResponse(BaseModel):
     alignment_method: Optional[str]
     original_filenames: list[str]
     duration_ms: Optional[int]
+    audio_size_bytes: int
     progress_current: int
     progress_total: int
     progress_detail: Optional[str]
@@ -334,6 +335,26 @@ def _resolve_path(relative_path: Optional[str]) -> Optional[Path]:
     return path if path.is_relative_to(LIBRARY_PATH.resolve()) else None
 
 
+def _canonical_audio_track_ids(tracks: list[ImportedAudiobookTrack]) -> dict[str, int]:
+    canonical_ids: dict[str, int] = {}
+    for track in tracks:
+        canonical_ids.setdefault(track.audio_file_path, track.id)
+    return canonical_ids
+
+
+async def _canonical_audio_track_id(track: ImportedAudiobookTrack, db: AsyncSession) -> int:
+    result = await db.execute(
+        select(ImportedAudiobookTrack.id)
+        .where(
+            ImportedAudiobookTrack.imported_audiobook_id == track.imported_audiobook_id,
+            ImportedAudiobookTrack.audio_file_path == track.audio_file_path,
+        )
+        .order_by(ImportedAudiobookTrack.sequence_order)
+        .limit(1)
+    )
+    return result.scalar_one()
+
+
 async def _imported_audiobook_response(
     edition: ImportedAudiobook,
     db: AsyncSession,
@@ -344,6 +365,8 @@ async def _imported_audiobook_response(
         .order_by(ImportedAudiobookTrack.sequence_order)
     )
     tracks = list(result.scalars().all())
+    canonical_audio_track_ids = _canonical_audio_track_ids(tracks)
+    audio_paths = {path for track in tracks if (path := _resolve_path(track.audio_file_path)) is not None and path.is_file()}
     chapter_ids = {track.matched_chapter_id for track in tracks if track.matched_chapter_id is not None}
     chapters = {}
     if chapter_ids:
@@ -367,6 +390,7 @@ async def _imported_audiobook_response(
         alignment_method=edition.alignment_method,
         original_filenames=edition.original_filenames or [],
         duration_ms=edition.duration_ms,
+        audio_size_bytes=sum(path.stat().st_size for path in audio_paths),
         progress_current=edition.progress_current or 0,
         progress_total=edition.progress_total or 0,
         progress_detail=edition.progress_detail,
@@ -390,7 +414,10 @@ async def _imported_audiobook_response(
                 media_type=track.media_type,
                 cue_count=cue_counts.get(track.id, 0),
                 alignment_score=track.alignment_score,
-                audio_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio",
+                audio_url=(
+                    f"/api/imported-audiobooks/{edition.id}/tracks/"
+                    f"{canonical_audio_track_ids[track.audio_file_path]}/audio"
+                ),
                 cues_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/cues",
                 smil_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/smil",
             )
@@ -657,6 +684,7 @@ async def get_imported_track_smil(
     if track.matched_chapter_id is None:
         raise HTTPException(status_code=404, detail="Track is not matched to book text")
     chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
+    canonical_audio_track_id = await _canonical_audio_track_id(track, db)
     result = await db.execute(
         select(ImportedAudiobookCue, AudiobookSentence)
         .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
@@ -677,7 +705,7 @@ async def get_imported_track_smil(
             par,
             "audio",
             {
-                "src": f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio",
+                "src": f"/api/imported-audiobooks/{edition.id}/tracks/{canonical_audio_track_id}/audio",
                 "clipBegin": f"{cue.clip_begin_ms / 1000:.3f}s",
                 "clipEnd": f"{cue.clip_end_ms / 1000:.3f}s",
             },
