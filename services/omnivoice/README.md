@@ -63,6 +63,8 @@ The image is rebuilt and published only when files under `services/omnivoice/` o
 | `OMNIVOICE_NUM_STEPS` | `16` | Diffusion steps; use `32` for higher quality/slower output |
 | `OMNIVOICE_MP3_BITRATE` | `96k` | Returned MP3 bitrate |
 | `OMNIVOICE_MAX_BATCH_SIZE` | `8` | Maximum items accepted by `POST /generate-batch` |
+| `OMNIVOICE_NATIVE_BATCHING` | `false` | Opt into native model batching. Keep disabled on MPS, where native batches can produce stationary mechanical noise. |
+| `OMNIVOICE_QUALITY_ATTEMPTS` | `3` | Maximum individual generations attempted when the signal-quality gate rejects an output. |
 | `OMNIVOICE_PORT` | `8001` | Port used by the Make target |
 
 Story Manager controls submitted batch size with `AUDIOBOOK_TTS_BATCH_SIZE` (default `4`) and length-buckets

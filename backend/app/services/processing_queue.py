@@ -329,10 +329,23 @@ class ProcessingQueue:
                 raise ValueError("AI audiobook generation is not enabled for this book.")
 
             if mode == "rebuild":
-                await crud.audiobook.delete_chapters_for_book(db, book.id)
-                await crud.audiobook.delete_characters_for_book(db, book.id)
+                chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+                if chapters:
+                    await crud.audiobook.reset_roster_and_diarization_for_book(db, book.id)
                 await crud.audiobook.set_book_audiobook_summary(db, book.id, None)
-                next_phase = "ingesting"
+                next_phase = "roster_gen" if chapters else "ingesting"
+                stop_after = None
+                batch_limit = None
+            elif mode == "audio":
+                chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+                characters = await crud.audiobook.get_characters_for_book(db, book.id)
+                review = await crud.audiobook.count_sentence_review_flags(db, book.id)
+                if not chapters or not characters:
+                    raise ValueError("Run AI speaker analysis before regenerating TTS audio.")
+                if review.get("unassigned", 0):
+                    raise ValueError("Assign every sentence before regenerating TTS audio.")
+                await crud.audiobook.reset_audio_generation_for_book(db, book.id)
+                next_phase = "audio_gen"
                 stop_after = None
                 batch_limit = None
             elif mode == "roster":

@@ -1203,7 +1203,11 @@
 }
 
 .book-rows--web .book-row {
-  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--accent) 6%, transparent));
+  background: linear-gradient(
+    180deg,
+    var(--surface),
+    color-mix(in srgb, var(--accent) 6%, transparent)
+  );
 }
 
 .library-filters {
@@ -1559,6 +1563,13 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.imported-edition-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .import-progress {
@@ -2159,8 +2170,7 @@
 .audiobook-reader-text .audiobook-sentence--active {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 24%, var(--surface));
-  box-shadow: 0 0 0 0.15rem
-    color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: 0 0 0 0.15rem color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .audiobook-reader-chapters {
@@ -3280,7 +3290,14 @@
 /* ─── Editorial desk redesign ────────────────────────────── */
 body {
   background:
-    linear-gradient(90deg, transparent 0, transparent calc(50% - 590px), rgba(226, 214, 192, 0.035) calc(50% - 590px), rgba(226, 214, 192, 0.035) calc(50% - 589px), transparent calc(50% - 589px)),
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent calc(50% - 590px),
+      rgba(226, 214, 192, 0.035) calc(50% - 590px),
+      rgba(226, 214, 192, 0.035) calc(50% - 589px),
+      transparent calc(50% - 589px)
+    ),
     var(--bg);
 }
 
@@ -3974,10 +3991,18 @@ body {
   background: var(--bg);
 }
 
-.processing-job--running { border-left-color: var(--accent); }
-.processing-job--queued { border-left-color: var(--warning); }
-.processing-job--completed { border-left-color: var(--success); }
-.processing-job--error { border-left-color: var(--danger); }
+.processing-job--running {
+  border-left-color: var(--accent);
+}
+.processing-job--queued {
+  border-left-color: var(--warning);
+}
+.processing-job--completed {
+  border-left-color: var(--success);
+}
+.processing-job--error {
+  border-left-color: var(--danger);
+}
 
 .processing-job-main a {
   color: var(--accent);
@@ -3989,10 +4014,22 @@ body {
   background: transparent;
 }
 
-.processing-status--running { color: var(--accent); background: transparent; }
-.processing-status--queued { color: var(--warning); background: transparent; }
-.processing-status--completed { color: var(--success); background: transparent; }
-.processing-status--error { color: var(--danger); background: transparent; }
+.processing-status--running {
+  color: var(--accent);
+  background: transparent;
+}
+.processing-status--queued {
+  color: var(--warning);
+  background: transparent;
+}
+.processing-status--completed {
+  color: var(--success);
+  background: transparent;
+}
+.processing-status--error {
+  color: var(--danger);
+  background: transparent;
+}
 
 .processing-job-progress progress {
   accent-color: var(--accent);

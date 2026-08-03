@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from pydub import AudioSegment  # noqa: E402
 import torch  # noqa: E402
 
+from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ DEVICE = os.getenv("OMNIVOICE_DEVICE", "auto")
 NUM_STEPS = int(os.getenv("OMNIVOICE_NUM_STEPS", "16"))
 MP3_BITRATE = os.getenv("OMNIVOICE_MP3_BITRATE", "96k")
 MAX_BATCH_SIZE = max(1, int(os.getenv("OMNIVOICE_MAX_BATCH_SIZE", "8")))
+NATIVE_BATCHING = os.getenv("OMNIVOICE_NATIVE_BATCHING", "false").lower() in {"1", "true", "yes"}
+QUALITY_ATTEMPTS = max(1, int(os.getenv("OMNIVOICE_QUALITY_ATTEMPTS", "3")))
 
 
 class GenerateRequest(BaseModel):
@@ -86,13 +89,13 @@ class OmniVoiceRuntime:
     def generate(self, request: GenerateRequest) -> tuple[bytes, int]:
         return self.generate_batch([request])[0]
 
-    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int]]:
+    def _generate_audio(self, requests: list[GenerateRequest]) -> list[np.ndarray]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
         prompts = [translate_generation_prompt(request.voice, request.text) for request in requests]
         with self._generate_lock:
-            audios = self.model.generate(
+            return self.model.generate(
                 text=[prompt.text for prompt in prompts],
                 language=[request.language for request in requests],
                 instruct=[prompt.instruct for prompt in prompts],
@@ -102,7 +105,57 @@ class OmniVoiceRuntime:
                 postprocess_output=True,
             )
 
-        return [_encode_audio(audio, self.model.sampling_rate) for audio in audios]
+    def _generate_valid_audio(self, request: GenerateRequest, request_number: int) -> np.ndarray:
+        if self.model is None:
+            raise RuntimeError("OmniVoice model is not loaded")
+
+        last_error = None
+        for attempt in range(1, QUALITY_ATTEMPTS + 1):
+            audio = self._generate_audio([request])[0]
+            try:
+                validate_generated_audio(audio, self.model.sampling_rate)
+                return audio
+            except AudioQualityError as exc:
+                last_error = exc
+                logger.warning(
+                    "Rejected generated audio for request %d on quality attempt %d/%d: %s",
+                    request_number,
+                    attempt,
+                    QUALITY_ATTEMPTS,
+                    exc,
+                )
+
+        text = request.text.replace("\n", " ")[:120]
+        raise AudioQualityError(
+            f"request {request_number} ({text!r}) failed quality validation after "
+            f"{QUALITY_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
+
+    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int]]:
+        if self.model is None:
+            raise RuntimeError("OmniVoice model is not loaded")
+
+        if NATIVE_BATCHING and len(requests) > 1:
+            audios = self._generate_audio(requests)
+            valid_audios = []
+            for index, (request, audio) in enumerate(zip(requests, audios, strict=True), start=1):
+                try:
+                    validate_generated_audio(audio, self.model.sampling_rate)
+                    valid_audios.append(audio)
+                except AudioQualityError as exc:
+                    logger.warning(
+                        "Rejected native batch output for request %d; regenerating individually: %s",
+                        index,
+                        exc,
+                    )
+                    valid_audios.append(self._generate_valid_audio(request, index))
+        else:
+            valid_audios = [
+                self._generate_valid_audio(request, index)
+                for index, request in enumerate(requests, start=1)
+            ]
+
+        return [_encode_audio(audio, self.model.sampling_rate) for audio in valid_audios]
 
 
 runtime = OmniVoiceRuntime()
@@ -125,6 +178,8 @@ async def health() -> dict[str, object]:
         "device": runtime.device,
         "num_steps": NUM_STEPS,
         "max_batch_size": MAX_BATCH_SIZE,
+        "native_batching": NATIVE_BATCHING,
+        "quality_attempts": QUALITY_ATTEMPTS,
     }
 
 

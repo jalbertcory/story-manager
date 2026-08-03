@@ -100,8 +100,8 @@ function ImportedEditionReader({ edition }) {
   if (!playable.length) {
     return (
       <p className="empty-state">
-        This edition has no tracks matched to book text. Review its track
-        matching in Sources.
+        This edition's imported audio is intact, but it has no synchronized book
+        text. Use Rematch to Book Text in Sources to restore it.
       </p>
     );
   }
@@ -353,7 +353,7 @@ function AudiobookReader({
       imports.filter(
         (edition) =>
           ["ready", "aligning"].includes(edition.status) &&
-          edition.tracks.some((track) => track.cue_count > 0),
+          edition.tracks.length > 0,
       ),
     [imports],
   );

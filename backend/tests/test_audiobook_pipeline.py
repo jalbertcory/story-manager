@@ -20,10 +20,12 @@ from backend.app.services import (
     audiobook_publication,
     audiobook_text,
     audiobook_tts,
+    processing_queue,
     web_novel,
 )
 from backend.app.services import audiobook_queue
 from backend.app.services.audiobook_queue import AudiobookQueue
+from backend.app.services.processing_queue import ProcessingQueue
 
 
 async def _make_book(db, **overrides):
@@ -1074,6 +1076,36 @@ async def test_roster_rebuild_preserves_ingestion_and_clears_derived_analysis(db
     chapter.summary = "Old summary"
     sentence.speaker_confidence = 0.9
     sentence.audio_file_path = "library/audiobooks/1/snippets/1.mp3"
+    edition = models.ImportedAudiobook(
+        book_id=book.id,
+        name="Human edition",
+        status="ready",
+    )
+    db.add(edition)
+    await db.flush()
+    track = models.ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        matched_chapter_id=chapter.id,
+        sequence_order=0,
+        title="Chapter 1",
+        audio_file_path="library/audiobooks/1/imports/1/chapter.mp3",
+        media_type="audio/mpeg",
+        source_start_ms=0,
+        source_end_ms=10_000,
+        duration_ms=10_000,
+    )
+    db.add(track)
+    await db.flush()
+    cue = models.ImportedAudiobookCue(
+        track_id=track.id,
+        sentence_id=sentence.id,
+        sequence_order=0,
+        clip_begin_ms=0,
+        clip_end_ms=1_000,
+        confidence=0.9,
+        method="transcribed",
+    )
+    db.add(cue)
     await db.commit()
     queue = _FakeQueue()
     monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
@@ -1095,7 +1127,115 @@ async def test_roster_rebuild_preserves_ingestion_and_clears_derived_analysis(db
     assert sentence.audio_file_path is None
     assert chapter.summary is None
     assert await crud.audiobook.get_characters_for_book(db, book.id) == []
+    preserved_track = await db.get(models.ImportedAudiobookTrack, track.id)
+    preserved_cue = await db.get(models.ImportedAudiobookCue, cue.id)
+    assert preserved_track is not None
+    assert preserved_track.matched_chapter_id == chapter.id
+    assert preserved_cue is not None
+    assert preserved_cue.sentence_id == sentence.id
     assert queue.enqueued == [book.id]
+
+
+@pytest.mark.asyncio
+async def test_audio_only_rebuild_preserves_speakers_and_human_audiobook(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="complete")
+    chapter, character, sentence = await _seed_audio_chapter(
+        db,
+        book.id,
+        sentence_status="audio_generated",
+    )
+    sentence.tagged_text = "[whisper] One sentence."
+    sentence.speaker_confidence = 0.91
+    sentence.speaker_reason = "Explicit attribution"
+    sentence.audio_file_path = "library/audiobooks/1/snippets/1.mp3"
+    sentence.audio_duration_ms = 1_000
+    edition = models.ImportedAudiobook(book_id=book.id, name="Human edition", status="ready")
+    db.add(edition)
+    await db.flush()
+    track = models.ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        matched_chapter_id=chapter.id,
+        sequence_order=0,
+        title="Chapter 1",
+        audio_file_path="library/audiobooks/1/imports/1/chapter.mp3",
+        media_type="audio/mpeg",
+        source_start_ms=0,
+        source_end_ms=10_000,
+        duration_ms=10_000,
+    )
+    db.add(track)
+    await db.flush()
+    cue = models.ImportedAudiobookCue(
+        track_id=track.id,
+        sentence_id=sentence.id,
+        sequence_order=0,
+        clip_begin_ms=0,
+        clip_end_ms=1_000,
+        confidence=0.9,
+        method="transcribed",
+    )
+    db.add(cue)
+    await db.commit()
+    queue = _FakeQueue()
+    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+
+    response = await audiobook_router.rebuild_audio_only(book.id, db)
+
+    await db.refresh(book)
+    await db.refresh(chapter)
+    await db.refresh(sentence)
+    assert response == {"status": "audio_gen", "queued": True}
+    assert book.audiobook_pipeline_status == "audio_gen"
+    assert sentence.status == "ready_for_audio"
+    assert sentence.character_id == character.id
+    assert sentence.tagged_text == "[whisper] One sentence."
+    assert sentence.speaker_confidence == 0.91
+    assert sentence.speaker_reason == "Explicit attribution"
+    assert sentence.audio_file_path is None
+    assert chapter.audio_file_path is None
+    assert chapter.needs_reassembly is True
+    preserved_track = await db.get(models.ImportedAudiobookTrack, track.id)
+    preserved_cue = await db.get(models.ImportedAudiobookCue, cue.id)
+    assert preserved_track is not None
+    assert preserved_track.matched_chapter_id == chapter.id
+    assert preserved_cue is not None
+    assert preserved_cue.sentence_id == sentence.id
+    assert queue.enqueued == [book.id]
+
+
+@pytest.mark.asyncio
+async def test_force_rebuild_worker_preserves_ingested_ids(
+    db,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="complete")
+    chapter, _character, sentence = await _seed_audio_chapter(
+        db,
+        book.id,
+        sentence_status="audio_generated",
+    )
+    book_id = book.id
+    chapter_id = chapter.id
+    sentence_id = sentence.id
+
+    class FakeAudiobookQueue:
+        async def process_book(self, _book_id):
+            return None
+
+    monkeypatch.setattr(processing_queue, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue, "get_audiobook_queue", lambda: FakeAudiobookQueue())
+
+    await ProcessingQueue()._run_audiobook_pipeline(SimpleNamespace(id=987, book_id=book_id, payload={"mode": "rebuild"}))
+
+    db.expire_all()
+    preserved_chapter = await db.get(models.AudiobookChapter, chapter_id)
+    preserved_sentence = await db.get(models.AudiobookSentence, sentence_id)
+    refreshed_book = await db.get(models.Book, book_id)
+    assert preserved_chapter is not None
+    assert preserved_sentence is not None
+    assert preserved_sentence.status == "pending_diarization"
+    assert refreshed_book.audiobook_pipeline_status == "roster_gen"
 
 
 @pytest.mark.asyncio
@@ -1163,6 +1303,47 @@ async def test_restarted_audio_phase_rebuilds_length_bucketed_background_queue(
 
     await queue._process(book.id)
 
+    assert enqueued == [(book.id, [sentence.id])]
+
+
+@pytest.mark.asyncio
+async def test_restarted_audio_phase_reclaims_interrupted_sentences(
+    db,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    book = await _make_book(
+        db,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_stop_after_phase="audio_gen",
+    )
+    _chapter, _character, sentence = await _seed_audio_chapter(
+        db,
+        book.id,
+        sentence_status="audio_generating",
+    )
+    queue = AudiobookQueue()
+    enqueued: list[tuple[int, list[int]]] = []
+
+    async def record_background_audio(book_id, sentence_ids):
+        enqueued.append((book_id, sentence_ids))
+
+    async def finish_audio(book_id, phase_db):
+        await crud.audiobook.set_book_pipeline_status(phase_db, book_id, "assembling")
+
+    async def wait_for_audio(_book_id):
+        return None
+
+    monkeypatch.setattr(audiobook_queue, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(queue, "enqueue_background_audio", record_background_audio)
+    monkeypatch.setattr(queue, "_wait_for_background_audio", wait_for_audio)
+    monkeypatch.setattr(audiobook_queue, "generate_audio_for_book", finish_audio)
+
+    await queue._process(book.id)
+
+    await db.refresh(sentence)
+    assert sentence.status == "ready_for_audio"
     assert enqueued == [(book.id, [sentence.id])]
 
 

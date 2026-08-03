@@ -5,6 +5,8 @@ import {
   alignImportedAudiobook,
   deleteImportedAudiobook,
   matchImportedAudiobookTrack,
+  rebuildAudioOnly,
+  rematchImportedAudiobook,
   retryImportedAudiobook,
   uploadImportedAudiobook,
 } from "../../api/audiobook";
@@ -18,11 +20,22 @@ function durationLabel(durationMs) {
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+function importedAtLabel(createdAt) {
+  if (!createdAt) return "Import date unavailable";
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "Import date unavailable";
+  return `Imported ${new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date)}`;
+}
+
 function AudiobookSources({
   bookId,
   chapters = [],
   imports = [],
   aiEnabled = false,
+  aiPipelineActive = false,
   onEnableAi,
 }) {
   const queryClient = useQueryClient();
@@ -30,10 +43,12 @@ function AudiobookSources({
   const [files, setFiles] = useState([]);
   const [name, setName] = useState("");
   const [jobNotice, setJobNotice] = useState("");
+  const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
     queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
+    queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
   };
   const uploadMutation = useMutation({
     mutationFn: () => uploadImportedAudiobook(bookId, files, name),
@@ -63,10 +78,27 @@ function AudiobookSources({
       invalidate();
     },
   });
+  const rematchMutation = useMutation({
+    mutationFn: rematchImportedAudiobook,
+    onSuccess: () => {
+      setJobNotice("Human audiobook chapter rematch queued.");
+      invalidate();
+    },
+  });
   const matchMutation = useMutation({
     mutationFn: ({ editionId, trackId, chapterId }) =>
       matchImportedAudiobookTrack(editionId, trackId, chapterId),
     onSuccess: invalidate,
+  });
+  const aiTtsMutation = useMutation({
+    mutationFn: () => rebuildAudioOnly(bookId),
+    onSuccess: () => {
+      setConfirmAiTtsRebuild(false);
+      setJobNotice(
+        "AI TTS-only regeneration queued; speaker analysis preserved.",
+      );
+      invalidate();
+    },
   });
 
   return (
@@ -139,6 +171,52 @@ function AudiobookSources({
             Enable AI Audiobook Pipeline
           </button>
         )}
+        {aiEnabled && !confirmAiTtsRebuild && (
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={aiPipelineActive || aiTtsMutation.isPending}
+            onClick={() => setConfirmAiTtsRebuild(true)}
+          >
+            Regenerate AI TTS Only
+          </button>
+        )}
+        {aiEnabled && aiPipelineActive && (
+          <p className="hint">
+            Pause the active AI pipeline before regenerating TTS.
+          </p>
+        )}
+        {aiEnabled && confirmAiTtsRebuild && (
+          <div className="alignment-note">
+            <p>
+              Replace AI TTS clips and assembly only? The roster, speaker
+              assignments, and imported human audiobooks will be preserved.
+            </p>
+            <div className="confirm-inline">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={aiTtsMutation.isPending}
+                onClick={() => aiTtsMutation.mutate()}
+              >
+                {aiTtsMutation.isPending
+                  ? "Queueing…"
+                  : "Yes, regenerate AI TTS"}
+              </button>
+              <button
+                type="button"
+                className="btn-text"
+                disabled={aiTtsMutation.isPending}
+                onClick={() => setConfirmAiTtsRebuild(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {aiTtsMutation.isError && (
+          <p className="error">{aiTtsMutation.error.message}</p>
+        )}
       </section>
 
       {!imports.length ? (
@@ -164,12 +242,24 @@ function AudiobookSources({
                     {durationLabel(edition.duration_ms)} · {matched} of{" "}
                     {edition.tracks.length} tracks matched
                   </p>
+                  <p>
+                    <time dateTime={edition.created_at}>
+                      {importedAtLabel(edition.created_at)}
+                    </time>
+                  </p>
                 </div>
-                <span
-                  className={`badge${edition.status === "error" ? " badge--error" : active ? " badge--warning" : ""}`}
-                >
-                  {edition.status}
-                </span>
+                <div className="imported-edition-badges">
+                  {edition.is_reader_default && (
+                    <span className="badge badge--success">
+                      Reader app default
+                    </span>
+                  )}
+                  <span
+                    className={`badge${edition.status === "error" ? " badge--error" : active ? " badge--warning" : ""}`}
+                  >
+                    {edition.status}
+                  </span>
+                </div>
               </header>
               {active && (
                 <div className="import-progress" role="status">
@@ -197,6 +287,25 @@ function AudiobookSources({
               )}
               {edition.status === "ready" && (
                 <>
+                  {edition.tracks.length > 0 && matched === 0 && (
+                    <div className="alignment-note">
+                      <p>
+                        The imported audio is intact, but its chapter matches
+                        and synchronized text need to be restored.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        aria-label={`Rematch ${edition.name} to book text`}
+                        disabled={rematchMutation.isPending}
+                        onClick={() => rematchMutation.mutate(edition.id)}
+                      >
+                        {rematchMutation.isPending
+                          ? "Queueing…"
+                          : "Rematch to Book Text"}
+                      </button>
+                    </div>
+                  )}
                   <p className="alignment-note">
                     {edition.alignment_method === "transcribed"
                       ? "Sentence timestamps are aligned to WhisperX word timestamps."
@@ -286,12 +395,14 @@ function AudiobookSources({
       )}
       {(retryMutation.isError ||
         alignMutation.isError ||
+        rematchMutation.isError ||
         deleteMutation.isError ||
         matchMutation.isError) && (
         <p className="error">
           {(
             retryMutation.error ||
             alignMutation.error ||
+            rematchMutation.error ||
             deleteMutation.error ||
             matchMutation.error
           )?.message || "Audiobook action failed"}

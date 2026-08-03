@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,16 @@ async def test_reader_audiobook_capability_and_assets(
                 book_id=839,
                 name="Human narration",
                 status="ready",
+                created_at=datetime(2026, 7, 2, 15, 30, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            models.ImportedAudiobook(
+                id=69,
+                book_id=839,
+                name="Older human narration",
+                status="ready",
+                created_at=datetime(2026, 7, 1, 15, 30, tzinfo=timezone.utc),
             )
         )
         db.add(
@@ -236,6 +247,9 @@ async def test_reader_audiobook_capability_and_assets(
     assert single["audiobook"]["status"] == "complete"
     assert single["audiobook_types"] == ["ai_generated", "human_narrated"]
     human = app_client.get("/reader/books/839/human-audiobooks", auth=auth).json()
+    assert [edition["id"] for edition in human] == [70, 69]
+    assert [edition["is_reader_default"] for edition in human] == [True, False]
+    assert human[0]["created_at"].startswith("2026-07-02T15:30:00")
     assert len(human[0]["tracks"]) == 2
     assert human[0]["audio_size_bytes"] == len(audio_content)
     canonical_audio_url = "/reader/human-audiobooks/70/tracks/71/audio"
@@ -244,6 +258,7 @@ async def test_reader_audiobook_capability_and_assets(
         imported_smil = app_client.get(track["smil_url"], auth=auth)
         assert imported_smil.status_code == 200
         assert f'src="{canonical_audio_url}"'.encode() in imported_smil.content
+        assert b'src="chapter.xhtml#' in imported_smil.content
     assert b'clipBegin="0.000s" clipEnd="1.250s"' in app_client.get(human[0]["tracks"][0]["smil_url"], auth=auth).content
     assert b'clipBegin="1.250s" clipEnd="2.500s"' in app_client.get(human[0]["tracks"][1]["smil_url"], auth=auth).content
     imported_audio = app_client.get(canonical_audio_url, auth=auth)

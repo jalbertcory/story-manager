@@ -278,148 +278,154 @@ function AudiobookPipeline({
   return (
     <div className="audiobook-pipeline">
       {aiEnabled && (
-      <div className="pipeline-header">
-        <PipelineProgress status={progressStatus} />
+        <div className="pipeline-header">
+          <PipelineProgress status={progressStatus} />
 
-        <div className="pipeline-meta">
-          {totalSentences > 0 && (
-            <span className="pipeline-sentence-count">
-              {doneCount} / {totalSentences} sentences with audio
-            </span>
-          )}
-          {pipelineStatus === "error" && (
-            <span className="badge badge--error">Pipeline error</span>
-          )}
-          {pipelineStatus === "paused" && (
-            <span className="badge badge--warning">
-              Paused — next: {nextPhaseLabel}
-            </span>
-          )}
-          {pauseRequested && (
-            <span className="badge badge--warning">Pause requested…</span>
-          )}
-          {statusData?.last_error && (
-            <details className="pipeline-error-summary">
-              <summary>Last pipeline error</summary>
-              <pre>{statusData.last_error}</pre>
-            </details>
-          )}
-        </div>
+          <div className="pipeline-meta">
+            {totalSentences > 0 && (
+              <span className="pipeline-sentence-count">
+                {doneCount} / {totalSentences} sentences with audio
+              </span>
+            )}
+            {pipelineStatus === "error" && (
+              <span className="badge badge--error">Pipeline error</span>
+            )}
+            {pipelineStatus === "paused" && (
+              <span className="badge badge--warning">
+                Paused — next: {nextPhaseLabel}
+              </span>
+            )}
+            {pauseRequested && (
+              <span className="badge badge--warning">Pause requested…</span>
+            )}
+            {statusData?.last_error && (
+              <details className="pipeline-error-summary">
+                <summary>Last pipeline error</summary>
+                <pre>{statusData.last_error}</pre>
+              </details>
+            )}
+          </div>
 
-        <JobInspector
-          statusData={statusData}
-          totalSentences={totalSentences}
-          doneCount={doneCount}
-        />
+          <JobInspector
+            statusData={statusData}
+            totalSentences={totalSentences}
+            doneCount={doneCount}
+          />
 
-        <div className="pipeline-controls">
-          {pipelineStatus === "complete" && (
-            <a
-              className="btn btn-primary"
-              href={getAudiobookDownloadUrl(bookId)}
-              download
-            >
-              Download Audiobook EPUB
-            </a>
-          )}
-          {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
-            <>
-              {BATCHABLE_STATUSES.has(nextPhase) && (
+          <div className="pipeline-controls">
+            {pipelineStatus === "complete" && (
+              <a
+                className="btn btn-primary"
+                href={getAudiobookDownloadUrl(bookId)}
+                download
+              >
+                Download Audiobook EPUB
+              </a>
+            )}
+            {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
+              <>
+                {BATCHABLE_STATUSES.has(nextPhase) && (
+                  <button
+                    onClick={() => batchMutation.mutate()}
+                    disabled={
+                      batchMutation.isPending ||
+                      stepMutation.isPending ||
+                      startMutation.isPending
+                    }
+                  >
+                    {batchMutation.isPending
+                      ? "Starting Batch…"
+                      : "Run One Batch"}
+                  </button>
+                )}
                 <button
-                  onClick={() => batchMutation.mutate()}
+                  onClick={() => stepMutation.mutate()}
                   disabled={
-                    batchMutation.isPending ||
                     stepMutation.isPending ||
-                    startMutation.isPending
+                    startMutation.isPending ||
+                    batchMutation.isPending
                   }
                 >
-                  {batchMutation.isPending
-                    ? "Starting Batch…"
-                    : "Run One Batch"}
+                  Run Next Stage: {nextPhaseLabel}
                 </button>
-              )}
+                <button
+                  onClick={() => startMutation.mutate()}
+                  disabled={
+                    startMutation.isPending ||
+                    stepMutation.isPending ||
+                    batchMutation.isPending
+                  }
+                  className="btn-primary"
+                >
+                  Run to Completion
+                </button>
+              </>
+            )}
+            {isActive(pipelineStatus) && (
               <button
-                onClick={() => stepMutation.mutate()}
-                disabled={
-                  stepMutation.isPending ||
-                  startMutation.isPending ||
-                  batchMutation.isPending
-                }
+                onClick={() => pauseMutation.mutate()}
+                disabled={pauseMutation.isPending || pauseRequested}
               >
-                Run Next Stage: {nextPhaseLabel}
+                {pauseRequested ? "Pause Requested…" : "Pause Safely"}
               </button>
-              <button
-                onClick={() => startMutation.mutate()}
-                disabled={
-                  startMutation.isPending ||
-                  stepMutation.isPending ||
-                  batchMutation.isPending
-                }
-                className="btn-primary"
-              >
-                Run to Completion
-              </button>
-            </>
-          )}
-          {isActive(pipelineStatus) && (
-            <button
-              onClick={() => pauseMutation.mutate()}
-              disabled={pauseMutation.isPending || pauseRequested}
-            >
-              {pauseRequested ? "Pause Requested…" : "Pause Safely"}
-            </button>
-          )}
-          {!isActive(pipelineStatus) &&
-            (!confirmRebuild ? (
-              <button
-                className="btn-danger"
-                onClick={() => setConfirmRebuild(true)}
-              >
-                Force Full Rebuild
-              </button>
-            ) : (
-              <span className="confirm-inline">
-                Destroy all audio and re-run from scratch?{" "}
+            )}
+            {!isActive(pipelineStatus) &&
+              (!confirmRebuild ? (
                 <button
                   className="btn-danger"
-                  onClick={() => rebuildMutation.mutate()}
-                  disabled={rebuildMutation.isPending}
+                  onClick={() => setConfirmRebuild(true)}
                 >
-                  {rebuildMutation.isPending ? "Queueing…" : "Yes, queue rebuild"}
-                </button>{" "}
-                <button
-                  className="btn-text"
-                  onClick={() => setConfirmRebuild(false)}
-                >
-                  Cancel
+                  Rebuild AI Audiobook
                 </button>
-              </span>
-            ))}
+              ) : (
+                <span className="confirm-inline">
+                  Rebuild the AI roster, speaker assignments, TTS, and assembly?
+                  Imported human audiobooks and alignments will be preserved.{" "}
+                  <button
+                    className="btn-danger"
+                    onClick={() => rebuildMutation.mutate()}
+                    disabled={rebuildMutation.isPending}
+                  >
+                    {rebuildMutation.isPending
+                      ? "Queueing…"
+                      : "Yes, queue rebuild"}
+                  </button>{" "}
+                  <button
+                    className="btn-text"
+                    onClick={() => setConfirmRebuild(false)}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ))}
+          </div>
+
+          {lastQueuedJob && (
+            <p className="job-queued-notice" role="status">
+              Processing job
+              {typeof lastQueuedJob === "number"
+                ? ` #${lastQueuedJob}`
+                : ""}{" "}
+              queued. <a href="/processing">View processing</a>
+            </p>
+          )}
+
+          {(startMutation.isError ||
+            stepMutation.isError ||
+            batchMutation.isError ||
+            pauseMutation.isError ||
+            rebuildMutation.isError) && (
+            <p className="error">
+              {(
+                startMutation.error ||
+                stepMutation.error ||
+                batchMutation.error ||
+                pauseMutation.error ||
+                rebuildMutation.error
+              )?.message || "Action failed"}
+            </p>
+          )}
         </div>
-
-        {lastQueuedJob && (
-          <p className="job-queued-notice" role="status">
-            Processing job{typeof lastQueuedJob === "number" ? ` #${lastQueuedJob}` : ""} queued.{" "}
-            <a href="/processing">View processing</a>
-          </p>
-        )}
-
-        {(startMutation.isError ||
-          stepMutation.isError ||
-          batchMutation.isError ||
-          pauseMutation.isError ||
-          rebuildMutation.isError) && (
-          <p className="error">
-            {(
-              startMutation.error ||
-              stepMutation.error ||
-              batchMutation.error ||
-              pauseMutation.error ||
-              rebuildMutation.error
-            )?.message || "Action failed"}
-          </p>
-        )}
-      </div>
       )}
 
       <nav className="sub-tabs">
@@ -441,6 +447,7 @@ function AudiobookPipeline({
             chapters={chapters}
             imports={importedAudiobooks}
             aiEnabled={aiEnabled}
+            aiPipelineActive={isActive(pipelineStatus)}
             onEnableAi={onEnableAi}
           />
         )}
