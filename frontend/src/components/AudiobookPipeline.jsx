@@ -9,7 +9,6 @@ import {
   runPipelineBatch,
   pausePipeline,
   rebuildPipeline,
-  rebuildAudioOnly,
   getAudiobookDownloadUrl,
   getImportedAudiobooks,
 } from "../api/audiobook";
@@ -136,7 +135,6 @@ function AudiobookPipeline({
     book.audiobook_enabled === undefined ? "progress" : "sources",
   );
   const [confirmRebuild, setConfirmRebuild] = useState(false);
-  const [confirmAudioRebuild, setConfirmAudioRebuild] = useState(false);
   const [lastQueuedJob, setLastQueuedJob] = useState(null);
 
   const isActive = (status) => ACTIVE_STATUSES.has(status);
@@ -230,15 +228,6 @@ function AudiobookPipeline({
     onSuccess: (data) => {
       setLastQueuedJob(data.processing_job_id || true);
       setConfirmRebuild(false);
-      invalidateAll();
-    },
-  });
-
-  const audioRebuildMutation = useMutation({
-    mutationFn: () => rebuildAudioOnly(bookId),
-    onSuccess: (data) => {
-      setLastQueuedJob(data.processing_job_id || true);
-      setConfirmAudioRebuild(false);
       invalidateAll();
     },
   });
@@ -381,14 +370,10 @@ function AudiobookPipeline({
               </button>
             )}
             {!isActive(pipelineStatus) &&
-              !confirmAudioRebuild &&
               (!confirmRebuild ? (
                 <button
                   className="btn-danger"
-                  onClick={() => {
-                    setConfirmAudioRebuild(false);
-                    setConfirmRebuild(true);
-                  }}
+                  onClick={() => setConfirmRebuild(true)}
                 >
                   Rebuild AI Audiobook
                 </button>
@@ -413,43 +398,14 @@ function AudiobookPipeline({
                   </button>
                 </span>
               ))}
-            {!isActive(pipelineStatus) &&
-              !confirmRebuild &&
-              (!confirmAudioRebuild ? (
-                <button
-                  onClick={() => {
-                    setConfirmRebuild(false);
-                    setConfirmAudioRebuild(true);
-                  }}
-                >
-                  Regenerate AI Audio (Keep Speakers)
-                </button>
-              ) : (
-                <span className="confirm-inline">
-                  Replace AI TTS clips and assembly only? Speaker assignments
-                  and imported human audiobooks will be preserved.{" "}
-                  <button
-                    onClick={() => audioRebuildMutation.mutate()}
-                    disabled={audioRebuildMutation.isPending}
-                  >
-                    {audioRebuildMutation.isPending
-                      ? "Queueing…"
-                      : "Yes, regenerate AI audio"}
-                  </button>{" "}
-                  <button
-                    className="btn-text"
-                    onClick={() => setConfirmAudioRebuild(false)}
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ))}
           </div>
 
           {lastQueuedJob && (
             <p className="job-queued-notice" role="status">
               Processing job
-              {typeof lastQueuedJob === "number" ? ` #${lastQueuedJob}` : ""}{" "}
+              {typeof lastQueuedJob === "number"
+                ? ` #${lastQueuedJob}`
+                : ""}{" "}
               queued. <a href="/processing">View processing</a>
             </p>
           )}
@@ -458,16 +414,14 @@ function AudiobookPipeline({
             stepMutation.isError ||
             batchMutation.isError ||
             pauseMutation.isError ||
-            rebuildMutation.isError ||
-            audioRebuildMutation.isError) && (
+            rebuildMutation.isError) && (
             <p className="error">
               {(
                 startMutation.error ||
                 stepMutation.error ||
                 batchMutation.error ||
                 pauseMutation.error ||
-                rebuildMutation.error ||
-                audioRebuildMutation.error
+                rebuildMutation.error
               )?.message || "Action failed"}
             </p>
           )}
@@ -493,6 +447,7 @@ function AudiobookPipeline({
             chapters={chapters}
             imports={importedAudiobooks}
             aiEnabled={aiEnabled}
+            aiPipelineActive={isActive(pipelineStatus)}
             onEnableAi={onEnableAi}
           />
         )}

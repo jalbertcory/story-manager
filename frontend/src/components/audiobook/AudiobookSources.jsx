@@ -5,6 +5,7 @@ import {
   alignImportedAudiobook,
   deleteImportedAudiobook,
   matchImportedAudiobookTrack,
+  rebuildAudioOnly,
   rematchImportedAudiobook,
   retryImportedAudiobook,
   uploadImportedAudiobook,
@@ -34,6 +35,7 @@ function AudiobookSources({
   chapters = [],
   imports = [],
   aiEnabled = false,
+  aiPipelineActive = false,
   onEnableAi,
 }) {
   const queryClient = useQueryClient();
@@ -41,10 +43,12 @@ function AudiobookSources({
   const [files, setFiles] = useState([]);
   const [name, setName] = useState("");
   const [jobNotice, setJobNotice] = useState("");
+  const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
     queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
+    queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
   };
   const uploadMutation = useMutation({
     mutationFn: () => uploadImportedAudiobook(bookId, files, name),
@@ -85,6 +89,16 @@ function AudiobookSources({
     mutationFn: ({ editionId, trackId, chapterId }) =>
       matchImportedAudiobookTrack(editionId, trackId, chapterId),
     onSuccess: invalidate,
+  });
+  const aiTtsMutation = useMutation({
+    mutationFn: () => rebuildAudioOnly(bookId),
+    onSuccess: () => {
+      setConfirmAiTtsRebuild(false);
+      setJobNotice(
+        "AI TTS-only regeneration queued; speaker analysis preserved.",
+      );
+      invalidate();
+    },
   });
 
   return (
@@ -156,6 +170,52 @@ function AudiobookSources({
           <button type="button" onClick={onEnableAi}>
             Enable AI Audiobook Pipeline
           </button>
+        )}
+        {aiEnabled && !confirmAiTtsRebuild && (
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={aiPipelineActive || aiTtsMutation.isPending}
+            onClick={() => setConfirmAiTtsRebuild(true)}
+          >
+            Regenerate AI TTS Only
+          </button>
+        )}
+        {aiEnabled && aiPipelineActive && (
+          <p className="hint">
+            Pause the active AI pipeline before regenerating TTS.
+          </p>
+        )}
+        {aiEnabled && confirmAiTtsRebuild && (
+          <div className="alignment-note">
+            <p>
+              Replace AI TTS clips and assembly only? The roster, speaker
+              assignments, and imported human audiobooks will be preserved.
+            </p>
+            <div className="confirm-inline">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={aiTtsMutation.isPending}
+                onClick={() => aiTtsMutation.mutate()}
+              >
+                {aiTtsMutation.isPending
+                  ? "Queueing…"
+                  : "Yes, regenerate AI TTS"}
+              </button>
+              <button
+                type="button"
+                className="btn-text"
+                disabled={aiTtsMutation.isPending}
+                onClick={() => setConfirmAiTtsRebuild(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {aiTtsMutation.isError && (
+          <p className="error">{aiTtsMutation.error.message}</p>
         )}
       </section>
 

@@ -50,9 +50,7 @@ def test_accepts_speech_like_audio_with_natural_variation():
     time = np.arange(sampling_rate * 2) / sampling_rate
     envelope = np.maximum(0, np.sin(2 * np.pi * 1.3 * time)) ** 2
     samples = envelope * (
-        0.12 * np.sin(2 * np.pi * 130 * time)
-        + 0.06 * np.sin(2 * np.pi * 260 * time)
-        + 0.03 * np.sin(2 * np.pi * 390 * time)
+        0.12 * np.sin(2 * np.pi * 130 * time) + 0.06 * np.sin(2 * np.pi * 260 * time) + 0.03 * np.sin(2 * np.pi * 390 * time)
     )
 
     report = validate_generated_audio(samples.astype(np.float32), sampling_rate)

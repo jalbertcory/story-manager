@@ -105,20 +105,22 @@ describe("AudiobookPipeline", () => {
     });
     globalThis.fetch = fetchMock;
 
-    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+    renderWithClient(
+      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
+    );
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Regenerate AI Audio (Keep Speakers)",
+        name: "Regenerate AI TTS Only",
       }),
     );
     expect(
       screen.getByText(
-        /Speaker assignments and imported human audiobooks will be preserved/,
+        /roster, speaker assignments, and imported human audiobooks will be preserved/,
       ),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Yes, regenerate AI audio" }),
+      screen.getByRole("button", { name: "Yes, regenerate AI TTS" }),
     );
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
