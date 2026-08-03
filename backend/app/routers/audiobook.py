@@ -694,12 +694,13 @@ async def get_imported_track_smil(
     root = ET.Element("smil", {"xmlns": "http://www.w3.org/ns/SMIL", "version": "3.0"})
     body = ET.SubElement(root, "body")
     seq = ET.SubElement(body, "seq")
+    chapter_text_href = chapter.content_file_name.replace("\\", "/").rsplit("/", 1)[-1]
     for cue, sentence in result.all():
         par = ET.SubElement(seq, "par")
         ET.SubElement(
             par,
             "text",
-            {"src": f"{chapter.content_file_name}#{sentence.html_element_id}"},
+            {"src": f"{chapter_text_href}#{sentence.html_element_id}"},
         )
         ET.SubElement(
             par,

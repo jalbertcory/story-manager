@@ -244,6 +244,7 @@ async def test_reader_audiobook_capability_and_assets(
         imported_smil = app_client.get(track["smil_url"], auth=auth)
         assert imported_smil.status_code == 200
         assert f'src="{canonical_audio_url}"'.encode() in imported_smil.content
+        assert b'src="chapter.xhtml#' in imported_smil.content
     assert b'clipBegin="0.000s" clipEnd="1.250s"' in app_client.get(human[0]["tracks"][0]["smil_url"], auth=auth).content
     assert b'clipBegin="1.250s" clipEnd="2.500s"' in app_client.get(human[0]["tracks"][1]["smil_url"], auth=auth).content
     imported_audio = app_client.get(canonical_audio_url, auth=auth)
