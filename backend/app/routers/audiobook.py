@@ -302,6 +302,7 @@ class ImportedAudiobookResponse(BaseModel):
     error: Optional[str]
     alignment_error: Optional[str]
     created_at: datetime
+    is_reader_default: bool = False
     tracks: list[ImportedTrackResponse]
 
 
@@ -358,6 +359,8 @@ async def _canonical_audio_track_id(track: ImportedAudiobookTrack, db: AsyncSess
 async def _imported_audiobook_response(
     edition: ImportedAudiobook,
     db: AsyncSession,
+    *,
+    is_reader_default: bool = False,
 ) -> ImportedAudiobookResponse:
     result = await db.execute(
         select(ImportedAudiobookTrack)
@@ -397,6 +400,7 @@ async def _imported_audiobook_response(
         error=edition.error,
         alignment_error=edition.alignment_error,
         created_at=edition.created_at,
+        is_reader_default=is_reader_default,
         tracks=[
             ImportedTrackResponse(
                 id=track.id,
@@ -458,7 +462,16 @@ async def list_imported_audiobooks(
         .where(ImportedAudiobook.book_id == book_id)
         .order_by(ImportedAudiobook.created_at.desc(), ImportedAudiobook.id.desc())
     )
-    return [await _imported_audiobook_response(edition, db) for edition in result.scalars().all()]
+    editions = list(result.scalars().all())
+    reader_default_id = next((edition.id for edition in editions if edition.status == "ready"), None)
+    return [
+        await _imported_audiobook_response(
+            edition,
+            db,
+            is_reader_default=edition.id == reader_default_id,
+        )
+        for edition in editions
+    ]
 
 
 @router.post(
@@ -596,6 +609,50 @@ async def align_imported_audiobook(
     return await _imported_audiobook_response(edition, db)
 
 
+@router.post(
+    "/api/imported-audiobooks/{edition_id}/rematch",
+    response_model=ImportedAudiobookResponse,
+)
+async def rematch_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    """Rebuild human-audio chapter matches and text cues without reimporting audio."""
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    book = await _get_book_or_404(edition.book_id, db)
+    if edition.status in ("queued", "importing", "aligning", "stale"):
+        raise HTTPException(status_code=409, detail=f"Audiobook is already {edition.status}")
+    track_count = await db.scalar(
+        select(func.count(ImportedAudiobookTrack.id)).where(
+            ImportedAudiobookTrack.imported_audiobook_id == edition.id,
+        )
+    )
+    if not track_count:
+        raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
+
+    realign = edition.alignment_method in {"transcribed", "hybrid"}
+    edition.status = "stale"
+    edition.alignment_error = None
+    edition.progress_current = 0
+    edition.progress_total = track_count
+    edition.progress_detail = "Chapter rematch queued"
+    await db.commit()
+    await queue_processing_job(
+        db=db,
+        job_type="rematch_imported_audiobook",
+        book_id=book.id,
+        target_type="imported_audiobook",
+        target_id=edition.id,
+        target_content_version=book.content_version,
+        payload={"realign": realign},
+        dedupe_key=f"rematch_imported_audiobook:imported_audiobook:{edition.id}:v{book.content_version or 1}",
+        progress_detail="Queued to restore human-audio chapter matches and text cues",
+    )
+    return await _imported_audiobook_response(edition, db)
+
+
 @router.delete("/api/imported-audiobooks/{edition_id}", status_code=204)
 async def delete_imported_audiobook(
     edition_id: int,
@@ -694,12 +751,13 @@ async def get_imported_track_smil(
     root = ET.Element("smil", {"xmlns": "http://www.w3.org/ns/SMIL", "version": "3.0"})
     body = ET.SubElement(root, "body")
     seq = ET.SubElement(body, "seq")
+    chapter_text_href = chapter.content_file_name.replace("\\", "/").rsplit("/", 1)[-1]
     for cue, sentence in result.all():
         par = ET.SubElement(seq, "par")
         ET.SubElement(
             par,
             "text",
-            {"src": f"{chapter.content_file_name}#{sentence.html_element_id}"},
+            {"src": f"{chapter_text_href}#{sentence.html_element_id}"},
         )
         ET.SubElement(
             par,
@@ -849,9 +907,45 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
         target_content_version=book.content_version,
         payload={"mode": "rebuild"},
         dedupe_key=f"audiobook_pipeline:book:{book_id}:rebuild",
-        progress_detail="Queued force-full audiobook rebuild",
+        progress_detail="Queued AI audiobook rebuild; human editions preserved",
     )
     return {"status": book.audiobook_pipeline_status, "queued": True}
+
+
+@router.post("/api/books/{book_id}/audiobook/audio/rebuild")
+async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Regenerate AI TTS and assembly without changing speaker analysis."""
+    book = await _get_audiobook_book_or_404(book_id, db)
+    if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
+        raise HTTPException(status_code=409, detail="Pause the active pipeline before regenerating AI audio")
+    chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
+    characters = await crud.audiobook.get_characters_for_book(db, book_id)
+    review = await crud.audiobook.count_sentence_review_flags(db, book_id)
+    if not chapters or not characters:
+        raise HTTPException(status_code=409, detail="Run AI speaker analysis before regenerating TTS audio")
+    if review.get("unassigned", 0):
+        raise HTTPException(status_code=409, detail="Assign every sentence before regenerating TTS audio")
+
+    await crud.audiobook.reset_audio_generation_for_book(db, book_id)
+    await crud.audiobook.configure_book_pipeline_run(
+        db,
+        book_id,
+        status="audio_gen",
+        stop_after_phase=None,
+    )
+    await queue_processing_job(
+        db=db,
+        job_type="audiobook_pipeline",
+        book_id=book_id,
+        target_type="book",
+        target_id=book_id,
+        target_content_version=book.content_version,
+        payload={"mode": "audio"},
+        dedupe_key=f"audiobook_pipeline:book:{book_id}:audio-rebuild",
+        progress_detail="Queued AI TTS regeneration; speakers and human editions preserved",
+    )
+    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
+    return {"status": "audio_gen", "queued": True}
 
 
 @router.post("/api/books/{book_id}/audiobook/roster/rebuild")

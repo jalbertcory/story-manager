@@ -201,6 +201,8 @@ Run the Story Manager OmniVoice image as a second Unraid container:
 | Model cache | `/mnt/user/appdata/story-manager-omnivoice/models` -> `/models` (read/write) |
 | `OMNIVOICE_DEVICE` | `auto` |
 | `OMNIVOICE_NUM_STEPS` | `16` |
+| `OMNIVOICE_NATIVE_BATCHING` | `false` |
+| `OMNIVOICE_QUALITY_ATTEMPTS` | `3` |
 
 For an NVIDIA GPU, install Unraid's NVIDIA driver support and add `--gpus all` under **Extra Parameters**. The image
 can fall back to CPU when no supported GPU is available, but whole-book generation will be much slower. The first

@@ -5,6 +5,7 @@ import {
   alignImportedAudiobook,
   deleteImportedAudiobook,
   matchImportedAudiobookTrack,
+  rematchImportedAudiobook,
   retryImportedAudiobook,
   uploadImportedAudiobook,
 } from "../../api/audiobook";
@@ -16,6 +17,16 @@ function durationLabel(durationMs) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function importedAtLabel(createdAt) {
+  if (!createdAt) return "Import date unavailable";
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "Import date unavailable";
+  return `Imported ${new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date)}`;
 }
 
 function AudiobookSources({
@@ -60,6 +71,13 @@ function AudiobookSources({
     mutationFn: alignImportedAudiobook,
     onSuccess: () => {
       setJobNotice("Human audiobook timestamp alignment queued.");
+      invalidate();
+    },
+  });
+  const rematchMutation = useMutation({
+    mutationFn: rematchImportedAudiobook,
+    onSuccess: () => {
+      setJobNotice("Human audiobook chapter rematch queued.");
       invalidate();
     },
   });
@@ -164,12 +182,24 @@ function AudiobookSources({
                     {durationLabel(edition.duration_ms)} · {matched} of{" "}
                     {edition.tracks.length} tracks matched
                   </p>
+                  <p>
+                    <time dateTime={edition.created_at}>
+                      {importedAtLabel(edition.created_at)}
+                    </time>
+                  </p>
                 </div>
-                <span
-                  className={`badge${edition.status === "error" ? " badge--error" : active ? " badge--warning" : ""}`}
-                >
-                  {edition.status}
-                </span>
+                <div className="imported-edition-badges">
+                  {edition.is_reader_default && (
+                    <span className="badge badge--success">
+                      Reader app default
+                    </span>
+                  )}
+                  <span
+                    className={`badge${edition.status === "error" ? " badge--error" : active ? " badge--warning" : ""}`}
+                  >
+                    {edition.status}
+                  </span>
+                </div>
               </header>
               {active && (
                 <div className="import-progress" role="status">
@@ -197,6 +227,25 @@ function AudiobookSources({
               )}
               {edition.status === "ready" && (
                 <>
+                  {edition.tracks.length > 0 && matched === 0 && (
+                    <div className="alignment-note">
+                      <p>
+                        The imported audio is intact, but its chapter matches
+                        and synchronized text need to be restored.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        aria-label={`Rematch ${edition.name} to book text`}
+                        disabled={rematchMutation.isPending}
+                        onClick={() => rematchMutation.mutate(edition.id)}
+                      >
+                        {rematchMutation.isPending
+                          ? "Queueing…"
+                          : "Rematch to Book Text"}
+                      </button>
+                    </div>
+                  )}
                   <p className="alignment-note">
                     {edition.alignment_method === "transcribed"
                       ? "Sentence timestamps are aligned to WhisperX word timestamps."
@@ -286,12 +335,14 @@ function AudiobookSources({
       )}
       {(retryMutation.isError ||
         alignMutation.isError ||
+        rematchMutation.isError ||
         deleteMutation.isError ||
         matchMutation.isError) && (
         <p className="error">
           {(
             retryMutation.error ||
             alignMutation.error ||
+            rematchMutation.error ||
             deleteMutation.error ||
             matchMutation.error
           )?.message || "Audiobook action failed"}

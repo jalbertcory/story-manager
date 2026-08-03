@@ -17,6 +17,7 @@ from backend.app.models import (
     ImportedAudiobook,
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
+    ProcessingJob,
 )
 from backend.app.routers import audiobook as audiobook_router
 from backend.app.services import audiobook_import
@@ -317,3 +318,51 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     assert response.json()["status"] == "aligning"
     assert response.json()["progress_total"] == 1
     assert queue.queued == [edition_id]
+
+
+@pytest.mark.asyncio
+async def test_rematch_endpoint_queues_cue_recovery_without_reimporting_audio(
+    app_client,
+    sqlite_sessionmaker,
+):
+    async with sqlite_sessionmaker() as db:
+        book, _chapter = await _seed_book_text(db)
+        edition = ImportedAudiobook(
+            book_id=book.id,
+            name="Damaged alignment",
+            status="ready",
+            alignment_method="transcribed",
+        )
+        db.add(edition)
+        await db.flush()
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=edition.id,
+                sequence_order=0,
+                title="Chapter 1",
+                audio_file_path="library/audio.m4b",
+                media_type="audio/mp4",
+                source_start_ms=0,
+                source_end_ms=10_000,
+                duration_ms=10_000,
+            )
+        )
+        await db.commit()
+        edition_id = edition.id
+
+    response = app_client.post(f"/api/imported-audiobooks/{edition_id}/rematch")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "stale"
+    async with sqlite_sessionmaker() as db:
+        edition = await db.get(ImportedAudiobook, edition_id)
+        job = (
+            await db.execute(
+                select(ProcessingJob).where(
+                    ProcessingJob.job_type == "rematch_imported_audiobook",
+                    ProcessingJob.target_id == edition_id,
+                )
+            )
+        ).scalar_one()
+        assert edition.status == "stale"
+        assert job.payload == {"realign": True}

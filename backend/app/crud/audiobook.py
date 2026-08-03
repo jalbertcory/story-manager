@@ -653,7 +653,7 @@ async def delete_characters_for_book(db: AsyncSession, book_id: int) -> None:
 
 
 async def reset_roster_and_diarization_for_book(db: AsyncSession, book_id: int) -> None:
-    """Clear derived speaker analysis while preserving the expensive EPUB ingestion."""
+    """Clear AI analysis/audio while preserving ingestion and human audiobook cues."""
     chapter_ids = select(AudiobookChapter.id).where(AudiobookChapter.book_id == book_id)
     await db.execute(
         update(AudiobookSentence)
@@ -677,10 +677,57 @@ async def reset_roster_and_diarization_for_book(db: AsyncSession, book_id: int) 
             needs_reassembly=True,
             preview_status=None,
             preview_error=None,
+            audio_file_path=None,
+            smil_file_path=None,
+            reader_audio_file_path=None,
+            reader_smil_file_path=None,
+            audio_size_bytes=None,
+            audio_sha256=None,
+            smil_size_bytes=None,
+            smil_sha256=None,
+            duration_ms=None,
+            generation_state="pending",
         )
     )
     await db.commit()
+    await invalidate_packaged_audiobook(db, book_id)
     await delete_characters_for_book(db, book_id)
+
+
+async def reset_audio_generation_for_book(db: AsyncSession, book_id: int) -> int:
+    """Clear only AI TTS/assembly output, preserving speakers and human cues."""
+    chapter_ids = select(AudiobookChapter.id).where(AudiobookChapter.book_id == book_id)
+    result = await db.execute(
+        update(AudiobookSentence)
+        .where(AudiobookSentence.chapter_id.in_(chapter_ids))
+        .values(
+            audio_file_path=None,
+            audio_duration_ms=None,
+            status="ready_for_audio",
+        )
+    )
+    await db.execute(
+        update(AudiobookChapter)
+        .where(AudiobookChapter.book_id == book_id)
+        .values(
+            needs_reassembly=True,
+            preview_status=None,
+            preview_error=None,
+            audio_file_path=None,
+            smil_file_path=None,
+            reader_audio_file_path=None,
+            reader_smil_file_path=None,
+            audio_size_bytes=None,
+            audio_sha256=None,
+            smil_size_bytes=None,
+            smil_sha256=None,
+            duration_ms=None,
+            generation_state="pending",
+        )
+    )
+    await db.commit()
+    await invalidate_packaged_audiobook(db, book_id)
+    return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +918,21 @@ async def reset_error_sentences_for_book(db: AsyncSession, book_id: int) -> int:
         .values(status="ready_for_audio", audio_file_path=None, audio_duration_ms=None)
     )
     await db.execute(update(AudiobookChapter).where(AudiobookChapter.book_id == book_id).values(needs_reassembly=True))
+    await db.commit()
+    return result.rowcount or 0
+
+
+async def reset_interrupted_sentences_for_book(db: AsyncSession, book_id: int) -> int:
+    """Reclaim speech clips whose in-memory worker disappeared during a restart."""
+    chapter_ids = select(AudiobookChapter.id).where(AudiobookChapter.book_id == book_id)
+    result = await db.execute(
+        update(AudiobookSentence)
+        .where(
+            AudiobookSentence.chapter_id.in_(chapter_ids),
+            AudiobookSentence.status.in_(("audio_queued", "audio_generating")),
+        )
+        .values(status="ready_for_audio", audio_file_path=None, audio_duration_ms=None)
+    )
     await db.commit()
     return result.rowcount or 0
 

@@ -105,6 +105,27 @@ async def test_omnivoice_batches_multiple_sentences_in_one_model_request():
 
 
 @pytest.mark.asyncio
+async def test_punctuation_only_batch_uses_local_silence(monkeypatch):
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001",
+    )
+
+    async def silence(_text):
+        return b"silent-mp3"
+
+    monkeypatch.setattr(tts_providers, "_stub_speech", silence)
+
+    results = await tts_providers.synthesize_speech_batch(
+        settings,
+        [TTSRequest(text="."), TTSRequest(text="[sigh] !")],
+    )
+
+    assert [result.audio_bytes for result in results] == [b"silent-mp3", b"silent-mp3"]
+    assert _Client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_openai_compatible_uses_voice_id_and_compatible_payload():
     settings = models.AudiobookSettings(
         tts_provider="openai-compatible",

@@ -43,6 +43,13 @@ export function rebuildPipeline(bookId) {
   });
 }
 
+export function rebuildAudioOnly(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/audiobook/audio/rebuild`, {
+    method: "POST",
+    fallbackMessage: "Failed to regenerate AI audio",
+  });
+}
+
 export function rebuildCharacterRoster(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/rebuild`, {
     method: "POST",
@@ -163,6 +170,13 @@ export function alignImportedAudiobook(editionId) {
   return sendWithoutBody(`/api/imported-audiobooks/${editionId}/align`, {
     method: "POST",
     fallbackMessage: "Failed to start audiobook timestamp alignment",
+  });
+}
+
+export function rematchImportedAudiobook(editionId) {
+  return sendWithoutBody(`/api/imported-audiobooks/${editionId}/rematch`, {
+    method: "POST",
+    fallbackMessage: "Failed to rematch audiobook to book text",
   });
 }
 

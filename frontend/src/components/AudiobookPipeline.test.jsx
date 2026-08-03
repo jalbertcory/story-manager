@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AudiobookPipeline from "./AudiobookPipeline";
@@ -63,6 +63,201 @@ describe("AudiobookPipeline", () => {
         method: "POST",
       });
     });
+  });
+
+  it("clearly separates AI audio regeneration from an AI analysis rebuild", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              pipeline_status: "complete",
+              next_phase: "complete",
+              pause_requested: false,
+              sentence_counts: { audio_generated: 2 },
+            }),
+        });
+      }
+      if (url === "/api/books/11/audiobook/characters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 4, name: "Avery" }]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/chapters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 9, sentence_count: 2 }]),
+        });
+      }
+      if (
+        (url === "/api/books/11/audiobook/audio/rebuild" ||
+          url === "/api/books/11/audiobook/rebuild") &&
+        options?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ queued: true }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Regenerate AI Audio (Keep Speakers)",
+      }),
+    );
+    expect(
+      screen.getByText(
+        /Speaker assignments and imported human audiobooks will be preserved/,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Yes, regenerate AI audio" }),
+    );
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/audio/rebuild",
+        { method: "POST" },
+      );
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Rebuild AI Audiobook" }),
+    );
+    expect(
+      screen.getByText(
+        /Imported human audiobooks and alignments will be preserved/,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, queue rebuild" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/rebuild",
+        { method: "POST" },
+      );
+    });
+  });
+
+  it("shows import times and identifies the reader app default edition", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/11/audiobook/imports") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              {
+                id: 10,
+                name: "Newest narration",
+                source_type: "upload",
+                status: "ready",
+                duration_ms: 3_600_000,
+                created_at: "2026-07-02T15:30:00Z",
+                is_reader_default: true,
+                tracks: [
+                  {
+                    id: 100,
+                    title: "Chapter 1",
+                    matched_chapter_id: null,
+                    cue_count: 0,
+                  },
+                ],
+              },
+              {
+                id: 9,
+                name: "Older narration",
+                source_type: "upload",
+                status: "ready",
+                duration_ms: 3_600_000,
+                created_at: "2026-07-01T15:30:00Z",
+                is_reader_default: false,
+                tracks: [
+                  {
+                    id: 90,
+                    title: "Chapter 1",
+                    matched_chapter_id: null,
+                    cue_count: 0,
+                  },
+                ],
+              },
+            ]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ pipeline_status: "complete" }),
+        });
+      }
+      if (
+        url === "/api/books/11/audiobook/characters" ||
+        url === "/api/books/11/audiobook/chapters"
+      ) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (
+        url === "/api/imported-audiobooks/10/rematch" &&
+        options?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "stale" }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(
+      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
+    );
+
+    const newestHeading = await screen.findByRole("heading", {
+      name: "Newest narration",
+    });
+    const newestCard = newestHeading.closest("section");
+    const olderCard = screen
+      .getByRole("heading", { name: "Older narration" })
+      .closest("section");
+    expect(
+      within(newestCard).getByText("Reader app default"),
+    ).toBeInTheDocument();
+    expect(
+      within(olderCard).queryByText("Reader app default"),
+    ).not.toBeInTheDocument();
+    expect(within(newestCard).getByText(/^Imported /)).toHaveAttribute(
+      "datetime",
+      "2026-07-02T15:30:00Z",
+    );
+    expect(within(olderCard).getByText(/^Imported /)).toHaveAttribute(
+      "datetime",
+      "2026-07-01T15:30:00Z",
+    );
+
+    fireEvent.click(
+      within(newestCard).getByRole("button", {
+        name: "Rematch Newest narration to book text",
+      }),
+    );
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/imported-audiobooks/10/rematch",
+        { method: "POST" },
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen & Read" }));
+    expect(
+      await screen.findByRole("option", { name: "Newest narration" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/imported audio is intact, but it has no synchronized/),
+    ).toBeInTheDocument();
   });
 
   it("shows model progress and can run exactly one diarization batch", async () => {

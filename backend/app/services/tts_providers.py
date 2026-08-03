@@ -79,6 +79,11 @@ def _plain_text(text: str) -> str:
     return " ".join(_EXPRESSION_TAG_RE.sub("", text).split())
 
 
+def _has_spoken_content(text: str) -> bool:
+    """Return whether text contains something a speech model can pronounce."""
+    return any(character.isalnum() for character in _plain_text(text))
+
+
 def _openai_speech_url(base_url: str) -> str:
     root = base_url.rstrip("/")
     if root.endswith("/audio/speech"):
@@ -246,6 +251,8 @@ async def synthesize_speech(
     request: TTSRequest,
 ) -> bytes:
     """Generate an MP3 using the first available endpoint."""
+    if not _has_spoken_content(request.text):
+        return await _stub_speech("")
     if settings is None:
         return await _stub_speech(request.text)
     routed = await synthesize_speech_routed(settings, request)
@@ -259,14 +266,26 @@ async def synthesize_speech_batch(
     """Generate a true model batch when supported, with a sequential fallback."""
     if not requests:
         return []
+
+    spoken_requests = [request for request in requests if _has_spoken_content(request.text)]
     if settings is None:
-        return [TTSResult(await _stub_speech(request.text)) for request in requests]
-    routed = await route_request(
-        settings,
-        "tts",
-        lambda endpoint_settings: _synthesize_speech_batch_endpoint(endpoint_settings, requests),
-    )
-    return routed.value
+        spoken_results = [TTSResult(await _stub_speech(request.text)) for request in spoken_requests]
+    elif spoken_requests:
+        routed = await route_request(
+            settings,
+            "tts",
+            lambda endpoint_settings: _synthesize_speech_batch_endpoint(endpoint_settings, spoken_requests),
+        )
+        spoken_results = routed.value
+    else:
+        spoken_results = []
+
+    if len(spoken_requests) == len(requests):
+        return spoken_results
+
+    silence = TTSResult(await _stub_speech(""))
+    spoken = iter(spoken_results)
+    return [next(spoken) if _has_spoken_content(request.text) else silence for request in requests]
 
 
 async def _synthesize_speech_batch_endpoint(
