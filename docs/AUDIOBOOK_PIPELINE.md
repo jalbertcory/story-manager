@@ -263,7 +263,7 @@ selected provider:
 
 | Provider | HTTP contract | Voice selection |
 |---|---|---|
-| `omnivoice` | `POST {base_url}/generate` | Descriptive `voice_prompt`; expression tags preserved |
+| `omnivoice` | `POST {base_url}/generate` | Persistent character voice ID plus descriptive `voice_prompt`; expression tags preserved |
 | `openai-compatible` | `POST {base_url}/v1/audio/speech` | Character/default voice ID; compatible core fields only |
 | `openai` | `POST /v1/audio/speech` | Character/default voice ID; instructions on supported models |
 | `elevenlabs` | `POST /v1/text-to-speech/{voice_id}` | Character/default voice ID |
@@ -277,6 +277,12 @@ The compact speed profile maps to the provider's speed parameter. A character vo
 
 OmniVoice is a self-hosted TTS worker. The endpoint URL is configured in `audiobook_settings`.
 
+Voice design is intentionally not speaker-deterministic across independent calls. On first use, Story Manager calls
+`POST {base_url}/voices/design` once for the character profile, stores the returned provider voice ID on the book and
+series roster, and sends it as `voice_id` on every later generation. The worker persists the generated enrollment WAV
+in `$OMNIVOICE_VOICE_STORE` and converts it to a cached `VoiceClonePrompt`. In Docker this defaults to
+`/models/voices`, so the existing model-cache volume also preserves character voices across worker restarts.
+
 ```
 POST {tts_base_url}/generate
 Content-Type: application/json
@@ -284,6 +290,7 @@ Accept: audio/mpeg
 
 {
   "voice": "[gender-female][pitch-high][speed-normal]",
+  "voice_id": "omnivoice-0123456789abcdef0123456789abcdef",
   "text": "She laughed. [laughter] \"I can't believe it,\" she said."
 }
 
@@ -291,6 +298,9 @@ Response: 200 OK
 Content-Type: audio/mpeg
 Body: raw MP3 bytes
 ```
+
+The `voice_id` is obtained from `POST {tts_base_url}/voices/design`; omit it only when creating an enrollment sample
+or intentionally using one-shot voice design.
 
 ### Voice Profile Schema
 

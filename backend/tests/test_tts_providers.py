@@ -3,17 +3,22 @@ import base64
 import pytest
 
 from backend.app import models
-from backend.app.services import tts_providers
+from backend.app.services import endpoint_pool, tts_providers
 from backend.app.services.tts_providers import TTSRequest
 
 
 class _Response:
-    content = b"mp3-bytes"
+    def __init__(self, payload=None, *, content=b"mp3-bytes", headers=None):
+        self.payload = payload
+        self.content = content
+        self.headers = headers or {}
 
     def raise_for_status(self):
         return None
 
     def json(self):
+        if self.payload is not None:
+            return self.payload
         return {
             "items": [
                 {
@@ -42,12 +47,34 @@ class _Client:
 
     async def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
+        if url.endswith("/voices/design"):
+            return _Response(
+                {
+                    "id": "omnivoice-0123456789abcdef0123456789abcdef",
+                    "sample_text": "Reference text.",
+                    "sample_url": "/voices/example/sample",
+                }
+            )
+        if url.endswith("/generate-batch"):
+            items = [
+                {
+                    "audio_base64": base64.b64encode(audio).decode(),
+                    "duration_ms": duration,
+                }
+                for audio, duration in [(b"first-mp3", 1100), (b"second-mp3", 2200)][: len(kwargs["json"]["requests"])]
+            ]
+            return _Response({"items": items})
         return _Response()
+
+    async def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return _Response(content=b"reference-wav", headers={"content-type": "audio/wav"})
 
 
 @pytest.fixture(autouse=True)
 def fake_http_client(monkeypatch):
     _Client.calls = []
+    endpoint_pool.reset_cooldowns()
     monkeypatch.setattr(tts_providers.httpx, "AsyncClient", _Client)
 
 
@@ -71,8 +98,28 @@ async def test_omnivoice_uses_descriptive_profile_and_expression_tags():
     assert url == "http://omnivoice:8001/generate"
     assert request["json"] == {
         "voice": "[gender-female][pitch-low][speed-slow]",
+        "voice_id": None,
         "text": "[whisper] Keep quiet.",
     }
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_fetches_persisted_voice_design_sample():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+
+    sample = await tts_providers.get_omnivoice_voice_sample(
+        settings,
+        "omnivoice-0123456789abcdef0123456789abcdef",
+    )
+
+    assert sample.audio_bytes == b"reference-wav"
+    assert sample.media_type == "audio/wav"
+    url, request = _Client.calls[0]
+    assert url == ("http://omnivoice:8001/voices/" "omnivoice-0123456789abcdef0123456789abcdef/sample")
+    assert request["headers"] == {"Accept": "audio/wav"}
 
 
 @pytest.mark.asyncio
@@ -98,10 +145,48 @@ async def test_omnivoice_batches_multiple_sentences_in_one_model_request():
     assert url == "http://omnivoice:8001/generate-batch"
     assert request["json"] == {
         "requests": [
-            {"voice": "[gender-female]", "text": "First."},
-            {"voice": "[gender-male]", "text": "Second."},
+            {"voice": "[gender-female]", "voice_id": None, "text": "First."},
+            {"voice": "[gender-male]", "voice_id": None, "text": "Second."},
         ]
     }
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_reuses_character_voice_id_for_single_and_batch_requests():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+    request = TTSRequest(
+        text="Consistent voice.",
+        voice_prompt="[gender-male][pitch-low]",
+        voice_id="omnivoice-0123456789abcdef0123456789abcdef",
+        voice_provider="omnivoice",
+    )
+
+    await tts_providers.synthesize_speech(settings, request)
+    await tts_providers.synthesize_speech_batch(settings, [request])
+
+    assert _Client.calls[0][1]["json"]["voice_id"] == request.voice_id
+    assert _Client.calls[1][1]["json"]["requests"][0]["voice_id"] == request.voice_id
+
+
+@pytest.mark.asyncio
+async def test_design_omnivoice_voice_returns_durable_provider_id():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+
+    designed = await tts_providers.design_omnivoice_voice(
+        settings,
+        "female, low pitch, british accent",
+    )
+
+    assert designed.id == "omnivoice-0123456789abcdef0123456789abcdef"
+    url, request = _Client.calls[0]
+    assert url == "http://omnivoice:8001/voices/design"
+    assert request["json"] == {"voice": "female, low pitch, british accent"}
 
 
 @pytest.mark.asyncio

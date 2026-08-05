@@ -463,6 +463,7 @@ function AudiobookPipeline({
             bookId={bookId}
             pipelineStatus={pipelineStatus}
             series={book.series}
+            ttsProvider={statusData?.tts_provider}
           />
         )}
         {subTab === "script-editor" && (

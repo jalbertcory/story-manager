@@ -1375,7 +1375,9 @@ async def test_pause_is_cooperative_and_status_exposes_error_context(db):
 @pytest.mark.asyncio
 async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db, monkeypatch):
     book = await _make_book(db)
-    chapter, _character, _sentence = await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
+    chapter, character, _sentence = await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
+    character.tts_voice_id = "omnivoice-0123456789abcdef0123456789abcdef"
+    character.tts_voice_provider = "omnivoice"
     settings = models.AudiobookSettings(
         tts_provider="omnivoice",
         tts_base_url="http://tts.example.test",
@@ -1524,6 +1526,126 @@ async def test_character_voice_id_is_tagged_and_used_only_for_its_provider(db):
 
     settings.tts_provider = "openai"
     assert audiobook_tts._voice_id_for_provider(settings, character) is None
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_design_is_created_once_and_persisted_on_roster(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    _chapter, character, sentence = await _seed_audio_chapter(db, book.id)
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001",
+    )
+    db.add(settings)
+    await db.commit()
+    calls = []
+
+    async def design_voice(_settings, voice_prompt):
+        calls.append(voice_prompt)
+        return SimpleNamespace(
+            id="omnivoice-0123456789abcdef0123456789abcdef",
+            sample_text="Reference text.",
+            sample_url="/voices/example/sample",
+        )
+
+    monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", design_voice)
+
+    first = await audiobook_tts._build_sentence_request(settings, sentence, db)
+    second = await audiobook_tts._build_sentence_request(settings, sentence, db)
+    await db.refresh(character)
+
+    assert calls == ["[gender-neutral][pitch-medium][speed-normal]"]
+    assert first.voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
+    assert second.voice_id == first.voice_id
+    assert character.tts_voice_id == first.voice_id
+    assert character.tts_voice_provider == "omnivoice"
+
+
+@pytest.mark.asyncio
+async def test_editing_omnivoice_profile_discards_old_reference_id(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "voice_prompt": "[gender-male][pitch-medium]",
+                    "tts_voice_id": "omnivoice-0123456789abcdef0123456789abcdef",
+                    "tts_voice_provider": "omnivoice",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001",
+    )
+    db.add(settings)
+    await db.commit()
+
+    await audiobook_router.update_character(
+        character.id,
+        audiobook_router.CharacterUpdate(voice_prompt="[gender-female][pitch-low]"),
+        db,
+    )
+    await db.refresh(character)
+
+    assert character.tts_voice_id is None
+    assert character.tts_voice_provider is None
+
+
+@pytest.mark.asyncio
+async def test_manual_omnivoice_design_can_be_auditioned(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    character = (
+        await crud.audiobook.create_characters_bulk(
+            db,
+            book.id,
+            [
+                {
+                    "name": "Narrator",
+                    "voice_prompt": "[gender-male][pitch-low][age-middle]",
+                    "is_narrator": True,
+                }
+            ],
+        )
+    )[0]
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001",
+    )
+    db.add(settings)
+    await db.commit()
+
+    async def design_voice(_settings, _voice_prompt):
+        return SimpleNamespace(
+            id="omnivoice-0123456789abcdef0123456789abcdef",
+            sample_text="Reference text.",
+            sample_url="/voices/example/sample",
+        )
+
+    async def get_sample(_settings, voice_id):
+        assert voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
+        return SimpleNamespace(audio_bytes=b"sample-wav", media_type="audio/wav")
+
+    monkeypatch.setattr(audiobook_router, "design_omnivoice_voice", design_voice)
+    monkeypatch.setattr(audiobook_router, "get_omnivoice_voice_sample", get_sample)
+
+    updated = await audiobook_router.design_character_voice(
+        character.id,
+        audiobook_router.CharacterVoiceDesign(voice_prompt=character.voice_prompt),
+        db,
+    )
+    sample = await audiobook_router.get_character_voice_sample(character.id, db)
+
+    assert updated.tts_voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
+    assert updated.tts_voice_provider == "omnivoice"
+    assert sample.body == b"sample-wav"
+    assert sample.media_type == "audio/wav"
+    assert sample.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.asyncio

@@ -2061,6 +2061,23 @@
   font-size: 0.8rem;
 }
 
+.character-voice-design {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.character-voice-design button {
+  justify-self: start;
+}
+
+.character-voice-design audio {
+  width: 100%;
+}
+
 .script-editor,
 .chapter-assembly {
   overflow: hidden;
@@ -2242,6 +2259,41 @@
   max-height: 56vh;
   overflow-y: auto;
   padding-right: 0.75rem;
+}
+
+.audiobook-reader-block {
+  max-width: 72ch;
+  margin: 0 0 1.05em;
+}
+
+.audiobook-reader-block:last-child {
+  margin-bottom: 0;
+}
+
+.audiobook-reader-block--heading {
+  font-family: inherit;
+  font-size: 1.25rem;
+  line-height: 1.35;
+  margin: 1.5em 0 0.75em;
+}
+
+.audiobook-reader-block--quote {
+  margin-left: 1rem;
+  padding-left: 1rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.audiobook-reader-block--list-item {
+  position: relative;
+  padding-left: 1.25rem;
+}
+
+.audiobook-reader-block--list-item::before {
+  content: "•";
+  position: absolute;
+  left: 0.2rem;
+  color: var(--accent);
 }
 
 @media (max-width: 760px) {

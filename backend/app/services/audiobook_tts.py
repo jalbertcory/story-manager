@@ -21,6 +21,7 @@ from .tts_providers import (
     DEFAULT_VOICE_PROMPT,
     TTSRequest,
     TTSResult,
+    design_omnivoice_voice,
     synthesize_speech,
     synthesize_speech_batch,
     tts_provider_name,
@@ -56,6 +57,33 @@ def _voice_id_for_provider(
     if character.tts_voice_provider != tts_provider_name(settings):
         return None
     return character.tts_voice_id
+
+
+async def _ensure_omnivoice_voice(
+    settings: AudiobookSettings | None,
+    character: AudiobookCharacter | None,
+    db: AsyncSession,
+) -> None:
+    """Turn a one-shot voice design into a durable clone the first time it is used."""
+    if character is None or settings is None or tts_provider_name(settings) != "omnivoice":
+        return
+    if character.tts_voice_provider == "omnivoice" and character.tts_voice_id:
+        return
+
+    voice_prompt = character.voice_prompt or DEFAULT_VOICE_PROMPT
+    designed = await design_omnivoice_voice(settings, voice_prompt)
+    character.tts_voice_id = designed.id
+    character.tts_voice_provider = "omnivoice"
+    await db.commit()
+    linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, character)
+    for linked_character in linked_characters:
+        await crud.audiobook.cascade_voice_change(db, linked_character.id)
+    logger.info(
+        "Assigned reusable OmniVoice voice %s to %s (%d linked roster entries).",
+        designed.id,
+        character.name,
+        len(linked_characters),
+    )
 
 
 async def _generate_sentence_clip(
@@ -109,6 +137,7 @@ async def _build_sentence_requests(
     """Render dialogue with its character and attribution prose with Narrator."""
 
     character = await db.get(AudiobookCharacter, sentence.character_id) if sentence.character_id is not None else None
+    await _ensure_omnivoice_voice(settings, character, db)
     full_text = sentence.tagged_text or sentence.original_text
     if character is None or character.is_narrator:
         return [_request_for_character(settings, character, full_text)]
@@ -130,6 +159,7 @@ async def _build_sentence_requests(
             ),
             None,
         )
+    await _ensure_omnivoice_voice(settings, narrator, db)
 
     expression_match = _LEADING_EXPRESSION_RE.match(full_text)
     expression_prefix = expression_match.group(1).strip() if expression_match else ""

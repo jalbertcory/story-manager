@@ -44,6 +44,19 @@ class TTSResult:
     duration_ms: int | None = None
 
 
+@dataclass(frozen=True)
+class DesignedVoice:
+    id: str
+    sample_text: str
+    sample_url: str
+
+
+@dataclass(frozen=True)
+class VoiceSample:
+    audio_bytes: bytes
+    media_type: str
+
+
 def _profile_tokens(prompt: str) -> dict[str, str]:
     return {key.lower(): value.lower() for key, value in _PROFILE_TOKEN_RE.findall(prompt)}
 
@@ -91,6 +104,19 @@ def _openai_speech_url(base_url: str) -> str:
     if root.endswith("/v1"):
         return root + "/audio/speech"
     return root + "/v1/audio/speech"
+
+
+def _omnivoice_root(base_url: str) -> str:
+    root = base_url.rstrip("/")
+    if root.endswith("/generate"):
+        root = root[: -len("/generate")]
+    return root
+
+
+def _request_voice_id(request: TTSRequest, provider: str) -> str | None:
+    if request.voice_provider and request.voice_provider != provider:
+        return None
+    return request.voice_id
 
 
 async def _stub_speech(text: str) -> bytes:
@@ -148,21 +174,21 @@ async def _synthesize_speech_endpoint(
     if provider == "omnivoice":
         if not settings.tts_base_url:
             raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
-        url = settings.tts_base_url.rstrip("/")
-        if not url.endswith("/generate"):
-            url += "/generate"
+        url = f"{_omnivoice_root(settings.tts_base_url)}/generate"
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
-                json={"voice": request.voice_prompt, "text": request.text},
+                json={
+                    "voice": request.voice_prompt,
+                    "voice_id": _request_voice_id(request, provider),
+                    "text": request.text,
+                },
                 headers={"Accept": "audio/mpeg"},
             )
             response.raise_for_status()
             return response.content
 
-    endpoint_voice_id = request.voice_id
-    if request.voice_provider and request.voice_provider != provider:
-        endpoint_voice_id = None
+    endpoint_voice_id = _request_voice_id(request, provider)
     voice_id = endpoint_voice_id or settings.tts_default_voice
     if not voice_id:
         raise RuntimeError(
@@ -259,6 +285,72 @@ async def synthesize_speech(
     return routed.value
 
 
+async def _design_omnivoice_voice_endpoint(settings: AudiobookSettings, voice_prompt: str) -> DesignedVoice:
+    if tts_provider_name(settings) != "omnivoice":
+        raise RuntimeError("Consistent voice design is only available for OmniVoice.")
+    if not settings.tts_base_url:
+        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            f"{_omnivoice_root(settings.tts_base_url)}/voices/design",
+            json={"voice": voice_prompt},
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    try:
+        return DesignedVoice(
+            id=str(payload["id"]),
+            sample_text=str(payload["sample_text"]),
+            sample_url=str(payload["sample_url"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("OmniVoice returned an invalid designed voice.") from exc
+
+
+async def design_omnivoice_voice(settings: AudiobookSettings, voice_prompt: str) -> DesignedVoice:
+    """Create one durable reference voice on the first available OmniVoice worker."""
+    routed = await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _design_omnivoice_voice_endpoint(endpoint_settings, voice_prompt),
+    )
+    return routed.value
+
+
+async def _get_omnivoice_voice_sample_endpoint(
+    settings: AudiobookSettings,
+    voice_id: str,
+) -> VoiceSample:
+    if tts_provider_name(settings) != "omnivoice":
+        raise RuntimeError("Voice samples are only available for OmniVoice.")
+    if not settings.tts_base_url:
+        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(
+            f"{_omnivoice_root(settings.tts_base_url)}/voices/{voice_id}/sample",
+            headers={"Accept": "audio/wav"},
+        )
+        response.raise_for_status()
+    media_type = response.headers.get("content-type", "audio/wav").split(";", 1)[0]
+    return VoiceSample(audio_bytes=response.content, media_type=media_type)
+
+
+async def get_omnivoice_voice_sample(
+    settings: AudiobookSettings,
+    voice_id: str,
+) -> VoiceSample:
+    """Fetch the durable reference clip created with an OmniVoice design."""
+    routed = await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _get_omnivoice_voice_sample_endpoint(endpoint_settings, voice_id),
+    )
+    return routed.value
+
+
 async def synthesize_speech_batch(
     settings: AudiobookSettings | None,
     requests: list[TTSRequest],
@@ -298,15 +390,22 @@ async def _synthesize_speech_batch_endpoint(
     if not settings.tts_base_url:
         raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
 
-    root = settings.tts_base_url.rstrip("/")
-    if root.endswith("/generate"):
-        root = root[: -len("/generate")]
+    root = _omnivoice_root(settings.tts_base_url)
     url = f"{root}/generate-batch"
     timeout = httpx.Timeout(600.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             url,
-            json={"requests": [{"voice": request.voice_prompt, "text": request.text} for request in requests]},
+            json={
+                "requests": [
+                    {
+                        "voice": request.voice_prompt,
+                        "voice_id": _request_voice_id(request, "omnivoice"),
+                        "text": request.text,
+                    }
+                    for request in requests
+                ]
+            },
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
