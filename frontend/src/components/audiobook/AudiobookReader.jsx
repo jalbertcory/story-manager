@@ -21,34 +21,81 @@ function findActiveCue(cues, currentMs) {
   return null;
 }
 
-function HighlightedText({ cues, activeSentenceId, onSeek }) {
+function groupCuesByReadingBlock(cues) {
+  const blocks = [];
+  for (const cue of cues) {
+    const previous = blocks.at(-1);
+    const unstructured = cue.reading_block_index == null;
+    const key = unstructured
+      ? `unstructured-${blocks.length}`
+      : `block-${cue.reading_block_index}`;
+    if (
+      (unstructured && previous?.unstructured) ||
+      (!unstructured && previous?.key === key)
+    ) {
+      previous.cues.push(cue);
+    } else {
+      blocks.push({
+        key,
+        unstructured,
+        type: cue.reading_block_type || "paragraph",
+        cues: [cue],
+      });
+    }
+  }
+  return blocks;
+}
+
+function HighlightedText({
+  cues,
+  activeSentenceId,
+  onSeek,
+  titleForCue = () => undefined,
+}) {
   const activeRef = useRef(null);
+  const blocks = useMemo(() => groupCuesByReadingBlock(cues), [cues]);
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeSentenceId]);
   return (
     <div className="audiobook-reader-text">
-      {cues.map((cue) => (
-        <span
-          key={cue.sentence_id}
-          ref={cue.sentence_id === activeSentenceId ? activeRef : null}
-          className={
-            cue.sentence_id === activeSentenceId
-              ? "audiobook-sentence--active"
-              : ""
-          }
-          onClick={() => onSeek(cue.clip_begin_ms)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              onSeek(cue.clip_begin_ms);
-            }
-          }}
-        >
-          {cue.text}{" "}
-        </span>
-      ))}
+      {blocks.map((block) => {
+        const BlockTag =
+          block.type === "heading"
+            ? "h4"
+            : block.type === "quote"
+              ? "blockquote"
+              : "p";
+        return (
+          <BlockTag
+            key={block.key}
+            className={`audiobook-reader-block audiobook-reader-block--${block.type}`}
+          >
+            {block.cues.map((cue) => (
+              <span
+                key={cue.sentence_id}
+                ref={cue.sentence_id === activeSentenceId ? activeRef : null}
+                title={titleForCue(cue)}
+                className={
+                  cue.sentence_id === activeSentenceId
+                    ? "audiobook-sentence--active"
+                    : ""
+                }
+                onClick={() => onSeek(cue.clip_begin_ms)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    onSeek(cue.clip_begin_ms);
+                  }
+                }}
+              >
+                {cue.text}{" "}
+              </span>
+            ))}
+          </BlockTag>
+        );
+      })}
     </div>
   );
 }
@@ -227,6 +274,8 @@ function GeneratedEditionReader({ chapters, characters, bookId }) {
         text: sentence.original_text,
         clip_begin_ms: begin,
         clip_end_ms: currentMs,
+        reading_block_index: sentence.reading_block_index,
+        reading_block_type: sentence.reading_block_type,
       };
     });
   }, [data]);
@@ -309,29 +358,17 @@ function GeneratedEditionReader({ chapters, characters, bookId }) {
         {isLoading ? (
           <p>Loading chapter text…</p>
         ) : (
-          <div className="audiobook-reader-text">
-            {cues.map((cue) => {
+          <HighlightedText
+            cues={cues}
+            activeSentenceId={activeSentenceId}
+            onSeek={seek}
+            titleForCue={(cue) => {
               const sentence = data.items.find(
                 (item) => item.id === cue.sentence_id,
               );
-              return (
-                <span
-                  key={cue.sentence_id}
-                  title={
-                    characterNames.get(sentence?.character_id) || "Unassigned"
-                  }
-                  className={
-                    cue.sentence_id === activeSentenceId
-                      ? "audiobook-sentence--active"
-                      : ""
-                  }
-                  onClick={() => seek(cue.clip_begin_ms)}
-                >
-                  {cue.text}{" "}
-                </span>
-              );
-            })}
-          </div>
+              return characterNames.get(sentence?.character_id) || "Unassigned";
+            }}
+          />
         )}
       </main>
     </div>

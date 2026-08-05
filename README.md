@@ -235,6 +235,11 @@ curl http://<TTS-HOST-IP>:8001/health
 In Story Manager's **Audio Settings**, choose **OmniVoice**, set **Base URL** to
 `http://<UNRAID-IP>:8001`, then click **Save & Test TTS**. Keep this endpoint limited to the trusted LAN.
 
+The adapter turns each character's descriptive profile into one persistent reference performance and saves the
+returned OmniVoice voice ID on the book/series roster. All later sentences use voice cloning from that reference,
+so the description no longer produces a different reader on every request. These references live in the mapped
+`/models` volume; preserve that volume for the lifetime of the books or series.
+
 #### Kokoro or another OpenAI-compatible server
 
 Kokoro is a lightweight alternative with a fixed catalog of voices and works well on CPU for many home servers.

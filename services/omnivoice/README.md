@@ -65,6 +65,7 @@ The image is rebuilt and published only when files under `services/omnivoice/` o
 | `OMNIVOICE_MAX_BATCH_SIZE` | `8` | Maximum items accepted by `POST /generate-batch` |
 | `OMNIVOICE_NATIVE_BATCHING` | `false` | Opt into native model batching. Keep disabled on MPS, where native batches can produce stationary mechanical noise. |
 | `OMNIVOICE_QUALITY_ATTEMPTS` | `3` | Maximum individual generations attempted when the signal-quality gate rejects an output. |
+| `OMNIVOICE_VOICE_STORE` | `$HF_HOME/voices` | Persistent enrollment samples backing reusable voice IDs. The default is inside the mapped `/models` volume in Docker. |
 | `OMNIVOICE_PORT` | `8001` | Port used by the Make target |
 
 Story Manager controls submitted batch size with `AUDIOBOOK_TTS_BATCH_SIZE` (default `4`) and length-buckets
@@ -76,3 +77,16 @@ Legacy Story Manager profiles such as `[gender-female][pitch-low][speed-normal]`
 comma-separated voice-design attributes. Official instructions such as `female, middle-aged, low pitch` are also
 accepted directly. Supported OmniVoice non-verbal tags are preserved; unsupported historical tags are removed so
 one bad expression tag cannot fail a full audiobook run.
+
+## Consistent voices
+
+OmniVoice voice-design instructions describe a class of voices; they do not select one speaker. Story Manager's
+adapter therefore designs one enrollment performance with `POST /voices/design`, saves its WAV file under
+`OMNIVOICE_VOICE_STORE`, and returns an `omnivoice-...` ID. Later `/generate` and `/generate-batch` requests pass that
+ID into OmniVoice's reusable voice-cloning prompt while retaining the original instruction as compatible style
+guidance.
+
+Story Manager provisions this ID automatically the first time a roster voice is used and saves it on both the book
+and series character profiles. The roster also offers **Create Consistent Voice** / **Replace Voice Design** controls
+for auditioning a sample before full-book generation. Keep the `/models` volume when replacing or upgrading the
+container. Multiple OmniVoice workers must mount the same voice-store directory if they are used as fallbacks.

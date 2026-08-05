@@ -90,6 +90,19 @@ export function updateCharacter(charId, data) {
   });
 }
 
+export function designCharacterVoice(charId, data) {
+  return sendJson(`/api/audiobook/characters/${charId}/design-voice`, {
+    method: "POST",
+    body: data,
+    fallbackMessage: "Failed to design a consistent OmniVoice voice",
+  });
+}
+
+export function getCharacterVoiceSampleUrl(charId, revision = "") {
+  const suffix = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+  return `/api/audiobook/characters/${charId}/voice-sample${suffix}`;
+}
+
 // Sentences
 export function getSentences(
   bookId,

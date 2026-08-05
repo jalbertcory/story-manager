@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  designCharacterVoice,
+  getCharacterVoiceSampleUrl,
   rebuildCharacterRoster,
   shareCharacterRosterWithSeries,
   updateCharacter,
@@ -14,12 +16,17 @@ const ACTIVE_STATUSES = new Set([
   "assembling",
 ]);
 
-function CharacterCard({ character, bookId }) {
+function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
   const queryClient = useQueryClient();
   const [voicePrompt, setVoicePrompt] = useState(character.voice_prompt || "");
   const [voiceId, setVoiceId] = useState(character.tts_voice_id || "");
   const [voiceIdDirty, setVoiceIdDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [sampleRevision, setSampleRevision] = useState(0);
+
+  useEffect(() => {
+    if (!voiceIdDirty) setVoiceId(character.tts_voice_id || "");
+  }, [character.tts_voice_id, voiceIdDirty]);
 
   const mutation = useMutation({
     mutationFn: (data) => updateCharacter(character.id, data),
@@ -28,6 +35,22 @@ function CharacterCard({ character, bookId }) {
       setVoiceIdDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-characters", bookId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+    },
+  });
+
+  const designMutation = useMutation({
+    mutationFn: () =>
+      designCharacterVoice(character.id, {
+        voice_prompt: voicePrompt || null,
+      }),
+    onSuccess: (updatedCharacter) => {
+      setVoiceId(updatedCharacter.tts_voice_id || "");
+      setVoiceIdDirty(false);
+      setSampleRevision(Date.now());
       queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
@@ -117,11 +140,46 @@ function CharacterCard({ character, bookId }) {
       </label>
       <p className="character-voice-hint">
         Used by fixed-voice providers such as OpenAI-compatible APIs and
-        ElevenLabs. OmniVoice uses the descriptive profile above.
+        ElevenLabs. OmniVoice stores a reusable reference voice here after it is
+        designed.
         {character.tts_voice_provider
           ? ` Saved for ${character.tts_voice_provider}.`
           : ""}
       </p>
+      {ttsProvider === "omnivoice" && (
+        <div className="character-voice-design">
+          <button
+            onClick={() => designMutation.mutate()}
+            disabled={designMutation.isPending || pipelineActive}
+          >
+            {designMutation.isPending
+              ? "Designing sample…"
+              : character.tts_voice_provider === "omnivoice"
+                ? "Replace Voice Design"
+                : "Create Consistent Voice"}
+          </button>
+          {(character.tts_voice_provider === "omnivoice" ||
+            designMutation.isSuccess) && (
+            <audio
+              controls
+              preload="none"
+              src={getCharacterVoiceSampleUrl(character.id, sampleRevision)}
+            >
+              Your browser does not support audio playback.
+            </audio>
+          )}
+          <p className="character-voice-hint">
+            This creates one reference performance and reuses it for every
+            sentence. Replacing it updates the shared series roster and
+            invalidates clips made with the previous voice.
+          </p>
+        </div>
+      )}
+      {designMutation.isError && (
+        <p className="error">
+          {designMutation.error?.message || "Voice design failed"}
+        </p>
+      )}
       {mutation.isError && (
         <p className="error">{mutation.error?.message || "Save failed"}</p>
       )}
@@ -138,7 +196,13 @@ function CharacterCard({ character, bookId }) {
   );
 }
 
-function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
+function CharacterRoster({
+  characters,
+  bookId,
+  pipelineStatus,
+  series,
+  ttsProvider,
+}) {
   const queryClient = useQueryClient();
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const regenerateMutation = useMutation({
@@ -222,7 +286,8 @@ function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
         )}
         {regenerateMutation.isSuccess && (
           <span className="success">
-            Roster regeneration queued. <a href="/processing">View processing</a>
+            Roster regeneration queued.{" "}
+            <a href="/processing">View processing</a>
           </span>
         )}
         {shareMutation.isSuccess && (
@@ -236,7 +301,13 @@ function CharacterRoster({ characters, bookId, pipelineStatus, series }) {
       </div>
       <div className="character-roster">
         {characters.map((char) => (
-          <CharacterCard key={char.id} character={char} bookId={bookId} />
+          <CharacterCard
+            key={char.id}
+            character={char}
+            bookId={bookId}
+            pipelineActive={ACTIVE_STATUSES.has(pipelineStatus)}
+            ttsProvider={ttsProvider}
+          />
         ))}
       </div>
     </>

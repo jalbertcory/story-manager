@@ -37,6 +37,7 @@ from ..services.audiobook_import import (
     safe_import_filename,
     stream_upload_to_path,
 )
+from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
 from ..services.processing_queue import queue_processing_job
 from ..services import audiobook_llm
 from ..services.transcription_providers import (
@@ -44,7 +45,13 @@ from ..services.transcription_providers import (
     transcription_service_health,
 )
 from ..services.endpoint_pool import configured_endpoints, primary_provider
-from ..services.tts_providers import TTSRequest, synthesize_speech_routed, tts_provider_name
+from ..services.tts_providers import (
+    TTSRequest,
+    design_omnivoice_voice,
+    get_omnivoice_voice_sample,
+    synthesize_speech_routed,
+    tts_provider_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +119,8 @@ class AudiobookStatusResponse(BaseModel):
     llm_requests: int
     llm_provider: str
     llm_model: Optional[str]
+    tts_provider: str
+    tts_model: Optional[str]
 
 
 class CharacterResponse(BaseModel):
@@ -141,6 +150,10 @@ class CharacterUpdate(BaseModel):
     is_narrator: Optional[bool] = None
 
 
+class CharacterVoiceDesign(BaseModel):
+    voice_prompt: Optional[str] = None
+
+
 class SentenceResponse(BaseModel):
     id: int
     chapter_id: int
@@ -154,6 +167,8 @@ class SentenceResponse(BaseModel):
     speaker_confidence: Optional[float]
     speaker_reason: Optional[str]
     status: str
+    reading_block_index: Optional[int] = None
+    reading_block_type: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -258,6 +273,17 @@ class SentenceListResponse(BaseModel):
     limit: int
 
 
+def _reading_block_fields(
+    reading_blocks: dict[str, ReadingBlock],
+    html_element_id: str,
+) -> dict[str, int | str | None]:
+    block = reading_blocks.get(html_element_id)
+    return {
+        "reading_block_index": block.index if block else None,
+        "reading_block_type": block.kind if block else None,
+    }
+
+
 class ImportedCueResponse(BaseModel):
     sentence_id: int
     html_element_id: str
@@ -266,6 +292,8 @@ class ImportedCueResponse(BaseModel):
     clip_end_ms: int
     confidence: Optional[float]
     method: str
+    reading_block_index: Optional[int] = None
+    reading_block_type: Optional[str] = None
 
 
 class ImportedTrackResponse(BaseModel):
@@ -678,7 +706,13 @@ async def get_imported_track_cues(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> list[ImportedCueResponse]:
-    _edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    reading_blocks: dict[str, ReadingBlock] = {}
+    if track.matched_chapter_id is not None:
+        chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
+        book = await _get_audiobook_book_or_404(edition.book_id, db)
+        if chapter is not None:
+            reading_blocks = chapter_reading_blocks(book, chapter)
     result = await db.execute(
         select(ImportedAudiobookCue, AudiobookSentence)
         .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
@@ -694,6 +728,7 @@ async def get_imported_track_cues(
             clip_end_ms=cue.clip_end_ms,
             confidence=cue.confidence,
             method=cue.method,
+            **_reading_block_fields(reading_blocks, sentence.html_element_id),
         )
         for cue, sentence in result.all()
     ]
@@ -1013,6 +1048,8 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
         llm_requests=book.audiobook_llm_requests or 0,
         llm_provider=(settings.llm_provider or "stub") if settings else "stub",
         llm_model=settings.llm_model if settings else None,
+        tts_provider=tts_provider_name(settings),
+        tts_model=settings.tts_model if settings else None,
     )
 
 
@@ -1056,6 +1093,16 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
     if existing is None:
         raise HTTPException(status_code=404, detail="Character not found")
     await _get_audiobook_book_or_404(existing.book_id, db)
+    if (
+        "voice_prompt" in data
+        and data["voice_prompt"] != existing.voice_prompt
+        and existing.tts_voice_provider == "omnivoice"
+        and "tts_voice_id" not in data
+    ):
+        # The saved reference represents the old design. A new one will be
+        # auditioned manually or provisioned automatically on next use.
+        data["tts_voice_id"] = None
+        data["tts_voice_provider"] = None
     if "tts_voice_id" in data:
         voice_id = data["tts_voice_id"]
         if isinstance(voice_id, str):
@@ -1072,6 +1119,62 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
             await crud.audiobook.cascade_voice_change(db, linked_character.id)
 
     return CharacterResponse.model_validate(char)
+
+
+@router.post("/api/audiobook/characters/{char_id}/design-voice", response_model=CharacterResponse)
+async def design_character_voice(
+    char_id: int,
+    body: CharacterVoiceDesign,
+    db: AsyncSession = Depends(get_db),
+) -> CharacterResponse:
+    character = await crud.audiobook.get_character(db, char_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Character not found")
+    await _get_audiobook_book_or_404(character.book_id, db)
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    if settings is None or tts_provider_name(settings) != "omnivoice":
+        raise HTTPException(status_code=409, detail="Select OmniVoice in Audio Settings first")
+
+    requested_prompt = body.voice_prompt if "voice_prompt" in body.model_fields_set else character.voice_prompt
+    voice_prompt = requested_prompt or "[gender-neutral][pitch-medium][speed-normal]"
+    # Do not replace the saved profile/reference until a new design succeeds.
+    designed = await design_omnivoice_voice(settings, voice_prompt)
+    character.voice_prompt = voice_prompt
+    character.tts_voice_id = designed.id
+    character.tts_voice_provider = "omnivoice"
+    await db.commit()
+    linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, character)
+    for linked_character in linked_characters:
+        await crud.audiobook.cascade_voice_change(db, linked_character.id)
+    await db.refresh(character)
+    return CharacterResponse.model_validate(character)
+
+
+@router.get("/api/audiobook/characters/{char_id}/voice-sample")
+async def get_character_voice_sample(
+    char_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    character = await crud.audiobook.get_character(db, char_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Character not found")
+    await _get_audiobook_book_or_404(character.book_id, db)
+    if character.tts_voice_provider != "omnivoice" or not character.tts_voice_id:
+        raise HTTPException(status_code=404, detail="Design a consistent OmniVoice voice first")
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    if settings is None or tts_provider_name(settings) != "omnivoice":
+        raise HTTPException(status_code=409, detail="Select OmniVoice in Audio Settings first")
+    sample = await get_omnivoice_voice_sample(
+        settings,
+        character.tts_voice_id,
+    )
+    return Response(
+        sample.audio_bytes,
+        media_type=sample.media_type,
+        # The character can be assigned a different provider voice later while
+        # retaining the same sample URL, so do not let browsers keep a stale clip.
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/api/books/{book_id}/audiobook/roster/share-series")
@@ -1116,7 +1219,7 @@ async def list_sentences(
     review_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ) -> SentenceListResponse:
-    await _get_audiobook_book_or_404(book_id, db)
+    book = await _get_audiobook_book_or_404(book_id, db)
     sentences, total = await crud.audiobook.get_sentences_paginated(
         db,
         book_id,
@@ -1125,8 +1228,21 @@ async def list_sentences(
         chapter_id=chapter_id,
         review_only=review_only,
     )
+    reading_blocks: dict[str, ReadingBlock] = {}
+    if chapter_id is not None:
+        chapter = await db.get(AudiobookChapter, chapter_id)
+        if chapter is not None and chapter.book_id == book_id:
+            reading_blocks = chapter_reading_blocks(book, chapter)
+    items = []
+    for sentence in sentences:
+        response = SentenceResponse.model_validate(sentence)
+        items.append(
+            response.model_copy(
+                update=_reading_block_fields(reading_blocks, sentence.html_element_id),
+            )
+        )
     return SentenceListResponse(
-        items=[SentenceResponse.model_validate(s) for s in sentences],
+        items=items,
         total=total,
         page=page,
         limit=limit,

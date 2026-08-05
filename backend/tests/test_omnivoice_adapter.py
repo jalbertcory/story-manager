@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
+import wave
 
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
 from services.omnivoice.prompt import translate_generation_prompt
+from services.omnivoice.voice_store import VoiceStore
 
 
 def test_translates_legacy_voice_profile_to_official_omnivoice_attributes():
@@ -56,3 +58,33 @@ def test_accepts_speech_like_audio_with_natural_variation():
     report = validate_generated_audio(samples.astype(np.float32), sampling_rate)
 
     assert report.has_stationary_mechanical_noise is False
+
+
+def test_voice_store_persists_reference_audio_and_metadata(tmp_path):
+    store = VoiceStore(tmp_path / "voices")
+    audio = np.linspace(-0.25, 0.25, 2400, dtype=np.float32)
+
+    created = store.create(
+        model="k2-fsa/OmniVoice",
+        instruct="female, low pitch, british accent",
+        ref_text="A reusable reference sentence.",
+        audio=audio,
+        sampling_rate=24000,
+    )
+
+    loaded = VoiceStore(tmp_path / "voices").get(created.id)
+    assert loaded == created
+    assert store.sample_path(created.id).is_file()
+    with wave.open(str(store.sample_path(created.id)), "rb") as sample:
+        assert sample.getframerate() == 24000
+        assert sample.getnchannels() == 1
+        assert sample.getnframes() == len(audio)
+
+
+def test_voice_store_rejects_untrusted_or_unknown_ids(tmp_path):
+    store = VoiceStore(tmp_path / "voices")
+
+    with pytest.raises(KeyError, match="Invalid"):
+        store.get("../../private")
+    with pytest.raises(KeyError, match="Unknown"):
+        store.get("omnivoice-00000000000000000000000000000000")
