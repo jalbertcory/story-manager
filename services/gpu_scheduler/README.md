@@ -15,33 +15,67 @@ The four services are:
 | OmniVoice | `ghcr.io/jalbertcory/story-manager-omnivoice:latest` | `8001` |
 | WhisperX | `ghcr.io/jalbertcory/story-manager-transcription:latest` | `8002` |
 
-Install Docker Desktop, enable its WSL 2 backend, and confirm NVIDIA GPU support works. Install `git` and `make` in
-the PowerShell/WSL environment where the commands will run. Then clone the project:
+Install Docker Desktop, enable its WSL 2 backend, and confirm NVIDIA GPU support works. Install Git, then clone the
+project:
 
 ```powershell
 git clone https://github.com/jalbertcory/story-manager.git
 cd story-manager
 ```
 
-Create the four services and start the controller:
+From the repository root, paste this entire block into PowerShell. It downloads and starts all four containers,
+installs the recommended Ollama model, prints their state, and opens the scheduler UI:
 
 ```powershell
-make managed-ai
-```
+$aiCompose = "services/gpu_scheduler/compose.windows.yaml"
 
-Open <http://127.0.0.1:8765> on the gaming PC. Select the weekly hours during which AI services may run, then enable
-the schedule. The controller starts in **observe-only** mode, so Ollama, OmniVoice, and WhisperX remain stopped until
-the schedule is enabled or **AI on · 2 hours** is selected.
-
-While Ollama is available, install the recommended model once:
-
-```powershell
+docker compose -f $aiCompose pull gpu-scheduler ollama omnivoice transcription
+docker compose -f $aiCompose up -d gpu-scheduler ollama omnivoice transcription
 docker exec story-manager-ollama ollama pull qwen3.5:9b
+docker compose -f $aiCompose ps -a
+
+Start-Process "http://127.0.0.1:8765"
 ```
 
-Confirm the controller and model-container state:
+The first starts of OmniVoice and WhisperX download model weights and can take several minutes. Their containers report
+healthy only after those models finish loading.
+
+In <http://127.0.0.1:8765>, select the weekly hours during which AI services may run, then enable the schedule. The
+controller starts in **observe-only** mode, so it does not change the model containers started by the setup block
+until scheduling is enabled. Once enabled, it reconciles them to the saved hours and may stop them immediately when
+the current time is outside the selected window. Select **AI on · 2 hours** when a temporary availability override is
+needed.
+
+Confirm the controller and model-container state at any time:
 
 ```powershell
+$aiCompose = "services/gpu_scheduler/compose.windows.yaml"
+docker compose -f $aiCompose ps -a
+
+curl.exe --fail http://127.0.0.1:8765/health
+curl.exe --fail http://127.0.0.1:11434/api/tags
+curl.exe --fail http://127.0.0.1:8001/health
+curl.exe --fail http://127.0.0.1:8002/health
+```
+
+If the Story Manager application runs on another computer, give the gaming PC a DHCP reservation and add these URLs
+under **Audio & AI Configuration**:
+
+| Capability | Gaming PC endpoint | Recommended model |
+|---|---|---|
+| LLM | `http://<GAMING-PC-IP>:11434` | `qwen3.5:9b` |
+| TTS | `http://<GAMING-PC-IP>:8001` | OmniVoice |
+| Speech-to-text | `http://<GAMING-PC-IP>:8002` | `large-v3` with language `en` |
+
+Allow inbound ports `11434`, `8001`, and `8002` only from the Story Manager host. The scheduler UI remains bound to
+gaming-PC localhost and should not be exposed to the LAN.
+
+### Make alternative
+
+In a PowerShell, WSL, or Unix-like environment that has Make installed, the equivalent schedule-respecting setup is:
+
+```bash
+make managed-ai
 make gpu-services-status
 ```
 
@@ -50,11 +84,18 @@ controller to apply the saved policy. It does not force the model containers on 
 hours. Running it again pulls updated controller and model images, preserves every model/configuration volume, and
 reapplies the saved policy.
 
+When `make managed-ai` creates Ollama for the first time, enable the schedule or select **AI on · 2 hours**, wait for
+Ollama to start, and install the recommended model once:
+
+```powershell
+docker exec story-manager-ollama ollama pull qwen3.5:9b
+```
+
 The example Compose project includes Ollama, OmniVoice, and WhisperX. Remove any services the gaming PC should not
 host.
 
-Give the PC a DHCP reservation, allow inbound ports `11434`, `8001`, and `8002` only from the Story Manager host, and
-add the gaming PC endpoints above the always-on fallbacks in **Audio & AI Configuration**.
+Add the gaming PC endpoints above the always-on fallbacks in **Audio & AI Configuration** when endpoint pools are in
+use.
 
 ## Managing other containers
 

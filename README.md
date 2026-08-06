@@ -185,7 +185,31 @@ Text-to-speech is a separate service from Ollama. Story Manager supports:
 The optional [GPU Availability Controller](services/gpu_scheduler/README.md) runs Ollama, OmniVoice, and WhisperX on
 a Windows gaming PC only during configured weekly active hours. Its local control panel starts and stops explicitly
 labeled model containers while Story Manager's ordered endpoint pools route work to an always-on fallback.
-Run `make managed-ai` on that host to create the labeled model containers without bypassing the saved schedule.
+
+For a first-time Windows setup, install Docker Desktop with its WSL 2 backend and NVIDIA GPU support, then clone this
+repository and paste the following block into PowerShell from the repository root:
+
+```powershell
+$aiCompose = "services/gpu_scheduler/compose.windows.yaml"
+
+docker compose -f $aiCompose pull gpu-scheduler ollama omnivoice transcription
+docker compose -f $aiCompose up -d gpu-scheduler ollama omnivoice transcription
+docker exec story-manager-ollama ollama pull qwen3.5:9b
+docker compose -f $aiCompose ps -a
+
+Start-Process "http://127.0.0.1:8765"
+```
+
+The four containers are the scheduler, Ollama, OmniVoice, and WhisperX. The model services start immediately for
+initial setup while the scheduler is in observe-only mode. In the control panel, select the weekly hours when the GPU
+may be used and enable the schedule. Enabling it gives the controller ownership of the model containers, so it may
+stop them immediately when the current time is outside the selected hours. Use **AI on · 2 hours** for a temporary
+override.
+
+In Story Manager's **Audio & AI Configuration**, add the gaming PC's LAN endpoints: Ollama on port `11434`,
+OmniVoice on port `8001`, and WhisperX on port `8002`. Keep these ports restricted to the trusted LAN. See the
+[GPU Availability Controller guide](services/gpu_scheduler/README.md) for health checks, endpoint examples, the
+`make managed-ai` alternative, and operational details.
 
 OmniVoice remains the recommended local option when you want generated voice characteristics instead of selecting
 from a fixed voice catalog. The character roster stores a provider-neutral voice profile plus an optional provider
