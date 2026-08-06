@@ -1,0 +1,70 @@
+name: story-manager-ai
+
+services:
+  gpu-scheduler:
+    image: ghcr.io/jalbertcory/story-manager-gpu-scheduler:latest
+    build:
+      context: ../..
+      dockerfile: services/gpu_scheduler/Dockerfile
+    container_name: story-manager-gpu-scheduler
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      SCHEDULER_TIMEZONE: America/New_York
+    volumes:
+      - gpu-scheduler-data:/data
+      # Docker Desktop exposes the Linux VM's Engine socket through this path.
+      - /var/run/docker.sock.raw:/var/run/docker.sock
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: story-manager-ollama
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    labels:
+      story-manager.gpu-scheduler.managed: "true"
+      story-manager.gpu-scheduler.order: "10"
+
+  omnivoice:
+    image: ghcr.io/jalbertcory/story-manager-omnivoice:latest
+    container_name: story-manager-omnivoice
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8001:8001"
+    environment:
+      OMNIVOICE_DEVICE: auto
+      OMNIVOICE_NUM_STEPS: "16"
+    volumes:
+      - omnivoice-models:/models
+    labels:
+      story-manager.gpu-scheduler.managed: "true"
+      story-manager.gpu-scheduler.order: "20"
+
+  transcription:
+    image: ghcr.io/jalbertcory/story-manager-transcription:latest
+    container_name: story-manager-transcription
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8002:8002"
+    environment:
+      WHISPER_MODEL: large-v3
+      WHISPER_DEVICE: auto
+      WHISPER_COMPUTE_TYPE: auto
+    volumes:
+      - whisper-models:/models
+    labels:
+      story-manager.gpu-scheduler.managed: "true"
+      story-manager.gpu-scheduler.order: "30"
+
+volumes:
+  gpu-scheduler-data:
+  ollama-models:
+  omnivoice-models:
+  whisper-models:

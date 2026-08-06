@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>GPU Availability</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Story Manager</p>
+          <h1>GPU Availability</h1>
+          <p class="subtitle">Your gaming PC lends its GPU on your terms.</p>
+        </div>
+        <div id="status-pill" class="status-pill neutral"><span></span> Loading</div>
+      </header>
+
+      <section id="error-banner" class="error-banner hidden" role="alert"></section>
+
+      <section class="overview-grid" aria-label="Current status">
+        <article class="metric-card">
+          <span class="metric-label">Policy</span>
+          <strong id="policy-value">—</strong>
+          <small id="policy-detail">Waiting for controller</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Next change</span>
+          <strong id="next-value">—</strong>
+          <small id="next-detail">No transition calculated</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Managed services</span>
+          <strong id="container-count">—</strong>
+          <small id="container-detail">Looking for labeled containers</small>
+        </article>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel schedule-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">Automatic control</p>
+              <h2>Active hours</h2>
+            </div>
+            <label class="switch">
+              <input id="enabled" type="checkbox" />
+              <span class="switch-track"><span></span></span>
+              <span>Enabled</span>
+            </label>
+          </div>
+          <p class="panel-copy">GPU services run inside these windows and stop outside them. Equal start and end times mean all day.</p>
+
+          <div class="field-row">
+            <label>
+              <span>Timezone</span>
+              <input id="timezone" type="text" autocomplete="off" placeholder="America/New_York" />
+            </label>
+            <label>
+              <span>Graceful stop timeout</span>
+              <div class="input-suffix"><input id="stop-timeout" type="number" min="1" max="120" /><span>sec</span></div>
+            </label>
+          </div>
+
+          <div id="schedule" class="schedule" aria-label="Weekly active hours"></div>
+          <div class="form-actions">
+            <span id="save-message" role="status"></span>
+            <button id="save-button" class="primary-button" type="button">Save schedule</button>
+          </div>
+        </section>
+
+        <aside class="side-column">
+          <section class="panel">
+            <p class="section-kicker">Temporary mode</p>
+            <h2>Override</h2>
+            <p class="panel-copy">Overrides are optional and automatically return to the weekly schedule.</p>
+            <div class="override-buttons">
+              <button type="button" data-override="unavailable" data-minutes="120">Gaming · 2 hours</button>
+              <button type="button" data-override="unavailable" data-minutes="240">Gaming · 4 hours</button>
+              <button type="button" data-override="available" data-minutes="120">AI on · 2 hours</button>
+              <button type="button" data-override="automatic">Return to schedule</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading compact">
+              <div>
+                <p class="section-kicker">Docker</p>
+                <h2>Services</h2>
+              </div>
+              <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh now">↻</button>
+            </div>
+            <div id="containers" class="containers"></div>
+            <p id="label-hint" class="label-hint"></p>
+          </section>
+        </aside>
+      </div>
+
+      <footer>Runs locally. Only explicitly labeled containers are controlled.</footer>
+    </main>
+  </body>
+</html>
