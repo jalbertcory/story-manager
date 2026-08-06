@@ -1,24 +1,24 @@
-name: OmniVoice image
+name: GPU scheduler image
 
 on:
   push:
     branches:
       - main
     paths:
-      - services/omnivoice/**
+      - services/gpu_scheduler/**
       - services/__init__.py
-      - .github/workflows/omnivoice-image.yml
+      - .github/workflows/gpu-scheduler-image.yml
   pull_request:
     branches:
       - main
     paths:
-      - services/omnivoice/**
+      - services/gpu_scheduler/**
       - services/__init__.py
-      - .github/workflows/omnivoice-image.yml
+      - .github/workflows/gpu-scheduler-image.yml
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-omnivoice
+  IMAGE_NAME: ${{ github.repository }}-gpu-scheduler
 
 jobs:
   build:
@@ -53,10 +53,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/omnivoice/Dockerfile
+          file: services/gpu_scheduler/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=omnivoice
-          cache-to: type=gha,mode=max,scope=omnivoice
+          cache-from: type=gha,scope=gpu-scheduler
+          cache-to: type=gha,mode=max,scope=gpu-scheduler

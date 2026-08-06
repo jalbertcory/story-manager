@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-transcription run-transcription build-transcription-image pull-ollama-model run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -6,6 +6,11 @@ OMNIVOICE_PORT ?= 8001
 TRANSCRIPTION_PORT ?= 8002
 WHISPER_LANGUAGE ?= en
 WHISPER_MODEL_CACHE ?= .run/models/whisperx
+GPU_SCHEDULER_COMPOSE_FILE ?= services/gpu_scheduler/compose.windows.yaml
+GPU_SCHEDULER_URL ?= http://127.0.0.1:8765
+GPU_SCHEDULER_BUILD ?=
+MANAGED_AI_SERVICES ?= ollama omnivoice transcription
+GPU_COMPOSE = docker compose -f $(GPU_SCHEDULER_COMPOSE_FILE)
 
 help:
 	@echo "Story Manager commands:"
@@ -21,6 +26,10 @@ help:
 	@echo "  make run-transcription Run the local WhisperX timestamp service"
 	@echo "  make build-transcription-image Build the production WhisperX image"
 	@echo "  make pull-ollama-model Pull the recommended local audiobook LLM"
+	@echo "  make run-gpu-scheduler Start the GPU availability control panel"
+	@echo "  make managed-ai       Create model containers for control by the scheduler"
+	@echo "  make gpu-services-status Show scheduler and managed-container state"
+	@echo "  make test-gpu-scheduler Run scheduler unit tests"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
@@ -64,6 +73,38 @@ build-transcription-image:
 
 pull-ollama-model:
 	ollama pull qwen3.5:9b
+
+run-gpu-scheduler:
+	@if [ -z "$(GPU_SCHEDULER_BUILD)" ]; then \
+		$(GPU_COMPOSE) pull gpu-scheduler; \
+	fi
+	$(GPU_COMPOSE) up -d $(GPU_SCHEDULER_BUILD) gpu-scheduler
+	@until curl --silent --show-error --fail --max-time 3 $(GPU_SCHEDULER_URL)/health >/dev/null 2>&1; do \
+		printf "."; \
+		sleep 1; \
+	done; \
+	echo " GPU scheduler is ready at $(GPU_SCHEDULER_URL)."
+
+managed-ai: run-gpu-scheduler
+	$(GPU_COMPOSE) pull $(MANAGED_AI_SERVICES)
+	$(GPU_COMPOSE) create $(MANAGED_AI_SERVICES)
+	@curl --silent --show-error --fail \
+		-X POST $(GPU_SCHEDULER_URL)/api/reconcile >/dev/null
+	@echo "Managed AI containers are registered. Their desired state is controlled at $(GPU_SCHEDULER_URL)."
+
+gpu-services-status:
+	@$(GPU_COMPOSE) ps -a
+	@printf '\nScheduler state:\n'
+	@if command -v jq >/dev/null 2>&1; then \
+		curl --silent --show-error --fail $(GPU_SCHEDULER_URL)/api/state | \
+			jq '{policy_source, desired_available, containers, last_error}'; \
+	else \
+		curl --silent --show-error --fail $(GPU_SCHEDULER_URL)/api/state; \
+		printf '\n'; \
+	fi
+
+test-gpu-scheduler:
+	PYTHONPATH=. uv run --project services/gpu_scheduler pytest services/gpu_scheduler/tests
 
 run-ui:
 	cd frontend && npm run dev

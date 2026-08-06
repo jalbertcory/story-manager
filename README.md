@@ -180,6 +180,13 @@ Text-to-speech is a separate service from Ollama. Story Manager supports:
 - OpenAI's speech API.
 - ElevenLabs' text-to-speech API.
 
+### Sometimes-available gaming PC
+
+The optional [GPU Availability Controller](services/gpu_scheduler/README.md) runs Ollama, OmniVoice, and WhisperX on
+a Windows gaming PC only during configured weekly active hours. Its local control panel starts and stops explicitly
+labeled model containers while Story Manager's ordered endpoint pools route work to an always-on fallback.
+Run `make managed-ai` on that host to create the labeled model containers without bypassing the saved schedule.
+
 OmniVoice remains the recommended local option when you want generated voice characteristics instead of selecting
 from a fixed voice catalog. The character roster stores a provider-neutral voice profile plus an optional provider
 voice ID, so changing providers does not require rebuilding character identity or speaker assignments.
