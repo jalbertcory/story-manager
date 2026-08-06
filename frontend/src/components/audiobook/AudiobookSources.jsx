@@ -30,6 +30,36 @@ function importedAtLabel(createdAt) {
   }).format(date)}`;
 }
 
+const AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".m4b",
+  ".mp3",
+  ".mp4",
+  ".ogg",
+  ".opus",
+  ".wav",
+]);
+const IMPORT_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ".cue", ".zip"]);
+
+function extension(file) {
+  const index = file.name.lastIndexOf(".");
+  return index < 0 ? "" : file.name.slice(index).toLowerCase();
+}
+
+function selectAudiobookFiles(selectedFiles) {
+  const supported = selectedFiles.filter((file) =>
+    IMPORT_EXTENSIONS.has(extension(file)),
+  );
+  const hasM4b = supported.some((file) => extension(file) === ".m4b");
+  if (!hasM4b) return supported;
+  return supported.filter(
+    (file) =>
+      !AUDIO_EXTENSIONS.has(extension(file)) || extension(file) === ".m4b",
+  );
+}
+
 function AudiobookSources({
   bookId,
   chapters = [],
@@ -40,8 +70,11 @@ function AudiobookSources({
 }) {
   const queryClient = useQueryClient();
   const inputRef = useRef(null);
+  const directoryInputRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [name, setName] = useState("");
+  const [autoAlign, setAutoAlign] = useState(true);
+  const [ignoredFileCount, setIgnoredFileCount] = useState(0);
   const [jobNotice, setJobNotice] = useState("");
   const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
 
@@ -51,15 +84,23 @@ function AudiobookSources({
     queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
   };
   const uploadMutation = useMutation({
-    mutationFn: () => uploadImportedAudiobook(bookId, files, name),
+    mutationFn: () => uploadImportedAudiobook(bookId, files, name, autoAlign),
     onSuccess: () => {
       setJobNotice("Human audiobook import and matching queued.");
       setFiles([]);
       setName("");
+      setIgnoredFileCount(0);
       if (inputRef.current) inputRef.current.value = "";
+      if (directoryInputRef.current) directoryInputRef.current.value = "";
       invalidate();
     },
   });
+  const chooseFiles = (selectedFiles) => {
+    const selected = Array.from(selectedFiles || []);
+    const usable = selectAudiobookFiles(selected);
+    setFiles(usable);
+    setIgnoredFileCount(selected.length - usable.length);
+  };
   const retryMutation = useMutation({
     mutationFn: retryImportedAudiobook,
     onSuccess: () => {
@@ -108,9 +149,9 @@ function AudiobookSources({
           <span className="metric-label">Human narration</span>
           <h3>Import an audiobook</h3>
           <p>
-            Upload a Libation ZIP unchanged, or select M4B, MP3, M4A, and CUE
-            files together. CUE and embedded chapter titles are matched against
-            this book automatically.
+            Select a Libation book folder unchanged, upload its ZIP, or choose
+            M4B, MP3, M4A, and CUE files together. Story Manager prefers the
+            chapter-capable M4B when Libation also created a duplicate MP3.
           </p>
         </div>
         <label>
@@ -122,13 +163,24 @@ function AudiobookSources({
           />
         </label>
         <label>
-          Audiobook file or files
+          Libation book directory
+          <input
+            ref={directoryInputRef}
+            type="file"
+            multiple
+            webkitdirectory=""
+            directory=""
+            onChange={(event) => chooseFiles(event.target.files)}
+          />
+        </label>
+        <label>
+          Or audiobook file / ZIP
           <input
             ref={inputRef}
             type="file"
             multiple
             accept=".zip,.cue,.m4b,.m4a,.mp3,.mp4,.aac,.flac,.ogg,.opus,.wav,audio/*"
-            onChange={(event) => setFiles(Array.from(event.target.files || []))}
+            onChange={(event) => chooseFiles(event.target.files)}
           />
         </label>
         {files.length > 0 && (
@@ -136,6 +188,20 @@ function AudiobookSources({
             {files.map((file) => file.name).join(", ")}
           </p>
         )}
+        {ignoredFileCount > 0 && (
+          <p className="hint">
+            Ignored {ignoredFileCount} duplicate or non-audio{" "}
+            {ignoredFileCount === 1 ? "file" : "files"}.
+          </p>
+        )}
+        <label>
+          <input
+            type="checkbox"
+            checked={autoAlign}
+            onChange={(event) => setAutoAlign(event.target.checked)}
+          />{" "}
+          Improve sentence timestamps with Whisper after matching
+        </label>
         <button
           type="button"
           className="btn-primary"

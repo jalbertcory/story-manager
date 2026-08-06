@@ -262,6 +262,95 @@ describe("AudiobookPipeline", () => {
     ).toBeInTheDocument();
   });
 
+  it("uploads a Libation directory without its duplicate MP3 and enables Whisper alignment", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (
+        url === "/api/books/11/audiobook/imports" &&
+        options?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: 20, status: "queued" }),
+        });
+      }
+      if (
+        url === "/api/books/11/audiobook/status" ||
+        url === "/api/books/11/audiobook/characters" ||
+        url === "/api/books/11/audiobook/chapters" ||
+        url === "/api/books/11/audiobook/imports"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              url.endsWith("/status") ? { pipeline_status: "complete" } : [],
+            ),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+    const makeFile = (name, relativePath) => {
+      const file = new File(["audio"], name);
+      Object.defineProperty(file, "webkitRelativePath", {
+        value: relativePath,
+      });
+      return file;
+    };
+    const m4b = makeFile(
+      "Dungeon Crawler Carl [B08V8B2CGV].m4b",
+      "Dungeon Crawler Carl [B08V8B2CGV]/Dungeon Crawler Carl [B08V8B2CGV].m4b",
+    );
+    const mp3 = makeFile(
+      "Dungeon Crawler Carl [B08V8B2CGV].mp3",
+      "Dungeon Crawler Carl [B08V8B2CGV]/Dungeon Crawler Carl [B08V8B2CGV].mp3",
+    );
+    const cue = makeFile(
+      "Dungeon Crawler Carl [B08V8B2CGV].cue",
+      "Dungeon Crawler Carl [B08V8B2CGV]/Dungeon Crawler Carl [B08V8B2CGV].cue",
+    );
+    const cover = makeFile(
+      "cover.jpg",
+      "Dungeon Crawler Carl [B08V8B2CGV]/cover.jpg",
+    );
+
+    renderWithClient(
+      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Libation book directory"), {
+      target: { files: [m4b, mp3, cue, cover] },
+    });
+    expect(
+      screen.getByText("Ignored 2 duplicate or non-audio files."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Improve sentence timestamps with Whisper after matching",
+      }),
+    ).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Upload & Match" }));
+
+    await waitFor(() => {
+      const uploadCall = fetchMock.mock.calls.find(
+        ([url, options]) =>
+          url === "/api/books/11/audiobook/imports" &&
+          options?.method === "POST",
+      );
+      expect(uploadCall).toBeDefined();
+      const body = uploadCall[1].body;
+      expect(body.getAll("files").map((file) => file.name)).toEqual([
+        m4b.name,
+        cue.name,
+      ]);
+      expect(body.getAll("source_paths")).toEqual([
+        m4b.webkitRelativePath,
+        cue.webkitRelativePath,
+      ]);
+      expect(body.get("auto_align")).toBe("true");
+    });
+  });
+
   it("shows model progress and can run exactly one diarization batch", async () => {
     const fetchMock = vi.fn((url, options) => {
       if (url === "/api/books/11/audiobook/status") {

@@ -510,19 +510,22 @@ async def upload_imported_audiobook(
     book_id: int,
     files: list[UploadFile] = File(...),
     name: Optional[str] = Form(None),
+    source_paths: list[str] = Form(default=[]),
+    auto_align: bool = Form(default=True),
     db: AsyncSession = Depends(get_db),
 ) -> ImportedAudiobookResponse:
     await _get_book_or_404(book_id, db)
     filenames = [file.filename or "" for file in files]
+    display_names = source_paths if len(source_paths) == len(files) else filenames
     if not files or any(Path(filename).suffix.lower() not in IMPORT_EXTENSIONS for filename in filenames):
         supported = ", ".join(sorted(IMPORT_EXTENSIONS))
         raise HTTPException(status_code=400, detail=f"Upload audiobook audio, CUE, or ZIP files ({supported}).")
     edition = ImportedAudiobook(
         book_id=book_id,
-        name=(name or "").strip() or display_name_from_filename(filenames[0]),
-        asin=asin_from_names(filenames),
+        name=(name or "").strip() or display_name_from_filename(display_names[0]),
+        asin=asin_from_names(display_names),
         status="queued",
-        original_filenames=filenames,
+        original_filenames=display_names,
         progress_detail="Receiving upload",
     )
     db.add(edition)
@@ -546,6 +549,7 @@ async def upload_imported_audiobook(
             book_id=book_id,
             target_type="imported_audiobook",
             target_id=edition.id,
+            payload={"auto_align": auto_align},
             dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
             progress_detail="Queued after audiobook upload",
         )

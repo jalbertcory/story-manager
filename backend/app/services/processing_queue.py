@@ -8,12 +8,12 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..database import SessionLocal
-from ..models import Book, ImportedAudiobook, ProcessingJob
+from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
 from .audiobook_alignment import process_alignment
 from .audiobook_import import process_import, rematch_imported_audiobook
 from .audiobook_queue import get_audiobook_queue
@@ -22,6 +22,7 @@ from .audiobook_assembly import assemble_chapter_preview
 from .audiobook_tts import generate_audio_for_chapter_preview
 from .cover_processing import reextract_book_cover
 from .metadata_jobs import process_metadata_sync_job
+from .transcription_providers import transcription_provider_name
 from .update_scheduler import run_web_novel_update
 from .web_novel import run_book_refresh
 
@@ -178,6 +179,31 @@ class ProcessingQueue:
                 edition = await db.get(ImportedAudiobook, target_id)
                 if edition is not None and edition.status == "error":
                     raise RuntimeError(edition.error or "Human audiobook import failed.")
+                settings = await crud.audiobook.get_audiobook_settings(db)
+                matched_count = await db.scalar(
+                    select(func.count(ImportedAudiobookTrack.id)).where(
+                        ImportedAudiobookTrack.imported_audiobook_id == target_id,
+                        ImportedAudiobookTrack.matched_chapter_id.is_not(None),
+                    )
+                )
+            if (
+                payload.get("auto_align", True)
+                and edition is not None
+                and matched_count
+                and transcription_provider_name(settings) != "none"
+            ):
+                child = await queue_processing_job(
+                    job_type="align_imported_audiobook",
+                    book_id=job.book_id,
+                    target_type="imported_audiobook",
+                    target_id=target_id,
+                    target_content_version=edition.matched_content_version,
+                    parent_job_id=job.id,
+                    dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
+                    progress_detail="Queued automatically after audiobook import",
+                )
+                await self.enqueue(child.id)
+                return "Human audiobook import completed; timestamp alignment queued"
             return "Human audiobook import completed"
         if job.job_type == "rematch_imported_audiobook":
             target_id = _required_target(job)

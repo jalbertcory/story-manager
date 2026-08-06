@@ -6,9 +6,103 @@ import pytest
 from sqlalchemy import select
 
 from backend.app import crud
-from backend.app.models import Book, ImportedAudiobook, ProcessingJob, SourceType
+from backend.app.models import (
+    AudiobookChapter,
+    AudiobookSettings,
+    Book,
+    ImportedAudiobook,
+    ImportedAudiobookTrack,
+    ProcessingJob,
+    SourceType,
+)
 from backend.app.services import processing_queue as processing_queue_module
 from backend.app.services.processing_queue import ProcessingQueue, queue_audio_reconciliation
+
+
+@pytest.mark.asyncio
+async def test_audiobook_import_automatically_queues_whisper_alignment(
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    async with sqlite_sessionmaker() as db:
+        book = Book(
+            title="Auto Align",
+            author="Narrator",
+            source_type=SourceType.epub,
+            immutable_path="library/auto-align-immutable.epub",
+            current_path="library/auto-align.epub",
+            content_version=1,
+        )
+        db.add(book)
+        await db.flush()
+        chapter = AudiobookChapter(
+            book_id=book.id,
+            chapter_number=1,
+            title="Chapter 1",
+            stable_chapter_key="auto-align-chapter",
+            spine_order=0,
+        )
+        edition = ImportedAudiobook(
+            book_id=book.id,
+            name="Human narration",
+            status="queued",
+        )
+        db.add_all([chapter, edition])
+        await db.flush()
+        db.add(
+            AudiobookSettings(
+                transcription_provider="whisperx",
+                transcription_base_url="http://whisper:8002",
+            )
+        )
+        job = ProcessingJob(
+            job_type="import_audiobook",
+            status="running",
+            book_id=book.id,
+            target_type="imported_audiobook",
+            target_id=edition.id,
+            payload={"auto_align": True},
+            dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
+        )
+        db.add(job)
+        await db.commit()
+
+    async def fake_import(edition_id, db):
+        selected = await db.get(ImportedAudiobook, edition_id)
+        selected.status = "ready"
+        selected.matched_content_version = 1
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=edition_id,
+                matched_chapter_id=chapter.id,
+                sequence_order=1,
+                title="Chapter 1",
+                audio_file_path="library/audio.m4b",
+                media_type="audio/mp4",
+                source_start_ms=0,
+                source_end_ms=10_000,
+                duration_ms=10_000,
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "process_import", fake_import)
+    queue = ProcessingQueue()
+
+    detail = await queue._execute(job)
+
+    assert detail.endswith("timestamp alignment queued")
+    async with sqlite_sessionmaker() as db:
+        alignment_job = (
+            await db.execute(
+                select(ProcessingJob).where(
+                    ProcessingJob.job_type == "align_imported_audiobook",
+                    ProcessingJob.target_id == edition.id,
+                )
+            )
+        ).scalar_one()
+        assert alignment_job.parent_job_id == job.id
 
 
 @pytest.mark.asyncio
