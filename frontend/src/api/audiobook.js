@@ -163,10 +163,19 @@ export function getImportedAudiobooks(bookId) {
   );
 }
 
-export function uploadImportedAudiobook(bookId, files, name = "") {
+export function uploadImportedAudiobook(
+  bookId,
+  files,
+  name = "",
+  autoAlign = true,
+) {
   const body = new FormData();
-  files.forEach((file) => body.append("files", file));
+  files.forEach((file) => {
+    body.append("files", file);
+    body.append("source_paths", file.webkitRelativePath || file.name);
+  });
   if (name.trim()) body.append("name", name.trim());
+  body.append("auto_align", String(autoAlign));
   return sendForm(`/api/books/${bookId}/audiobook/imports`, body, {
     fallbackMessage: "Failed to upload audiobook",
   });

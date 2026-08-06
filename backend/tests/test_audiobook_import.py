@@ -228,6 +228,23 @@ def test_prepare_sources_reuses_extracted_files_on_retry(tmp_path, monkeypatch):
     assert cue_paths == [extracted_cue]
 
 
+def test_prepare_sources_prefers_m4b_from_unzipped_libation_folder(tmp_path):
+    edition_dir = tmp_path / "edition"
+    incoming_dir = edition_dir / "incoming"
+    incoming_dir.mkdir(parents=True)
+    (incoming_dir / "Book [B012345678].m4b").write_bytes(b"m4b")
+    (incoming_dir / "Book [B012345678].mp3").write_bytes(b"mp3")
+    (incoming_dir / "Book [B012345678].cue").write_text(
+        'TITLE "Book"\n',
+        encoding="utf-8",
+    )
+
+    audio_paths, cue_paths = audiobook_import._prepare_sources(edition_dir)
+
+    assert [path.suffix for path in audio_paths] == [".m4b"]
+    assert [path.suffix for path in cue_paths] == [".cue"]
+
+
 @pytest.mark.asyncio
 async def test_upload_endpoint_streams_large_format_to_staging(
     app_client,
@@ -252,6 +269,10 @@ async def test_upload_endpoint_streams_large_format_to_staging(
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",
         files={"files": ("Import Test [B012345678].m4b", b"not-buffered-by-the-handler", "audio/mp4")},
+        data={
+            "source_paths": "Import Test [B012345678]/Import Test.m4b",
+            "auto_align": "true",
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -261,6 +282,16 @@ async def test_upload_endpoint_streams_large_format_to_staging(
     assert (
         tmp_path / str(book_id) / str(payload["id"]) / "incoming" / "Import Test [B012345678].m4b"
     ).read_bytes() == b"not-buffered-by-the-handler"
+    async with sqlite_sessionmaker() as db:
+        job = (
+            await db.execute(
+                select(ProcessingJob).where(
+                    ProcessingJob.job_type == "import_audiobook",
+                    ProcessingJob.target_id == payload["id"],
+                )
+            )
+        ).scalar_one()
+        assert job.payload == {"auto_align": True}
 
 
 @pytest.mark.asyncio

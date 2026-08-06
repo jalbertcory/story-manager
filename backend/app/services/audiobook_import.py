@@ -136,11 +136,7 @@ def _extract_archive_sources(archive_path: Path, source_dir: Path) -> tuple[list
         if not audio_entries:
             raise ValueError(f"{archive_path.name} contains no supported audio files.")
 
-        # Libation commonly includes both M4B and MP3 renditions of the same
-        # recording. Prefer the smaller, chapter-capable M4B instead of
-        # importing two duplicate thirteen-hour editions.
-        m4b_entries = [entry for entry in audio_entries if Path(entry.filename).suffix.lower() == ".m4b"]
-        selected_audio = m4b_entries or audio_entries
+        selected_audio = _preferred_audio_files(audio_entries, lambda entry: Path(entry.filename))
         audio_paths: list[Path] = []
         cue_paths: list[Path] = []
         for entry in selected_audio:
@@ -152,6 +148,12 @@ def _extract_archive_sources(archive_path: Path, source_dir: Path) -> tuple[list
             _copy_zip_entry(archive, entry, destination)
             cue_paths.append(destination)
         return audio_paths, cue_paths
+
+
+def _preferred_audio_files(items: list, path_for_item=lambda item: item) -> list:
+    """Discard Libation's duplicate MP3 rendition when an M4B is present."""
+    m4b_items = [item for item in items if path_for_item(item).suffix.lower() == ".m4b"]
+    return m4b_items or items
 
 
 def _prepare_sources(edition_dir: Path) -> tuple[list[Path], list[Path]]:
@@ -180,6 +182,7 @@ def _prepare_sources(edition_dir: Path) -> tuple[list[Path], list[Path]]:
             destination = _unique_destination(source_dir, incoming.name)
             incoming.replace(destination)
             cue_paths.append(destination)
+    audio_paths = _preferred_audio_files(audio_paths)
     if not audio_paths:
         raise ValueError("No supported audiobook audio was uploaded.")
     return audio_paths, cue_paths
