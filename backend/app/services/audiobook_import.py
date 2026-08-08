@@ -33,7 +33,7 @@ AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".mp4", ".ogg", ".o
 IMPORT_EXTENSIONS = AUDIO_EXTENSIONS | {".cue", ".zip"}
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
-_ASIN_RE = re.compile(r"\[(B[0-9A-Z]{9})\]", re.IGNORECASE)
+_ASIN_RE = re.compile(r"\[((?:B[0-9A-Z]{9})|(?:[0-9]{9}[0-9X]))\]", re.IGNORECASE)
 _CUE_TRACK_RE = re.compile(r"^\s*TRACK\s+(\d+)\s+AUDIO\s*$", re.IGNORECASE)
 _CUE_TITLE_RE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$', re.IGNORECASE)
 _CUE_INDEX_RE = re.compile(r"^\s*INDEX\s+01\s+(\d+):(\d+):(\d+)\s*$", re.IGNORECASE)
@@ -70,11 +70,79 @@ def safe_import_filename(raw_name: str, fallback: str = "audiobook") -> str:
 
 
 def asin_from_names(names: list[str]) -> str | None:
+    """Return the Audible ASIN or ISBN-10 embedded in a Libation name."""
     for name in names:
         match = _ASIN_RE.search(name)
         if match:
             return match.group(1).upper()
     return None
+
+
+@dataclass(frozen=True)
+class LibationBackupGroup:
+    """Supported files belonging to one Libation book directory."""
+
+    source_key: str
+    folder_name: str
+    title: str
+    product_id: str
+    source_paths: tuple[str, ...]
+
+
+def libation_backup_groups(source_paths: list[str]) -> tuple[list[LibationBackupGroup], int]:
+    """Group a browser directory manifest by its ``Title [product-id]`` folder."""
+    grouped: dict[str, dict[str, object]] = {}
+    ignored_count = 0
+    for raw_path in source_paths:
+        normalized_path = (raw_path or "").replace("\\", "/").strip("/")
+        path = PurePosixPath(normalized_path)
+        if not normalized_path or path.suffix.lower() not in IMPORT_EXTENSIONS:
+            ignored_count += 1
+            continue
+
+        folder_index = None
+        folder_match = None
+        for index, part in enumerate(path.parts):
+            match = _ASIN_RE.search(part)
+            if match:
+                folder_index = index
+                folder_match = match
+                break
+        if folder_index is None or folder_match is None:
+            ignored_count += 1
+            continue
+
+        folder_name = path.parts[folder_index]
+        # A ZIP can itself be named like a Libation folder. Remove the archive
+        # extension for the user-facing title and stable grouping key.
+        if folder_index == len(path.parts) - 1 and path.suffix.lower() == ".zip":
+            folder_name = Path(folder_name).stem
+        product_id = folder_match.group(1).upper()
+        title = _ASIN_RE.sub("", folder_name).strip(" ._-") or "Untitled audiobook"
+        source_key = "/".join((*path.parts[:folder_index], folder_name))
+        entry = grouped.setdefault(
+            source_key,
+            {
+                "folder_name": folder_name,
+                "title": title,
+                "product_id": product_id,
+                "source_paths": [],
+            },
+        )
+        entry["source_paths"].append(normalized_path)
+
+    groups = [
+        LibationBackupGroup(
+            source_key=source_key,
+            folder_name=str(entry["folder_name"]),
+            title=str(entry["title"]),
+            product_id=str(entry["product_id"]),
+            source_paths=tuple(entry["source_paths"]),
+        )
+        for source_key, entry in grouped.items()
+    ]
+    groups.sort(key=lambda group: group.title.casefold())
+    return groups, ignored_count
 
 
 def display_name_from_filename(filename: str) -> str:

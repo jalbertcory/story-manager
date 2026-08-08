@@ -9,11 +9,13 @@ import {
   rejectMetadataMatch,
 } from "../api/metadata";
 import ReaderKeys from "./ReaderKeys.jsx";
+import LibationBackupImport from "./LibationBackupImport.jsx";
 
 const utilityTabs = [
   { key: "audit", label: "Audit" },
   { key: "series", label: "Series Detection" },
   { key: "metadata", label: "Metadata" },
+  { key: "audiobooks", label: "Audiobooks" },
   { key: "storage", label: "Storage" },
   { key: "reader-access", label: "Reader Access" },
 ];
@@ -446,6 +448,8 @@ function Utilities({ onBack }) {
         )}
           </section>
         )}
+
+        {activeTab === "audiobooks" && <LibationBackupImport />}
 
         {activeTab === "storage" && (
           <section className="settings-section">

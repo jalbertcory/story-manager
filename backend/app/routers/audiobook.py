@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from ..services.audiobook_import import (
     asin_from_names,
     display_name_from_filename,
     imported_audiobook_dir,
+    libation_backup_groups,
     rematch_track,
     safe_import_filename,
     stream_upload_to_path,
@@ -45,6 +47,7 @@ from ..services.transcription_providers import (
     transcription_service_health,
 )
 from ..services.endpoint_pool import configured_endpoints, primary_provider
+from ..services.metadata.scoring import normalize_text
 from ..services.tts_providers import (
     TTSRequest,
     design_omnivoice_voice,
@@ -338,6 +341,34 @@ class ImportedTrackMatchUpdate(BaseModel):
     chapter_id: Optional[int] = None
 
 
+class LibationBackupPreviewRequest(BaseModel):
+    source_paths: list[str] = Field(min_length=1, max_length=50_000)
+
+
+class LibationBackupMatchResponse(BaseModel):
+    source_key: str
+    folder_name: str
+    source_title: str
+    product_id: str
+    file_count: int
+    status: str
+    match_method: Optional[str] = None
+    book_id: Optional[int] = None
+    book_title: Optional[str] = None
+    book_author: Optional[str] = None
+    existing_edition_id: Optional[int] = None
+    detail: Optional[str] = None
+
+
+class LibationBackupPreviewResponse(BaseModel):
+    groups: list[LibationBackupMatchResponse]
+    matched_count: int
+    unmatched_count: int
+    ambiguous_count: int
+    already_imported_count: int
+    ignored_file_count: int
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -471,9 +502,119 @@ async def _get_imported_track_or_404(
     return edition, track
 
 
+def _normalized_identifier(value: Any) -> str:
+    return re.sub(r"[^0-9a-z]", "", str(value).casefold())
+
+
+def _book_identifier_values(book: Book) -> set[str]:
+    values: set[str] = set()
+    for value in (book.metadata_remote_ids or {}).values():
+        candidates = value if isinstance(value, list) else [value]
+        for candidate in candidates:
+            if isinstance(candidate, (str, int)) and (normalized := _normalized_identifier(candidate)):
+                values.add(normalized)
+    return values
+
+
+def _single_book_match(candidates: list[Book]) -> tuple[Book | None, bool]:
+    unique = {book.id: book for book in candidates}
+    if len(unique) == 1:
+        return next(iter(unique.values())), False
+    return None, len(unique) > 1
+
+
 # ---------------------------------------------------------------------------
 # Human-narrated audiobook imports
 # ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/api/audiobook/libation-backup/preview",
+    response_model=LibationBackupPreviewResponse,
+)
+async def preview_libation_backup(
+    request: LibationBackupPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> LibationBackupPreviewResponse:
+    """Match a path-only Libation backup manifest before any audio is uploaded."""
+    groups, ignored_file_count = libation_backup_groups(request.source_paths)
+    books = list((await db.execute(select(Book).order_by(Book.title, Book.id))).scalars().all())
+    imports = list((await db.execute(select(ImportedAudiobook))).scalars().all())
+    imports_by_book_and_id = {
+        (edition.book_id, _normalized_identifier(edition.asin)): edition for edition in imports if edition.asin
+    }
+    books_by_identifier: dict[str, list[Book]] = {}
+    books_by_title: dict[str, list[Book]] = {}
+    for book in books:
+        for identifier in _book_identifier_values(book):
+            books_by_identifier.setdefault(identifier, []).append(book)
+        books_by_title.setdefault(normalize_text(book.title or ""), []).append(book)
+
+    matches: list[LibationBackupMatchResponse] = []
+    for group in groups:
+        normalized_id = _normalized_identifier(group.product_id)
+        identifier_candidates = books_by_identifier.get(normalized_id, [])
+        matched_book, ambiguous = _single_book_match(identifier_candidates)
+        match_method = "identifier" if matched_book else None
+        if not identifier_candidates:
+            title_candidates = books_by_title.get(normalize_text(group.title), [])
+            matched_book, ambiguous = _single_book_match(title_candidates)
+            match_method = "title" if matched_book else None
+
+        if ambiguous:
+            matches.append(
+                LibationBackupMatchResponse(
+                    source_key=group.source_key,
+                    folder_name=group.folder_name,
+                    source_title=group.title,
+                    product_id=group.product_id,
+                    file_count=len(group.source_paths),
+                    status="ambiguous",
+                    detail="More than one library book has this identifier or title.",
+                )
+            )
+            continue
+        if matched_book is None:
+            matches.append(
+                LibationBackupMatchResponse(
+                    source_key=group.source_key,
+                    folder_name=group.folder_name,
+                    source_title=group.title,
+                    product_id=group.product_id,
+                    file_count=len(group.source_paths),
+                    status="unmatched",
+                    detail="No library book has the same identifier or title.",
+                )
+            )
+            continue
+
+        existing = imports_by_book_and_id.get((matched_book.id, normalized_id))
+        status = "already_imported" if existing else "matched"
+        matches.append(
+            LibationBackupMatchResponse(
+                source_key=group.source_key,
+                folder_name=group.folder_name,
+                source_title=group.title,
+                product_id=group.product_id,
+                file_count=len(group.source_paths),
+                status=status,
+                match_method=match_method,
+                book_id=matched_book.id,
+                book_title=matched_book.title,
+                book_author=matched_book.author,
+                existing_edition_id=existing.id if existing else None,
+                detail=(f"Already attached as {existing.name} ({existing.status})." if existing else None),
+            )
+        )
+
+    return LibationBackupPreviewResponse(
+        groups=matches,
+        matched_count=sum(match.status == "matched" for match in matches),
+        unmatched_count=sum(match.status == "unmatched" for match in matches),
+        ambiguous_count=sum(match.status == "ambiguous" for match in matches),
+        already_imported_count=sum(match.status == "already_imported" for match in matches),
+        ignored_file_count=ignored_file_count,
+    )
 
 
 @router.get(

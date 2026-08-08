@@ -245,6 +245,87 @@ def test_prepare_sources_prefers_m4b_from_unzipped_libation_folder(tmp_path):
     assert [path.suffix for path in cue_paths] == [".cue"]
 
 
+def test_libation_backup_groups_supports_audible_and_isbn_folders():
+    groups, ignored = audiobook_import.libation_backup_groups(
+        [
+            "Libation/A Court of Mist and Fury [B01DYO4QRQ]/book.m4b",
+            "Libation/A Court of Mist and Fury [B01DYO4QRQ]/book.cue",
+            "Libation/A Court of Silver Flames [1980085722]/book.mp3",
+            "Libation/A Court of Silver Flames [1980085722]/cover.jpg",
+        ]
+    )
+
+    assert ignored == 1
+    assert [(group.title, group.product_id, len(group.source_paths)) for group in groups] == [
+        ("A Court of Mist and Fury", "B01DYO4QRQ", 2),
+        ("A Court of Silver Flames", "1980085722", 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_libation_backup_preview_matches_identifiers_titles_and_skips_existing(
+    app_client,
+    sqlite_sessionmaker,
+):
+    async with sqlite_sessionmaker() as db:
+        identifier_book = Book(
+            title="Different Store Title",
+            author="Author One",
+            immutable_path="library/identifier-immutable.epub",
+            current_path="library/identifier.epub",
+            metadata_remote_ids={"isbn_10": "1980085722"},
+        )
+        title_book = Book(
+            title="Title Match",
+            author="Author Two",
+            immutable_path="library/title-immutable.epub",
+            current_path="library/title.epub",
+        )
+        existing_book = Book(
+            title="Already Here",
+            author="Author Three",
+            immutable_path="library/existing-immutable.epub",
+            current_path="library/existing.epub",
+        )
+        db.add_all([identifier_book, title_book, existing_book])
+        await db.flush()
+        existing = ImportedAudiobook(
+            book_id=existing_book.id,
+            name="Prior Libation import",
+            asin="B111111111",
+            status="ready",
+        )
+        db.add(existing)
+        await db.commit()
+
+    response = app_client.post(
+        "/api/audiobook/libation-backup/preview",
+        json={
+            "source_paths": [
+                "Backup/Store Name [1980085722]/book.m4b",
+                "Backup/Title Match [B012345678]/book.m4b",
+                "Backup/Already Here [B111111111]/book.m4b",
+                "Backup/Not In Library [B222222222]/book.m4b",
+                "Backup/Not In Library [B222222222]/cover.jpg",
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_count"] == 2
+    assert payload["unmatched_count"] == 1
+    assert payload["already_imported_count"] == 1
+    assert payload["ignored_file_count"] == 1
+    matches = {group["product_id"]: group for group in payload["groups"]}
+    assert matches["1980085722"]["match_method"] == "identifier"
+    assert matches["1980085722"]["book_title"] == "Different Store Title"
+    assert matches["B012345678"]["match_method"] == "title"
+    assert matches["B111111111"]["status"] == "already_imported"
+    assert matches["B111111111"]["existing_edition_id"] is not None
+    assert matches["B222222222"]["status"] == "unmatched"
+
+
 @pytest.mark.asyncio
 async def test_upload_endpoint_streams_large_format_to_staging(
     app_client,
