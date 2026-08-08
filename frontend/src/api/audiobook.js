@@ -163,6 +163,13 @@ export function getImportedAudiobooks(bookId) {
   );
 }
 
+export function previewLibationBackup(sourcePaths) {
+  return sendJson("/api/audiobook/libation-backup/preview", {
+    body: { source_paths: sourcePaths },
+    fallbackMessage: "Failed to inspect the Libation backup",
+  });
+}
+
 export function uploadImportedAudiobook(
   bookId,
   files,

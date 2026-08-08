@@ -26,6 +26,7 @@ describe("Utilities", () => {
     expect(screen.getByRole("tab", { name: "Audit" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Series Detection" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Metadata" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Audiobooks" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Storage" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Reader Access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Library Audit" })).toBeInTheDocument();

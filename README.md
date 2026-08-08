@@ -5,8 +5,8 @@ Story Manager is a self-hosted library manager for EPUBs and web novels. It give
 ## Features
 
 - Manage uploaded EPUBs and tracked web novels in one library.
-- Import human-narrated audiobooks, including Libation ZIP exports, and read
-  along with synchronized EPUB text.
+- Import individual human-narrated audiobooks or a complete Libation backup,
+  match them to library EPUBs, and read along with synchronized text.
 - Download and refresh supported web novels with FanFicFare.
 - Preserve existing chapters when source sites remove older content.
 - Edit book metadata, covers, chapters, cleaning configs, and series information.
