@@ -714,7 +714,9 @@ async def get_imported_track_cues(
     reading_blocks: dict[str, ReadingBlock] = {}
     if track.matched_chapter_id is not None:
         chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
-        book = await _get_audiobook_book_or_404(edition.book_id, db)
+        # Imported narration is independent of the opt-in AI generation
+        # pipeline. Human-only books still need their synchronized text cues.
+        book = await _get_book_or_404(edition.book_id, db)
         if chapter is not None:
             reading_blocks = chapter_reading_blocks(book, chapter)
     result = await db.execute(
