@@ -1639,6 +1639,76 @@
   margin-bottom: 1.5rem;
 }
 
+.libation-backup-import {
+  display: grid;
+  gap: 1rem;
+}
+
+.libation-backup-import > h3,
+.libation-backup-import > p,
+.libation-match p,
+.libation-import-progress p {
+  margin: 0;
+}
+
+.libation-directory-picker {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.libation-preview-summary {
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.libation-match-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 32rem;
+  overflow: auto;
+}
+
+.libation-match {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.libation-match--matched {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.libation-match-status {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.libation-import-progress {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.libation-import-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .libation-match {
+    display: grid;
+  }
+}
+
 .utilities-tab-content > .settings-section:first-child {
   padding-top: 0;
   border-top: 0;
