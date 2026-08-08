@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -403,6 +404,128 @@ async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlit
         ).json()
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_human_only_audiobook_exposes_cues_and_downloads_anchored_text(
+    app_client,
+    sqlite_sessionmaker,
+    tmp_path,
+    monkeypatch,
+):
+    library = tmp_path / "library"
+    current_path = library / "human.epub"
+    reader_path = library / "audiobooks" / "841" / "reader" / "text-v1.epub"
+    audio_path = library / "audiobooks" / "841" / "imports" / "70" / "human.m4b"
+    current_path.parent.mkdir(parents=True)
+    reader_path.parent.mkdir(parents=True)
+    audio_path.parent.mkdir(parents=True)
+    with ZipFile(current_path, "w") as archive:
+        archive.writestr("EPUB/Text/chapter.xhtml", "<html><body><p>Human narration.</p></body></html>")
+    with ZipFile(reader_path, "w") as archive:
+        archive.writestr(
+            "EPUB/Text/chapter.xhtml",
+            '<html><body><p><span id="sentence-1">Human narration.</span></p></body></html>',
+        )
+    audio_path.write_bytes(b"human-audio")
+
+    monkeypatch.setattr(reader, "LIBRARY_PATH", library)
+    monkeypatch.setattr(reader.audiobook_router, "LIBRARY_PATH", library)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library)
+
+    async with sqlite_sessionmaker() as db:
+        book = models.Book(
+            id=841,
+            title="Human Audio With Text",
+            author="Reader",
+            source_type=models.SourceType.epub,
+            immutable_path="library/human-source.epub",
+            current_path=_relative(library, current_path),
+            content_version=1,
+            audiobook_enabled=False,
+            audiobook_text_content_version=1,
+            audiobook_text_file_path=_relative(library, reader_path),
+        )
+        chapter = models.AudiobookChapter(
+            id=801,
+            book_id=book.id,
+            chapter_number=1,
+            content_file_name="Text/chapter.xhtml",
+            source_href="Text/chapter.xhtml",
+            title="Chapter One",
+        )
+        sentence = models.AudiobookSentence(
+            id=802,
+            chapter_id=chapter.id,
+            html_element_id="sentence-1",
+            sequence_order=0,
+            original_text="Human narration.",
+        )
+        edition = models.ImportedAudiobook(
+            id=70,
+            book_id=book.id,
+            name="Human narration",
+            status="ready",
+            matched_content_version=1,
+        )
+        track = models.ImportedAudiobookTrack(
+            id=71,
+            imported_audiobook_id=edition.id,
+            matched_chapter_id=chapter.id,
+            sequence_order=1,
+            title="Chapter One",
+            audio_file_path=_relative(library, audio_path),
+            media_type="audio/mp4",
+            source_start_ms=0,
+            source_end_ms=1250,
+            duration_ms=1250,
+        )
+        cue = models.ImportedAudiobookCue(
+            track_id=track.id,
+            sentence_id=sentence.id,
+            sequence_order=0,
+            clip_begin_ms=0,
+            clip_end_ms=1250,
+            method="transcribed",
+        )
+        db.add_all([book, chapter, sentence, edition, track, cue])
+        await db.commit()
+
+    cues = app_client.get("/api/imported-audiobooks/70/tracks/71/cues")
+    assert cues.status_code == 200
+    assert cues.json() == [
+        {
+            "sentence_id": 802,
+            "html_element_id": "sentence-1",
+            "text": "Human narration.",
+            "clip_begin_ms": 0,
+            "clip_end_ms": 1250,
+            "confidence": None,
+            "method": "transcribed",
+            "reading_block_index": 0,
+            "reading_block_type": "paragraph",
+        }
+    ]
+
+    key_response = app_client.post("/api/reader-keys", json={"label": "Human Audio Reader"})
+    auth = ("reader", key_response.json()["token"])
+    download = app_client.get("/reader/books/841/download", auth=auth)
+    assert download.status_code == 200
+    assert download.content == reader_path.read_bytes()
+    assert download.headers["content-disposition"] == 'attachment; filename="human.epub"'
+    assert b"sentence-1" in download.content
+
+    editions = app_client.get("/reader/books/841/human-audiobooks", auth=auth).json()
+    smil = app_client.get(editions[0]["tracks"][0]["smil_url"], auth=auth)
+    assert smil.status_code == 200
+    assert b'src="chapter.xhtml#sentence-1"' in smil.content
+
+    async with sqlite_sessionmaker() as db:
+        book = await db.get(models.Book, 841)
+        book.content_version = 2
+        await db.commit()
+    stale_fallback = app_client.get("/reader/books/841/download", auth=auth)
+    assert stale_fallback.content == current_path.read_bytes()
 
 
 def test_reader_audiobook_capability_supports_all_publication_states():

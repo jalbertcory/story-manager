@@ -732,8 +732,18 @@ async def reader_download_book(book_id: int, db: AsyncSession = Depends(get_db))
     current_path = LIBRARY_PATH.parent / book.current_path
     if not current_path.is_file():
         raise HTTPException(status_code=404, detail="EPUB file not found")
+
+    # Human-audiobook SMIL targets the stable sentence spans injected into the
+    # reader text rendition. Serve that rendition when it matches the current
+    # book content, while retaining the normal EPUB as a safe stale fallback.
+    reader_text_path = text_reader_path(book)
+    download_path = (
+        reader_text_path
+        if reader_text_path is not None and book.audiobook_text_content_version == (book.content_version or 1)
+        else current_path
+    )
     return FileResponse(
-        current_path,
+        download_path,
         media_type="application/epub+zip",
         headers={"Content-Disposition": f'attachment; filename="{current_path.name}"'},
     )
