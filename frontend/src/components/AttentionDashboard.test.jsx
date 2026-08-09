@@ -72,7 +72,7 @@ describe("AttentionDashboard", () => {
     expect(screen.getByText("Source unavailable")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review jobs" })).toHaveAttribute(
       "href",
-      "/processing?status=error",
+      "/activity/processing?status=error",
     );
     expect(screen.getByRole("link", { name: "Stale Audio" })).toHaveAttribute(
       "href",
@@ -80,7 +80,7 @@ describe("AttentionDashboard", () => {
     );
     expect(screen.getByRole("link", { name: "Review metadata" })).toHaveAttribute(
       "href",
-      "/utilities?section=metadata",
+      "/settings/library-tools?section=metadata",
     );
   });
 

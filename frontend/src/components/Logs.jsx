@@ -29,14 +29,14 @@ function Logs({ onBack }) {
 
   return (
     <div className={onBack ? "book-settings" : undefined}>
-      {onBack && (
-        <div className="settings-header">
+      <div className="settings-header">
+        {onBack && (
           <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
             ← Back
           </button>
-          <h2>Application Logs</h2>
-        </div>
-      )}
+        )}
+        <h2>Application Logs</h2>
+      </div>
 
       <section className="settings-section">
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>

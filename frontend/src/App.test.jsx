@@ -1,4 +1,4 @@
-import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import App from "./App";
 import { renderWithClient } from "./test-utils";
@@ -60,6 +60,122 @@ describe("App", () => {
       expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
     });
   });
+
+  it("groups every page under Library, Activity, and Settings", async () => {
+    window.innerWidth = 390;
+    const emptyCategory = { count: 0, items: [] };
+    const attention = {
+      total_count: 2,
+      failed_jobs: emptyCategory,
+      failed_refreshes: emptyCategory,
+      stale_audiobooks: emptyCategory,
+      metadata_proposals: emptyCategory,
+      broken_files: emptyCategory,
+      missing_covers: emptyCategory,
+    };
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/dashboard/attention?limit=5") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(attention),
+        });
+      }
+      if (url.startsWith("/api/processing/jobs?")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              {
+                id: 91,
+                job_type: "refresh_all",
+                status: "running",
+                progress_current: 1,
+                progress_total: 2,
+                payload: {},
+              },
+            ]),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    });
+
+    renderWithClient(<App />);
+
+    const primary = await screen.findByRole("navigation", {
+      name: "Primary navigation",
+    });
+    const primaryLinks = within(primary).getAllByRole("link");
+    expect(primaryLinks.map((link) => link.firstChild.textContent)).toEqual([
+      "Library",
+      "Activity",
+      "Settings",
+    ]);
+    expect(primaryLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "/",
+      "/activity",
+      "/settings",
+    ]);
+    expect(
+      await screen.findByLabelText("2 items need attention"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("1 active processing job"),
+    ).toBeInTheDocument();
+
+    primaryLinks[1].focus();
+    expect(primaryLinks[1]).toHaveFocus();
+    fireEvent.click(primaryLinks[1]);
+
+    expect(window.location.pathname).toBe("/activity");
+    expect(
+      await screen.findByRole("heading", { name: "Needs attention" }),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "Activity sections" }),
+      ).getAllByRole("link").map((link) => link.textContent),
+    ).toEqual(["Overview", "Processing jobs", "Scheduled runs"]);
+
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+    expect(window.location.pathname).toBe("/settings");
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "Settings sections" }),
+      ).getAllByRole("link").map((link) => link.textContent),
+    ).toEqual(["Cleaning rules", "Audio & AI", "Library tools", "Logs"]);
+  });
+
+  it(
+    "canonicalizes legacy deep links and responds to history navigation",
+    async () => {
+      window.history.replaceState(null, "", "/processing?status=error");
+      globalThis.fetch = vi.fn(() =>
+        Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+      );
+
+      renderWithClient(<App />);
+
+      expect(
+        await screen.findByRole("heading", { name: "Processing control" }),
+      ).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/activity/processing");
+      expect(window.location.search).toBe("?status=error");
+
+      window.history.replaceState(null, "", "/settings/logs");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+
+      expect(
+        await screen.findByRole("heading", { name: "Application Logs" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: "Settings" }),
+      ).toHaveAttribute("aria-current", "page");
+    },
+  );
 
   it("searches by unified query", async () => {
     const mockBooks = [
@@ -524,6 +640,38 @@ describe("App", () => {
       if (url === "/api/books/44") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(book) });
       }
+      if (url === "/api/dashboard/attention?limit=5") {
+        const emptyCategory = { count: 0, items: [] };
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              total_count: 1,
+              failed_jobs: emptyCategory,
+              failed_refreshes: emptyCategory,
+              stale_audiobooks: emptyCategory,
+              metadata_proposals: emptyCategory,
+              broken_files: emptyCategory,
+              missing_covers: emptyCategory,
+            }),
+        });
+      }
+      if (url.startsWith("/api/processing/jobs?")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              {
+                id: 92,
+                job_type: "refresh_all",
+                status: "running",
+                progress_current: 1,
+                progress_total: 2,
+                payload: {},
+              },
+            ]),
+        });
+      }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     });
 
@@ -535,6 +683,12 @@ describe("App", () => {
     expect(characters).toHaveClass("sub-tab--active");
     expect(window.location.pathname).toBe("/books/44/audiobooks");
     expect(window.location.search).toBe("?tab=characters");
+    expect(
+      await screen.findByLabelText("1 item needs attention"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("1 active processing job"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Analysis" }));
     expect(window.location.search).toBe("?tab=analysis");

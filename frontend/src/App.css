@@ -3712,6 +3712,10 @@ body {
 }
 
 .main-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   min-height: 2.8rem;
   padding: 0.65rem 1rem;
   border: 0;
@@ -3721,6 +3725,7 @@ body {
   color: var(--text-muted);
   font-size: 0.78rem;
   letter-spacing: 0.025em;
+  text-decoration: none;
 }
 
 .main-tab:first-child {
@@ -3744,10 +3749,58 @@ body {
 .nav-job-count {
   min-width: 1.15rem;
   height: 1.15rem;
+  margin-left: 0;
   border-radius: 50%;
   background: var(--accent);
   color: var(--bg);
   font-weight: 600;
+}
+
+.nav-status-counts {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.nav-job-count--active {
+  background: var(--success);
+}
+
+.section-navigation {
+  display: flex;
+  gap: 1.25rem;
+  margin: -1rem 0 1.75rem;
+  padding: 0 0 0.65rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-navigation-link {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.025em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.section-navigation-link:hover,
+.section-navigation-link--active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.section-navigation-link--active {
+  font-weight: 600;
+}
+
+.app-container--book {
+  max-width: 1440px;
+}
+
+.app-container--book .book-settings {
+  border-left: 0;
+  border-right: 0;
 }
 
 .library-page-heading {
@@ -4535,8 +4588,13 @@ body {
   }
 
   .main-tab {
+    flex: 1 1 0;
     min-height: 2.5rem;
     padding: 0.55rem 0.75rem;
+  }
+
+  .section-navigation {
+    margin-top: -0.5rem;
   }
 
   .library-page-heading,
@@ -4588,6 +4646,11 @@ body {
   .main-tab,
   .main-tab--active {
     border-radius: 0;
+  }
+
+  .main-tab {
+    padding-right: 0.45rem;
+    padding-left: 0.45rem;
   }
 
   .library-page-heading,

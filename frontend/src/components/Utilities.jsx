@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveMetadataMatch,
@@ -19,6 +19,11 @@ const utilityTabs = [
   { key: "storage", label: "Storage" },
   { key: "reader-access", label: "Reader Access" },
 ];
+
+function getRequestedUtilityTab() {
+  const requested = new URLSearchParams(window.location.search).get("section");
+  return utilityTabs.some((tab) => tab.key === requested) ? requested : "audit";
+}
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
@@ -95,13 +100,32 @@ function formatMetadataMatchOption(match) {
 
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState(() => {
-    const requested = new URLSearchParams(window.location.search).get("section");
-    return utilityTabs.some((tab) => tab.key === requested) ? requested : "audit";
-  });
+  const [activeTab, setActiveTab] = useState(getRequestedUtilityTab);
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
+
+  useEffect(() => {
+    const onPopState = () => setActiveTab(getRequestedUtilityTab());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const selectUtilityTab = (tabKey) => {
+    const params = new URLSearchParams(window.location.search);
+    if (tabKey === "audit") {
+      params.delete("section");
+    } else {
+      params.set("section", tabKey);
+    }
+    const query = params.toString();
+    window.history.pushState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+    );
+    setActiveTab(tabKey);
+  };
 
   const previewMutation = useMutation({
     mutationFn: () => runCleanup(true),
@@ -184,14 +208,14 @@ function Utilities({ onBack }) {
 
   return (
     <div className={`${onBack ? "book-settings " : ""}utilities-page`}>
-      {onBack && (
-        <div className="settings-header">
+      <div className="settings-header">
+        {onBack && (
           <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
             ← Back
           </button>
-          <h2>Utilities</h2>
-        </div>
-      )}
+        )}
+        <h2>Library Tools</h2>
+      </div>
 
       <nav className="sub-tabs utilities-tabs" aria-label="Utility sections" role="tablist">
         {utilityTabs.map((tab) => (
@@ -201,7 +225,7 @@ function Utilities({ onBack }) {
             type="button"
             role="tab"
             aria-selected={activeTab === tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            onClick={() => selectUtilityTab(tab.key)}
           >
             {tab.label}
           </button>

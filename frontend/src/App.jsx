@@ -21,8 +21,11 @@ import useLibraryCatalog from "./hooks/useLibraryCatalog";
 import {
   buildBookPath,
   buildTabPath,
+  getPrimarySection,
+  getRoute,
   parseLocation,
-  TABS,
+  PRIMARY_NAV,
+  SECTION_NAV,
 } from "./lib/navigation";
 
 function App() {
@@ -87,6 +90,13 @@ function App() {
         return;
       }
 
+      if (parsed.redirectPath) {
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `${parsed.redirectPath}${search}${hash || ""}`,
+        );
+      }
       setEditingBook(null);
       setActiveTab(parsed.tab);
       setLibraryView(parsed.libraryView);
@@ -106,10 +116,14 @@ function App() {
       setAudiobookTab("sources");
     } else {
       const nextPath = buildTabPath(view, libraryView);
-      const tab = TABS.find((item) => item.key === view) || TABS[0];
-      window.history.pushState({ view: "tab", tab: tab.key }, "", nextPath);
+      const route = getRoute(view);
+      window.history.pushState(
+        { view: "tab", tab: route.key },
+        "",
+        nextPath,
+      );
       setEditingBook(null);
-      setActiveTab(tab.key);
+      setActiveTab(route.key);
     }
   };
 
@@ -276,18 +290,6 @@ function App() {
     return <AdminLogin onAuthenticated={setAuthStatus} />;
   }
 
-  if (editingBook) {
-    return (
-      <BookSettings
-        book={editingBook}
-        onBack={() => navigate("library")}
-        bookSection={bookSection}
-        audiobookTab={audiobookTab}
-        onNavigationChange={handleBookNavigation}
-      />
-    );
-  }
-
   const renderTabContent = () => {
     switch (activeTab) {
       case "attention":
@@ -397,8 +399,39 @@ function App() {
     }
   };
 
+  const activePrimary = editingBook
+    ? "library"
+    : getPrimarySection(activeTab);
+  const secondaryItems = editingBook ? [] : SECTION_NAV[activePrimary] || [];
+
+  const renderPrimaryBadge = (sectionKey) => {
+    if (sectionKey !== "activity") return null;
+    return (
+      <span className="nav-status-counts">
+        {attentionQuery.data?.total_count > 0 && (
+          <span
+            className="nav-job-count nav-job-count--attention"
+            aria-label={`${attentionQuery.data.total_count} ${attentionQuery.data.total_count === 1 ? "item needs" : "items need"} attention`}
+          >
+            {attentionQuery.data.total_count}
+          </span>
+        )}
+        {activeProcessingJobs.length > 0 && (
+          <span
+            className="nav-job-count nav-job-count--active"
+            aria-label={`${activeProcessingJobs.length} active processing ${activeProcessingJobs.length === 1 ? "job" : "jobs"}`}
+          >
+            {activeProcessingJobs.length}
+          </span>
+        )}
+      </span>
+    );
+  };
+
   return (
-    <div className={`app-container${globalDragging ? " drag-over" : ""}`}>
+    <div
+      className={`app-container${editingBook ? " app-container--book" : ""}${globalDragging ? " drag-over" : ""}`}
+    >
       <header className="app-header">
         <h1>Story Manager</h1>
         {authStatus.mode === "password" && (
@@ -407,25 +440,57 @@ function App() {
           </button>
         )}
       </header>
-      <nav className="main-tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            className={`main-tab${activeTab === tab.key ? " main-tab--active" : ""}`}
-            onClick={() => navigate(tab.key)}
-            aria-current={activeTab === tab.key ? "page" : undefined}
+      <nav className="main-tabs" aria-label="Primary navigation">
+        {PRIMARY_NAV.map((section) => (
+          <a
+            key={section.key}
+            className={`main-tab${activePrimary === section.key ? " main-tab--active" : ""}`}
+            href={section.path}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(section.defaultTab);
+            }}
+            aria-current={activePrimary === section.key ? "page" : undefined}
           >
-            {tab.label}
-            {tab.key === "processing" && activeProcessingJobs.length > 0 && (
-              <span className="nav-job-count">{activeProcessingJobs.length}</span>
-            )}
-            {tab.key === "attention" && attentionQuery.data?.total_count > 0 && (
-              <span className="nav-job-count">{attentionQuery.data.total_count}</span>
-            )}
-          </button>
+            {section.label}
+            {renderPrimaryBadge(section.key)}
+          </a>
         ))}
       </nav>
-      {renderTabContent()}
+      {secondaryItems.length > 0 && (
+        <nav
+          className="section-navigation"
+          aria-label={`${PRIMARY_NAV.find((item) => item.key === activePrimary)?.label} sections`}
+        >
+          {secondaryItems.map((item) => (
+            <a
+              key={item.key}
+              className={`section-navigation-link${activeTab === item.key ? " section-navigation-link--active" : ""}`}
+              href={item.path}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(item.key);
+              }}
+              aria-current={activeTab === item.key ? "page" : undefined}
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+      )}
+      <main>
+        {editingBook ? (
+          <BookSettings
+            book={editingBook}
+            onBack={() => navigate("library")}
+            bookSection={bookSection}
+            audiobookTab={audiobookTab}
+            onNavigationChange={handleBookNavigation}
+          />
+        ) : (
+          renderTabContent()
+        )}
+      </main>
     </div>
   );
 }

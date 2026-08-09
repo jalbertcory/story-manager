@@ -833,7 +833,8 @@ function BookSettings({
         </div>
         {jobNotice && (
           <p className="job-queued-notice" role="status">
-            {jobNotice} <a href="/processing">View processing</a>
+            {jobNotice}{" "}
+            <a href="/activity/processing">View processing</a>
           </p>
         )}
         <p className="hint actions-hint">

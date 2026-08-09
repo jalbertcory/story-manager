@@ -23,7 +23,7 @@ This roadmap captures the next major product and technical improvements for Stor
 
 ## 1. Needs Attention dashboard
 
-**Status:** In progress
+**Status:** Complete
 
 Give users one actionable view of problems and pending decisions across the library. The first version should summarize failed processing jobs, failed web refreshes, stale audiobooks, open metadata proposals, broken library files, and missing covers.
 
@@ -41,7 +41,7 @@ The dashboard should favor resolution over raw diagnostics. Every category shoul
 
 ## 2. Simplified navigation
 
-**Status:** Planned
+**Status:** In progress
 
 Replace the current tool-oriented top-level navigation with three user-oriented destinations: **Library**, **Activity**, and **Settings**. The Needs Attention dashboard should become the default overview within this structure.
 
