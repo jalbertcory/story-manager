@@ -130,6 +130,19 @@ def test_request_ids_are_returned_and_can_be_supplied(app_client):
     assert unsafe.headers["X-Request-ID"] != "secret value\ninvalid"
 
 
+def test_successful_polling_access_logs_are_debug_but_failures_remain_visible(app_client, caplog):
+    caplog.set_level(logging.DEBUG, logger="story_manager.access")
+
+    successful = app_client.get("/api/logs?limit=1")
+    invalid = app_client.get("/api/logs?limit=0")
+
+    assert successful.status_code == 200
+    assert invalid.status_code == 422
+    access_records = [record for record in caplog.records if record.name == "story_manager.access"]
+    assert any(record.levelno == logging.DEBUG and "completed with 200" in record.message for record in access_records)
+    assert any(record.levelno == logging.INFO and "completed with 422" in record.message for record in access_records)
+
+
 @pytest.mark.asyncio
 async def test_health_report_survives_database_outage():
     db = AsyncMock()
