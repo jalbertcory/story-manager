@@ -7,6 +7,16 @@ This document provides instructions for agents working on this project.
 For the Jules AI Agent this project uses a local PostgreSQL installation for the database. The `setupJules.sh` script was already run and automatically installed and configured PostgreSQL.
 All other agents should use `make run-db` to run a pgsql container.
 
+## Required Pre-PR Check
+
+Before creating a pull request or pushing an update to an existing pull request, run:
+
+```bash
+make pr-check
+```
+
+Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint, and frontend lint checks enforced by CI so local validation cannot report a false green.
+
 ### Database Credentials
 
 The following credentials are used to connect to the local PostgreSQL database:

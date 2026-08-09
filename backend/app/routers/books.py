@@ -354,7 +354,7 @@ async def restore_book_revision(
         raise HTTPException(status_code=404, detail="Book revision not found")
 
     previous_rules = (list(book.removed_chapters or []), list(book.content_selectors or []))
-    add_book_revision(db, book, action="revision_restored", summary=f'Restored revision {revision.id}: {revision.summary}')
+    add_book_revision(db, book, action="revision_restored", summary=f"Restored revision {revision.id}: {revision.summary}")
     restore_snapshot(book, revision.snapshot)
     await db.commit()
     await db.refresh(book)

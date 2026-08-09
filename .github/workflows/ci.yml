@@ -24,18 +24,8 @@ jobs:
         uv venv
         source .venv/bin/activate
         uv pip install -e ".[dev]"
-    - name: Check formatting with black
-      run: |
-        source .venv/bin/activate
-        black --check backend
-    - name: Check unused imports with autoflake
-      run: |
-        source .venv/bin/activate
-        autoflake --check --remove-all-unused-imports --recursive backend
-    - name: Lint with flake8
-      run: |
-        source .venv/bin/activate
-        flake8 backend --count --statistics
+    - name: Run backend lint suite
+      run: make lint-backend
 
   test:
     runs-on: ubuntu-latest

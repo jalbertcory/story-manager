@@ -359,7 +359,7 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
                     models.Book.series.ilike(pattern),
                     cast(models.Book.genre_tags, String).ilike(pattern),
                     cast(models.Book.user_genre_tags, String).ilike(pattern),
-                )
+                ),
             )
         )
     else:
@@ -369,7 +369,5 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
 
 async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
     """Retrieve all books that have no series assigned."""
-    result = await db.execute(
-        select(models.Book).filter(models.Book.series.is_(None), models.Book.deleted_at.is_(None))
-    )
+    result = await db.execute(select(models.Book).filter(models.Book.series.is_(None), models.Book.deleted_at.is_(None)))
     return result.scalars().all()
