@@ -368,6 +368,65 @@ class ProcessingJobsCreated(BaseModel):
     jobs: List[ProcessingJob] = Field(default_factory=list)
 
 
+class AttentionBookItem(BaseModel):
+    book_id: int
+    title: str
+    author: str
+    issue: str
+    detail: Optional[str] = None
+
+
+class AttentionFileItem(AttentionBookItem):
+    path: Optional[str] = None
+
+
+class AttentionJobItem(BaseModel):
+    id: int
+    job_type: str
+    book_id: Optional[int] = None
+    book_title: Optional[str] = None
+    error: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+
+class AttentionMetadataItem(BaseModel):
+    proposal_id: int
+    book_id: int
+    title: str
+    author: str
+    note: Optional[str] = None
+
+
+class AttentionBookCategory(BaseModel):
+    count: int
+    items: List[AttentionBookItem] = Field(default_factory=list)
+
+
+class AttentionFileCategory(BaseModel):
+    count: int
+    items: List[AttentionFileItem] = Field(default_factory=list)
+
+
+class AttentionJobCategory(BaseModel):
+    count: int
+    items: List[AttentionJobItem] = Field(default_factory=list)
+
+
+class AttentionMetadataCategory(BaseModel):
+    count: int
+    items: List[AttentionMetadataItem] = Field(default_factory=list)
+
+
+class AttentionDashboard(BaseModel):
+    total_count: int
+    failed_jobs: AttentionJobCategory
+    failed_refreshes: AttentionBookCategory
+    stale_audiobooks: AttentionBookCategory
+    metadata_proposals: AttentionMetadataCategory
+    broken_files: AttentionFileCategory
+    missing_covers: AttentionFileCategory
+
+
 class ReaderSeriesSummary(BaseModel):
     name: str
     book_count: int

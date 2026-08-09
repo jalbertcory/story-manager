@@ -60,7 +60,12 @@ function JobProgress({ job }) {
 
 function ProcessingJobs() {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("active");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get("status");
+    return ["active", "all", "error", "completed", "canceled"].includes(requested)
+      ? requested
+      : "active";
+  });
   const [operation, setOperation] = useState("clean_book");
   const [bookSearch, setBookSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);

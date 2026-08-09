@@ -95,7 +95,10 @@ function formatMetadataMatchOption(match) {
 
 function Utilities({ onBack }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState("audit");
+  const [activeTab, setActiveTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get("section");
+    return utilityTabs.some((tab) => tab.key === requested) ? requested : "audit";
+  });
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
