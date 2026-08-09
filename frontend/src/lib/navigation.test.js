@@ -29,6 +29,16 @@ describe("application navigation", () => {
     expect(buildTabPath("attention")).toBe("/activity");
   });
 
+  it("keeps the guided import workflow inside the Library section", () => {
+    expect(parseLocation("/import", "", "?type=audiobook")).toEqual({
+      view: "tab",
+      tab: "import",
+      libraryView: "series",
+    });
+    expect(getPrimarySection("import")).toBe("library");
+    expect(buildTabPath("import")).toBe("/import");
+  });
+
   it.each([
     ["/attention", "attention", "/activity"],
     ["/processing", "processing", "/activity/processing"],

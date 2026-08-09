@@ -46,6 +46,7 @@ export const SECTION_NAV = {
 
 const ROUTES = [
   { key: "library", path: "/", section: "library" },
+  { key: "import", path: "/import", section: "library" },
   ...SECTION_NAV.activity.map((route) => ({
     ...route,
     section: "activity",

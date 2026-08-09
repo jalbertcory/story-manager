@@ -3804,7 +3804,361 @@ body {
 }
 
 .library-page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   padding-bottom: 1rem;
+}
+
+/* ─── Guided import workflow ────────────────────────────── */
+.import-workflow {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.import-workflow-header {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.import-workflow-header h2 {
+  margin: 0;
+}
+
+.import-workflow-header > p {
+  max-width: 42rem;
+  margin: 0.4rem 0 1.25rem;
+  color: var(--text-muted);
+}
+
+.import-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+}
+
+.import-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.8rem;
+  padding: 0.55rem 0.8rem;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.import-steps li:last-child {
+  border-right: 0;
+}
+
+.import-steps li > span {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 1px solid var(--border-strong);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+}
+
+.import-steps .import-steps--active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.import-steps .import-steps--active > span {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.import-type-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--border-strong);
+}
+
+.import-type-picker button {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  min-height: 5.2rem;
+  padding: 0.85rem;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.import-type-picker button:last-child {
+  border-right: 0;
+}
+
+.import-type-picker button:hover:not(:disabled),
+.import-type-picker .import-type--active {
+  background: var(--surface);
+}
+
+.import-type-picker .import-type--active {
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.import-type-picker span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.import-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.import-panel h3 {
+  margin: -0.6rem 0 0;
+}
+
+.import-step-code {
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.import-drop-zone {
+  display: grid;
+  place-items: center;
+  gap: 0.35rem;
+  min-height: 10rem;
+  padding: 2rem;
+  border-style: dashed;
+  background: var(--bg);
+  text-align: center;
+  cursor: pointer;
+}
+
+.import-drop-zone span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.import-selected-files {
+  max-height: 13rem;
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.import-selected-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.import-selected-files li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-url-list,
+.import-audiobook-inputs {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.import-url-list label,
+.import-audiobook-inputs label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.import-book-combobox {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.import-book-combobox > label {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.import-book-options {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  right: 0;
+  left: 0;
+  max-height: 18rem;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  box-shadow: 0 0.75rem 1.5rem color-mix(in srgb, #000 28%, transparent);
+}
+
+.import-book-options li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.import-book-options li:last-child {
+  border-bottom: 0;
+}
+
+.import-book-options li:hover,
+.import-book-options .import-book-option--active,
+.import-book-options li[aria-selected="true"] {
+  background: var(--surface-2);
+}
+
+.import-book-options span,
+.import-book-options-empty {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.import-match-notice {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.import-url-row,
+.import-audio-pickers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.import-audio-pickers {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.import-checkbox {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: flex-start;
+  gap: 0.55rem !important;
+  color: var(--text) !important;
+}
+
+.import-checkbox input {
+  width: auto;
+  margin-top: 0.15rem;
+}
+
+.import-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.import-preview-summary {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.import-preview-list,
+.import-result-list {
+  display: grid;
+  border-top: 1px solid var(--border);
+}
+
+.import-preview-item,
+.import-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 1rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.import-preview-item > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.import-preview-item span,
+.import-preview-item small,
+.import-result small {
+  color: var(--text-muted);
+}
+
+.import-preview-item strong,
+.import-preview-item span,
+.import-preview-item small,
+.import-result strong {
+  overflow-wrap: anywhere;
+}
+
+.import-preview-status,
+.import-result > span {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.import-preview-item--ready .import-preview-status,
+.import-result--succeeded > span {
+  color: var(--success);
+}
+
+.import-preview-item--duplicate .import-preview-status,
+.import-result--skipped > span,
+.import-result--queued > span {
+  color: var(--warning);
+}
+
+.import-preview-item--error .import-preview-status,
+.import-preview-item--unsupported .import-preview-status,
+.import-result--failed > span {
+  color: var(--danger);
+}
+
+.import-result small {
+  grid-column: 1 / -1;
+}
+
+.import-duplicate-confirmation {
+  padding: 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, var(--border));
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
 }
 
 .search-controls {
@@ -4603,6 +4957,18 @@ body {
     align-items: flex-start;
   }
 
+  .import-type-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .import-type-picker button:nth-child(2) {
+    border-right: 0;
+  }
+
+  .import-type-picker button:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
   .settings-header {
     flex-direction: column;
   }
@@ -4656,6 +5022,34 @@ body {
   .library-page-heading,
   .processing-console-header {
     flex-direction: column;
+  }
+
+  .import-steps li {
+    justify-content: center;
+    padding-right: 0.35rem;
+    padding-left: 0.35rem;
+  }
+
+  .import-type-picker,
+  .import-audio-pickers,
+  .import-url-row {
+    grid-template-columns: 1fr;
+  }
+
+  .import-type-picker button,
+  .import-type-picker button:nth-child(2) {
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .import-type-picker button:last-child {
+    border-bottom: 0;
+  }
+
+  .import-preview-item,
+  .import-result {
+    grid-template-columns: 1fr;
   }
 
   .library-view-tabs {

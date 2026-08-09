@@ -41,7 +41,7 @@ The dashboard should favor resolution over raw diagnostics. Every category shoul
 
 ## 2. Simplified navigation
 
-**Status:** In progress
+**Status:** Complete
 
 Replace the current tool-oriented top-level navigation with three user-oriented destinations: **Library**, **Activity**, and **Settings**. The Needs Attention dashboard should become the default overview within this structure.
 
@@ -57,7 +57,7 @@ Activity will own processing jobs, failures, scheduled runs, and history. Settin
 
 ## 3. Unified import workflow
 
-**Status:** Planned
+**Status:** In progress
 
 Create one guided **Add to library** workflow for EPUB files, ZIP archives, folders, web-novel URLs, human audiobook files, and Libation backups. The workflow should separate selection, inspection, conflict resolution, execution, and results.
 

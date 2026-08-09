@@ -9,7 +9,6 @@ import {
   rejectMetadataMatch,
 } from "../api/metadata";
 import ReaderKeys from "./ReaderKeys.jsx";
-import LibationBackupImport from "./LibationBackupImport.jsx";
 
 const utilityTabs = [
   { key: "audit", label: "Audit" },
@@ -476,7 +475,18 @@ function Utilities({ onBack }) {
           </section>
         )}
 
-        {activeTab === "audiobooks" && <LibationBackupImport />}
+        {activeTab === "audiobooks" && (
+          <section className="settings-section">
+            <h3>Libation Backup Import</h3>
+            <p className="hint">
+              Preview book matches, resolve ambiguous titles, and queue the
+              selected backup through the guided import workflow.
+            </p>
+            <a className="btn btn-primary" href="/import?type=libation">
+              Open guided Libation import
+            </a>
+          </section>
+        )}
 
         {activeTab === "storage" && (
           <section className="settings-section">

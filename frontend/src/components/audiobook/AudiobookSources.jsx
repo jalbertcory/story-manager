@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -8,7 +8,6 @@ import {
   rebuildAudioOnly,
   rematchImportedAudiobook,
   retryImportedAudiobook,
-  uploadImportedAudiobook,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
 
@@ -30,36 +29,6 @@ function importedAtLabel(createdAt) {
   }).format(date)}`;
 }
 
-const AUDIO_EXTENSIONS = new Set([
-  ".aac",
-  ".flac",
-  ".m4a",
-  ".m4b",
-  ".mp3",
-  ".mp4",
-  ".ogg",
-  ".opus",
-  ".wav",
-]);
-const IMPORT_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ".cue", ".zip"]);
-
-function extension(file) {
-  const index = file.name.lastIndexOf(".");
-  return index < 0 ? "" : file.name.slice(index).toLowerCase();
-}
-
-function selectAudiobookFiles(selectedFiles) {
-  const supported = selectedFiles.filter((file) =>
-    IMPORT_EXTENSIONS.has(extension(file)),
-  );
-  const hasM4b = supported.some((file) => extension(file) === ".m4b");
-  if (!hasM4b) return supported;
-  return supported.filter(
-    (file) =>
-      !AUDIO_EXTENSIONS.has(extension(file)) || extension(file) === ".m4b",
-  );
-}
-
 function AudiobookSources({
   bookId,
   chapters = [],
@@ -69,12 +38,6 @@ function AudiobookSources({
   onEnableAi,
 }) {
   const queryClient = useQueryClient();
-  const inputRef = useRef(null);
-  const directoryInputRef = useRef(null);
-  const [files, setFiles] = useState([]);
-  const [name, setName] = useState("");
-  const [autoAlign, setAutoAlign] = useState(true);
-  const [ignoredFileCount, setIgnoredFileCount] = useState(0);
   const [jobNotice, setJobNotice] = useState("");
   const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
 
@@ -82,24 +45,6 @@ function AudiobookSources({
     queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
     queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
     queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
-  };
-  const uploadMutation = useMutation({
-    mutationFn: () => uploadImportedAudiobook(bookId, files, name, autoAlign),
-    onSuccess: () => {
-      setJobNotice("Human audiobook import and matching queued.");
-      setFiles([]);
-      setName("");
-      setIgnoredFileCount(0);
-      if (inputRef.current) inputRef.current.value = "";
-      if (directoryInputRef.current) directoryInputRef.current.value = "";
-      invalidate();
-    },
-  });
-  const chooseFiles = (selectedFiles) => {
-    const selected = Array.from(selectedFiles || []);
-    const usable = selectAudiobookFiles(selected);
-    setFiles(usable);
-    setIgnoredFileCount(selected.length - usable.length);
   };
   const retryMutation = useMutation({
     mutationFn: retryImportedAudiobook,
@@ -154,72 +99,12 @@ function AudiobookSources({
             chapter-capable M4B when Libation also created a duplicate MP3.
           </p>
         </div>
-        <label>
-          Edition name (optional)
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="For example, Audible / Jeff Hays"
-          />
-        </label>
-        <label>
-          Libation book directory
-          <input
-            ref={directoryInputRef}
-            type="file"
-            multiple
-            webkitdirectory=""
-            directory=""
-            onChange={(event) => chooseFiles(event.target.files)}
-          />
-        </label>
-        <label>
-          Or audiobook file / ZIP
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept=".zip,.cue,.m4b,.m4a,.mp3,.mp4,.aac,.flac,.ogg,.opus,.wav,audio/*"
-            onChange={(event) => chooseFiles(event.target.files)}
-          />
-        </label>
-        {files.length > 0 && (
-          <p className="audiobook-selected-files">
-            {files.map((file) => file.name).join(", ")}
-          </p>
-        )}
-        {ignoredFileCount > 0 && (
-          <p className="hint">
-            Ignored {ignoredFileCount} duplicate or non-audio{" "}
-            {ignoredFileCount === 1 ? "file" : "files"}.
-          </p>
-        )}
-        <label>
-          <input
-            type="checkbox"
-            checked={autoAlign}
-            onChange={(event) => setAutoAlign(event.target.checked)}
-          />{" "}
-          Improve sentence timestamps with Whisper after matching
-        </label>
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={!files.length || uploadMutation.isPending}
-          onClick={() => uploadMutation.mutate()}
+        <a
+          className="btn btn-primary"
+          href={`/import?type=audiobook&book_id=${bookId}`}
         >
-          {uploadMutation.isPending ? "Uploading…" : "Upload & Match"}
-        </button>
-        {uploadMutation.isPending && (
-          <p className="hint" role="status">
-            Large Libation archives can take a few minutes to transfer. Keep
-            this page open until the upload finishes; matching continues in the
-            background afterward.
-          </p>
-        )}
-        {uploadMutation.isError && (
-          <p className="error">{uploadMutation.error.message}</p>
-        )}
+          Open guided audiobook import
+        </a>
       </section>
 
       <section className="audiobook-ai-source">
