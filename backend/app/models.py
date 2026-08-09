@@ -90,6 +90,23 @@ class Book(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     content_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     content_version = Column(Integer, nullable=False, server_default="1")
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    purge_after = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class BookRevision(Base):
+    """A restorable snapshot taken before a user-visible book change."""
+
+    __tablename__ = "book_revisions"
+
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    action = Column(String, nullable=False)
+    summary = Column(String, nullable=False)
+    snapshot = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (Index("ix_book_revisions_book_created", "book_id", "created_at"),)
 
 
 class ProcessingJob(Base):

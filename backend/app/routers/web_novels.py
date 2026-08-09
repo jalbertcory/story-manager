@@ -36,6 +36,11 @@ async def add_web_novel(
 
     existing_book = await crud.get_book_by_source_url(db, source_url=source_url_str)
     if existing_book:
+        if existing_book.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This source is in the recycle bin. Restore it or permanently delete it before importing again.",
+            )
         if (
             existing_book.source_type == models.SourceType.web
             and existing_book.download_status == "error"

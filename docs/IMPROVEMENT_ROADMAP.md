@@ -57,7 +57,7 @@ Activity will own processing jobs, failures, scheduled runs, and history. Settin
 
 ## 3. Unified import workflow
 
-**Status:** In progress
+**Status:** Complete
 
 Create one guided **Add to library** workflow for EPUB files, ZIP archives, folders, web-novel URLs, human audiobook files, and Libation backups. The workflow should separate selection, inspection, conflict resolution, execution, and results.
 
@@ -74,7 +74,7 @@ Preflight inspection should show detected metadata, likely duplicates, audiobook
 
 ## 4. Recoverable destructive changes
 
-**Status:** Planned
+**Status:** In progress
 
 Make deletion and content-changing operations recoverable. Build on the existing immutable EPUB copy to support restoring original content, reviewing cleaning changes, and recovering accidentally deleted records where practical.
 

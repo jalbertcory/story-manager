@@ -65,6 +65,28 @@ class Book(BookBase):
     updated_at: Optional[datetime] = None
     content_updated_at: datetime
     content_version: int
+    deleted_at: Optional[datetime] = None
+    purge_after: Optional[datetime] = None
+
+
+class RecycledBook(Book):
+    recovery_files_available: bool
+
+
+class RecycleBin(BaseModel):
+    retention_days: int
+    books: List[RecycledBook] = Field(default_factory=list)
+
+
+class BookRevision(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    book_id: int
+    action: str
+    summary: str
+    snapshot: dict
+    created_at: datetime
 
 
 class BookCatalogEntry(BaseModel):

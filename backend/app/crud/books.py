@@ -1,7 +1,7 @@
 """Book CRUD operations: queries, creation, update, deletion."""
 
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, asc, case, cast, delete, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,11 @@ def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
     }
     column = sort_columns.get(sort_by, models.Book.title)
     order = asc(column) if sort_order == "asc" else desc(column)
-    return select(models.Book).order_by(order, asc(models.Book.title), asc(models.Book.id))
+    return (
+        select(models.Book)
+        .where(models.Book.deleted_at.is_(None))
+        .order_by(order, asc(models.Book.title), asc(models.Book.id))
+    )
 
 
 def _series_order_columns():
@@ -45,15 +49,28 @@ def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "
     )
 
 
-async def get_book_by_source_url(db: AsyncSession, source_url: str) -> Optional[models.Book]:
+async def get_book_by_source_url(
+    db: AsyncSession,
+    source_url: str,
+    *,
+    include_deleted: bool = True,
+) -> Optional[models.Book]:
     """Retrieve a single book from the database by its source URL."""
-    result = await db.execute(select(models.Book).filter(models.Book.source_url == source_url))
+    query = select(models.Book).filter(models.Book.source_url == source_url)
+    if not include_deleted:
+        query = query.filter(models.Book.deleted_at.is_(None))
+    result = await db.execute(query)
     return result.scalars().first()
 
 
 async def get_web_books(db: AsyncSession) -> List[models.Book]:
     """Retrieve all web books from the database."""
-    result = await db.execute(select(models.Book).filter(models.Book.source_type == models.SourceType.web))
+    result = await db.execute(
+        select(models.Book).filter(
+            models.Book.source_type == models.SourceType.web,
+            models.Book.deleted_at.is_(None),
+        )
+    )
     return result.scalars().all()
 
 
@@ -63,6 +80,7 @@ async def get_pending_web_books(db: AsyncSession) -> List[models.Book]:
         select(models.Book).filter(
             models.Book.source_type == models.SourceType.web,
             models.Book.download_status == "pending",
+            models.Book.deleted_at.is_(None),
         )
     )
     return result.scalars().all()
@@ -74,6 +92,7 @@ async def get_pending_refresh_books(db: AsyncSession) -> List[models.Book]:
         select(models.Book).filter(
             models.Book.source_type == models.SourceType.web,
             models.Book.refresh_status.in_(["queued", "processing"]),
+            models.Book.deleted_at.is_(None),
         )
     )
     return result.scalars().all()
@@ -131,9 +150,12 @@ async def create_book(db: AsyncSession, book: schemas.BookCreate) -> models.Book
     return db_book
 
 
-async def get_book(db: AsyncSession, book_id: int) -> Optional[models.Book]:
+async def get_book(db: AsyncSession, book_id: int, *, include_deleted: bool = False) -> Optional[models.Book]:
     """Retrieve a single book from the database by its ID."""
-    result = await db.execute(select(models.Book).filter(models.Book.id == book_id))
+    query = select(models.Book).filter(models.Book.id == book_id)
+    if not include_deleted:
+        query = query.filter(models.Book.deleted_at.is_(None))
+    result = await db.execute(query)
     return result.scalars().first()
 
 
@@ -141,7 +163,12 @@ async def get_books_by_ids(db: AsyncSession, book_ids: List[int]) -> List[models
     if not book_ids:
         return []
 
-    result = await db.execute(select(models.Book).filter(models.Book.id.in_(book_ids)))
+    result = await db.execute(
+        select(models.Book).filter(
+            models.Book.id.in_(book_ids),
+            models.Book.deleted_at.is_(None),
+        )
+    )
     books = {book.id: book for book in result.scalars().all()}
     return [books[book_id] for book_id in book_ids if book_id in books]
 
@@ -209,24 +236,44 @@ async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
 
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """Retrieve books from the database by author."""
-    result = await db.execute(select(models.Book).filter(models.Book.author.ilike(f"%{author}%")).offset(skip).limit(limit))
+    result = await db.execute(
+        select(models.Book)
+        .filter(models.Book.author.ilike(f"%{author}%"), models.Book.deleted_at.is_(None))
+        .offset(skip)
+        .limit(limit)
+    )
     return result.scalars().all()
 
 
-async def get_book_by_title(db: AsyncSession, title: str) -> Optional[models.Book]:
+async def get_book_by_title(
+    db: AsyncSession,
+    title: str,
+    *,
+    include_deleted: bool = False,
+) -> Optional[models.Book]:
     """Retrieve a single book from the database by its title."""
-    result = await db.execute(select(models.Book).filter(models.Book.title == title))
+    query = select(models.Book).filter(models.Book.title == title)
+    if not include_deleted:
+        query = query.filter(models.Book.deleted_at.is_(None))
+    result = await db.execute(query)
     return result.scalars().first()
 
 
-async def get_book_by_title_and_author(db: AsyncSession, title: str, author: str) -> Optional[models.Book]:
+async def get_book_by_title_and_author(
+    db: AsyncSession,
+    title: str,
+    author: str,
+    *,
+    include_deleted: bool = True,
+) -> Optional[models.Book]:
     """Retrieve a book by exact (case-insensitive) title and author match."""
-    result = await db.execute(
-        select(models.Book).where(
-            func.lower(models.Book.title) == title.lower(),
-            func.lower(models.Book.author) == author.lower(),
-        )
+    query = select(models.Book).where(
+        func.lower(models.Book.title) == title.lower(),
+        func.lower(models.Book.author) == author.lower(),
     )
+    if not include_deleted:
+        query = query.where(models.Book.deleted_at.is_(None))
+    result = await db.execute(query)
     return result.scalars().first()
 
 
@@ -237,6 +284,51 @@ async def delete_book(db: AsyncSession, book: models.Book) -> None:
     await db.execute(delete(models.BookLog).where(models.BookLog.book_id == book.id))
     await db.delete(book)
     await db.commit()
+
+
+async def recycle_book(db: AsyncSession, book: models.Book, *, retention_days: int) -> models.Book:
+    """Hide a book from the live library while preserving its files and history."""
+    now = datetime.now(timezone.utc)
+    book.deleted_at = now
+    book.purge_after = now + timedelta(days=retention_days)
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+
+async def restore_recycled_book(db: AsyncSession, book: models.Book) -> models.Book:
+    book.deleted_at = None
+    book.purge_after = None
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+
+async def get_recycled_books(db: AsyncSession) -> List[models.Book]:
+    result = await db.execute(
+        select(models.Book)
+        .where(models.Book.deleted_at.isnot(None))
+        .order_by(desc(models.Book.deleted_at), asc(models.Book.title))
+    )
+    return list(result.scalars().all())
+
+
+async def get_all_books_including_deleted(db: AsyncSession) -> List[models.Book]:
+    result = await db.execute(select(models.Book))
+    return list(result.scalars().all())
+
+
+async def recycle_all_books(db: AsyncSession, *, retention_days: int) -> int:
+    books = await get_books(db, limit=100000)
+    if not books:
+        return 0
+    now = datetime.now(timezone.utc)
+    purge_after = now + timedelta(days=retention_days)
+    for book in books:
+        book.deleted_at = now
+        book.purge_after = purge_after
+    await db.commit()
+    return len(books)
 
 
 async def delete_all_books(db: AsyncSession) -> int:
@@ -260,6 +352,7 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
         pattern = f"%{q}%"
         result = await db.execute(
             select(func.count(models.Book.id)).filter(
+                models.Book.deleted_at.is_(None),
                 or_(
                     models.Book.title.ilike(pattern),
                     models.Book.author.ilike(pattern),
@@ -270,11 +363,13 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
             )
         )
     else:
-        result = await db.execute(select(func.count(models.Book.id)))
+        result = await db.execute(select(func.count(models.Book.id)).filter(models.Book.deleted_at.is_(None)))
     return result.scalar() or 0
 
 
 async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
     """Retrieve all books that have no series assigned."""
-    result = await db.execute(select(models.Book).filter(models.Book.series.is_(None)))
+    result = await db.execute(
+        select(models.Book).filter(models.Book.series.is_(None), models.Book.deleted_at.is_(None))
+    )
     return result.scalars().all()

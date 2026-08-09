@@ -14,6 +14,7 @@ def _reader_books_query():
     return select(models.Book).where(
         models.Book.current_path.is_not(None),
         models.Book.download_status.is_(None),
+        models.Book.deleted_at.is_(None),
     )
 
 
@@ -66,6 +67,7 @@ async def get_reader_series(db: AsyncSession) -> List[dict]:
             models.Book.current_path.is_not(None),
             models.Book.download_status.is_(None),
             models.Book.series.is_not(None),
+            models.Book.deleted_at.is_(None),
         )
         .group_by(func.lower(models.Book.series))
         .order_by(func.lower(models.Book.series))

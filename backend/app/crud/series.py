@@ -45,7 +45,7 @@ async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limi
     """Retrieve books from the database by series."""
     result = await db.execute(
         select(models.Book)
-        .filter(func.lower(models.Book.series) == series.lower())
+        .filter(func.lower(models.Book.series) == series.lower(), models.Book.deleted_at.is_(None))
         .order_by(*_series_order_columns())
         .offset(skip)
         .limit(limit)
@@ -76,7 +76,10 @@ async def reorder_series_books(db: AsyncSession, series: str, ordered_book_ids: 
 async def get_all_series(db: AsyncSession) -> List[str]:
     """Return all distinct non-null series names, sorted alphabetically."""
     result = await db.execute(
-        select(models.Book.series).filter(models.Book.series.isnot(None)).distinct().order_by(models.Book.series)
+        select(models.Book.series)
+        .filter(models.Book.series.isnot(None), models.Book.deleted_at.is_(None))
+        .distinct()
+        .order_by(models.Book.series)
     )
     return [row[0] for row in result.all()]
 
@@ -132,7 +135,12 @@ async def set_series_user_genre_tags(
 
 async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
     """Rename a series, updating all books that belong to it. Returns count of updated books."""
-    result = await db.execute(select(models.Book).filter(func.lower(models.Book.series) == old_name.lower()))
+    result = await db.execute(
+        select(models.Book).filter(
+            func.lower(models.Book.series) == old_name.lower(),
+            models.Book.deleted_at.is_(None),
+        )
+    )
     books = result.scalars().all()
     for book in books:
         book.series = new_name
@@ -156,7 +164,12 @@ async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
 
 async def merge_series(db: AsyncSession, source: str, target: str) -> int:
     """Move all books from source series into target series. Returns count of moved books."""
-    result = await db.execute(select(models.Book).filter(func.lower(models.Book.series) == source.lower()))
+    result = await db.execute(
+        select(models.Book).filter(
+            func.lower(models.Book.series) == source.lower(),
+            models.Book.deleted_at.is_(None),
+        )
+    )
     books = result.scalars().all()
     for book in books:
         book.series = target
@@ -274,7 +287,11 @@ async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
     roster_result = await db.execute(select(models.AudiobookSeriesCharacter))
     all_roster_profiles = roster_result.scalars().all()
 
-    active_result = await db.execute(select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct())
+    active_result = await db.execute(
+        select(func.lower(models.Book.series))
+        .filter(models.Book.series.isnot(None), models.Book.deleted_at.is_(None))
+        .distinct()
+    )
     active_series = {row[0] for row in active_result.all()}
 
     deleted = 0

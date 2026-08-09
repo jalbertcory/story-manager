@@ -1738,9 +1738,12 @@ async def test_delete_book_by_id(db_session):
     response = client.delete(f"/api/books/{book.id}")
     assert response.status_code == 204
 
-    # Verify it's gone
+    # Verify it's hidden from the live library and available for recovery.
     response = client.get("/api/books")
     assert response.json() == []
+    recycle_bin = client.get("/api/recycle-bin").json()
+    assert [item["id"] for item in recycle_bin["books"]] == [book.id]
+    assert recycle_bin["books"][0]["purge_after"] is not None
 
     # Deleting again is idempotent (returns 204)
     response = client.delete(f"/api/books/{book.id}")
@@ -1748,7 +1751,97 @@ async def test_delete_book_by_id(db_session):
 
 
 @pytest.mark.asyncio
-async def test_delete_book_by_id_removes_author_folder_when_empty(db_session):
+async def test_recycle_bin_restore_returns_book_to_library(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Restore Me",
+                author="Author",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    assert client.delete(f"/api/books/{book.id}").status_code == 204
+    assert client.get(f"/api/books/{book.id}").status_code == 404
+
+    restore_response = client.post(f"/api/recycle-bin/{book.id}/restore")
+
+    assert restore_response.status_code == 200
+    assert restore_response.json()["deleted_at"] is None
+    assert client.get(f"/api/books/{book.id}").json()["title"] == "Restore Me"
+    assert client.get("/api/recycle-bin").json()["books"] == []
+
+
+@pytest.mark.asyncio
+async def test_book_revision_can_restore_metadata(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Original Title",
+                author="Original Author",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    update_response = client.put(
+        f"/api/books/{book.id}",
+        json={"title": "Changed Title", "author": "Changed Author"},
+    )
+    assert update_response.status_code == 200
+
+    revisions = client.get(f"/api/books/{book.id}/revisions").json()
+    assert len(revisions) == 1
+    assert revisions[0]["snapshot"]["title"] == "Original Title"
+
+    restore_response = client.post(f"/api/books/{book.id}/revisions/{revisions[0]['id']}/restore")
+
+    assert restore_response.status_code == 200
+    assert restore_response.json()["title"] == "Original Title"
+    assert restore_response.json()["author"] == "Original Author"
+    assert len(client.get(f"/api/books/{book.id}/revisions").json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_restore_original_epub_clears_book_cleaning_rules(db_session, tmp_path, monkeypatch):
+    from backend.app.routers import books as books_router
+
+    library_path = (tmp_path / "library").resolve()
+    monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    library_path.mkdir(parents=True)
+    immutable_path = library_path / "immutable_Original.epub"
+    current_path = library_path / "Original.epub"
+    create_dummy_epub(immutable_path, "Original", "Author")
+    current_path.write_bytes(b"changed-current-copy")
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Original",
+                author="Author",
+                source_type=models.SourceType.epub,
+                immutable_path=str(immutable_path.relative_to(library_path.parent)),
+                current_path=str(current_path.relative_to(library_path.parent)),
+                removed_chapters=["chapter-2.xhtml"],
+                content_selectors=[".advertisement"],
+            ),
+        )
+
+    response = client.post(f"/api/books/{book.id}/restore-original")
+
+    assert response.status_code == 200
+    assert response.json()["removed_chapters"] == []
+    assert response.json()["content_selectors"] == []
+    assert current_path.read_bytes() == immutable_path.read_bytes()
+    revisions = client.get(f"/api/books/{book.id}/revisions").json()
+    assert revisions[0]["action"] == "original_restored"
+    assert revisions[0]["snapshot"]["removed_chapters"] == ["chapter-2.xhtml"]
+
+
+@pytest.mark.asyncio
+async def test_delete_book_preserves_files_until_permanent_delete(db_session):
     library_path = Path("./library").resolve()
     author_dir = library_path / "Folder Author"
     author_dir.mkdir(parents=True, exist_ok=True)
@@ -1773,11 +1866,18 @@ async def test_delete_book_by_id_removes_author_folder_when_empty(db_session):
     response = client.delete(f"/api/books/{book.id}")
 
     assert response.status_code == 204
+    assert author_dir.exists()
+    assert immutable_path.exists()
+    assert current_path.exists()
+
+    response = client.delete(f"/api/recycle-bin/{book.id}")
+
+    assert response.status_code == 204
     assert not author_dir.exists()
 
 
 @pytest.mark.asyncio
-async def test_delete_book_by_id_removes_owned_audiobook_directory(db_session, tmp_path, monkeypatch):
+async def test_delete_book_preserves_audiobook_until_permanent_delete(db_session, tmp_path, monkeypatch):
     from backend.app.routers import books as books_router
 
     library_path = (tmp_path / "library").resolve()
@@ -1800,6 +1900,11 @@ async def test_delete_book_by_id_removes_owned_audiobook_directory(db_session, t
     source_path.write_bytes(b"large-audio-placeholder")
 
     response = client.delete(f"/api/books/{book.id}")
+
+    assert response.status_code == 204
+    assert audiobook_dir.exists()
+
+    response = client.delete(f"/api/recycle-bin/{book.id}")
 
     assert response.status_code == 204
     assert not audiobook_dir.exists()
@@ -1871,7 +1976,17 @@ async def test_remove_all_books_preview_and_delete(db_session):
     delete_response = client.post("/api/books/remove-all?dry_run=false")
 
     assert delete_response.status_code == 200
+    assert delete_response.json()["recoverable"] is True
     assert client.get("/api/books").json() == []
+    recycled_books = client.get("/api/recycle-bin").json()["books"]
+    assert len(recycled_books) == 2
+    assert author_one_dir.exists()
+    assert author_two_dir.exists()
+    assert cover_path.exists()
+    assert audiobook_path.exists()
+
+    for recycled_book in recycled_books:
+        assert client.delete(f"/api/recycle-bin/{recycled_book['id']}").status_code == 204
     assert not author_one_dir.exists()
     assert not author_two_dir.exists()
     assert not cover_path.exists()

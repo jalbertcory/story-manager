@@ -11,7 +11,6 @@ describe("BookSettings", () => {
 
   it("shows the source URL and can remove the web marker", async () => {
     const onBack = vi.fn();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const fetchMock = vi.fn((url, options) => {
       if (url === "/api/books/7/chapters") {
         return Promise.resolve({
@@ -93,10 +92,8 @@ describe("BookSettings", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Convert to EPUB-only" }));
-
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Remove the web marker from "Imported Story"? This will keep the EPUB files but stop treating it as a web novel.',
-    );
+    expect(screen.getByRole("dialog", { name: /Remove the web source/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/books/7/detach-source", {
@@ -110,7 +107,6 @@ describe("BookSettings", () => {
 
   it("allows removing the web marker when a web book has epub files but no source URL", async () => {
     const onBack = vi.fn();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const fetchMock = vi.fn((url, options) => {
       if (url === "/api/books/8/chapters") {
         return Promise.resolve({
@@ -196,6 +192,7 @@ describe("BookSettings", () => {
     });
     expect(removeButton).toBeEnabled();
     fireEvent.click(removeButton);
+    fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/books/8/detach-source", {

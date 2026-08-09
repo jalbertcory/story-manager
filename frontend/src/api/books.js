@@ -35,6 +35,39 @@ export function deleteBook(bookId) {
   });
 }
 
+export function getRecycleBin() {
+  return getJson("/api/recycle-bin", "Failed to load recycle bin");
+}
+
+export function restoreRecycledBook(bookId) {
+  return sendWithoutBody(`/api/recycle-bin/${bookId}/restore`, {
+    fallbackMessage: "Restore failed",
+  });
+}
+
+export function permanentlyDeleteRecycledBook(bookId) {
+  return sendWithoutBody(`/api/recycle-bin/${bookId}`, {
+    method: "DELETE",
+    fallbackMessage: "Permanent delete failed",
+  });
+}
+
+export function getBookRevisions(bookId) {
+  return getJson(`/api/books/${bookId}/revisions`, "Failed to load change history");
+}
+
+export function restoreBookRevision(bookId, revisionId) {
+  return sendWithoutBody(`/api/books/${bookId}/revisions/${revisionId}/restore`, {
+    fallbackMessage: "Failed to restore revision",
+  });
+}
+
+export function restoreOriginalEpub(bookId) {
+  return sendWithoutBody(`/api/books/${bookId}/restore-original`, {
+    fallbackMessage: "Failed to restore original EPUB",
+  });
+}
+
 export function processBook(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/process`, {
     fallbackMessage: "Processing failed",

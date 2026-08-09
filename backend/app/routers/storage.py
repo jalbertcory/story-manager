@@ -70,7 +70,8 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
     if not LIBRARY_PATH.exists():
         return {"dry_run": dry_run, "files": [], "books": [], "total_bytes": 0}
 
-    books = await crud.get_books(db, limit=100000)
+    active_books = await crud.get_books(db, limit=100000)
+    books = await crud.get_all_books_including_deleted(db)
     failed_import_books = [
         {
             "book_id": book.id,
@@ -79,13 +80,13 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             "source_url": book.source_url,
             "issue": "failed_web_import",
         }
-        for book in books
+        for book in active_books
         if is_failed_web_import_placeholder(book)
     ]
 
     # Refuse to run if any downloads are still in progress — their files
     # are not yet recorded in the DB and would be incorrectly flagged.
-    pending = [b for b in books if b.download_status == "pending"]
+    pending = [b for b in active_books if b.download_status == "pending"]
     if pending:
         return {
             "dry_run": dry_run,
@@ -127,7 +128,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             full = LIBRARY_PATH.parent / f["path"]
             logger.info("Storage cleanup: deleting %s", f["path"])
             full.unlink(missing_ok=True)
-        for book in books:
+        for book in active_books:
             if not is_failed_web_import_placeholder(book):
                 continue
             logger.info("Storage cleanup: deleting failed web import placeholder book %s (%s)", book.id, book.source_url)

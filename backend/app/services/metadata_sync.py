@@ -978,11 +978,21 @@ async def apply_metadata_sync(
     updated_books = 0
     synced_at = datetime.now(timezone.utc)
 
+    from .book_recovery import add_book_revision, snapshot_book
+
     for suggestion in suggestions:
         if not suggestion.matched:
             continue
 
+        previous_snapshot = snapshot_book(suggestion.book)
         if apply_suggestion_to_book(suggestion.book, suggestion, source=suggestion.source, synced_at=synced_at):
+            add_book_revision(
+                db,
+                suggestion.book,
+                action="metadata_changed",
+                summary=f"Applied metadata from {suggestion.source or 'Open Library'}",
+                snapshot=previous_snapshot,
+            )
             updated_books += 1
 
     await db.commit()
