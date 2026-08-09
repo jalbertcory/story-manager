@@ -1,11 +1,14 @@
 """Structured error responses and global exception handlers."""
 
 import logging
-import traceback
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from .logging_config import redact_value
+from .observability_context import request_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +17,28 @@ class ErrorResponse(BaseModel):
     error: str
     detail: str
     status_code: int
+    request_id: str
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", None) or request_id_var.get()
+
+
+def _error_response(request: Request, status_code: int, detail, *, headers=None) -> JSONResponse:
+    request_id = _request_id(request)
+    response_headers = dict(headers or {})
+    if request_id:
+        response_headers["X-Request-ID"] = request_id
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": _status_to_error_code(status_code),
+            "detail": redact_value(detail),
+            "status_code": status_code,
+            "request_id": request_id,
+        },
+        headers=response_headers,
+    )
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -21,32 +46,24 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": _status_to_error_code(exc.status_code),
-                "detail": exc.detail,
-                "status_code": exc.status_code,
-            },
-            headers=getattr(exc, "headers", None),
-        )
+        return _error_response(request, exc.status_code, exc.detail, headers=getattr(exc, "headers", None))
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return _error_response(request, 422, exc.errors())
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.error(
-            "Unhandled exception on %s %s: %s\n%s",
+        logger.exception(
+            "Unhandled exception on %s %s: %s",
             request.method,
             request.url.path,
             exc,
-            traceback.format_exc(),
         )
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": "internal_error",
-                "detail": "An unexpected error occurred.",
-                "status_code": 500,
-            },
+        return _error_response(
+            request,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "An unexpected error occurred.",
         )
 
 

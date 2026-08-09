@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
+from uuid import uuid4
 
 from sqlalchemy import and_, desc, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..lifecycle import PROCESSING_JOB, ProcessingJobStatus, transition_state
 from ..models import Book, ProcessingJob
+from ..observability_context import request_id_var
 
 ACTIVE_PROCESSING_STATUSES = tuple(PROCESSING_JOB.active_states)
 
@@ -52,6 +54,7 @@ async def create_processing_job(
         target_id=target_id,
         target_content_version=target_content_version,
         parent_job_id=parent_job_id,
+        request_id=request_id_var.get() or uuid4().hex[:12],
         payload=payload or {},
         dedupe_key=dedupe_key,
         resource_lane=resource_lane,

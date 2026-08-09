@@ -125,7 +125,7 @@ The first deployment can retain a single-container experience, but job ownership
 
 ## 7. Centralized state-machine definitions
 
-**Status:** In progress
+**Status:** Complete
 
 Replace scattered lifecycle strings and implicit transitions with centralized state definitions for processing jobs, web imports and refreshes, metadata jobs, generated audiobooks, imported audiobooks, alignment, and publication.
 
@@ -144,7 +144,7 @@ State machines should define valid transitions, terminal states, retry behavior,
 
 ## 8. Stronger observability
 
-**Status:** Planned
+**Status:** In progress
 
 Make failures diagnosable without reading raw container output. Connect request IDs to log records, expose worker and dependency health, measure job behavior, and provide a user-downloadable diagnostic bundle with secrets removed.
 

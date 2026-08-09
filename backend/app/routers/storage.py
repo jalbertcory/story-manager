@@ -1,16 +1,16 @@
-"""Storage cleanup and in-memory log endpoints."""
+"""Storage cleanup and persistent log endpoints."""
 
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..logging_config import _LOG_BUFFER
+from ..logging_config import read_persisted_logs
 from ..services.library_health import inspect_library_files, is_failed_web_import_placeholder
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,17 @@ async def post_client_log(entry: ClientLogEntry):
 
 
 @router.get("/api/logs")
-async def get_logs(limit: int = 200, level: Optional[str] = None):
-    entries = list(_LOG_BUFFER)
-    if level:
-        upper = level.upper()
-        entries = [e for e in entries if e["level"] == upper]
+async def get_logs(
+    limit: int = Query(default=200, ge=1, le=1000),
+    level: Optional[str] = None,
+    request_id: Optional[str] = None,
+    job_id: Optional[int] = None,
+):
+    entries = read_persisted_logs(limit=1000, level=level)
+    if request_id:
+        entries = [entry for entry in entries if entry.get("request_id") == request_id]
+    if job_id is not None:
+        entries = [entry for entry in entries if entry.get("job_id") == job_id]
     return entries[-limit:]
 
 

@@ -41,6 +41,7 @@ from .lifecycle import (
     UpdateTaskStatus,
 )
 import enum
+from uuid import uuid4
 
 
 def _state_check(column_name: str, machine: StateMachine, name: str) -> CheckConstraint:
@@ -185,6 +186,7 @@ class ProcessingJob(Base):
     target_id = Column(Integer, nullable=True)
     target_content_version = Column(Integer, nullable=True)
     parent_job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True)
+    request_id = Column(String(64), nullable=False, default=lambda: uuid4().hex[:12], index=True)
     payload = Column(JSON, nullable=True)
     dedupe_key = Column(String, nullable=True, index=True)
     progress_current = Column(Integer, nullable=False, default=0, server_default="0")

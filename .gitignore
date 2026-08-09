@@ -196,3 +196,5 @@ config
 # Mac specific files
 .DS_Store
 .DS_Store?
+# Persistent local application logs
+/logs/
