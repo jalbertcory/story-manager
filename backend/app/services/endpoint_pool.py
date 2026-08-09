@@ -110,9 +110,18 @@ async def route_request(
     last_error: Exception | None = None
     for endpoint in available:
         key = _endpoint_key(capability, endpoint)
+        started_at = time.perf_counter()
         try:
             value = await attempt(_endpoint_settings(settings, capability, endpoint))
         except Exception as exc:
+            await _record_endpoint_attempt(
+                settings,
+                capability,
+                endpoint,
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                error_type=type(exc).__name__,
+            )
             _cooldowns[key] = time.monotonic() + COOLDOWN_SECONDS
             logger.warning(
                 "%s endpoint %r failed and will cool down for %.0f seconds: %s",
@@ -123,11 +132,35 @@ async def route_request(
             )
             last_error = exc
             continue
+        await _record_endpoint_attempt(
+            settings,
+            capability,
+            endpoint,
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
         _cooldowns.pop(key, None)
         return RoutedResult(value=value, endpoint=endpoint)
 
     assert last_error is not None
     raise last_error
+
+
+async def _record_endpoint_attempt(
+    settings: AudiobookSettings,
+    capability: str,
+    endpoint: dict[str, Any],
+    **measurement: Any,
+) -> None:
+    """Keep observability failures from affecting the routed AI request."""
+    if settings.id is None:
+        return
+    try:
+        from .endpoint_metrics import record_attempt
+
+        await record_attempt(settings.id, capability, endpoint, **measurement)
+    except Exception:
+        logger.exception("Failed to record %s endpoint request metric", capability.upper())
 
 
 def reset_cooldowns() -> None:

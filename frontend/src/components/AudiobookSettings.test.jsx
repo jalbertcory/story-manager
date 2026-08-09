@@ -124,4 +124,111 @@ describe("AudiobookSettings", () => {
       "always-on",
     ]);
   });
+
+  it("compares request counts and speed metrics for LLM endpoints", async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/audiobook/settings") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              llm_endpoints: [
+                {
+                  id: "gaming-pc",
+                  name: "Gaming PC",
+                  provider: "ollama",
+                  model: "qwen3.5:27b",
+                },
+              ],
+              tts_provider: "stub",
+              transcription_provider: "none",
+            }),
+        });
+      }
+      if (url === "/api/audiobook/settings/endpoint-stats") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              llm: [
+                {
+                  endpoint_id: "gaming-pc",
+                  name: "Gaming PC",
+                  provider: "ollama",
+                  model: "qwen3.5:27b",
+                  requests: 10,
+                  answered: 9,
+                  failed: 1,
+                  success_rate: 90,
+                  average_ms: 2400,
+                  p50_ms: 1900,
+                  p95_ms: 5200,
+                  answered_24h: 3,
+                  speed_buckets: {
+                    under_5s: 8,
+                    from_5s_to_15s: 1,
+                    from_15s_to_60s: 0,
+                    over_60s: 0,
+                  },
+                },
+              ],
+              tts: [
+                {
+                  endpoint_id: "tts-host",
+                  name: "TTS Host",
+                  provider: "omnivoice",
+                  requests: 5,
+                  answered: 5,
+                  failed: 0,
+                  success_rate: 100,
+                  average_ms: 800,
+                  p50_ms: 750,
+                  p95_ms: 1100,
+                  answered_24h: 2,
+                  speed_buckets: {
+                    under_5s: 5,
+                    from_5s_to_15s: 0,
+                    from_15s_to_60s: 0,
+                    over_60s: 0,
+                  },
+                },
+              ],
+              transcription: [
+                {
+                  endpoint_id: "stt-host",
+                  name: "Speech Host",
+                  provider: "whisperx",
+                  requests: 2,
+                  answered: 1,
+                  failed: 1,
+                  success_rate: 50,
+                  average_ms: 65_000,
+                  p50_ms: 65_000,
+                  p95_ms: 65_000,
+                  answered_24h: 1,
+                  speed_buckets: {
+                    under_5s: 0,
+                    from_5s_to_15s: 0,
+                    from_15s_to_60s: 0,
+                    over_60s: 1,
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    renderWithClient(<AudiobookSettings />);
+
+    expect(await screen.findAllByText("Connection performance")).toHaveLength(3);
+    expect(screen.getByText("90% answered")).toBeInTheDocument();
+    expect(screen.getByText("2.4 s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Gaming PC speed breakdown")).toHaveTextContent("<5s 8");
+    expect(screen.getByText("TTS Host")).toBeInTheDocument();
+    expect(screen.getByText("800 ms")).toBeInTheDocument();
+    expect(screen.getByText("Speech Host")).toBeInTheDocument();
+    expect(screen.getAllByText("1.1 min")).toHaveLength(3);
+  });
 });
