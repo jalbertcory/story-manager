@@ -47,6 +47,7 @@ from ..services.transcription_providers import (
     transcription_service_health,
 )
 from ..services.endpoint_pool import configured_endpoints, primary_provider
+from ..services.endpoint_metrics import endpoint_summaries
 from ..services.metadata.scoring import normalize_text
 from ..services.tts_providers import (
     TTSRequest,
@@ -245,6 +246,43 @@ class EndpointUpdate(BaseModel):
     model: Optional[str] = None
     default_voice: Optional[str] = None
     language: Optional[str] = None
+
+
+class EndpointSpeedBuckets(BaseModel):
+    under_5s: int
+    from_5s_to_15s: int
+    from_15s_to_60s: int
+    over_60s: int
+
+
+class EndpointStats(BaseModel):
+    endpoint_id: str
+    name: str
+    provider: str
+    model: Optional[str]
+    requests: int
+    answered: int
+    failed: int
+    success_rate: Optional[float]
+    average_ms: Optional[float]
+    p50_ms: Optional[float]
+    p95_ms: Optional[float]
+    fastest_ms: Optional[float]
+    slowest_ms: Optional[float]
+    answered_24h: int
+    average_24h_ms: Optional[float]
+    speed_buckets: EndpointSpeedBuckets
+    last_answered_at: Optional[datetime]
+
+
+class EndpointStatsResponse(BaseModel):
+    endpoints: list[EndpointStats]
+
+
+class AllEndpointStatsResponse(BaseModel):
+    llm: list[EndpointStats]
+    tts: list[EndpointStats]
+    transcription: list[EndpointStats]
 
 
 class SettingsUpdate(BaseModel):
@@ -1756,6 +1794,24 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
     if tts_changed:
         await crud.audiobook.invalidate_generated_audio_for_tts_change(db)
     return _settings_response(settings)
+
+
+@router.get("/api/audiobook/settings/llm-stats", response_model=EndpointStatsResponse)
+async def get_llm_endpoint_stats(db: AsyncSession = Depends(get_db)) -> EndpointStatsResponse:
+    """Compare reliability and response latency across configured LLM endpoints."""
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    return EndpointStatsResponse(endpoints=await endpoint_summaries(db, settings, "llm"))
+
+
+@router.get("/api/audiobook/settings/endpoint-stats", response_model=AllEndpointStatsResponse)
+async def get_endpoint_stats(db: AsyncSession = Depends(get_db)) -> AllEndpointStatsResponse:
+    """Compare reliability and response latency across all configured AI endpoints."""
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    return AllEndpointStatsResponse(
+        llm=await endpoint_summaries(db, settings, "llm"),
+        tts=await endpoint_summaries(db, settings, "tts"),
+        transcription=await endpoint_summaries(db, settings, "transcription"),
+    )
 
 
 @router.post("/api/audiobook/settings/test-llm")

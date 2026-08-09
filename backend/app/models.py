@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Enum,
     JSON,
+    Index,
     Numeric,
     Text,
     UniqueConstraint,
@@ -257,6 +258,37 @@ class AudiobookSettings(Base):
     transcription_endpoints = Column(JSON, nullable=True)
     roster_prompt_template = Column(Text, nullable=True)
     diarization_prompt_template = Column(Text, nullable=True)
+
+
+class AiEndpointRequestMetric(Base):
+    """One completed attempt against a configured AI endpoint."""
+
+    __tablename__ = "ai_endpoint_request_metrics"
+    __table_args__ = (
+        Index(
+            "ix_ai_endpoint_metrics_settings_capability_endpoint_created",
+            "settings_id",
+            "capability",
+            "endpoint_id",
+            "created_at",
+        ),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    settings_id = Column(
+        Integer,
+        ForeignKey("audiobook_settings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    capability = Column(String, nullable=False)
+    endpoint_id = Column(String, nullable=False)
+    endpoint_name = Column(String, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=True)
+    success = Column(Boolean, nullable=False, index=True)
+    duration_ms = Column(Float, nullable=False)
+    error_type = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class AudiobookChapter(Base):

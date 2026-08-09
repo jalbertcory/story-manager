@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getAudiobookEndpointStats,
   getAudiobookSettings,
   testAudiobookLlm,
   testAudiobookTranscription,
@@ -338,11 +339,78 @@ function useEndpointTestMutation(testFunction, buildPayload, refreshSettings) {
   });
 }
 
+function formatDuration(milliseconds) {
+  if (milliseconds === null || milliseconds === undefined) return "—";
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)} s`;
+  return `${(milliseconds / 60_000).toFixed(1)} min`;
+}
+
+function EndpointMetrics({ stats, capability, isLoading, error, onRefresh, isRefreshing }) {
+  return (
+    <div className="llm-metrics">
+      <div className="llm-metrics-heading">
+        <div>
+          <h4>Connection performance</h4>
+          <p className="settings-hint">
+            Successful {capability} requests and endpoint failures are recorded from this upgrade onward.
+            Latency is measured end-to-end for each endpoint attempt.
+          </p>
+        </div>
+        <button type="button" className="btn-secondary" onClick={onRefresh} disabled={isRefreshing}>
+          {isRefreshing ? "Refreshing…" : "Refresh metrics"}
+        </button>
+      </div>
+      {isLoading && <p className="settings-hint">Loading connection metrics…</p>}
+      {error && <p className="error">{error.message || "Failed to load connection metrics"}</p>}
+      {!isLoading && !error && stats.length === 0 && (
+        <p className="settings-hint">Save an LLM endpoint to begin collecting metrics.</p>
+      )}
+      {stats.length > 0 && (
+        <div className="llm-metric-grid">
+          {stats.map((endpoint) => (
+            <article className="llm-metric-card" key={endpoint.endpoint_id}>
+              <header>
+                <div>
+                  <strong>{endpoint.name}</strong>
+                  <span>{endpoint.provider}{endpoint.model ? ` · ${endpoint.model}` : ""}</span>
+                </div>
+                <span className="llm-success-rate">
+                  {endpoint.success_rate === null ? "No data" : `${endpoint.success_rate}% answered`}
+                </span>
+              </header>
+              <dl className="llm-metric-summary">
+                <div><dt>Answered</dt><dd>{endpoint.answered}</dd></div>
+                <div><dt>Failed attempts</dt><dd>{endpoint.failed}</dd></div>
+                <div><dt>Average</dt><dd>{formatDuration(endpoint.average_ms)}</dd></div>
+                <div><dt>P50</dt><dd>{formatDuration(endpoint.p50_ms)}</dd></div>
+                <div><dt>P95</dt><dd>{formatDuration(endpoint.p95_ms)}</dd></div>
+                <div><dt>Last 24h</dt><dd>{endpoint.answered_24h}</dd></div>
+              </dl>
+              <div className="llm-speed-breakdown" aria-label={`${endpoint.name} speed breakdown`}>
+                <span>&lt;5s <strong>{endpoint.speed_buckets.under_5s}</strong></span>
+                <span>5–15s <strong>{endpoint.speed_buckets.from_5s_to_15s}</strong></span>
+                <span>15–60s <strong>{endpoint.speed_buckets.from_15s_to_60s}</strong></span>
+                <span>60s+ <strong>{endpoint.speed_buckets.over_60s}</strong></span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AudiobookSettings() {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useQuery({
     queryKey: ["audiobook-settings"],
     queryFn: getAudiobookSettings,
+  });
+  const endpointStatsQuery = useQuery({
+    queryKey: ["audiobook-endpoint-stats"],
+    queryFn: getAudiobookEndpointStats,
+    refetchInterval: 30_000,
   });
 
   const [llmEndpoints, setLlmEndpoints] = useState([]);
@@ -385,6 +453,7 @@ function AudiobookSettings() {
     setTtsEndpoints(clearTypedSecrets);
     setTranscriptionEndpoints(clearTypedSecrets);
     queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    queryClient.invalidateQueries({ queryKey: ["audiobook-endpoint-stats"] });
   };
 
   const saveMutation = useMutation({
@@ -453,6 +522,14 @@ function AudiobookSettings() {
             setEndpoints={setLlmEndpoints}
           />
           {testStatus(llmTest, "LLM")}
+          <EndpointMetrics
+            stats={endpointStatsQuery.data?.llm || []}
+            capability="LLM"
+            isLoading={endpointStatsQuery.isLoading}
+            error={endpointStatsQuery.error}
+            onRefresh={() => endpointStatsQuery.refetch()}
+            isRefreshing={endpointStatsQuery.isFetching}
+          />
         </section>
 
         <section className="settings-section">
@@ -462,6 +539,14 @@ function AudiobookSettings() {
             setEndpoints={setTtsEndpoints}
           />
           {testStatus(ttsTest, "TTS")}
+          <EndpointMetrics
+            stats={endpointStatsQuery.data?.tts || []}
+            capability="TTS"
+            isLoading={endpointStatsQuery.isLoading}
+            error={endpointStatsQuery.error}
+            onRefresh={() => endpointStatsQuery.refetch()}
+            isRefreshing={endpointStatsQuery.isFetching}
+          />
         </section>
 
         <section className="settings-section">
@@ -471,6 +556,14 @@ function AudiobookSettings() {
             setEndpoints={setTranscriptionEndpoints}
           />
           {testStatus(transcriptionTest, "Transcription")}
+          <EndpointMetrics
+            stats={endpointStatsQuery.data?.transcription || []}
+            capability="speech-to-text"
+            isLoading={endpointStatsQuery.isLoading}
+            error={endpointStatsQuery.error}
+            onRefresh={() => endpointStatsQuery.refetch()}
+            isRefreshing={endpointStatsQuery.isFetching}
+          />
         </section>
 
         <section className="settings-section">

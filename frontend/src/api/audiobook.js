@@ -250,6 +250,13 @@ export function updateAudiobookSettings(data) {
   });
 }
 
+export function getAudiobookEndpointStats() {
+  return getJson(
+    "/api/audiobook/settings/endpoint-stats",
+    "Failed to fetch AI endpoint metrics",
+  );
+}
+
 export function testAudiobookLlm() {
   return sendWithoutBody("/api/audiobook/settings/test-llm", {
     method: "POST",
