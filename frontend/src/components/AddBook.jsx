@@ -53,6 +53,15 @@ const AUDIO_EXTENSIONS = new Set([
   ".zip",
 ]);
 
+const MATCH_STOP_WORDS = new Set([
+  "and",
+  "book",
+  "edition",
+  "series",
+  "the",
+  "volume",
+]);
+
 function requestedImportType() {
   const requested = new URLSearchParams(window.location.search).get("type");
   return IMPORT_TYPES.some((item) => item.key === requested)
@@ -144,6 +153,90 @@ function selectAudiobookFiles(selectedFiles) {
   );
 }
 
+function normalizeMatchText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function bookLabel(book) {
+  return `${book.title} — ${book.author || "Unknown author"}`;
+}
+
+function titleVariants(title) {
+  const full = normalizeMatchText(title);
+  const titleText = String(title || "");
+  const primary = normalizeMatchText(
+    titleText.split(":", 1)[0].split("(", 1)[0].split("[", 1)[0],
+  );
+  return [...new Set([full, primary].filter(Boolean))];
+}
+
+function significantTokens(value) {
+  return normalizeMatchText(value)
+    .split(" ")
+    .filter((token) => token.length > 2 && !MATCH_STOP_WORDS.has(token));
+}
+
+function scoreFilenameMatch(book, fileText) {
+  const normalizedFile = normalizeMatchText(fileText);
+  const variants = titleVariants(book.title);
+  let score = 0;
+
+  variants.forEach((variant, index) => {
+    if (variant.length >= 4 && normalizedFile.includes(variant)) {
+      score = Math.max(score, (index === 0 ? 1000 : 900) + variant.length);
+    }
+  });
+
+  const titleTokens = significantTokens(book.title);
+  const fileTokens = new Set(significantTokens(fileText));
+  const matchedTokens = titleTokens.filter((token) => fileTokens.has(token));
+  const coverage = titleTokens.length
+    ? matchedTokens.length / titleTokens.length
+    : 0;
+  if (matchedTokens.length >= 2 && coverage >= 0.7) {
+    score = Math.max(score, 500 + coverage * 100 + matchedTokens.length);
+  }
+
+  if (score > 0) {
+    const authorTokens = significantTokens(book.author);
+    score += authorTokens.filter((token) => fileTokens.has(token)).length * 10;
+  }
+  return score;
+}
+
+function findFilenameBookMatch(files, catalog) {
+  const fileText = files
+    .map((file) => file.webkitRelativePath || file.name)
+    .join(" ");
+  const candidates = catalog
+    .map((book) => ({ book, score: scoreFilenameMatch(book, fileText) }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  if (!candidates.length) return null;
+  if (candidates[1] && candidates[0].score - candidates[1].score < 5) {
+    return null;
+  }
+  return candidates[0].book;
+}
+
+function scoreBookSearch(book, normalizedQuery) {
+  const title = normalizeMatchText(book.title);
+  const author = normalizeMatchText(book.author);
+  if (title === normalizedQuery) return 100;
+  if (title.startsWith(normalizedQuery)) return 90;
+  if (title.includes(normalizedQuery)) return 80;
+  if (author === normalizedQuery) return 70;
+  if (author.startsWith(normalizedQuery)) return 60;
+  if (author.includes(normalizedQuery)) return 50;
+  return 0;
+}
+
 function previewStatusLabel(status) {
   switch (status) {
     case "ready":
@@ -169,11 +262,13 @@ const AddBook = forwardRef(function AddBook(
   const fileInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const audioDirectoryRef = useRef(null);
+  const lastAutoMatchSignatureRef = useRef("");
   const [importType, setImportType] = useState(requestedImportType);
   const [files, setFiles] = useState([]);
   const [urls, setUrls] = useState([""]);
   const [audioFiles, setAudioFiles] = useState([]);
   const [selectedBookId, setSelectedBookId] = useState(requestedBookId);
+  const [audioMatchNotice, setAudioMatchNotice] = useState("");
   const [editionName, setEditionName] = useState("");
   const [autoAlign, setAutoAlign] = useState(true);
   const [dragging, setDragging] = useState(false);
@@ -216,6 +311,7 @@ const AddBook = forwardRef(function AddBook(
     const onPopState = () => {
       setImportType(requestedImportType());
       setSelectedBookId(requestedBookId());
+      setAudioMatchNotice("");
       setPreview(null);
       setResults(null);
     };
@@ -223,11 +319,41 @@ const AddBook = forwardRef(function AddBook(
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  useEffect(() => {
+    const signature = audioFiles
+      .map((file) => file.webkitRelativePath || file.name)
+      .join("|");
+    if (
+      !signature ||
+      !catalog.length ||
+      selectedBookId ||
+      lastAutoMatchSignatureRef.current === signature
+    ) {
+      return;
+    }
+
+    lastAutoMatchSignatureRef.current = signature;
+    const matchedBook = findFilenameBookMatch(audioFiles, catalog);
+    if (matchedBook) {
+      setSelectedBookId(matchedBook.id);
+      setAudioMatchNotice(
+        `Matched from the filename: ${bookLabel(matchedBook)}. Please confirm before importing.`,
+      );
+    }
+  }, [audioFiles, catalog, selectedBookId]);
+
   const resetInspection = () => {
     setPreview(null);
     setPreviewError("");
     setDuplicatesReviewed(false);
     setResults(null);
+  };
+
+  const chooseAudioFiles = (selectedFiles) => {
+    lastAutoMatchSignatureRef.current = "";
+    setAudioMatchNotice("");
+    setAudioFiles(selectAudiobookFiles(selectedFiles));
+    resetInspection();
   };
 
   const chooseType = (type) => {
@@ -403,6 +529,11 @@ const AddBook = forwardRef(function AddBook(
   const canImport =
     (preview?.ready_count > 0 || preview?.duplicate_count > 0) &&
     (preview.duplicate_count === 0 || duplicatesReviewed);
+  const selectionHeading = {
+    books: "Select book files",
+    web: "Enter source URLs",
+    audiobook: "Match narration to a library book",
+  }[importType];
 
   if (importType === "libation") {
     return (
@@ -422,7 +553,7 @@ const AddBook = forwardRef(function AddBook(
       {!preview && !results && (
         <section className="import-panel" aria-labelledby="import-input-heading">
           <span className="import-step-code">01 / SELECT</span>
-          <h3 id="import-input-heading">Choose what to inspect</h3>
+          <h3 id="import-input-heading">{selectionHeading}</h3>
 
           {importType === "books" && (
             <>
@@ -513,23 +644,23 @@ const AddBook = forwardRef(function AddBook(
 
           {importType === "audiobook" && (
             <div className="import-audiobook-inputs">
-              <label>
-                Attach narration to
-                <select
-                  value={selectedBookId || ""}
-                  onChange={(event) => {
-                    setSelectedBookId(Number(event.target.value) || null);
-                    resetInspection();
-                  }}
-                >
-                  <option value="">Choose a library book</option>
-                  {catalog.map((book) => (
-                    <option key={book.id} value={book.id}>
-                      {book.title} — {book.author || "Unknown author"}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <BookCombobox
+                books={catalog}
+                selectedBookId={selectedBookId}
+                onSelect={(bookId) => {
+                  lastAutoMatchSignatureRef.current = audioFiles
+                    .map((file) => file.webkitRelativePath || file.name)
+                    .join("|");
+                  setSelectedBookId(bookId);
+                  setAudioMatchNotice("");
+                  resetInspection();
+                }}
+              />
+              {audioMatchNotice && (
+                <p className="import-match-notice" role="status">
+                  {audioMatchNotice}
+                </p>
+              )}
               <label>
                 Edition name (optional)
                 <input
@@ -546,10 +677,7 @@ const AddBook = forwardRef(function AddBook(
                     type="file"
                     multiple
                     accept=".zip,.cue,.m4b,.m4a,.mp3,.mp4,.aac,.flac,.ogg,.opus,.wav,audio/*"
-                    onChange={(event) => {
-                      setAudioFiles(selectAudiobookFiles(event.target.files));
-                      resetInspection();
-                    }}
+                    onChange={(event) => chooseAudioFiles(event.target.files)}
                   />
                 </label>
                 <label>
@@ -560,10 +688,7 @@ const AddBook = forwardRef(function AddBook(
                     multiple
                     webkitdirectory=""
                     directory=""
-                    onChange={(event) => {
-                      setAudioFiles(selectAudiobookFiles(event.target.files));
-                      resetInspection();
-                    }}
+                    onChange={(event) => chooseAudioFiles(event.target.files)}
                   />
                 </label>
               </div>
@@ -730,6 +855,128 @@ function ImportTypePicker({ selected, onSelect }) {
           <span>{item.description}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+function BookCombobox({ books, selectedBookId, onSelect }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const selectedBook = books.find((book) => book.id === selectedBookId);
+  const selectedLabel = selectedBook ? bookLabel(selectedBook) : "";
+  const normalizedQuery = normalizeMatchText(query);
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const showingSelectedLabel = selectedLabel && query === selectedLabel;
+  const options = (
+    !normalizedQuery || showingSelectedLabel
+      ? books
+      : books
+          .filter((book) => {
+            const searchable = normalizeMatchText(bookLabel(book));
+            return queryTokens.every((token) => searchable.includes(token));
+          })
+          .sort(
+            (left, right) =>
+              scoreBookSearch(right, normalizedQuery) -
+                scoreBookSearch(left, normalizedQuery) ||
+              bookLabel(left).localeCompare(bookLabel(right)),
+          )
+  ).slice(0, 20);
+
+  useEffect(() => {
+    if (selectedBook) {
+      setQuery(bookLabel(selectedBook));
+    }
+  }, [selectedBook]);
+
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [query]);
+
+  const chooseBook = (book) => {
+    setQuery(bookLabel(book));
+    setOpen(false);
+    onSelect(book.id);
+  };
+
+  return (
+    <div
+      className="import-book-combobox"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <label htmlFor="audiobook-book-search">Attach narration to</label>
+      <input
+        id="audiobook-book-search"
+        type="search"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls="audiobook-book-options"
+        aria-activedescendant={
+          open && options[activeIndex]
+            ? `audiobook-book-option-${options[activeIndex].id}`
+            : undefined
+        }
+        placeholder="Search by title or author"
+        autoComplete="off"
+        value={query}
+        onFocus={(event) => {
+          event.currentTarget.select();
+          setOpen(true);
+        }}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+          if (selectedBookId) onSelect(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) =>
+              current < 0 ? 0 : Math.min(current + 1, options.length - 1),
+            );
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => Math.max(current - 1, 0));
+          } else if (event.key === "Enter" && open && options[activeIndex]) {
+            event.preventDefault();
+            chooseBook(options[activeIndex]);
+          } else if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      />
+      {open && (
+        <ul
+          id="audiobook-book-options"
+          className="import-book-options"
+          role="listbox"
+          aria-label="Library book matches"
+        >
+          {options.map((book, index) => (
+            <li
+              id={`audiobook-book-option-${book.id}`}
+              key={book.id}
+              role="option"
+              aria-selected={book.id === selectedBookId}
+              className={index === activeIndex ? "import-book-option--active" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => chooseBook(book)}
+            >
+              <strong>{book.title}</strong>
+              <span>{book.author || "Unknown author"}</span>
+            </li>
+          ))}
+          {!options.length && <li className="import-book-options-empty">No matching books</li>}
+        </ul>
+      )}
     </div>
   );
 }

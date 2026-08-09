@@ -3994,6 +3994,66 @@ body {
   font-size: 0.8rem;
 }
 
+.import-book-combobox {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.import-book-combobox > label {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.import-book-options {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  right: 0;
+  left: 0;
+  max-height: 18rem;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  box-shadow: 0 0.75rem 1.5rem color-mix(in srgb, #000 28%, transparent);
+}
+
+.import-book-options li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.import-book-options li:last-child {
+  border-bottom: 0;
+}
+
+.import-book-options li:hover,
+.import-book-options .import-book-option--active,
+.import-book-options li[aria-selected="true"] {
+  background: var(--surface-2);
+}
+
+.import-book-options span,
+.import-book-options-empty {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.import-match-notice {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .import-url-row,
 .import-audio-pickers {
   display: grid;

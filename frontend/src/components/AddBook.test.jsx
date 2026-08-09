@@ -180,10 +180,19 @@ describe("AddBook", () => {
 
     const { container } = renderWithClient(<AddBook />);
     fireEvent.click(screen.getByRole("button", { name: /Audiobook/ }));
-    await screen.findByRole("option", { name: /Matched Book/ });
-    fireEvent.change(screen.getByLabelText("Attach narration to"), {
-      target: { value: "42" },
+    expect(
+      screen.getByRole("heading", {
+        name: "Match narration to a library book",
+      }),
+    ).toBeInTheDocument();
+    const bookSearch = await screen.findByRole("combobox", {
+      name: "Attach narration to",
     });
+    fireEvent.focus(bookSearch);
+    fireEvent.change(bookSearch, { target: { value: "Matched" } });
+    fireEvent.click(
+      await screen.findByRole("option", { name: /Matched Book/ }),
+    );
     fireEvent.change(
       container.querySelector('input[accept^=".zip"]'),
       {
@@ -203,5 +212,90 @@ describe("AddBook", () => {
         "/api/books/42/audiobook/imports",
       );
     });
+  });
+
+  it("suggests a strong library match from the audiobook filename", async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          id: 42,
+          title: "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure",
+          author: "Matt Dinniman",
+        },
+        {
+          id: 43,
+          title: "Carl's Doomsday Scenario: Dungeon Crawler Carl Book 2",
+          author: "Matt Dinniman",
+        },
+      ]),
+    );
+
+    const { container } = renderWithClient(<AddBook />);
+    fireEvent.click(screen.getByRole("button", { name: /Audiobook/ }));
+    const bookSearch = await screen.findByRole("combobox", {
+      name: "Attach narration to",
+    });
+    fireEvent.focus(bookSearch);
+    await screen.findByRole("option", {
+      name: /Dungeon Crawler Carl: A LitRPG\/Gamelit Adventure/,
+    });
+    fireEvent.change(bookSearch, {
+      target: { value: "Dungeon Crawler Carl" },
+    });
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent(
+      "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure",
+    );
+    fireEvent.change(container.querySelector('input[accept^=".zip"]'), {
+      target: {
+        files: [
+          new File(
+            ["audio"],
+            "Dungeon Crawler Carl [B08V8B2CGV].m4b",
+            { type: "audio/mp4" },
+          ),
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(bookSearch).toHaveValue(
+        "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure — Matt Dinniman",
+      );
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Matched from the filename",
+    );
+    expect(
+      screen.getByRole("button", { name: "Inspect selection" }),
+    ).toBeEnabled();
+  });
+
+  it("leaves ambiguous filename matches for the user to decide", async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      jsonResponse([
+        { id: 42, title: "Shared Title", author: "First Author" },
+        { id: 43, title: "Shared Title", author: "Second Author" },
+      ]),
+    );
+
+    const { container } = renderWithClient(<AddBook />);
+    fireEvent.click(screen.getByRole("button", { name: /Audiobook/ }));
+    const bookSearch = await screen.findByRole("combobox", {
+      name: "Attach narration to",
+    });
+    fireEvent.change(container.querySelector('input[accept^=".zip"]'), {
+      target: {
+        files: [new File(["audio"], "Shared Title.m4b")],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Shared Title.m4b")).toBeInTheDocument();
+    });
+    expect(bookSearch).toHaveValue("");
+    expect(screen.queryByText(/Matched from the filename/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Inspect selection" }),
+    ).toBeDisabled();
   });
 });
