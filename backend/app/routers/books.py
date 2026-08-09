@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,17 +11,28 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, epub_editor, models, schemas
-from ..config import LIBRARY_PATH
+from ..config import LIBRARY_PATH, RECYCLE_BIN_RETENTION_DAYS
 from ..database import get_db
 from ..services.catalog import build_book_catalog, normalize_genre_tags
 from ..services.chapter_history import build_chapter_update_history
 from ..services.library_paths import remove_empty_parent_dirs
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.processing_queue import queue_processing_job
+from ..services.book_recovery import (
+    add_book_revision,
+    get_book_revision,
+    get_book_revisions,
+    restore_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _recovery_files_available(book: models.Book) -> bool:
+    paths = [book.immutable_path, book.current_path]
+    return any(path and (LIBRARY_PATH.parent / path).is_file() for path in paths)
 
 
 def _remove_book_files(book: models.Book) -> list[str]:
@@ -108,6 +120,14 @@ async def rename_series(series_name: str, body: schemas.SeriesRename, db: AsyncS
     new_name = body.new_name.strip()
     if not new_name:
         raise HTTPException(status_code=400, detail="New series name cannot be empty")
+    books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=100000)
+    for book in books:
+        add_book_revision(
+            db,
+            book,
+            action="series_changed",
+            summary=f'Series renamed from "{series_name}" to "{new_name}"',
+        )
     count = await crud.rename_series(db, old_name=series_name, new_name=new_name)
     if count == 0:
         raise HTTPException(status_code=404, detail="No books found with that series name")
@@ -123,6 +143,14 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
         raise HTTPException(status_code=400, detail="Source and target series names are required")
     if source.lower() == target.lower():
         raise HTTPException(status_code=400, detail="Source and target series must be different")
+    books = await crud.get_books_by_series(db, series=source, skip=0, limit=100000)
+    for book in books:
+        add_book_revision(
+            db,
+            book,
+            action="series_changed",
+            summary=f'Merged series "{source}" into "{target}"',
+        )
     count = await crud.merge_series(db, source=source, target=target)
     if count == 0:
         raise HTTPException(status_code=404, detail="No books found in source series")
@@ -132,6 +160,14 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
 @router.post("/api/series/{series_name}/reorder")
 async def reorder_series(series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)):
     """Persist the order of every book in a series."""
+    books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=100000)
+    for book in books:
+        add_book_revision(
+            db,
+            book,
+            action="series_changed",
+            summary=f'Reordered series "{series_name}"',
+        )
     count = await crud.reorder_series_books(db, series=series_name, ordered_book_ids=body.ordered_book_ids)
     if count == 0:
         raise HTTPException(status_code=404, detail="No books found with that series name")
@@ -250,6 +286,18 @@ async def update_book_details(
     if book_update.user_genre_tags is not None:
         book_update.user_genre_tags = normalize_genre_tags(book_update.user_genre_tags)
     update_dict = book_update.model_dump(exclude_unset=True)
+    changed_fields = [key for key, value in update_dict.items() if getattr(db_book, key) != value]
+    if changed_fields:
+        if any(field in {"removed_chapters", "content_selectors"} for field in changed_fields):
+            action = "cleaning_rules_changed"
+            summary = "Changed EPUB cleaning rules"
+        elif any(field in {"series", "series_index"} for field in changed_fields):
+            action = "series_changed"
+            summary = "Changed series information"
+        else:
+            action = "metadata_changed"
+            summary = "Changed " + ", ".join(field.replace("_", " ") for field in changed_fields)
+        add_book_revision(db, db_book, action=action, summary=summary)
     updated_book = await crud.update_book(db=db, book=db_book, update_data=book_update)
     if "content_selectors" in update_dict or "removed_chapters" in update_dict:
         job = await queue_processing_job(
@@ -283,6 +331,78 @@ async def update_book_details(
             await crud.audiobook.unlink_book_roster_from_series(db, updated_book.id)
         await crud.cleanup_orphaned_series_metadata(db)
     return updated_book
+
+
+@router.get("/api/books/{book_id}/revisions", response_model=List[schemas.BookRevision])
+async def list_book_revisions(book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id=book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return await get_book_revisions(db, book_id)
+
+
+@router.post("/api/books/{book_id}/revisions/{revision_id}/restore", response_model=schemas.Book)
+async def restore_book_revision(
+    book_id: int,
+    revision_id: int,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    book = await crud.get_book(db, book_id=book_id)
+    revision = await get_book_revision(db, book_id, revision_id)
+    if book is None or revision is None:
+        raise HTTPException(status_code=404, detail="Book revision not found")
+
+    previous_rules = (list(book.removed_chapters or []), list(book.content_selectors or []))
+    add_book_revision(db, book, action="revision_restored", summary=f"Restored revision {revision.id}: {revision.summary}")
+    restore_snapshot(book, revision.snapshot)
+    await db.commit()
+    await db.refresh(book)
+
+    current_rules = (list(book.removed_chapters or []), list(book.content_selectors or []))
+    if current_rules != previous_rules:
+        job = await queue_processing_job(
+            db=db,
+            job_type="clean_book",
+            book_id=book.id,
+            target_type="book",
+            target_id=book.id,
+            target_content_version=book.content_version,
+            dedupe_key=f"clean_book:book:{book.id}",
+            progress_detail="Queued after restoring book history",
+        )
+        response.headers["X-Processing-Job-Id"] = str(job.id)
+    return book
+
+
+@router.post("/api/books/{book_id}/restore-original", response_model=schemas.Book)
+async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id=book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.immutable_path or not book.current_path:
+        raise HTTPException(status_code=409, detail="This book does not have both an original and current EPUB file.")
+
+    immutable_path = LIBRARY_PATH.parent / book.immutable_path
+    current_path = LIBRARY_PATH.parent / book.current_path
+    if not immutable_path.is_file():
+        raise HTTPException(status_code=409, detail="The original EPUB file is missing.")
+
+    add_book_revision(
+        db,
+        book,
+        action="original_restored",
+        summary="Restored the current EPUB from the immutable original",
+    )
+    book.removed_chapters = []
+    book.content_selectors = []
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(immutable_path, current_path)
+    book.current_word_count = epub_editor.get_word_count(str(current_path))
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await db.refresh(book)
+    return book
 
 
 @router.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
@@ -356,10 +476,8 @@ async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_
         all_paths.extend(file["path"] for file in book_preview["files"])
 
     if not dry_run:
-        for book in books:
-            _remove_book_files(book)
-        deleted_books = await crud.delete_all_books(db)
-        logger.warning("Removed %s books from the library.", deleted_books)
+        recycled_books = await crud.recycle_all_books(db, retention_days=RECYCLE_BIN_RETENTION_DAYS)
+        logger.warning("Moved %s books to the recycle bin.", recycled_books)
 
     return {
         "dry_run": dry_run,
@@ -369,28 +487,90 @@ async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_
         "log_count": total_logs,
         "books": preview_books,
         "paths": all_paths,
+        "recoverable": True,
+        "retention_days": RECYCLE_BIN_RETENTION_DAYS,
     }
 
 
-@router.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_book_by_title(title: str, db: AsyncSession = Depends(get_db)):
-    book = await crud.get_book_by_title(db, title=title)
-    if book is None:
-        return None
+@router.get("/api/recycle-bin", response_model=schemas.RecycleBin)
+async def get_recycle_bin(db: AsyncSession = Depends(get_db)):
+    books = await crud.get_recycled_books(db)
+    return schemas.RecycleBin(
+        retention_days=RECYCLE_BIN_RETENTION_DAYS,
+        books=[
+            schemas.RecycledBook.model_validate(
+                {**schemas.Book.model_validate(book).model_dump(), "recovery_files_available": _recovery_files_available(book)}
+            )
+            for book in books
+        ],
+    )
 
+
+@router.post("/api/recycle-bin/{book_id}/restore", response_model=schemas.Book)
+async def restore_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id=book_id, include_deleted=True)
+    if book is None or book.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Book not found in recycle bin")
+    restored = await crud.restore_recycled_book(db, book)
+    return restored
+
+
+@router.delete("/api/recycle-bin/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await crud.get_book(db, book_id=book_id, include_deleted=True)
+    if book is None or book.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Book not found in recycle bin")
     _remove_book_files(book)
     await crud.delete_book(db, book=book)
     await crud.cleanup_orphaned_series_metadata(db)
     return None
 
 
+@router.post("/api/recycle-bin/purge-expired")
+async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]
+    for book in expired:
+        _remove_book_files(book)
+        await crud.delete_book(db, book=book)
+    if expired:
+        await crud.cleanup_orphaned_series_metadata(db)
+    return {"purged": len(expired)}
+
+
+@router.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book_by_title(
+    title: str,
+    permanent: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    book = await crud.get_book_by_title(db, title=title, include_deleted=permanent)
+    if book is None:
+        return None
+
+    if permanent:
+        _remove_book_files(book)
+        await crud.delete_book(db, book=book)
+        await crud.cleanup_orphaned_series_metadata(db)
+    else:
+        await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)
+    return None
+
+
 @router.delete("/api/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_book_by_id(book_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_book_by_id(
+    book_id: int,
+    permanent: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
     book = await crud.get_book(db, book_id=book_id)
     if book is None:
         return None
 
-    _remove_book_files(book)
-    await crud.delete_book(db, book=book)
-    await crud.cleanup_orphaned_series_metadata(db)
+    if permanent:
+        _remove_book_files(book)
+        await crud.delete_book(db, book=book)
+        await crud.cleanup_orphaned_series_metadata(db)
+    else:
+        await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)
     return None

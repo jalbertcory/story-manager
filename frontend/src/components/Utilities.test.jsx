@@ -1,4 +1,4 @@
-import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import Utilities from "./Utilities";
 import { renderWithClient } from "../test-utils";
@@ -28,6 +28,7 @@ describe("Utilities", () => {
     expect(screen.getByRole("tab", { name: "Series Detection" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Metadata" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Audiobooks" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Recycle Bin" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Storage" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Reader Access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Library Audit" })).toBeInTheDocument();
@@ -481,5 +482,49 @@ describe("Utilities", () => {
     expect(screen.getAllByText(/^failed web import$/i)[0]).toBeInTheDocument();
     expect(screen.getByText("https://example.com/story/failed-cleanup")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete 1 item" })).toBeInTheDocument();
+  });
+
+  it("restores books and confirms permanent recycle-bin deletion", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/metadata/jobs/latest") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/metadata/inbox") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/recycle-bin") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            retention_days: 30,
+            books: [{
+              id: 41,
+              title: "Recoverable Story",
+              author: "Author",
+              purge_after: "2026-09-08T00:00:00Z",
+              recovery_files_available: true,
+            }],
+          }),
+        });
+      }
+      if (url === "/api/recycle-bin/41" && options?.method === "DELETE") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recycle Bin" }));
+
+    expect(await screen.findByText("Recoverable Story")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Permanently delete" }));
+    const dialog = screen.getByRole("dialog", { name: /Permanently delete/ });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Permanently delete" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", { method: "DELETE" });
+    });
   });
 });

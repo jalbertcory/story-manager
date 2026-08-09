@@ -162,6 +162,15 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         )
 
     existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
+    if existing and existing.deleted_at is not None:
+        temp_immutable_path.unlink(missing_ok=True)
+        temp_current_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"'{title}' by '{author}' is in the recycle bin. Restore it or permanently delete it before importing again."
+            ),
+        )
     if existing and existing.source_type == models.SourceType.epub:
         # Check if the existing book's files are missing — if so, restore them
         # from the upload instead of rejecting as a duplicate.

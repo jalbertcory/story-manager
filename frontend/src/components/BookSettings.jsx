@@ -9,8 +9,11 @@ import {
   getBookChapters,
   getBookCleanedChapters,
   getBookUpdateHistory,
+  getBookRevisions,
   processBook,
   refreshBook,
+  restoreBookRevision,
+  restoreOriginalEpub,
   updateBook,
 } from "../api/books";
 import { getMatchedConfigs, previewCleaning } from "../api/cleaning";
@@ -31,6 +34,7 @@ import {
   SyncedGenreTagList,
 } from "./book-settings/BookSettingsSections";
 import { useBookSettingsForm } from "./book-settings/useBookSettingsForm";
+import ConfirmActionDialog from "./ConfirmActionDialog";
 
 const fetchChapters = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
@@ -51,6 +55,19 @@ const fetchUpdateHistory = async ({ queryKey }) => {
   const [_key, bookId] = queryKey;
   return getBookUpdateHistory(bookId);
 };
+
+function describeRevisionSnapshot(revision) {
+  const snapshot = revision.snapshot || {};
+  if (revision.action === "cleaning_rules_changed" || revision.action === "original_restored") {
+    const removedCount = snapshot.removed_chapters?.length || 0;
+    const selectorCount = snapshot.content_selectors?.length || 0;
+    return `Previous content rules: ${removedCount} removed chapter${removedCount === 1 ? "" : "s"}, ${selectorCount} selector${selectorCount === 1 ? "" : "s"}`;
+  }
+  if (revision.action === "series_changed") {
+    return `Previous series: ${snapshot.series || "None"}${snapshot.series_index != null ? ` · order ${snapshot.series_index}` : ""}`;
+  }
+  return `Previous metadata: “${snapshot.title || "Untitled"}” by ${snapshot.author || "Unknown author"}`;
+}
 
 function BookSettings({
   book: initialBook,
@@ -156,6 +173,7 @@ function BookSettings({
     }
   };
   const [jobNotice, setJobNotice] = useState("");
+  const [confirmAction, setConfirmAction] = useState(null);
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
     queryKey: ["chapters", book.id],
@@ -191,6 +209,11 @@ function BookSettings({
     queryKey: ["series"],
     queryFn: getSeries,
     staleTime: 60_000,
+  });
+
+  const { data: revisions = [] } = useQuery({
+    queryKey: ["book-revisions", book.id],
+    queryFn: () => getBookRevisions(book.id),
   });
 
   const saveMutation = useMutation({
@@ -251,6 +274,29 @@ function BookSettings({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
+    },
+  });
+
+  const restoreOriginalMutation = useMutation({
+    mutationFn: () => restoreOriginalEpub(book.id),
+    onSuccess: (updatedBook) => {
+      setConfirmAction(null);
+      setJobNotice("Original EPUB restored.");
+      queryClient.setQueryData(["book", book.id], updatedBook);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
+      queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
+      queryClient.invalidateQueries({ queryKey: ["cleaned-chapters", book.id] });
+    },
+  });
+
+  const restoreRevisionMutation = useMutation({
+    mutationFn: (revisionId) => restoreBookRevision(book.id, revisionId),
+    onSuccess: (updatedBook) => {
+      setConfirmAction(null);
+      queryClient.setQueryData(["book", book.id], updatedBook);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
     },
   });
 
@@ -320,19 +366,11 @@ function BookSettings({
   };
 
   const handleDelete = () => {
-    if (window.confirm(`Delete "${book.title}"? This cannot be undone.`)) {
-      deleteMutation.mutate();
-    }
+    setConfirmAction({ type: "delete" });
   };
 
   const handleDetachSource = () => {
-    if (
-      window.confirm(
-        `Remove the web marker from "${book.title}"? This will keep the EPUB files but stop treating it as a web novel.`,
-      )
-    ) {
-      detachSourceMutation.mutate();
-    }
+    setConfirmAction({ type: "detach" });
   };
 
   const toggleChapter = (filename) => {
@@ -353,6 +391,8 @@ function BookSettings({
     refreshMutation.isPending ||
     detachSourceMutation.isPending ||
     deleteMutation.isPending ||
+    restoreOriginalMutation.isPending ||
+    restoreRevisionMutation.isPending ||
     enableAudiobookMutation.isPending ||
     isRefreshing;
   const canDetachWebMarker =
@@ -792,6 +832,47 @@ function BookSettings({
         toggleChapterPreview={toggleChapterPreview}
       />
 
+      <section className="settings-section">
+        <h3>Recovery &amp; change history</h3>
+        <p className="hint">
+          Restore the current EPUB from its immutable original, or roll metadata and series fields back to a saved revision.
+        </p>
+        <div className="settings-actions" style={{ marginBottom: revisions.length ? "0.85rem" : 0 }}>
+          <button
+            type="button"
+            onClick={() => setConfirmAction({ type: "original" })}
+            disabled={isBusy || !book.immutable_path || !book.current_path}
+          >
+            Restore original EPUB
+          </button>
+        </div>
+        {revisions.length > 0 ? (
+          <ul className="revision-list">
+            {revisions.map((revision) => (
+              <li className="revision-item" key={revision.id}>
+                <div>
+                  <strong>{revision.summary}</strong>
+                  <p className="hint">
+                    {new Date(revision.created_at).toLocaleString()} · {revision.action.replace(/_/g, " ")}
+                  </p>
+                  <p className="hint">{describeRevisionSnapshot(revision)}</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-text btn-sm"
+                  onClick={() => setConfirmAction({ type: "revision", revision })}
+                  disabled={isBusy}
+                >
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">No reversible changes have been recorded yet.</p>
+        )}
+      </section>
+
       <section
         className="settings-section actions-bar"
         aria-label="Book actions"
@@ -878,6 +959,55 @@ function BookSettings({
       {deleteMutation.isError && (
         <p className="error">Delete failed: {deleteMutation.error.message}</p>
       )}
+
+      <ConfirmActionDialog
+        open={confirmAction?.type === "delete"}
+        title={`Move “${book.title}” to the recycle bin?`}
+        confirmLabel="Move to recycle bin"
+        busyLabel="Moving…"
+        danger
+        isPending={deleteMutation.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => deleteMutation.mutate()}
+      >
+        <p>The book disappears from the library, but its EPUB, cover, audiobook files, and history are preserved.</p>
+        <p>You can restore it from Library Tools during the configured recovery window (30 days by default). Permanent deletion remains available there.</p>
+      </ConfirmActionDialog>
+
+      <ConfirmActionDialog
+        open={confirmAction?.type === "detach"}
+        title={`Remove the web source from “${book.title}”?`}
+        confirmLabel="Remove web source"
+        isPending={detachSourceMutation.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => detachSourceMutation.mutate()}
+      >
+        <p>The EPUB files stay in your library, but source refreshes stop and the book becomes EPUB-only.</p>
+      </ConfirmActionDialog>
+
+      <ConfirmActionDialog
+        open={confirmAction?.type === "original"}
+        title="Restore the original EPUB?"
+        confirmLabel="Restore original"
+        isPending={restoreOriginalMutation.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => restoreOriginalMutation.mutate()}
+      >
+        <p>This replaces the current readable EPUB with the immutable original and clears this book’s chapter removals and content selectors.</p>
+        <p>Your metadata and the immutable original are not changed. The current state is saved in history first.</p>
+      </ConfirmActionDialog>
+
+      <ConfirmActionDialog
+        open={confirmAction?.type === "revision"}
+        title="Restore this saved revision?"
+        confirmLabel="Restore revision"
+        isPending={restoreRevisionMutation.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => restoreRevisionMutation.mutate(confirmAction.revision.id)}
+      >
+        <p>{confirmAction?.revision?.summary}</p>
+        <p>The current metadata and cleaning settings are saved as a new revision before the rollback.</p>
+      </ConfirmActionDialog>
       </>
       )}
     </div>

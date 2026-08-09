@@ -326,6 +326,15 @@ async def approve_metadata_match(
     if proposal is None:
         raise ValueError("Metadata proposal not found")
 
+    from .book_recovery import add_book_revision
+
+    add_book_revision(
+        db,
+        book,
+        action="metadata_changed",
+        summary=f"Approved metadata match from {match.source or 'Open Library'}",
+    )
+
     match.status = "approved"
     match.approved_at = datetime.now(timezone.utc)
     match.rejected_at = None

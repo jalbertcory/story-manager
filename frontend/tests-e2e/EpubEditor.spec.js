@@ -35,7 +35,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.goto("/");
 
   // Delete the book if it exists
-  await page.request.delete("/api/books/by-title/Test Book");
+  await page.request.delete("/api/books/by-title/Test Book?permanent=true");
 
   // Open the guided import workflow.
   await page.getByRole("button", { name: "Add to library" }).click();

@@ -13,3 +13,7 @@ LIBRARY_PATH = (APP_DIR / ".." / ".." / "library").resolve()
 AUDIOBOOK_ASSEMBLY_MARKER = ".epub3-overlay-v3"
 
 GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
+
+# Deleted books remain restorable for this many days. Operators can override
+# the window without changing existing recycle-bin deadlines.
+RECYCLE_BIN_RETENTION_DAYS = max(1, int(os.getenv("RECYCLE_BIN_RETENTION_DAYS", "30")))

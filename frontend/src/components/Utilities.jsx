@@ -9,12 +9,19 @@ import {
   rejectMetadataMatch,
 } from "../api/metadata";
 import ReaderKeys from "./ReaderKeys.jsx";
+import ConfirmActionDialog from "./ConfirmActionDialog.jsx";
+import {
+  getRecycleBin,
+  permanentlyDeleteRecycledBook,
+  restoreRecycledBook,
+} from "../api/books";
 
 const utilityTabs = [
   { key: "audit", label: "Audit" },
   { key: "series", label: "Series Detection" },
   { key: "metadata", label: "Metadata" },
   { key: "audiobooks", label: "Audiobooks" },
+  { key: "recycle-bin", label: "Recycle Bin" },
   { key: "storage", label: "Storage" },
   { key: "reader-access", label: "Reader Access" },
 ];
@@ -103,6 +110,7 @@ function Utilities({ onBack }) {
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState(null);
 
   useEffect(() => {
     const onPopState = () => setActiveTab(getRequestedUtilityTab());
@@ -190,6 +198,29 @@ function Utilities({ onBack }) {
   });
 
   const validationResult = validateMutation.data;
+
+  const { data: recycleBin, isLoading: recycleBinLoading } = useQuery({
+    queryKey: ["recycle-bin"],
+    queryFn: getRecycleBin,
+    enabled: activeTab === "recycle-bin",
+  });
+
+  const restoreBookMutation = useMutation({
+    mutationFn: restoreRecycledBook,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["series"] });
+    },
+  });
+
+  const permanentDeleteMutation = useMutation({
+    mutationFn: permanentlyDeleteRecycledBook,
+    onSuccess: () => {
+      setPermanentDeleteTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+    },
+  });
 
   const handleDetectSeries = async () => {
     setDetectState("pending");
@@ -488,12 +519,66 @@ function Utilities({ onBack }) {
           </section>
         )}
 
+        {activeTab === "recycle-bin" && (
+          <section className="settings-section">
+            <h3>Recycle Bin</h3>
+            <p className="hint">
+              Deleted books and all files they own stay recoverable for {recycleBin?.retention_days || 30} days by default.
+              Restore a book to return it to the library, or permanently delete it to remove its files now.
+            </p>
+            {recycleBinLoading ? (
+              <p className="hint">Loading deleted books…</p>
+            ) : (recycleBin?.books || []).length === 0 ? (
+              <p className="hint">The recycle bin is empty.</p>
+            ) : (
+              <ul className="recycle-bin-list">
+                {recycleBin.books.map((book) => (
+                  <li className="recycle-bin-item" key={book.id}>
+                    <div>
+                      <strong>{book.title}</strong>
+                      <p className="hint">by {book.author || "Unknown author"}</p>
+                      <p className="hint">
+                        {book.purge_after
+                          ? `Recovery window ends ${new Date(book.purge_after).toLocaleString()}`
+                          : "No automatic purge date is set"}
+                        {!book.recovery_files_available && " · EPUB recovery file is missing"}
+                      </p>
+                    </div>
+                    <div className="recycle-bin-actions">
+                      <button
+                        type="button"
+                        onClick={() => restoreBookMutation.mutate(book.id)}
+                        disabled={restoreBookMutation.isPending || permanentDeleteMutation.isPending}
+                      >
+                        Restore
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => setPermanentDeleteTarget(book)}
+                        disabled={restoreBookMutation.isPending || permanentDeleteMutation.isPending}
+                      >
+                        Permanently delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(restoreBookMutation.isError || permanentDeleteMutation.isError) && (
+              <p className="error">
+                {(restoreBookMutation.error || permanentDeleteMutation.error)?.message}
+              </p>
+            )}
+          </section>
+        )}
+
         {activeTab === "storage" && (
           <section className="settings-section">
         <h3>Storage Cleanup</h3>
         <p className="hint">
           Scans the library directory for orphaned EPUB and cover files, and
-          failed web imports that never produced EPUB files.
+          failed web imports that never produced EPUB files. Files owned by books in the recycle bin are protected.
         </p>
 
         <div className="settings-actions">
@@ -630,6 +715,20 @@ function Utilities({ onBack }) {
 
         {activeTab === "reader-access" && <ReaderKeys />}
       </div>
+
+      <ConfirmActionDialog
+        open={Boolean(permanentDeleteTarget)}
+        title={`Permanently delete “${permanentDeleteTarget?.title || "this book"}”?`}
+        confirmLabel="Permanently delete"
+        busyLabel="Deleting…"
+        danger
+        isPending={permanentDeleteMutation.isPending}
+        onCancel={() => setPermanentDeleteTarget(null)}
+        onConfirm={() => permanentDeleteMutation.mutate(permanentDeleteTarget.id)}
+      >
+        <p>This removes the database record, EPUBs, cover, audiobook files, and saved revision history.</p>
+        <p><strong>This cannot be undone.</strong></p>
+      </ConfirmActionDialog>
     </div>
   );
 }

@@ -152,7 +152,7 @@ async def get_metadata_inbox_entries(
         select(models.MetadataProposal, models.Book, models.BookMetadataMatch)
         .join(models.Book, models.MetadataProposal.book_id == models.Book.id)
         .outerjoin(models.BookMetadataMatch, models.MetadataProposal.match_id == models.BookMetadataMatch.id)
-        .where(models.MetadataProposal.status == "open")
+        .where(models.MetadataProposal.status == "open", models.Book.deleted_at.is_(None))
         .order_by(models.MetadataProposal.created_at.desc(), models.MetadataProposal.id.desc())
         .limit(limit)
     )
@@ -177,6 +177,7 @@ async def get_stale_books_for_metadata_sync(
             models.Book.author.is_not(None),
             func.lower(models.Book.author) != "pending",
             models.Book.title.is_not(None),
+            models.Book.deleted_at.is_(None),
             (models.Book.metadata_synced_at.is_(None) | (models.Book.metadata_synced_at <= cutoff)),
         )
         .order_by(asc(models.Book.id))
