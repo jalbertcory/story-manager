@@ -217,7 +217,19 @@ test-migrations:
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
 	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
-		< scripts/migration-preexisting-audiobook-verify.sql
+		< scripts/migration-preexisting-audiobook-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0032; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-lifecycle-setup.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-lifecycle-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade -1; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "UPDATE books SET refresh_status = 'constraint-removed' WHERE title = 'Migration Test';"
 
 e2e:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true

@@ -18,6 +18,15 @@ from lxml import etree
 from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import SessionLocal
+from ..lifecycle import (
+    AUDIOBOOK_PIPELINE,
+    WEB_IMPORT,
+    WEB_REFRESH,
+    AudiobookPipelineStatus,
+    WebImportStatus,
+    WebRefreshStatus,
+    transition_state,
+)
 from .cover_collectors import collect_cover
 from .epub_utils import (
     get_and_save_epub_cover,
@@ -330,7 +339,13 @@ async def _enqueue_audiobook_refresh(book: models.Book, db) -> None:
         )
         active_statuses = {"ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"}
         if book.audiobook_pipeline_status not in active_statuses:
-            book.audiobook_pipeline_status = "ingesting"
+            transition_state(
+                book,
+                "audiobook_pipeline_status",
+                AUDIOBOOK_PIPELINE,
+                AudiobookPipelineStatus.INGESTING,
+                context=f"book {book.id}",
+            )
         await db.commit()
 
         from .audiobook_queue import AudiobookQueue, get_audiobook_queue
@@ -565,7 +580,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
         try:
             result = await download_web_novel(source_url)
             if result is None:
-                db_book.download_status = "error"
+                transition_state(db_book, "download_status", WEB_IMPORT, WebImportStatus.ERROR, context=f"book {book_id}")
                 db_book.title = "Error: FFF produced no epub for new URL"
                 await db.commit()
                 return
@@ -574,7 +589,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
             if existing and existing.id != book_id and existing.source_type == models.SourceType.web:
                 new_epub_path.unlink(missing_ok=True)
-                db_book.download_status = "error"
+                transition_state(db_book, "download_status", WEB_IMPORT, WebImportStatus.ERROR, context=f"book {book_id}")
                 db_book.title = f"Conflict: '{metadata['title']}' already exists"
                 await db.commit()
                 return
@@ -603,14 +618,14 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             if cover_path:
                 db_book.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
 
-            db_book.download_status = None
+            transition_state(db_book, "download_status", WEB_IMPORT, None, context=f"book {book_id}")
             await db.commit()
             await db.refresh(db_book)
 
         except Exception as e:
             logger.error(f"Background download failed for book {book_id}: {e}\n{traceback.format_exc()}")
             try:
-                db_book.download_status = "error"
+                transition_state(db_book, "download_status", WEB_IMPORT, WebImportStatus.ERROR, context=f"book {book_id}")
                 db_book.title = "Download failed"
                 await db.commit()
             except Exception:
@@ -647,11 +662,17 @@ async def run_book_refresh(book_id: int) -> None:
             return
         if not db_book.source_url:
             logger.warning("Refresh worker: book %s has no source_url.", book_id)
-            db_book.refresh_status = "error"
+            transition_state(db_book, "refresh_status", WEB_REFRESH, WebRefreshStatus.ERROR, context=f"book {book_id}")
             await db.commit()
             return
 
-        db_book.refresh_status = "processing"
+        transition_state(
+            db_book,
+            "refresh_status",
+            WEB_REFRESH,
+            WebRefreshStatus.PROCESSING,
+            context=f"book {book_id}",
+        )
         await db.commit()
         await db.refresh(db_book)
 
@@ -674,7 +695,7 @@ async def run_book_refresh(book_id: int) -> None:
                 updated_book.current_word_count = new_word_count
                 updated_book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
                 updated_book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
-                updated_book.download_status = None
+                transition_state(updated_book, "download_status", WEB_IMPORT, None, context=f"book {book_id}")
                 await crud.touch_book_content(db, updated_book)
                 await db.commit()
                 await db.refresh(updated_book)
@@ -691,7 +712,7 @@ async def run_book_refresh(book_id: int) -> None:
                 await _enqueue_audiobook_refresh(updated_book, db)
                 await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
 
-                updated_book.refresh_status = None
+                transition_state(updated_book, "refresh_status", WEB_REFRESH, None, context=f"book {book_id}")
                 await db.commit()
                 return
 
@@ -740,7 +761,7 @@ async def run_book_refresh(book_id: int) -> None:
             await _enqueue_audiobook_refresh(updated_book, db)
             await queue_metadata_sync_job(db, trigger="book_update", book_ids=[updated_book.id])
 
-            updated_book.refresh_status = None
+            transition_state(updated_book, "refresh_status", WEB_REFRESH, None, context=f"book {book_id}")
             await db.commit()
         except Exception as exc:
             logger.error(
@@ -750,7 +771,7 @@ async def run_book_refresh(book_id: int) -> None:
                 traceback.format_exc(),
             )
             try:
-                db_book.refresh_status = "error"
+                transition_state(db_book, "refresh_status", WEB_REFRESH, WebRefreshStatus.ERROR, context=f"book {book_id}")
                 await db.commit()
             except Exception:
                 logger.exception("Failed to mark refresh_status=error for book %s", book_id)

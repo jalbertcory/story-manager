@@ -9,9 +9,10 @@ from sqlalchemy import and_, desc, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..lifecycle import PROCESSING_JOB, ProcessingJobStatus, transition_state
 from ..models import Book, ProcessingJob
 
-ACTIVE_PROCESSING_STATUSES = ("queued", "running")
+ACTIVE_PROCESSING_STATUSES = tuple(PROCESSING_JOB.active_states)
 
 
 async def create_processing_job(
@@ -45,7 +46,7 @@ async def create_processing_job(
 
     job = ProcessingJob(
         job_type=job_type,
-        status="queued",
+        status=ProcessingJobStatus.QUEUED.value,
         book_id=book_id,
         target_type=target_type,
         target_id=target_id,
@@ -123,8 +124,8 @@ async def claim_processing_job(
     """Atomically claim the oldest runnable job in a resource lane."""
     now = datetime.now(timezone.utc)
     runnable = or_(
-        and_(ProcessingJob.status == "queued", ProcessingJob.available_at <= now),
-        and_(ProcessingJob.status == "running", ProcessingJob.lease_expires_at <= now),
+        and_(ProcessingJob.status == ProcessingJobStatus.QUEUED.value, ProcessingJob.available_at <= now),
+        and_(ProcessingJob.status == ProcessingJobStatus.RUNNING.value, ProcessingJob.lease_expires_at <= now),
     )
     query = (
         select(ProcessingJob)
@@ -143,7 +144,7 @@ async def claim_processing_job(
         await db.rollback()
         return None
 
-    job.status = "running"
+    transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.RUNNING, context=f"processing job {job.id}")
     job.attempt_count = (job.attempt_count or 0) + 1
     job.started_at = now
     job.completed_at = None
@@ -169,7 +170,7 @@ async def heartbeat_processing_job(
         update(ProcessingJob)
         .where(
             ProcessingJob.id == job_id,
-            ProcessingJob.status == "running",
+            ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
             ProcessingJob.lease_owner == lease_owner,
         )
         .values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=lease_seconds))
@@ -184,12 +185,12 @@ async def recover_abandoned_processing_jobs(db: AsyncSession) -> tuple[int, int]
     canceled = await db.execute(
         update(ProcessingJob)
         .where(
-            ProcessingJob.status == "running",
+            ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
             ProcessingJob.lease_expires_at <= now,
             ProcessingJob.cancel_requested.is_(True),
         )
         .values(
-            status="canceled",
+            status=ProcessingJobStatus.CANCELED.value,
             progress_detail="Canceled after worker lease expired",
             completed_at=now,
             lease_owner=None,
@@ -200,13 +201,13 @@ async def recover_abandoned_processing_jobs(db: AsyncSession) -> tuple[int, int]
     exhausted = await db.execute(
         update(ProcessingJob)
         .where(
-            ProcessingJob.status == "running",
+            ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
             ProcessingJob.lease_expires_at <= now,
             ProcessingJob.cancel_requested.is_(False),
             ProcessingJob.attempt_count >= ProcessingJob.max_attempts,
         )
         .values(
-            status="error",
+            status=ProcessingJobStatus.ERROR.value,
             error="Worker lease expired and the retry limit was reached.",
             progress_detail="Failed after worker interruption",
             completed_at=now,
@@ -249,7 +250,7 @@ async def complete_processing_job(
     job = await db.get(ProcessingJob, job_id)
     if job is None or (lease_owner is not None and job.lease_owner != lease_owner):
         return False
-    job.status = "completed"
+    transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.COMPLETED, context=f"processing job {job.id}")
     job.cancel_requested = False
     job.completed_at = datetime.now(timezone.utc)
     job.lease_owner = None
@@ -280,17 +281,17 @@ async def fail_processing_job(
     job.lease_expires_at = None
     job.heartbeat_at = None
     if job.cancel_requested:
-        job.status = "canceled"
+        transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.CANCELED, context=f"processing job {job.id}")
         job.progress_detail = "Canceled"
         job.completed_at = now
     elif job.attempt_count < job.max_attempts:
         delay = retry_backoff_seconds * (2 ** max(0, job.attempt_count - 1))
-        job.status = "queued"
+        transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.QUEUED, context=f"processing job {job.id}")
         job.available_at = now + timedelta(seconds=delay)
         job.progress_detail = f"Retrying in {delay} seconds"
         job.completed_at = None
     else:
-        job.status = "error"
+        transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.ERROR, context=f"processing job {job.id}")
         job.progress_detail = "Failed"
         job.completed_at = now
     await db.commit()
@@ -301,7 +302,7 @@ async def mark_processing_job_canceled(db: AsyncSession, job_id: int) -> None:
     job = await db.get(ProcessingJob, job_id)
     if job is None:
         return
-    job.status = "canceled"
+    transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.CANCELED, context=f"processing job {job.id}")
     job.progress_detail = "Canceled"
     job.completed_at = datetime.now(timezone.utc)
     job.lease_owner = None
@@ -314,12 +315,12 @@ async def request_processing_job_cancel(db: AsyncSession, job_id: int) -> Proces
     job = await db.get(ProcessingJob, job_id)
     if job is None:
         return None
-    if job.status == "queued":
-        job.status = "canceled"
+    if job.status == ProcessingJobStatus.QUEUED.value:
+        transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.CANCELED, context=f"processing job {job.id}")
         job.cancel_requested = True
         job.progress_detail = "Canceled"
         job.completed_at = datetime.now(timezone.utc)
-    elif job.status == "running":
+    elif job.status == ProcessingJobStatus.RUNNING.value:
         job.cancel_requested = True
         job.progress_detail = "Cancellation requested"
     await db.commit()
@@ -329,7 +330,7 @@ async def request_processing_job_cancel(db: AsyncSession, job_id: int) -> Proces
 
 async def retry_processing_job(db: AsyncSession, job_id: int) -> ProcessingJob | None:
     job = await db.get(ProcessingJob, job_id)
-    if job is None or job.status not in ("error", "canceled"):
+    if job is None or job.status not in (ProcessingJobStatus.ERROR.value, ProcessingJobStatus.CANCELED.value):
         return None
     if job.dedupe_key:
         active = (
@@ -343,7 +344,7 @@ async def retry_processing_job(db: AsyncSession, job_id: int) -> ProcessingJob |
         ).scalar_one_or_none()
         if active is not None:
             return None
-    job.status = "queued"
+    transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.QUEUED, context=f"processing job {job.id}")
     job.cancel_requested = False
     job.error = None
     job.started_at = None

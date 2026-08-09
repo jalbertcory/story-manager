@@ -1695,7 +1695,7 @@ async def test_detach_book_source(db_session):
                 immutable_path="library/imported/original.epub",
                 current_path="library/imported/current.epub",
                 source_type=models.SourceType.web,
-                download_status="complete",
+                download_status="pending",
             ),
         )
 
@@ -1722,7 +1722,7 @@ async def test_detach_book_source_allows_missing_source_url_for_web_books(db_ses
                 immutable_path="library/imported/original.epub",
                 current_path="library/imported/current.epub",
                 source_type=models.SourceType.web,
-                download_status="complete",
+                download_status="pending",
             ),
         )
 
@@ -3811,7 +3811,7 @@ async def test_reader_series_api_and_opds_feeds(db_session):
                 immutable_path="library/immutable_hidden.epub",
                 current_path="library/hidden.epub",
                 source_type=models.SourceType.epub,
-                download_status="processing",
+                download_status="pending",
             ),
         )
         await crud.create_book(
@@ -3949,7 +3949,7 @@ async def test_reader_books_all_returns_only_reader_eligible_books(db_session):
                 immutable_path="library/immutable_background.epub",
                 current_path="library/background.epub",
                 source_type=models.SourceType.epub,
-                download_status="processing",
+                download_status="pending",
             ),
         )
         await crud.create_book(

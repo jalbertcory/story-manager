@@ -17,6 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from ..lifecycle import (
+    ALIGNMENT_METHOD,
+    AUDIOBOOK_PIPELINE,
+    IMPORTED_AUDIOBOOK,
+    AlignmentMethod,
+    ImportedAudiobookStatus,
+    transition_state,
+)
 from ..models import (
     AudiobookChapter,
     AudiobookSentence,
@@ -472,7 +480,13 @@ async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[Audiob
     await db.refresh(book)
     # Importing narration must not silently opt the user into an unattended AI
     # generation run. The generated pipeline remains exactly where it was.
-    book.audiobook_pipeline_status = prior_status
+    transition_state(
+        book,
+        "audiobook_pipeline_status",
+        AUDIOBOOK_PIPELINE,
+        prior_status,
+        context=f"book {book.id} after narration import preparation",
+    )
     await db.commit()
     return await crud.audiobook.get_chapters_for_book(db, book.id)
 
@@ -481,7 +495,13 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
     edition = await db.get(ImportedAudiobook, edition_id)
     if edition is None:
         return
-    edition.status = "importing"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.IMPORTING,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.error = None
     edition.progress_detail = "Inspecting uploaded files"
     await db.commit()
@@ -523,8 +543,20 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             await db.commit()
 
         matched_count = sum(1 for spec in specs if _chapter_match(spec, chapters))
-        edition.status = "ready"
-        edition.alignment_method = "estimated"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.READY,
+            context=f"imported audiobook {edition.id}",
+        )
+        transition_state(
+            edition,
+            "alignment_method",
+            ALIGNMENT_METHOD,
+            AlignmentMethod.ESTIMATED,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.matched_content_version = book.content_version or 1
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
@@ -537,7 +569,13 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         await db.rollback()
         edition = await db.get(ImportedAudiobook, edition_id)
         if edition is not None:
-            edition.status = "error"
+            transition_state(
+                edition,
+                "status",
+                IMPORTED_AUDIOBOOK,
+                ImportedAudiobookStatus.ERROR,
+                context=f"imported audiobook {edition.id}",
+            )
             edition.error = str(exc)
             edition.progress_detail = "Import failed"
             await db.commit()
@@ -552,7 +590,13 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
     if book is None:
         raise ValueError("The selected library book no longer exists.")
 
-    edition.status = "importing"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.IMPORTING,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.alignment_error = None
     edition.progress_current = 0
     edition.progress_detail = "Preparing current cleaned book text"
@@ -587,8 +631,20 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
         edition.progress_detail = f"Rematched track {index} of {len(tracks)}"
         await db.commit()
 
-    edition.status = "ready"
-    edition.alignment_method = "estimated"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.READY,
+        context=f"imported audiobook {edition.id}",
+    )
+    transition_state(
+        edition,
+        "alignment_method",
+        ALIGNMENT_METHOD,
+        AlignmentMethod.ESTIMATED,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.matched_content_version = book.content_version or 1
     edition.progress_detail = f"Ready: {matched_count} of {len(tracks)} tracks matched"
     edition.error = None
@@ -610,7 +666,13 @@ async def rematch_track(
     track.alignment_score = None
     edition = await db.get(ImportedAudiobook, track.imported_audiobook_id)
     if edition is not None:
-        edition.alignment_method = "estimated"
+        transition_state(
+            edition,
+            "alignment_method",
+            ALIGNMENT_METHOD,
+            AlignmentMethod.ESTIMATED,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.alignment_error = None
     await db.commit()
     await db.refresh(track)

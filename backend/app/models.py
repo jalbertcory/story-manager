@@ -1,6 +1,7 @@
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Integer,
     String,
@@ -18,7 +19,33 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 from .database import Base
+from .lifecycle import (
+    ALIGNMENT_METHOD,
+    AUDIOBOOK_PIPELINE,
+    AUDIOBOOK_PUBLICATION,
+    CHAPTER_GENERATION,
+    CHAPTER_PREVIEW,
+    IMPORTED_AUDIOBOOK,
+    METADATA_JOB,
+    PROCESSING_JOB,
+    SENTENCE,
+    UPDATE_TASK,
+    WEB_IMPORT,
+    WEB_REFRESH,
+    ChapterGenerationStatus,
+    ImportedAudiobookStatus,
+    MetadataJobStatus,
+    ProcessingJobStatus,
+    SentenceStatus,
+    StateMachine,
+    UpdateTaskStatus,
+)
 import enum
+
+
+def _state_check(column_name: str, machine: StateMachine, name: str) -> CheckConstraint:
+    values = ", ".join(f"'{value}'" for value in sorted(value for value in machine.states if value is not None))
+    return CheckConstraint(f"{column_name} IN ({values})", name=name)
 
 
 class SourceType(enum.Enum):
@@ -28,6 +55,16 @@ class SourceType(enum.Enum):
 
 class Book(Base):
     __tablename__ = "books"
+    __table_args__ = (
+        _state_check("download_status", WEB_IMPORT, "ck_books_download_status"),
+        _state_check("refresh_status", WEB_REFRESH, "ck_books_refresh_status"),
+        _state_check("audiobook_pipeline_status", AUDIOBOOK_PIPELINE, "ck_books_audiobook_pipeline_status"),
+        _state_check(
+            "audiobook_publication_state",
+            AUDIOBOOK_PUBLICATION,
+            "ck_books_audiobook_publication_state",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
@@ -135,7 +172,13 @@ class ProcessingJob(Base):
 
     id = Column(Integer, primary_key=True)
     job_type = Column(String, nullable=False, index=True)
-    status = Column(String, nullable=False, default="queued", server_default="queued", index=True)
+    status = Column(
+        String,
+        nullable=False,
+        default=ProcessingJobStatus.QUEUED.value,
+        server_default=ProcessingJobStatus.QUEUED.value,
+        index=True,
+    )
     resource_lane = Column(String, nullable=False, default="maintenance", server_default="maintenance", index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=True, index=True)
     target_type = Column(String, nullable=True)
@@ -161,6 +204,7 @@ class ProcessingJob(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
     __table_args__ = (
+        _state_check("status", PROCESSING_JOB, "ck_processing_jobs_status"),
         Index(
             "uq_processing_jobs_active_dedupe",
             "dedupe_key",
@@ -195,21 +239,23 @@ class BookLog(Base):
 
 class UpdateTask(Base):
     __tablename__ = "update_tasks"
+    __table_args__ = (_state_check("status", UPDATE_TASK, "ck_update_tasks_status"),)
 
     id = Column(Integer, primary_key=True, index=True)
     total_books = Column(Integer, nullable=False)
     completed_books = Column(Integer, nullable=False, default=0)
-    status = Column(String, nullable=False, default="running")
+    status = Column(String, nullable=False, default=UpdateTaskStatus.RUNNING.value)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class MetadataSyncJob(Base):
     __tablename__ = "metadata_sync_jobs"
+    __table_args__ = (_state_check("status", METADATA_JOB, "ck_metadata_sync_jobs_status"),)
 
     id = Column(Integer, primary_key=True, index=True)
     trigger = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="queued")
+    status = Column(String, nullable=False, default=MetadataJobStatus.QUEUED.value)
     total_books = Column(Integer, nullable=False, default=0)
     processed_books = Column(Integer, nullable=False, default=0)
     matched_books = Column(Integer, nullable=False, default=0)
@@ -345,7 +391,11 @@ class AiEndpointRequestMetric(Base):
 
 class AudiobookChapter(Base):
     __tablename__ = "audiobook_chapters"
-    __table_args__ = (UniqueConstraint("book_id", "stable_chapter_key", name="uq_audiobook_chapter_stable_key"),)
+    __table_args__ = (
+        UniqueConstraint("book_id", "stable_chapter_key", name="uq_audiobook_chapter_stable_key"),
+        _state_check("preview_status", CHAPTER_PREVIEW, "ck_audiobook_chapters_preview_status"),
+        _state_check("generation_state", CHAPTER_GENERATION, "ck_audiobook_chapters_generation_state"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -365,7 +415,12 @@ class AudiobookChapter(Base):
     source_content_hash = Column(String(64), nullable=True)
     title = Column(String, nullable=True)
     spine_order = Column(Integer, nullable=True)
-    generation_state = Column(String, nullable=False, default="pending", server_default="pending")
+    generation_state = Column(
+        String,
+        nullable=False,
+        default=ChapterGenerationStatus.PENDING.value,
+        server_default=ChapterGenerationStatus.PENDING.value,
+    )
     audio_revision = Column(Integer, nullable=False, default=0, server_default="0")
     reader_audio_file_path = Column(String, nullable=True)
     reader_smil_file_path = Column(String, nullable=True)
@@ -418,6 +473,7 @@ class AudiobookCharacter(Base):
 
 class AudiobookSentence(Base):
     __tablename__ = "audiobook_sentences"
+    __table_args__ = (_state_check("status", SENTENCE, "ck_audiobook_sentences_status"),)
 
     id = Column(Integer, primary_key=True, index=True)
     chapter_id = Column(Integer, ForeignKey("audiobook_chapters.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -430,22 +486,32 @@ class AudiobookSentence(Base):
     audio_duration_ms = Column(Integer, nullable=True)
     speaker_confidence = Column(Float, nullable=True)
     speaker_reason = Column(Text, nullable=True)
-    # Status values: pending_diarization, ready_for_audio, audio_generated, error
-    status = Column(String, nullable=False, server_default="pending_diarization")
+    # Values and transitions are defined by lifecycle.SENTENCE.
+    status = Column(String, nullable=False, server_default=SentenceStatus.PENDING_DIARIZATION.value)
 
 
 class ImportedAudiobook(Base):
     """A human-narrated audiobook edition attached to a library book."""
 
     __tablename__ = "imported_audiobooks"
+    __table_args__ = (
+        _state_check("status", IMPORTED_AUDIOBOOK, "ck_imported_audiobooks_status"),
+        _state_check("alignment_method", ALIGNMENT_METHOD, "ck_imported_audiobooks_alignment_method"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     source_type = Column(String, nullable=False, default="upload", server_default="upload")
     asin = Column(String, nullable=True, index=True)
-    # Values: queued, importing, ready, aligning, error.
-    status = Column(String, nullable=False, default="queued", server_default="queued", index=True)
+    # Values and transitions are defined by lifecycle.IMPORTED_AUDIOBOOK.
+    status = Column(
+        String,
+        nullable=False,
+        default=ImportedAudiobookStatus.QUEUED.value,
+        server_default=ImportedAudiobookStatus.QUEUED.value,
+        index=True,
+    )
     alignment_method = Column(String, nullable=True)
     original_filenames = Column(JSON, nullable=True)
     duration_ms = Column(BigInteger, nullable=True)

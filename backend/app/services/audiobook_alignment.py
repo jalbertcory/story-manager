@@ -18,6 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from ..lifecycle import (
+    ALIGNMENT_METHOD,
+    IMPORTED_AUDIOBOOK,
+    AlignmentMethod,
+    ImportedAudiobookStatus,
+    transition_state,
+)
 from ..models import (
     AudiobookSentence,
     ImportedAudiobook,
@@ -474,7 +481,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = transcription_provider_name(settings)
     if settings is None or provider == "none":
-        edition.status = "ready"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.READY,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.alignment_error = "Configure a transcription provider in Audio Settings first."
         edition.progress_detail = "Timestamp alignment not configured"
         await db.commit()
@@ -489,7 +502,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
         .order_by(ImportedAudiobookTrack.sequence_order)
     )
     tracks = list(result.scalars().all())
-    edition.status = "aligning"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.ALIGNING,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.alignment_error = None
     edition.progress_current = 0
     edition.progress_total = len(tracks)
@@ -559,8 +578,20 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
             await db.commit()
 
         average_score = sum(scores) / max(1, len(scores))
-        edition.status = "ready"
-        edition.alignment_method = "transcribed" if average_score >= 0.65 else "hybrid"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.READY,
+            context=f"imported audiobook {edition.id}",
+        )
+        transition_state(
+            edition,
+            "alignment_method",
+            ALIGNMENT_METHOD,
+            AlignmentMethod.TRANSCRIBED if average_score >= 0.65 else AlignmentMethod.HYBRID,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.progress_current = len(tracks)
         edition.progress_total = len(tracks)
         edition.progress_detail = f"Timestamp alignment ready ({average_score:.0%} confidence)"
@@ -572,7 +603,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
         await db.rollback()
         edition = await db.get(ImportedAudiobook, edition_id)
         if edition is not None:
-            edition.status = "ready"
+            transition_state(
+                edition,
+                "status",
+                IMPORTED_AUDIOBOOK,
+                ImportedAudiobookStatus.READY,
+                context=f"imported audiobook {edition.id}",
+            )
             edition.alignment_error = str(exc)
             edition.progress_detail = "Timestamp alignment failed; estimated cues retained where available"
             await db.commit()

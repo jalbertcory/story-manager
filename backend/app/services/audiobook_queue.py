@@ -10,6 +10,7 @@ from typing import Optional
 
 from .. import crud
 from ..database import SessionLocal
+from ..lifecycle import AUDIOBOOK_PIPELINE, AudiobookPipelineStatus, transition_state
 from .audiobook_ingestion import ingest_epub
 from .audiobook_llm import generate_character_roster, diarize_sentences
 from .audiobook_tts import (
@@ -329,7 +330,13 @@ class AudiobookQueue:
                 and book.audiobook_pending_content_version <= book.audiobook_source_content_version
             ):
                 return False
-            book.audiobook_pipeline_status = "ingesting"
+            transition_state(
+                book,
+                "audiobook_pipeline_status",
+                AUDIOBOOK_PIPELINE,
+                AudiobookPipelineStatus.INGESTING,
+                context=f"book {book.id}",
+            )
             await db.commit()
             return True
 

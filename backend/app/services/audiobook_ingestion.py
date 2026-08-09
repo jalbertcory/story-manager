@@ -17,6 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookSentence, Book
+from ..lifecycle import (
+    AUDIOBOOK_PIPELINE,
+    AUDIOBOOK_PUBLICATION,
+    CHAPTER_GENERATION,
+    AudiobookPipelineStatus,
+    AudiobookPublicationStatus,
+    ChapterGenerationStatus,
+    transition_state,
+)
 from .audiobook_publication import (
     normalize_resource_href,
     stable_chapter_key,
@@ -416,7 +425,13 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
             chapter.smil_sha256 = None
             chapter.duration_ms = None
             chapter.needs_reassembly = True
-            chapter.generation_state = "pending"
+            transition_state(
+                chapter,
+                "generation_state",
+                CHAPTER_GENERATION,
+                ChapterGenerationStatus.PENDING,
+                context=f"audiobook chapter {chapter.id}",
+            )
             chapter.summary = None
             chapter.summary_updated_at = None
             db.add_all([AudiobookSentence(chapter_id=chapter.id, **sentence) for sentence in chapter_sentences])
@@ -466,9 +481,21 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     book.audiobook_text_file_path = text_path
     book.audiobook_text_size_bytes = text_size
     book.audiobook_text_sha256 = text_sha
-    book.audiobook_publication_state = "partial" if ready_count else "processing"
+    transition_state(
+        book,
+        "audiobook_publication_state",
+        AUDIOBOOK_PUBLICATION,
+        AudiobookPublicationStatus.PARTIAL if ready_count else AudiobookPublicationStatus.PROCESSING,
+        context=f"book {book.id}",
+    )
     book.audiobook_publication_error = None
-    book.audiobook_pipeline_status = "diarizing" if characters else "roster_gen"
+    transition_state(
+        book,
+        "audiobook_pipeline_status",
+        AUDIOBOOK_PIPELINE,
+        AudiobookPipelineStatus.DIARIZING if characters else AudiobookPipelineStatus.ROSTER_GENERATION,
+        context=f"book {book.id}",
+    )
     book.audiobook_progress_current = persisted_chapters
     book.audiobook_progress_total = persisted_chapters
     book.audiobook_progress_detail = (

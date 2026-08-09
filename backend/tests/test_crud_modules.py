@@ -54,7 +54,7 @@ class TestBooksCrud:
     async def test_detach_book_source(self, db):
         book = await _create_book(db, "Web Book", "Author", source_url="http://example.com/story")
         book.source_type = models.SourceType.web
-        book.download_status = "complete"
+        book.download_status = "pending"
         await db.commit()
         detached = await crud.detach_book_source(db, book)
         assert detached.source_url is None

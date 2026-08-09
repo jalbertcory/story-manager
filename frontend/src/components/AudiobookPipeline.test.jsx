@@ -4,6 +4,79 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import AudiobookPipeline from "./AudiobookPipeline";
 import { renderWithClient } from "../test-utils";
 
+vi.mock("../hooks/useLifecycleDefinitions", () => ({
+  default: () => ({
+    data: {
+      audiobook_pipeline: {
+        states: [
+          { value: null, label: "Not started" },
+          { value: "ingesting", label: "Ingesting" },
+          { value: "roster_gen", label: "Roster" },
+          { value: "diarizing", label: "Diarizing" },
+          { value: "audio_gen", label: "TTS" },
+          { value: "assembling", label: "Assembly" },
+          { value: "complete", label: "Complete" },
+          { value: "error", label: "Error" },
+        ],
+        active_states: [
+          "ingesting",
+          "roster_gen",
+          "diarizing",
+          "audio_gen",
+          "assembling",
+        ],
+        failure_states: ["error"],
+        groups: {
+          progress_steps: [
+            "ingesting",
+            "roster_gen",
+            "diarizing",
+            "audio_gen",
+            "assembling",
+            "complete",
+          ],
+          batchable: ["diarizing", "audio_gen", "assembling"],
+          concurrent_analysis: ["diarizing"],
+          ready: ["complete"],
+          paused: ["paused"],
+        },
+      },
+      imported_audiobook: {
+        active_states: ["stale", "queued", "importing", "aligning"],
+      },
+      chapter_preview: {
+        states: [
+          { value: null, label: "Not generated" },
+          { value: "queued", label: "Queued" },
+          { value: "generating", label: "Generating" },
+          { value: "ready", label: "Ready" },
+          { value: "error", label: "Error" },
+        ],
+        active_states: ["queued", "generating"],
+        failure_states: ["error"],
+      },
+      sentence: {
+        states: [
+          { value: "pending_diarization", label: "Pending diarization" },
+          { value: "ready_for_audio", label: "Ready for audio" },
+          { value: "audio_queued", label: "Audio queued" },
+          { value: "audio_generating", label: "Generating audio" },
+          { value: "audio_generated", label: "Audio generated" },
+          { value: "error", label: "Error" },
+        ],
+        failure_states: ["error"],
+        groups: {
+          audio_in_progress: ["audio_queued", "audio_generating"],
+          audio_ready: ["ready_for_audio"],
+          audio_waiting: ["audio_queued"],
+          audio_working: ["audio_generating"],
+          audio_playable: ["audio_generated"],
+        },
+      },
+    },
+  }),
+}));
+
 describe("AudiobookPipeline", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

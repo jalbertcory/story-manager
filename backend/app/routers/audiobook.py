@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
+from ..lifecycle import IMPORTED_AUDIOBOOK, ImportedAudiobookStatus, transition_state
 from ..models import (
     AudiobookChapter,
     AudiobookCharacter,
@@ -734,7 +735,13 @@ async def upload_imported_audiobook(
         )
         await _notify_legacy_queue(get_audiobook_import_queue, "enqueue", edition.id)
     except Exception as exc:
-        edition.status = "error"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.ERROR,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.error = str(exc)
         edition.progress_detail = "Upload failed"
         await db.commit()
@@ -756,7 +763,13 @@ async def retry_imported_audiobook(
     await _get_book_or_404(edition.book_id, db)
     if edition.status not in ("error", "queued"):
         raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not retryable")
-    edition.status = "queued"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.QUEUED,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.error = None
     edition.progress_detail = "Queued for retry"
     await db.commit()
@@ -800,7 +813,13 @@ async def align_imported_audiobook(
     )
     if not matched_count:
         raise HTTPException(status_code=409, detail="Match at least one audio track to a book chapter first.")
-    edition.status = "aligning"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.ALIGNING,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.alignment_error = None
     edition.progress_current = 0
     edition.progress_total = matched_count
@@ -844,7 +863,13 @@ async def rematch_imported_audiobook(
         raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
 
     realign = edition.alignment_method in {"transcribed", "hybrid"}
-    edition.status = "stale"
+    transition_state(
+        edition,
+        "status",
+        IMPORTED_AUDIOBOOK,
+        ImportedAudiobookStatus.STALE,
+        context=f"imported audiobook {edition.id}",
+    )
     edition.alignment_error = None
     edition.progress_current = 0
     edition.progress_total = track_count

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..database import get_db
+from ..lifecycle import WEB_REFRESH, WebRefreshStatus, transition_state
 from ..services.processing_queue import queue_processing_job
 from ..services.refresh_queue import RefreshQueue, get_refresh_queue
 
@@ -111,7 +112,7 @@ async def refresh_book(
     # no-op rather than doubling it up — return the current status so the client
     # can begin polling.
     if db_book.refresh_status not in ("queued", "processing"):
-        db_book.refresh_status = "queued"
+        transition_state(db_book, "refresh_status", WEB_REFRESH, WebRefreshStatus.QUEUED, context=f"book {db_book.id}")
         await db.commit()
         await db.refresh(db_book)
 

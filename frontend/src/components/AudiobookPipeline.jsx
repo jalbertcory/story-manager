@@ -20,30 +20,13 @@ import AudiobookReader from "./audiobook/AudiobookReader";
 import ProgressDashboard from "./audiobook/ProgressDashboard";
 import AudiobookSources from "./audiobook/AudiobookSources";
 import { AUDIOBOOK_TABS } from "../lib/navigation";
+import useLifecycleDefinitions from "../hooks/useLifecycleDefinitions";
 
-const PIPELINE_STEPS = [
-  { status: "ingesting", label: "Ingesting" },
-  { status: "roster_gen", label: "Roster" },
-  { status: "diarizing", label: "Diarizing" },
-  { status: "audio_gen", label: "TTS" },
-  { status: "assembling", label: "Assembly" },
-  { status: "complete", label: "Complete" },
-];
-
-const ACTIVE_STATUSES = new Set([
-  "ingesting",
-  "roster_gen",
-  "diarizing",
-  "audio_gen",
-  "assembling",
-]);
-const BATCHABLE_STATUSES = new Set(["diarizing", "audio_gen", "assembling"]);
-
-function PipelineProgress({ status }) {
-  const currentIdx = PIPELINE_STEPS.findIndex((s) => s.status === status);
+function PipelineProgress({ status, steps }) {
+  const currentIdx = steps.findIndex((step) => step.status === status);
   return (
     <div className="pipeline-progress">
-      {PIPELINE_STEPS.map((step, idx) => {
+      {steps.map((step, idx) => {
         let cls = "pipeline-step";
         if (idx < currentIdx) cls += " pipeline-step--done";
         else if (idx === currentIdx) cls += " pipeline-step--active";
@@ -128,6 +111,36 @@ function AudiobookPipeline({
   audiobookTab,
   onAudiobookTabChange,
 }) {
+  const { data: lifecycleDefinitions } = useLifecycleDefinitions();
+  const pipelineLifecycle = lifecycleDefinitions?.audiobook_pipeline;
+  const importedLifecycle = lifecycleDefinitions?.imported_audiobook;
+  const previewLifecycle = lifecycleDefinitions?.chapter_preview;
+  const sentenceLifecycle = lifecycleDefinitions?.sentence;
+  const stateLabels = Object.fromEntries(
+    (pipelineLifecycle?.states ?? []).map((state) => [
+      state.value,
+      state.label,
+    ]),
+  );
+  const pipelineSteps = (pipelineLifecycle?.groups?.progress_steps ?? []).map(
+    (status) => ({
+      status,
+      label: stateLabels[status] ?? status,
+    }),
+  );
+  const activeStatuses = new Set(pipelineLifecycle?.active_states ?? []);
+  const batchableStatuses = new Set(pipelineLifecycle?.groups?.batchable ?? []);
+  const failedPipelineStatuses = new Set(
+    pipelineLifecycle?.failure_states ?? [],
+  );
+  const readyPipelineStatuses = new Set(pipelineLifecycle?.groups?.ready ?? []);
+  const pausedPipelineStatuses = new Set(
+    pipelineLifecycle?.groups?.paused ?? [],
+  );
+  const activeImportStatuses = new Set(importedLifecycle?.active_states ?? []);
+  const activePreviewStatuses = new Set(previewLifecycle?.active_states ?? []);
+  const playableSentenceStatuses =
+    sentenceLifecycle?.groups?.audio_playable ?? [];
   const bookId = book.id;
   const aiEnabled = book.audiobook_enabled !== false;
   const queryClient = useQueryClient();
@@ -137,7 +150,7 @@ function AudiobookPipeline({
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [lastQueuedJob, setLastQueuedJob] = useState(null);
 
-  const isActive = (status) => ACTIVE_STATUSES.has(status);
+  const isActive = (status) => activeStatuses.has(status);
 
   const { data: statusData } = useQuery({
     queryKey: ["audiobook-status", bookId],
@@ -162,9 +175,7 @@ function AudiobookPipeline({
     queryFn: () => getImportedAudiobooks(bookId),
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
-      state.data.some((edition) =>
-        ["stale", "queued", "importing", "aligning"].includes(edition.status),
-      )
+      state.data.some((edition) => activeImportStatuses.has(edition.status))
         ? 1000
         : false,
   });
@@ -176,7 +187,7 @@ function AudiobookPipeline({
     refetchInterval: ({ state }) => {
       const s = statusData?.pipeline_status;
       const previewActive = state.data?.some((chapter) =>
-        ["queued", "generating"].includes(chapter.preview_status),
+        activePreviewStatuses.has(chapter.preview_status),
       );
       const audioStillFinishing =
         (statusData?.sentence_counts?.audio_generating ?? 0) > 0;
@@ -236,18 +247,20 @@ function AudiobookPipeline({
   const nextPhase = statusData?.next_phase ?? "ingesting";
   const pauseRequested = statusData?.pause_requested ?? false;
   const progressStatus =
-    isActive(pipelineStatus) || pipelineStatus === "complete"
+    isActive(pipelineStatus) || readyPipelineStatuses.has(pipelineStatus)
       ? pipelineStatus
       : nextPhase;
   const nextPhaseLabel =
-    PIPELINE_STEPS.find((step) => step.status === nextPhase)?.label ??
-    nextPhase;
+    pipelineSteps.find((step) => step.status === nextPhase)?.label ?? nextPhase;
   const sentenceCounts = statusData?.sentence_counts ?? {};
   const totalSentences = Object.values(sentenceCounts).reduce(
     (a, b) => a + b,
     0,
   );
-  const doneCount = sentenceCounts["audio_generated"] ?? 0;
+  const doneCount = playableSentenceStatuses.reduce(
+    (count, status) => count + (sentenceCounts[status] ?? 0),
+    0,
+  );
 
   // A fast local/stub phase can finish before the slower data queries poll.
   // Refresh editor data whenever the durable pipeline state advances so the
@@ -279,7 +292,7 @@ function AudiobookPipeline({
     <div className="audiobook-pipeline">
       {aiEnabled && (
         <div className="pipeline-header">
-          <PipelineProgress status={progressStatus} />
+          <PipelineProgress status={progressStatus} steps={pipelineSteps} />
 
           <div className="pipeline-meta">
             {totalSentences > 0 && (
@@ -287,10 +300,10 @@ function AudiobookPipeline({
                 {doneCount} / {totalSentences} sentences with audio
               </span>
             )}
-            {pipelineStatus === "error" && (
+            {failedPipelineStatuses.has(pipelineStatus) && (
               <span className="badge badge--error">Pipeline error</span>
             )}
-            {pipelineStatus === "paused" && (
+            {pausedPipelineStatuses.has(pipelineStatus) && (
               <span className="badge badge--warning">
                 Paused — next: {nextPhaseLabel}
               </span>
@@ -313,7 +326,7 @@ function AudiobookPipeline({
           />
 
           <div className="pipeline-controls">
-            {pipelineStatus === "complete" && (
+            {readyPipelineStatuses.has(pipelineStatus) && (
               <a
                 className="btn btn-primary"
                 href={getAudiobookDownloadUrl(bookId)}
@@ -322,9 +335,10 @@ function AudiobookPipeline({
                 Download Audiobook EPUB
               </a>
             )}
-            {pipelineStatus !== "complete" && !isActive(pipelineStatus) && (
+            {!readyPipelineStatuses.has(pipelineStatus) &&
+              !isActive(pipelineStatus) && (
               <>
-                {BATCHABLE_STATUSES.has(nextPhase) && (
+                  {batchableStatuses.has(nextPhase) && (
                   <button
                     onClick={() => batchMutation.mutate()}
                     disabled={
