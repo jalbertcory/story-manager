@@ -4,9 +4,17 @@ import {
   getChapterAudioUrl,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
+import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
 
 function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
   const queryClient = useQueryClient();
+  const { data: lifecycleDefinitions } = useLifecycleDefinitions();
+  const previewLifecycle = lifecycleDefinitions?.chapter_preview;
+  const previewLabels = Object.fromEntries(
+    (previewLifecycle?.states ?? []).map((state) => [state.value, state.label]),
+  );
+  const activePreviewStatuses = new Set(previewLifecycle?.active_states ?? []);
+  const failedPreviewStatuses = new Set(previewLifecycle?.failure_states ?? []);
   const previewMutation = useMutation({
     mutationFn: (chapterId) => generateChapterPreview(bookId, chapterId),
     onSuccess: () => {
@@ -41,7 +49,7 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
             const analyzed =
               chapter.sentence_count > 0 &&
               chapter.processed_sentence_count === chapter.sentence_count;
-            const previewBusy = ["queued", "generating"].includes(
+            const previewBusy = activePreviewStatuses.has(
               chapter.preview_status,
             );
             const previewReady =
@@ -52,12 +60,11 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
                 <td>
                   {previewBusy ? (
                     <span className="badge badge--warning">
-                      {chapter.preview_status === "queued"
-                        ? "Queued"
-                        : "Generating"}{" "}
+                      {previewLabels[chapter.preview_status] ??
+                        chapter.preview_status}{" "}
                       · {chapter.audio_generated_count}/{chapter.sentence_count}
                     </span>
-                  ) : chapter.preview_status === "error" ? (
+                  ) : failedPreviewStatuses.has(chapter.preview_status) ? (
                     <span className="badge badge--error">Preview failed</span>
                   ) : chapter.needs_reassembly ? (
                     <span className="badge badge--warning">

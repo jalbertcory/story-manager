@@ -7,6 +7,13 @@ from sqlalchemy import String, and_, asc, case, cast, delete, desc, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models, schemas
+from ..lifecycle import (
+    AUDIOBOOK_PUBLICATION,
+    WEB_IMPORT,
+    AudiobookPublicationStatus,
+    WebImportStatus,
+    transition_state,
+)
 
 
 def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
@@ -448,7 +455,7 @@ async def reset_failed_web_book_for_retry(
     book.current_word_count = None
     book.removed_chapters = []
     book.content_selectors = []
-    book.download_status = "pending"
+    transition_state(book, "download_status", WEB_IMPORT, WebImportStatus.PENDING, context=f"book {book.id}")
     book.source_url = source_url
     book.source_type = models.SourceType.web
     await db.commit()
@@ -460,7 +467,7 @@ async def detach_book_source(db: AsyncSession, book: models.Book) -> models.Book
     """Clear a book's remote source metadata and treat it as a normal EPUB."""
     book.source_url = None
     book.source_type = models.SourceType.epub
-    book.download_status = None
+    transition_state(book, "download_status", WEB_IMPORT, None, context=f"book {book.id}")
     await db.commit()
     await db.refresh(book)
     return book
@@ -475,7 +482,13 @@ async def touch_book_content(db: AsyncSession, book: models.Book) -> None:
             book.content_version,
         )
         if book.audiobook_revision or book.audiobook_source_content_version is not None:
-            book.audiobook_publication_state = "stale"
+            transition_state(
+                book,
+                "audiobook_publication_state",
+                AUDIOBOOK_PUBLICATION,
+                AudiobookPublicationStatus.STALE,
+                context=f"book {book.id}",
+            )
 
 
 async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limit: int = 100) -> List[models.Book]:

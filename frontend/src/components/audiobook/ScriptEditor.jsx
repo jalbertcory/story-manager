@@ -7,17 +7,25 @@ import {
   getSentenceAudioUrl,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
+import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
 
 const STATUS_ICONS = {
-  pending_diarization: { icon: "⏳", label: "Pending diarization" },
-  ready_for_audio: { icon: "🎙", label: "Ready for audio" },
-  audio_queued: { icon: "⏱", label: "Audio queued" },
-  audio_generating: { icon: "🔊", label: "Generating audio" },
-  audio_generated: { icon: "✅", label: "Audio generated" },
-  error: { icon: "❌", label: "Error" },
+  pending_diarization: "⏳",
+  ready_for_audio: "🎙",
+  audio_queued: "⏱",
+  audio_generating: "🔊",
+  audio_generated: "✅",
+  error: "❌",
 };
 
-function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
+function SentenceRow({
+  sentence,
+  characters,
+  bookId,
+  pipelineActive,
+  statusLabels,
+  statusGroups,
+}) {
   const queryClient = useQueryClient();
   const [tags, setTags] = useState(
     sentence.tagged_text || sentence.original_text,
@@ -56,12 +64,11 @@ function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
     });
   };
 
-  const statusInfo = STATUS_ICONS[sentence.status] || {
-    icon: "?",
-    label: sentence.status,
+  const statusInfo = {
+    icon: STATUS_ICONS[sentence.status] || "?",
+    label: statusLabels[sentence.status] || sentence.status,
   };
-  const audioUrl =
-    sentence.status === "audio_generated"
+  const audioUrl = statusGroups.playable.has(sentence.status)
       ? getSentenceAudioUrl(sentence.id)
       : null;
 
@@ -127,8 +134,8 @@ function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
             preload="none"
             style={{ height: "24px" }}
           />
-        ) : sentence.status === "ready_for_audio" ||
-          sentence.status === "error" ? (
+        ) : statusGroups.ready.has(sentence.status) ||
+          statusGroups.failed.has(sentence.status) ? (
           <button
             type="button"
             className="btn-small"
@@ -151,13 +158,15 @@ function SentenceRow({ sentence, characters, bookId, pipelineActive }) {
           >
             {audioMutation.isPending
               ? "Queueing…"
-              : sentence.status === "error"
+              : statusGroups.failed.has(sentence.status)
                 ? "Retry audio"
                 : "Generate audio"}
           </button>
-        ) : ["audio_queued", "audio_generating"].includes(sentence.status) ? (
+        ) : statusGroups.inProgress.has(sentence.status) ? (
           <span className="sentence-audio-progress">
-            {sentence.status === "audio_queued" ? "Waiting…" : "Working…"}
+            {statusGroups.waiting.has(sentence.status)
+              ? "Waiting…"
+              : "Working…"}
           </span>
         ) : null}
         {audioMutation.isError && (
@@ -202,6 +211,38 @@ function ScriptEditor({
   chapters = [],
   pipelineActive = false,
 }) {
+  const { data: lifecycleDefinitions } = useLifecycleDefinitions();
+  const sentenceLifecycle = lifecycleDefinitions?.sentence;
+  const statusLabels = Object.fromEntries(
+    (sentenceLifecycle?.states ?? []).map((state) => [
+      state.value,
+      state.label,
+    ]),
+  );
+  const audioInProgressStatuses = new Set(
+    sentenceLifecycle?.groups?.audio_in_progress ?? [],
+  );
+  const audioReadyStatuses = new Set(
+    sentenceLifecycle?.groups?.audio_ready ?? [],
+  );
+  const audioWaitingStatuses = new Set(
+    sentenceLifecycle?.groups?.audio_waiting ?? [],
+  );
+  const audioWorkingStatuses = new Set(
+    sentenceLifecycle?.groups?.audio_working ?? [],
+  );
+  const audioPlayableStatuses = new Set(
+    sentenceLifecycle?.groups?.audio_playable ?? [],
+  );
+  const failedStatuses = new Set(sentenceLifecycle?.failure_states ?? []);
+  const statusGroups = {
+    inProgress: audioInProgressStatuses,
+    ready: audioReadyStatuses,
+    waiting: audioWaitingStatuses,
+    working: audioWorkingStatuses,
+    playable: audioPlayableStatuses,
+    failed: failedStatuses,
+  };
   const [page, setPage] = useState(1);
   const [chapterFilter, setChapterFilter] = useState("");
   const [reviewOnly, setReviewOnly] = useState(false);
@@ -219,7 +260,7 @@ function ScriptEditor({
     keepPreviousData: true,
     refetchInterval: ({ state }) =>
       state.data?.items?.some((sentence) =>
-        ["audio_queued", "audio_generating"].includes(sentence.status),
+        audioInProgressStatuses.has(sentence.status),
       )
         ? 1500
         : false,
@@ -313,6 +354,8 @@ function ScriptEditor({
                   characters={characters}
                   bookId={bookId}
                   pipelineActive={pipelineActive}
+                  statusLabels={statusLabels}
+                  statusGroups={statusGroups}
                 />
               ))}
             </tbody>

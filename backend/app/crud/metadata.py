@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from .. import models
+from ..lifecycle import METADATA_JOB, MetadataJobStatus, transition_state
 
 
 async def create_metadata_sync_job(
@@ -20,7 +21,7 @@ async def create_metadata_sync_job(
 ) -> models.MetadataSyncJob:
     job = models.MetadataSyncJob(
         trigger=trigger,
-        status="queued",
+        status=MetadataJobStatus.QUEUED.value,
         total_books=len(book_ids),
         processed_books=0,
         matched_books=0,
@@ -47,17 +48,19 @@ async def get_latest_metadata_sync_job(db: AsyncSession) -> Optional[models.Meta
 async def get_pending_metadata_sync_jobs(db: AsyncSession) -> list[models.MetadataSyncJob]:
     result = await db.execute(
         select(models.MetadataSyncJob)
-        .where(models.MetadataSyncJob.status == "queued")
+        .where(models.MetadataSyncJob.status == MetadataJobStatus.QUEUED.value)
         .order_by(asc(models.MetadataSyncJob.created_at))
     )
     return result.scalars().all()
 
 
 async def reset_running_metadata_sync_jobs(db: AsyncSession) -> None:
-    result = await db.execute(select(models.MetadataSyncJob).where(models.MetadataSyncJob.status == "running"))
+    result = await db.execute(
+        select(models.MetadataSyncJob).where(models.MetadataSyncJob.status == MetadataJobStatus.RUNNING.value)
+    )
     jobs = result.scalars().all()
     for job in jobs:
-        job.status = "queued"
+        transition_state(job, "status", METADATA_JOB, MetadataJobStatus.QUEUED, context=f"metadata job {job.id}")
         job.started_at = None
         job.completed_at = None
         job.error = None
@@ -66,7 +69,7 @@ async def reset_running_metadata_sync_jobs(db: AsyncSession) -> None:
 
 
 async def mark_metadata_sync_job_running(db: AsyncSession, job: models.MetadataSyncJob) -> models.MetadataSyncJob:
-    job.status = "running"
+    transition_state(job, "status", METADATA_JOB, MetadataJobStatus.RUNNING, context=f"metadata job {job.id}")
     job.started_at = datetime.now(timezone.utc)
     job.completed_at = None
     job.error = None
@@ -94,7 +97,7 @@ async def mark_metadata_sync_job_progress(
 
 
 async def complete_metadata_sync_job(db: AsyncSession, job: models.MetadataSyncJob) -> models.MetadataSyncJob:
-    job.status = "completed"
+    transition_state(job, "status", METADATA_JOB, MetadataJobStatus.COMPLETED, context=f"metadata job {job.id}")
     job.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(job)
@@ -102,7 +105,7 @@ async def complete_metadata_sync_job(db: AsyncSession, job: models.MetadataSyncJ
 
 
 async def fail_metadata_sync_job(db: AsyncSession, job: models.MetadataSyncJob, error: str) -> models.MetadataSyncJob:
-    job.status = "failed"
+    transition_state(job, "status", METADATA_JOB, MetadataJobStatus.FAILED, context=f"metadata job {job.id}")
     job.error = error
     job.completed_at = datetime.now(timezone.utc)
     await db.commit()

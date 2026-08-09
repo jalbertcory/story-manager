@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models, schemas
+from ..lifecycle import UPDATE_TASK, UpdateTaskStatus, transition_state
 
 
 async def create_book_log(db: AsyncSession, log: schemas.BookLogCreate) -> models.BookLog:
@@ -43,12 +44,12 @@ async def get_latest_update_task(db: AsyncSession) -> Optional[models.UpdateTask
 
 
 async def get_active_update_task(db: AsyncSession) -> Optional[models.UpdateTask]:
-    result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == "running"))
+    result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == UpdateTaskStatus.RUNNING.value))
     return result.scalars().first()
 
 
 async def create_update_task(db: AsyncSession, total_books: int) -> models.UpdateTask:
-    task = models.UpdateTask(total_books=total_books, completed_books=0, status="running")
+    task = models.UpdateTask(total_books=total_books, completed_books=0, status=UpdateTaskStatus.RUNNING.value)
     db.add(task)
     await db.commit()
     await db.refresh(task)
@@ -62,21 +63,21 @@ async def increment_update_task(db: AsyncSession, task: models.UpdateTask) -> No
 
 
 async def complete_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
-    task.status = "completed"
+    transition_state(task, "status", UPDATE_TASK, UpdateTaskStatus.COMPLETED, context=f"update task {task.id}")
     task.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
 
 
 async def fail_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
-    task.status = "failed"
+    transition_state(task, "status", UPDATE_TASK, UpdateTaskStatus.FAILED, context=f"update task {task.id}")
     task.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
 
 
 async def interrupt_update_task(db: AsyncSession, task: models.UpdateTask) -> None:
-    task.status = "interrupted"
+    transition_state(task, "status", UPDATE_TASK, UpdateTaskStatus.INTERRUPTED, context=f"update task {task.id}")
     task.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
@@ -84,10 +85,10 @@ async def interrupt_update_task(db: AsyncSession, task: models.UpdateTask) -> No
 
 async def reset_stuck_update_tasks(db: AsyncSession) -> None:
     """Mark any tasks left in 'running' state (e.g. from a crashed run) as 'interrupted'."""
-    result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == "running"))
+    result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.status == UpdateTaskStatus.RUNNING.value))
     stuck = result.scalars().all()
     for task in stuck:
-        task.status = "interrupted"
+        transition_state(task, "status", UPDATE_TASK, UpdateTaskStatus.INTERRUPTED, context=f"update task {task.id}")
         task.completed_at = datetime.now(timezone.utc)
     if stuck:
         await db.commit()

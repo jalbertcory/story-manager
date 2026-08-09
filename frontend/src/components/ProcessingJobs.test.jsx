@@ -3,8 +3,30 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProcessingJobs from "./ProcessingJobs";
 
+vi.mock("../hooks/useLifecycleDefinitions", () => ({
+  default: () => ({
+    data: {
+      processing_job: {
+        states: [
+          { value: "queued", label: "Queued" },
+          { value: "running", label: "Running" },
+          { value: "completed", label: "Completed" },
+          { value: "error", label: "Failed" },
+          { value: "canceled", label: "Canceled" },
+        ],
+        active_states: ["queued", "running"],
+        terminal_states: ["completed", "error", "canceled"],
+        retryable_states: ["error", "canceled"],
+        groups: { running: ["running"], waiting: ["queued"] },
+      },
+    },
+  }),
+}));
+
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <ProcessingJobs />
@@ -64,7 +86,9 @@ describe("ProcessingJobs", () => {
 
   it("shows active durable jobs and their progress", async () => {
     renderPage();
-    expect(await screen.findByRole("link", { name: "Queued Story" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "Queued Story" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Cleaning chapters")).toBeInTheDocument();
     expect(screen.getByText("33% · 1 / 3")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveValue(1);

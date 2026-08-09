@@ -58,7 +58,7 @@ for deployment and configuration.
 
 ## Overview
 
-This pipeline converts any stored EPUB into an EPUB 3 Media Overlay audiobook. The system is a **sentence-level state machine**: each sentence in the book is independently tracked through diarization → TTS → assembly, enabling surgical regeneration of specific audio snippets without full rebuilds.
+This pipeline converts any stored EPUB into an EPUB 3 Media Overlay audiobook. The system is a **sentence-level state machine**: each sentence in the book is independently tracked through diarization → TTS → assembly, enabling surgical regeneration of specific audio snippets without full rebuilds. The authoritative pipeline, publication, preview, chapter, sentence, import, and alignment vocabularies live in `backend/app/lifecycle.py`; recovery behavior is documented in [Application lifecycles](LIFECYCLES.md).
 
 The five pipeline phases are:
 1. **Ingestion** — parse EPUB, inject sentence `<span>` IDs, seed the database

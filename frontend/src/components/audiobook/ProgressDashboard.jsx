@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { chapterLabel } from "../../lib/audiobook";
-
-const ACTIVE_STATUSES = new Set([
-  "ingesting",
-  "roster_gen",
-  "diarizing",
-  "audio_gen",
-  "assembling",
-]);
+import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
 
 function percent(current, total) {
   return total ? Math.round((current * 1000) / total) / 10 : 0;
@@ -65,6 +58,19 @@ function ProgressMetric({ label, current, total, detail }) {
 }
 
 function ProgressDashboard({ status, chapters = [] }) {
+  const { data: lifecycleDefinitions } = useLifecycleDefinitions();
+  const pipelineLifecycle = lifecycleDefinitions?.audiobook_pipeline;
+  const stateLabels = Object.fromEntries(
+    (pipelineLifecycle?.states ?? []).map((state) => [
+      state.value,
+      state.label,
+    ]),
+  );
+  const activeStatuses = new Set(pipelineLifecycle?.active_states ?? []);
+  const failureStatuses = new Set(pipelineLifecycle?.failure_states ?? []);
+  const concurrentAnalysisStatuses = new Set(
+    pipelineLifecycle?.groups?.concurrent_analysis ?? [],
+  );
   const counts = status?.sentence_counts ?? {};
   const totalSentences = Object.values(counts).reduce(
     (sum, count) => sum + count,
@@ -86,7 +92,9 @@ function ProgressDashboard({ status, chapters = [] }) {
       chapter.audio_file_path &&
       chapter.smil_file_path,
   ).length;
-  const active = ACTIVE_STATUSES.has(status?.pipeline_status);
+  const pipelineStatus = status?.pipeline_status ?? null;
+  const pipelineLabel = stateLabels[pipelineStatus] ?? "Not started";
+  const active = activeStatuses.has(pipelineStatus);
   const rates = useProgressRates(analyzedSentences, generatedAudio);
   const receiving = status?.progress_detail?.includes("receiving ");
   const startedAt = status?.pipeline_started_at
@@ -103,7 +111,7 @@ function ProgressDashboard({ status, chapters = [] }) {
           <div>
             <span className="metric-label">Current activity</span>
             <h3>
-              {status?.pipeline_status || "Not started"}
+              {pipelineLabel}
               {active && (
                 <span className="progress-live-pulse" aria-label="working" />
               )}
@@ -111,16 +119,14 @@ function ProgressDashboard({ status, chapters = [] }) {
           </div>
           <span
             className={`badge ${
-              status?.pipeline_status === "error"
+              failureStatuses.has(pipelineStatus)
                 ? "badge--error"
                 : active
                   ? "badge--success"
                   : "badge--neutral"
             }`}
           >
-            {receiving
-              ? "Streaming model response"
-              : status?.pipeline_status || "idle"}
+            {receiving ? "Streaming model response" : pipelineLabel}
           </span>
         </div>
         <p className="progress-live-detail">
@@ -136,7 +142,7 @@ function ProgressDashboard({ status, chapters = [] }) {
             Audio: {formatRate(rates.audio)} ·{" "}
             {formatEta(totalSentences - generatedAudio, rates.audio)}
           </span>
-          {status?.pipeline_status === "diarizing" && (
+          {concurrentAnalysisStatuses.has(pipelineStatus) && (
             <span>Analysis and speech lanes are running concurrently</span>
           )}
           {startedAt && <span>Started {startedAt.toLocaleString()}</span>}

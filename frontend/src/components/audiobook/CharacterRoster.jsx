@@ -7,14 +7,7 @@ import {
   shareCharacterRosterWithSeries,
   updateCharacter,
 } from "../../api/audiobook";
-
-const ACTIVE_STATUSES = new Set([
-  "ingesting",
-  "roster_gen",
-  "diarizing",
-  "audio_gen",
-  "assembling",
-]);
+import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
 
 function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
   const queryClient = useQueryClient();
@@ -204,6 +197,11 @@ function CharacterRoster({
   ttsProvider,
 }) {
   const queryClient = useQueryClient();
+  const { data: lifecycleDefinitions } = useLifecycleDefinitions();
+  const activeStatuses = new Set(
+    lifecycleDefinitions?.audiobook_pipeline?.active_states ?? [],
+  );
+  const pipelineActive = activeStatuses.has(pipelineStatus);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const regenerateMutation = useMutation({
     mutationFn: () => rebuildCharacterRoster(bookId),
@@ -247,9 +245,7 @@ function CharacterRoster({
         {series && (
           <button
             onClick={() => shareMutation.mutate()}
-            disabled={
-              shareMutation.isPending || ACTIVE_STATUSES.has(pipelineStatus)
-            }
+            disabled={shareMutation.isPending || pipelineActive}
           >
             {shareMutation.isPending ? "Syncing series…" : "Sync Series Roster"}
           </button>
@@ -257,7 +253,7 @@ function CharacterRoster({
         {!confirmRegenerate ? (
           <button
             onClick={() => setConfirmRegenerate(true)}
-            disabled={ACTIVE_STATUSES.has(pipelineStatus)}
+            disabled={pipelineActive}
           >
             Regenerate Character Roster
           </button>
@@ -305,7 +301,7 @@ function CharacterRoster({
             key={char.id}
             character={char}
             bookId={bookId}
-            pipelineActive={ACTIVE_STATUSES.has(pipelineStatus)}
+            pipelineActive={pipelineActive}
             ttsProvider={ttsProvider}
           />
         ))}

@@ -14,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..database import SessionLocal
+from ..lifecycle import (
+    AUDIOBOOK_PUBLICATION,
+    IMPORTED_AUDIOBOOK,
+    AudiobookPublicationStatus,
+    ImportedAudiobookStatus,
+    transition_state,
+)
 from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
 from .audiobook_alignment import process_alignment
 from .audiobook_import import process_import, rematch_imported_audiobook
@@ -674,7 +681,13 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
     content_version = book.content_version or 1
     queued: list[ProcessingJob] = []
     if book.audiobook_enabled:
-        book.audiobook_publication_state = "stale"
+        transition_state(
+            book,
+            "audiobook_publication_state",
+            AUDIOBOOK_PUBLICATION,
+            AudiobookPublicationStatus.STALE,
+            context=f"book {book.id}",
+        )
         await db.commit()
 
     result = await db.execute(select(ImportedAudiobook).where(ImportedAudiobook.book_id == book.id))
@@ -682,7 +695,13 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
         if edition.matched_content_version == content_version and edition.status != "stale":
             continue
         realign = edition.alignment_method in {"transcribed", "hybrid"}
-        edition.status = "stale"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.STALE,
+            context=f"imported audiobook {edition.id}",
+        )
         edition.progress_detail = "Book content changed; rematch queued"
         edition.alignment_error = None
         await db.commit()

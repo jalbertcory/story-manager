@@ -14,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, Book
+from ..lifecycle import (
+    AUDIOBOOK_PUBLICATION,
+    CHAPTER_GENERATION,
+    AudiobookPublicationStatus,
+    ChapterGenerationStatus,
+    transition_state,
+)
 
 
 def normalize_resource_href(raw: str | None, chapter_number: int = 0) -> str:
@@ -147,7 +154,13 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
         source_audio = _resolved(chapter.audio_file_path)
         source_smil = _resolved(chapter.smil_file_path)
         if source_audio is None or source_smil is None or not source_audio.is_file() or not source_smil.is_file():
-            chapter.generation_state = "pending"
+            transition_state(
+                chapter,
+                "generation_state",
+                CHAPTER_GENERATION,
+                ChapterGenerationStatus.PENDING,
+                context=f"audiobook chapter {chapter.id}",
+            )
             continue
 
         href = normalize_resource_href(chapter.source_href or chapter.content_file_name, chapter.chapter_number)
@@ -176,7 +189,13 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
         chapter.smil_size_bytes = len(smil_content)
         chapter.smil_sha256 = smil_sha
         chapter.duration_ms = sum(sentence.audio_duration_ms or 0 for sentence in sentences)
-        chapter.generation_state = "ready"
+        transition_state(
+            chapter,
+            "generation_state",
+            CHAPTER_GENERATION,
+            ChapterGenerationStatus.READY,
+            context=f"audiobook chapter {chapter.id}",
+        )
         ready_count += 1
 
     book.audiobook_revision = (book.audiobook_revision or 0) + 1
@@ -187,8 +206,16 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
     book.audiobook_source_content_version = content_version
     book.audiobook_text_content_version = content_version
     book.audiobook_pending_content_version = pending_content_version or None
-    book.audiobook_publication_state = (
-        "complete" if chapters and ready_count == len(chapters) and not pending_content_version else "partial"
+    transition_state(
+        book,
+        "audiobook_publication_state",
+        AUDIOBOOK_PUBLICATION,
+        (
+            AudiobookPublicationStatus.COMPLETE
+            if chapters and ready_count == len(chapters) and not pending_content_version
+            else AudiobookPublicationStatus.PARTIAL
+        ),
+        context=f"book {book.id}",
     )
     book.audiobook_text_file_path = _relative(text_target)
     book.audiobook_text_size_bytes = text_size

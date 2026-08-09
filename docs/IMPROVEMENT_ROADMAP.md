@@ -108,7 +108,7 @@ Search should use PostgreSQL indexes suited to title, author, series, and tag lo
 
 ## 6. Consolidated background execution
 
-**Status:** In progress
+**Status:** Complete
 
 Complete the transition from specialized in-memory queues to the durable processing-job ledger. The API process should enqueue work, while a unified worker claims and executes jobs using explicit resource lanes.
 
@@ -125,9 +125,11 @@ The first deployment can retain a single-container experience, but job ownership
 
 ## 7. Centralized state-machine definitions
 
-**Status:** Planned
+**Status:** In progress
 
 Replace scattered lifecycle strings and implicit transitions with centralized state definitions for processing jobs, web imports and refreshes, metadata jobs, generated audiobooks, imported audiobooks, alignment, and publication.
+
+The lifecycle vocabulary and recovery contract are documented in [Application lifecycles](LIFECYCLES.md).
 
 State machines should define valid transitions, terminal states, retry behavior, and how parent and child operations interact. Database constraints should reject impossible values.
 
