@@ -22,7 +22,7 @@ Application logs are stored as redacted JSON lines in `logs/story-manager.jsonl`
 - `STORY_MANAGER_LOG_BACKUP_COUNT`
 - `LOG_FORMAT=json` for structured container output
 
-The Logs screen and `GET /api/logs` read this persisted history. The API accepts `level`, `request_id`, `job_id`, and `limit` filters.
+The Logs screen and `GET /api/logs` read this persisted history. Successful high-frequency polling requests are hidden by default so they do not overwhelm useful records; pass `include_polling=true` to include them. The API also accepts `level`, `request_id`, `job_id`, and `limit` filters.
 
 ## Job metrics
 

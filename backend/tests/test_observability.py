@@ -11,7 +11,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from unittest.mock import AsyncMock, Mock
 
-from backend.app.logging_config import _RedactedTextFormatter, read_persisted_logs, redact_text
+from backend.app.logging_config import (
+    _RedactedTextFormatter,
+    is_quiet_successful_access_entry,
+    read_persisted_logs,
+    redact_text,
+)
 from backend.app.models import ProcessingJob
 from backend.app.services.observability import health_report, processing_job_metrics
 
@@ -68,6 +73,30 @@ def test_plain_console_formatter_redacts_interpolated_secrets():
 
     assert "console-secret" not in output
     assert output == "request failed with api_key=[REDACTED]"
+
+
+def test_historical_successful_polling_entries_can_be_hidden():
+    assert is_quiet_successful_access_entry(
+        {
+            "logger": "story_manager.access",
+            "level": "INFO",
+            "message": "GET /api/logs completed with 200 in 61.9ms",
+        }
+    )
+    assert not is_quiet_successful_access_entry(
+        {
+            "logger": "story_manager.access",
+            "level": "INFO",
+            "message": "GET /api/logs completed with 500 in 61.9ms",
+        }
+    )
+    assert not is_quiet_successful_access_entry(
+        {
+            "logger": "story_manager.access",
+            "level": "INFO",
+            "message": "POST /api/processing/jobs completed with 202 in 12.0ms",
+        }
+    )
 
 
 @pytest.mark.asyncio

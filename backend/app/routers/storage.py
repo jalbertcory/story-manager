@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..logging_config import read_persisted_logs
+from ..logging_config import is_quiet_successful_access_entry, read_persisted_logs
 from ..services.library_health import inspect_library_files, is_failed_web_import_placeholder
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,11 @@ async def get_logs(
     level: Optional[str] = None,
     request_id: Optional[str] = None,
     job_id: Optional[int] = None,
+    include_polling: bool = False,
 ):
     entries = read_persisted_logs(limit=1000, level=level)
+    if not include_polling:
+        entries = [entry for entry in entries if not is_quiet_successful_access_entry(entry)]
     if request_id:
         entries = [entry for entry in entries if entry.get("request_id") == request_id]
     if job_id is not None:

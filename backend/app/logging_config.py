@@ -18,6 +18,18 @@ from .observability_context import job_id_var, request_id_var
 
 _LOG_BUFFER: collections.deque = collections.deque(maxlen=1000)
 _LOG_FILE = LOG_DIR / "story-manager.jsonl"
+QUIET_SUCCESS_PATHS = frozenset(
+    {
+        "/api/dashboard/attention",
+        "/api/logs",
+        "/api/observability/health",
+        "/api/observability/job-metrics",
+        "/api/processing/jobs",
+        "/health",
+        "/health/live",
+        "/health/ready",
+    }
+)
 
 _REDACTION_PATTERNS = (
     (re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+"), r"\1 [REDACTED]"),
@@ -65,6 +77,14 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, str):
         return redact_text(value)
     return value
+
+
+def is_quiet_successful_access_entry(entry: dict[str, Any]) -> bool:
+    """Identify historical successful polling access records for UI filtering."""
+    if entry.get("logger") != "story_manager.access":
+        return False
+    message = str(entry.get("message") or "")
+    return any(re.match(rf"^GET {re.escape(path)} completed with [23]\d\d\b", message) for path in QUIET_SUCCESS_PATHS)
 
 
 class _CorrelationFilter(logging.Filter):
