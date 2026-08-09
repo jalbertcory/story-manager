@@ -112,9 +112,7 @@ async def endpoint_summaries(
                 "fastest_ms": _rounded(durations[0]) if durations else None,
                 "slowest_ms": _rounded(durations[-1]) if durations else None,
                 "answered_24h": len(recent),
-                "average_24h_ms": _rounded(sum(recent_durations) / len(recent_durations))
-                if recent_durations
-                else None,
+                "average_24h_ms": _rounded(sum(recent_durations) / len(recent_durations)) if recent_durations else None,
                 "speed_buckets": {
                     "under_5s": sum(duration < 5_000 for duration in durations),
                     "from_5s_to_15s": sum(5_000 <= duration < 15_000 for duration in durations),

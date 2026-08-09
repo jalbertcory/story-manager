@@ -175,9 +175,7 @@ async def test_endpoint_summaries_include_latency_percentiles_and_buckets(db):
 @pytest.mark.asyncio
 async def test_llm_stats_api_returns_configured_endpoint_metrics(app_client, sqlite_sessionmaker):
     async with sqlite_sessionmaker() as db:
-        settings = models.AudiobookSettings(
-            llm_endpoints=[{"id": "api-host", "name": "API Host", "provider": "ollama"}]
-        )
+        settings = models.AudiobookSettings(llm_endpoints=[{"id": "api-host", "name": "API Host", "provider": "ollama"}])
         db.add(settings)
         await db.flush()
         db.add(
@@ -208,9 +206,7 @@ async def test_all_endpoint_stats_api_includes_tts_and_transcription(app_client,
         settings = models.AudiobookSettings(
             llm_endpoints=[{"id": "llm-host", "name": "LLM Host", "provider": "ollama"}],
             tts_endpoints=[{"id": "tts-host", "name": "TTS Host", "provider": "omnivoice"}],
-            transcription_endpoints=[
-                {"id": "stt-host", "name": "STT Host", "provider": "whisperx"}
-            ],
+            transcription_endpoints=[{"id": "stt-host", "name": "STT Host", "provider": "whisperx"}],
         )
         db.add(settings)
         await db.flush()
