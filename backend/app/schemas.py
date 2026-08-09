@@ -113,6 +113,30 @@ class BookCatalogEntry(BaseModel):
     audiobook_types: List[AudiobookType] = Field(default_factory=list)
 
 
+class CatalogGenreFacet(BaseModel):
+    name: str
+    count: int
+
+
+class BookCatalogFacets(BaseModel):
+    series: int = 0
+    standalone: int = 0
+    web: int = 0
+    audiobook_available: int = 0
+    audiobook_missing: int = 0
+    missing_series: int = 0
+    refreshing: int = 0
+    refresh_attention: int = 0
+    genres: List[CatalogGenreFacet] = Field(default_factory=list)
+
+
+class BookCatalogPage(BaseModel):
+    items: List[BookCatalogEntry] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    total_count: int = 0
+    facets: BookCatalogFacets = Field(default_factory=BookCatalogFacets)
+
+
 # Pydantic model for creating a new book log.
 class BookLogCreate(BaseModel):
     book_id: int

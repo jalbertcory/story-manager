@@ -81,9 +81,9 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
         book.cover_path = str(cover_path.relative_to(library_path.parent))
         await session.commit()
 
-    response = client.get("/api/books/catalog")
+    response = client.get("/api/books/catalog?view=all")
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["items"]
     assert len(data) == 1
     assert data[0]["title"] == "Catalog Book"
     assert data[0]["author"] == "Catalog Author"
@@ -119,10 +119,10 @@ async def test_book_catalog_includes_generated_and_human_audiobook_types(db_sess
         )
         await session.commit()
 
-    response = client.get("/api/books/catalog")
+    response = client.get("/api/books/catalog?view=all")
 
     assert response.status_code == 200
-    assert response.json()[0]["audiobook_types"] == [
+    assert response.json()["items"][0]["audiobook_types"] == [
         "ai_generated",
         "human_narrated",
     ]
@@ -154,10 +154,155 @@ async def test_book_catalog_sorts_audiobook_enabled_first(db_session):
         )
         await session.commit()
 
-    response = client.get("/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc")
+    response = client.get("/api/books/catalog?view=all&sort_by=audiobook_enabled&sort_order=desc")
 
     assert response.status_code == 200
-    assert [book["title"] for book in response.json()] == ["Audio Book", "Text Book"]
+    assert [book["title"] for book in response.json()["items"]] == ["Audio Book", "Text Book"]
+
+
+@pytest.mark.asyncio
+async def test_book_catalog_cursor_is_stable_when_new_books_are_added(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        for index, title in enumerate(["Alpha", "Bravo", "Charlie", "Delta", "Echo"], start=1):
+            await crud.create_book(
+                session,
+                schemas.BookCreate(
+                    title=title,
+                    author="Cursor Author",
+                    immutable_path=f"cursor-{index}-source.epub",
+                    current_path=f"cursor-{index}.epub",
+                    source_type=models.SourceType.epub,
+                ),
+            )
+
+    first = client.get("/api/books/catalog?view=standalone&limit=2")
+    assert first.status_code == 200
+    first_page = first.json()
+    assert [book["title"] for book in first_page["items"]] == ["Alpha", "Bravo"]
+    mismatched = client.get(
+        "/api/books/catalog",
+        params={
+            "view": "standalone",
+            "limit": 2,
+            "sort_order": "desc",
+            "cursor": first_page["next_cursor"],
+        },
+    )
+    assert mismatched.status_code == 400
+
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Between pages",
+                author="Cursor Author",
+                immutable_path="cursor-new-source.epub",
+                current_path="cursor-new.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    titles = [book["title"] for book in first_page["items"]]
+    cursor = first_page["next_cursor"]
+    while cursor:
+        response = client.get(
+            "/api/books/catalog",
+            params={"view": "standalone", "limit": 2, "cursor": cursor},
+        )
+        assert response.status_code == 200
+        page = response.json()
+        titles.extend(book["title"] for book in page["items"])
+        cursor = page["next_cursor"]
+
+    assert titles == ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+    assert len(titles) == len(set(titles))
+
+
+@pytest.mark.asyncio
+async def test_book_catalog_series_pages_keep_groups_complete_and_report_facets(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        for series in ["Alpha Saga", "Beta Saga", "Gamma Saga"]:
+            for index in range(2):
+                await crud.create_book(
+                    session,
+                    schemas.BookCreate(
+                        title=f"{series} {index + 1}",
+                        author="Series Author",
+                        series=series,
+                        immutable_path=f"{series}-{index}-source.epub",
+                        current_path=f"{series}-{index}.epub",
+                        source_type=models.SourceType.epub,
+                        genre_tags=["Fantasy"],
+                    ),
+                )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Standalone",
+                author="Solo Author",
+                immutable_path="standalone-facet-source.epub",
+                current_path="standalone-facet.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    response = client.get("/api/books/catalog?view=series&limit=2")
+    assert response.status_code == 200
+    page = response.json()
+    assert page["total_count"] == 3
+    assert {book["series"] for book in page["items"]} == {"Alpha Saga", "Beta Saga"}
+    assert len(page["items"]) == 4
+    assert page["facets"]["series"] == 3
+    assert page["facets"]["standalone"] == 1
+    assert page["facets"]["genres"] == [{"name": "Fantasy", "count": 6}]
+    assert page["next_cursor"]
+
+    second = client.get(
+        "/api/books/catalog",
+        params={"view": "series", "limit": 2, "cursor": page["next_cursor"]},
+    )
+    assert second.status_code == 200
+    assert {book["series"] for book in second.json()["items"]} == {"Gamma Saga"}
+    assert second.json()["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_book_catalog_genre_filter_is_exact_and_keeps_other_genre_facets(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Tagged Book",
+                author="Facet Author",
+                immutable_path="tagged-fantasy-source.epub",
+                current_path="tagged-fantasy.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Fantasy"],
+            ),
+        )
+        await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Fantasy",
+                author="Facet Author",
+                immutable_path="title-fantasy-source.epub",
+                current_path="title-fantasy.epub",
+                source_type=models.SourceType.epub,
+                genre_tags=["Romance"],
+            ),
+        )
+
+    response = client.get("/api/books/catalog?view=standalone&genre=Fantasy")
+    assert response.status_code == 200
+    page = response.json()
+    assert [book["title"] for book in page["items"]] == ["Tagged Book"]
+    assert page["facets"]["genres"] == [
+        {"name": "Fantasy", "count": 1},
+        {"name": "Romance", "count": 1},
+    ]
+
+    search = client.get("/api/books/catalog?view=standalone&q=Fantasy")
+    assert {book["title"] for book in search.json()["items"]} == {"Fantasy", "Tagged Book"}
 
 
 @pytest.mark.asyncio
@@ -181,7 +326,7 @@ async def test_get_book_catalog_includes_series_and_effective_genre_tags(db_sess
     response = client.get("/api/books/catalog")
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["items"]
     assert len(data) == 1
     assert data[0]["series_user_genre_tags"] == ["Adventure", "Fantasy"]
     assert data[0]["effective_genre_tags"] == ["Adventure", "Fantasy", "Progression Fantasy"]
@@ -217,7 +362,7 @@ async def test_update_series_genres_updates_catalog_effective_genres(db_session)
     catalog_response = client.get("/api/books/catalog")
 
     assert catalog_response.status_code == 200
-    catalog_data = catalog_response.json()
+    catalog_data = catalog_response.json()["items"]
     assert catalog_data[0]["series_user_genre_tags"] == ["Fantasy", "Progression Fantasy"]
     assert catalog_data[0]["effective_genre_tags"] == ["Fantasy", "Progression Fantasy"]
 
@@ -340,7 +485,7 @@ async def test_metadata_sync_apply_persists_genres_and_provenance(db_session, mo
 
     response = client.get("/api/books/catalog?q=Fantasy&sort_by=title&sort_order=asc")
     assert response.status_code == 200
-    assert [item["title"] for item in response.json()] == ["Dragon Saga 1"]
+    assert [item["title"] for item in response.json()["items"]] == ["Dragon Saga 1"]
 
 
 @pytest.mark.asyncio
@@ -4143,7 +4288,7 @@ async def test_catalog_includes_effective_series_genre_tags_from_books(db_sessio
 
     response = client.get("/api/books/catalog")
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["items"]
     series_books = [b for b in data if b["series"] == "Fallback Series"]
     assert len(series_books) == 2
     # Fantasy appears in both books (2/2 >= ceil(2/2)=1), Adventure and Romance in 1 each
@@ -4172,6 +4317,6 @@ async def test_catalog_effective_series_genre_tags_uses_explicit_when_set(db_ses
 
     response = client.get("/api/books/catalog")
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["items"]
     book = [b for b in data if b["series"] == "Explicit Series"][0]
     assert book["effective_series_genre_tags"] == ["Sci-Fi"]

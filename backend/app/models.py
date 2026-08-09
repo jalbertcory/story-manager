@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.sql import func
 from .database import Base
@@ -35,6 +36,9 @@ class Book(Base):
     genre_tags = Column(JSON, nullable=True)
     source_tags = Column(JSON, nullable=True)
     user_genre_tags = Column(JSON, nullable=True)
+    # Denormalized searchable text avoids repeatedly casting JSON tag arrays in
+    # every catalog query. A mapper hook below keeps it in sync.
+    catalog_search_text = Column(Text, nullable=True)
     metadata_remote_ids = Column(JSON, nullable=True)
     metadata_sync_source = Column(String, nullable=True)
     metadata_synced_at = Column(DateTime(timezone=True), nullable=True)
@@ -92,6 +96,20 @@ class Book(Base):
     content_version = Column(Integer, nullable=False, server_default="1")
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     purge_after = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+def _catalog_search_text(book: Book) -> str:
+    values = [book.title, book.author, book.series]
+    tags = [*(book.genre_tags or []), *(book.user_genre_tags or [])]
+    parts = [str(value).strip().casefold() for value in values if value and str(value).strip()]
+    parts.extend(f"tag:{str(tag).strip().casefold()}" for tag in tags if tag and str(tag).strip())
+    return "\n".join(parts) + "\n"
+
+
+@event.listens_for(Book, "before_insert")
+@event.listens_for(Book, "before_update")
+def _sync_catalog_search_text(_mapper, _connection, book: Book) -> None:
+    book.catalog_search_text = _catalog_search_text(book)
 
 
 class BookRevision(Base):

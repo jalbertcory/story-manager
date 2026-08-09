@@ -37,6 +37,9 @@ function App() {
   const [audiobookTab, setAudiobookTab] = useState("sources");
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
+  const [reviewFilter, setReviewFilter] = useState("");
+  const [audiobookFilter, setAudiobookFilter] = useState("");
+  const [genreFilter, setGenreFilter] = useState("");
   const [pendingImportEntries, setPendingImportEntries] = useState([]);
   const [globalDragging, setGlobalDragging] = useState(false);
   const [authStatus, setAuthStatus] = useState(null);
@@ -163,15 +166,24 @@ function App() {
   }, [applyLocation, authStatus?.authenticated]);
 
   const {
-    data: catalog = [],
+    data: catalogPages,
     isLoading,
     error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
   } = useLibraryCatalog({
     q: debouncedQuery,
+    view: libraryView,
+    review: reviewFilter,
+    audiobook: audiobookFilter,
+    genre: genreFilter,
     sortBy,
     sortOrder,
     enabled: Boolean(authStatus?.authenticated),
   });
+  const catalog = catalogPages?.pages.flatMap((page) => page.items) ?? [];
+  const catalogSummary = catalogPages?.pages[0];
 
   const { data: activeProcessingJobs = [] } = useQuery({
     queryKey: ["active-processing-jobs"],
@@ -398,11 +410,22 @@ function App() {
             {error && <p className="error">{error.message}</p>}
             <BookList
               books={catalog}
+              facets={catalogSummary?.facets}
+              totalCount={catalogSummary?.total_count ?? 0}
               onEdit={handleEdit}
               libraryView={libraryView}
               onLibraryViewChange={handleLibraryViewChange}
+              reviewFilter={reviewFilter}
+              onReviewFilterChange={setReviewFilter}
+              audiobookFilter={audiobookFilter}
+              onAudiobookFilterChange={setAudiobookFilter}
+              genreFilter={genreFilter}
+              onGenreFilterChange={setGenreFilter}
               sortBy={sortBy}
               sortOrder={sortOrder}
+              fetchNextPage={fetchNextPage}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
             />
           </>
         );

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBookCatalog } from "../api/books";
+import useDebouncedValue from "../hooks/useDebouncedValue";
 import {
   cancelProcessingJob,
   getProcessingJobs,
@@ -68,6 +69,7 @@ function ProcessingJobs() {
   });
   const [operation, setOperation] = useState("clean_book");
   const [bookSearch, setBookSearch] = useState("");
+  const debouncedBookSearch = useDebouncedValue(bookSearch.trim(), 250);
   const [selectedIds, setSelectedIds] = useState([]);
   const [queueNotice, setQueueNotice] = useState("");
   const statuses =
@@ -79,20 +81,28 @@ function ProcessingJobs() {
     refetchInterval: ({ state }) =>
       state.data?.some((job) => ACTIVE.has(job.status)) ? 1500 : 5000,
   });
-  const { data: catalog = [] } = useQuery({
-    queryKey: ["processing-book-catalog"],
-    queryFn: () => getBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
+  const { data: catalogPage } = useQuery({
+    queryKey: ["processing-book-catalog", operation, debouncedBookSearch],
+    queryFn: () =>
+      getBookCatalog({
+        q: debouncedBookSearch,
+        view: operation === "refresh_book" ? "web" : "all",
+        sortBy: "title",
+        sortOrder: "asc",
+        limit: 100,
+      }),
     staleTime: 30_000,
   });
+  const catalog = useMemo(() => catalogPage?.items ?? [], [catalogPage]);
 
   const eligibleBooks = useMemo(() => {
-    const query = bookSearch.trim().toLocaleLowerCase();
+    const query = debouncedBookSearch.toLocaleLowerCase();
     return catalog.filter((book) => {
       if (operation === "refresh_book" && book.source_type !== "web") return false;
       if (operation === "audiobook_pipeline" && !book.audiobook_enabled) return false;
       return !query || `${book.title} ${book.author}`.toLocaleLowerCase().includes(query);
     });
-  }, [bookSearch, catalog, operation]);
+  }, [catalog, debouncedBookSearch, operation]);
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });

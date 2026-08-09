@@ -2,18 +2,69 @@ import { getJson, getOptionalJson, sendJson, sendWithoutBody } from "./client";
 
 export function buildBookCatalogPath({
   q = "",
+  view = "series",
+  review = "",
+  audiobook = "",
+  genre = "",
   sortBy = "title",
   sortOrder = "asc",
+  limit = 30,
+  cursor = "",
 }) {
-  const suffix = `sort_by=${encodeURIComponent(sortBy)}&sort_order=${encodeURIComponent(sortOrder)}`;
-  if (!q) {
-    return `/api/books/catalog?${suffix}`;
-  }
-  return `/api/books/catalog?q=${encodeURIComponent(q)}&${suffix}`;
+  const params = [];
+  if (q) params.push(`q=${encodeURIComponent(q)}`);
+  params.push(`sort_by=${encodeURIComponent(sortBy)}`);
+  params.push(`sort_order=${encodeURIComponent(sortOrder)}`);
+  if (view !== "series") params.push(`view=${encodeURIComponent(view)}`);
+  if (limit !== 30) params.push(`limit=${limit}`);
+  if (review) params.push(`review=${encodeURIComponent(review)}`);
+  if (audiobook) params.push(`audiobook=${encodeURIComponent(audiobook)}`);
+  if (genre) params.push(`genre=${encodeURIComponent(genre)}`);
+  if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
+  return `/api/books/catalog?${params.join("&")}`;
 }
 
 export function getBookCatalog(params) {
-  return getJson(buildBookCatalogPath(params), "Failed to fetch books");
+  return getJson(buildBookCatalogPath(params), "Failed to fetch books").then(
+    (data) => {
+      if (!Array.isArray(data)) return data;
+      const series = new Set(
+        data
+          .filter((book) => book.series && !book.download_status)
+          .map((book) => book.series),
+      ).size;
+      const standalone = data.filter(
+        (book) =>
+          book.source_type !== "web" &&
+          (!book.series || Boolean(book.download_status)),
+      ).length;
+      const web = data.filter(
+        (book) => book.source_type === "web" && !book.download_status,
+      ).length;
+      return {
+        items: data,
+        next_cursor: null,
+        total_count: data.length,
+        facets: { series, standalone, web, genres: [] },
+      };
+    },
+  );
+}
+
+export async function getAllBookCatalog(params = {}) {
+  const books = [];
+  let cursor = "";
+  do {
+    const page = await getBookCatalog({
+      ...params,
+      view: params.view ?? "all",
+      limit: 100,
+      cursor,
+    });
+    books.push(...page.items);
+    cursor = page.next_cursor ?? "";
+  } while (cursor);
+  return books;
 }
 
 export function getBook(bookId) {
