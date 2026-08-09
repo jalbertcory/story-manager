@@ -1,6 +1,7 @@
 """Tests for the durable processing ledger and audio invalidation graph."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -16,7 +17,200 @@ from backend.app.models import (
     SourceType,
 )
 from backend.app.services import processing_queue as processing_queue_module
-from backend.app.services.processing_queue import ProcessingQueue, queue_audio_reconciliation
+from backend.app.services.processing_queue import ProcessingQueue, queue_audio_reconciliation, queue_processing_job
+
+
+@pytest.mark.asyncio
+async def test_processing_jobs_use_explicit_resource_policies(sqlite_sessionmaker):
+    expected = {
+        "clean_book": "cpu",
+        "refresh_book": "maintenance",
+        "metadata_sync": "llm",
+        "generate_sentence_audio": "tts",
+        "align_imported_audiobook": "transcription",
+    }
+    async with sqlite_sessionmaker() as db:
+        for index, (job_type, lane) in enumerate(expected.items(), start=1):
+            job = await queue_processing_job(
+                db=db,
+                job_type=job_type,
+                dedupe_key=f"lane-test-{index}",
+            )
+            assert job.resource_lane == lane
+            assert job.max_attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_processing_job_claim_is_exclusive_and_heartbeated(sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="clean_book",
+            resource_lane="cpu",
+        )
+
+    async with sqlite_sessionmaker() as db:
+        claimed = await crud.claim_processing_job(
+            db,
+            resource_lane="cpu",
+            lease_owner="worker-one",
+            lease_seconds=30,
+        )
+        assert claimed is not None
+        assert claimed.id == job.id
+        first_expiry = claimed.lease_expires_at
+
+    async with sqlite_sessionmaker() as db:
+        assert (
+            await crud.claim_processing_job(
+                db,
+                resource_lane="cpu",
+                lease_owner="worker-two",
+                lease_seconds=30,
+            )
+            is None
+        )
+        assert await crud.heartbeat_processing_job(
+            db,
+            job.id,
+            lease_owner="worker-one",
+            lease_seconds=60,
+        )
+        renewed = await db.get(ProcessingJob, job.id)
+        assert renewed.lease_expires_at > first_expiry
+
+
+@pytest.mark.asyncio
+async def test_expired_processing_job_is_reclaimed_until_attempt_limit(sqlite_sessionmaker):
+    expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="refresh_book",
+            resource_lane="maintenance",
+            max_attempts=2,
+        )
+        job.status = "running"
+        job.attempt_count = 1
+        job.lease_owner = "dead-worker"
+        job.lease_expires_at = expired
+        await db.commit()
+        job_id = job.id
+
+    async with sqlite_sessionmaker() as db:
+        reclaimed = await crud.claim_processing_job(
+            db,
+            resource_lane="maintenance",
+            lease_owner="replacement-worker",
+            lease_seconds=30,
+        )
+        assert reclaimed is not None
+        assert reclaimed.id == job_id
+        assert reclaimed.attempt_count == 2
+        reclaimed.lease_expires_at = expired
+        await db.commit()
+
+    async with sqlite_sessionmaker() as db:
+        _canceled, exhausted = await crud.recover_abandoned_processing_jobs(db)
+        assert exhausted == 1
+        failed = await db.get(ProcessingJob, job_id)
+        assert failed.status == "error"
+        assert "retry limit" in failed.error
+
+
+@pytest.mark.asyncio
+async def test_processing_failure_backoff_and_manual_retry_reset(sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="metadata_sync",
+            resource_lane="llm",
+        )
+        claimed = await crud.claim_processing_job(
+            db,
+            resource_lane="llm",
+            lease_owner="worker",
+            lease_seconds=30,
+        )
+        assert claimed is not None
+        status = await crud.fail_processing_job(
+            db,
+            job.id,
+            "provider unavailable",
+            lease_owner="worker",
+            retry_backoff_seconds=5,
+        )
+        assert status == "queued"
+        await db.refresh(job)
+        available_at = job.available_at.replace(tzinfo=timezone.utc)
+        assert available_at > datetime.now(timezone.utc)
+
+        job.status = "error"
+        await db.commit()
+        retried = await crud.retry_processing_job(db, job.id)
+        assert retried is not None
+        assert retried.attempt_count == 0
+        retry_at = retried.available_at.replace(tzinfo=timezone.utc)
+        assert retry_at <= datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_active_processing_job_deduplication_includes_running(sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        first, created = await crud.create_processing_job(
+            db,
+            job_type="clean_all",
+            resource_lane="cpu",
+            dedupe_key="clean-all",
+        )
+        assert created
+        first.status = "running"
+        await db.commit()
+
+        duplicate, created = await crud.create_processing_job(
+            db,
+            job_type="clean_all",
+            resource_lane="cpu",
+            dedupe_key="clean-all",
+        )
+        assert not created
+        assert duplicate.id == first.id
+
+
+@pytest.mark.asyncio
+async def test_canceled_abandoned_job_is_not_reclaimed(sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="refresh_all",
+            resource_lane="maintenance",
+        )
+        claimed = await crud.claim_processing_job(
+            db,
+            resource_lane="maintenance",
+            lease_owner="stopped-worker",
+            lease_seconds=30,
+        )
+        assert claimed is not None
+        await crud.request_processing_job_cancel(db, job.id)
+        claimed.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await db.commit()
+
+    async with sqlite_sessionmaker() as db:
+        canceled, _exhausted = await crud.recover_abandoned_processing_jobs(db)
+        assert canceled == 1
+        recovered = await db.get(ProcessingJob, job.id)
+        assert recovered.status == "canceled"
+        assert recovered.lease_owner is None
+        assert (
+            await crud.claim_processing_job(
+                db,
+                resource_lane="maintenance",
+                lease_owner="replacement-worker",
+                lease_seconds=30,
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio

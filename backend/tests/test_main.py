@@ -4,6 +4,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 from pathlib import Path
@@ -1049,16 +1050,11 @@ async def test_static_cover_files_reject_active_formats(db_session):
 
 
 @pytest.mark.asyncio
-async def test_add_web_novel(db_session, mocker):
+async def test_add_web_novel(db_session):
     """
     Test adding a new web novel. The endpoint returns immediately with a pending record
-    and enqueues the actual download onto the app-scoped worker queue.
+    and records the actual download in the durable processing ledger.
     """
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=True)
-
-    mocker.patch("backend.app.routers.web_novels.get_web_import_queue", return_value=queue)
-
     payload = {"url": "http://example.com/story/123"}
     response = client.post("/api/books/add_web_novel", json=payload)
 
@@ -1068,7 +1064,13 @@ async def test_add_web_novel(db_session, mocker):
     assert data["source_url"] == "http://example.com/story/123"
     assert data["immutable_path"] is None
     assert data["current_path"] is None
-    queue.enqueue.assert_awaited_once_with(data["id"], "http://example.com/story/123")
+    async with AsyncTestingSessionLocal() as session:
+        job = (
+            await session.execute(select(models.ProcessingJob).where(models.ProcessingJob.book_id == data["id"]))
+        ).scalar_one()
+        assert job.job_type == "import_web_book"
+        assert job.resource_lane == "maintenance"
+        assert job.payload["source_url"] == "http://example.com/story/123"
 
     # Verify that the pending book appears in the book list
     response = client.get("/api/books")
@@ -1104,11 +1106,7 @@ async def test_add_existing_web_novel(db_session):
 
 
 @pytest.mark.asyncio
-async def test_add_failed_web_novel_retries_placeholder(db_session, mocker):
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=True)
-    mocker.patch("backend.app.routers.web_novels.get_web_import_queue", return_value=queue)
-
+async def test_add_failed_web_novel_retries_placeholder(db_session):
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
             session,
@@ -1128,7 +1126,10 @@ async def test_add_failed_web_novel_retries_placeholder(db_session, mocker):
     assert data["id"] == book.id
     assert data["download_status"] == "pending"
     assert data["title"] == "https://example.com/story/retry"
-    queue.enqueue.assert_awaited_once_with(book.id, "https://example.com/story/retry")
+    async with AsyncTestingSessionLocal() as session:
+        job = (await session.execute(select(models.ProcessingJob).where(models.ProcessingJob.book_id == book.id))).scalar_one()
+        assert job.job_type == "import_web_book"
+        assert job.payload["source_url"] == "https://example.com/story/retry"
 
 
 @pytest.mark.asyncio

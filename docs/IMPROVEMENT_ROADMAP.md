@@ -91,7 +91,7 @@ The design should cover book deletion, bulk deletion, chapter removal, cleaning-
 
 ## 5. Server-side catalog pagination and filtering
 
-**Status:** In progress
+**Status:** Complete
 
 Stop loading the entire library for every catalog view. Introduce cursor-based pagination, server-side filtering, stable sorting, and aggregate facet counts while preserving the current series-oriented presentation.
 
@@ -108,7 +108,7 @@ Search should use PostgreSQL indexes suited to title, author, series, and tag lo
 
 ## 6. Consolidated background execution
 
-**Status:** Planned
+**Status:** In progress
 
 Complete the transition from specialized in-memory queues to the durable processing-job ledger. The API process should enqueue work, while a unified worker claims and executes jobs using explicit resource lanes.
 

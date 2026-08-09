@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..database import get_db
-from ..services.web_import_queue import get_web_import_queue
 from ..services.processing_queue import queue_processing_job
 from ..services.refresh_queue import RefreshQueue, get_refresh_queue
 
@@ -32,8 +31,6 @@ async def add_web_novel(
 ) -> models.Book:
     """Creates a pending book record immediately and queues the download."""
     source_url_str = str(request.url)
-    queue = get_web_import_queue()
-
     existing_book = await crud.get_book_by_source_url(db, source_url=source_url_str)
     if existing_book:
         if existing_book.deleted_at is not None:
@@ -49,7 +46,16 @@ async def add_web_novel(
         ):
             logger.info("Retrying failed web import placeholder for %s (book_id=%s).", source_url_str, existing_book.id)
             retried_book = await crud.reset_failed_web_book_for_retry(db, existing_book, source_url_str)
-            await queue.enqueue(retried_book.id, source_url_str)
+            await queue_processing_job(
+                db=db,
+                job_type="import_web_book",
+                book_id=retried_book.id,
+                target_type="book",
+                target_id=retried_book.id,
+                payload={"source_url": source_url_str},
+                dedupe_key=f"import_web_book:book:{retried_book.id}",
+                progress_detail="Queued web book import retry",
+            )
             return retried_book
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -64,7 +70,16 @@ async def add_web_novel(
         download_status="pending",
     )
     db_book = await crud.create_book(db=db, book=book_to_create)
-    await queue.enqueue(db_book.id, source_url_str)
+    await queue_processing_job(
+        db=db,
+        job_type="import_web_book",
+        book_id=db_book.id,
+        target_type="book",
+        target_id=db_book.id,
+        payload={"source_url": source_url_str},
+        dedupe_key=f"import_web_book:book:{db_book.id}",
+        progress_detail="Queued web book import",
+    )
     return db_book
 
 

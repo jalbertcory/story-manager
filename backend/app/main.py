@@ -36,9 +36,7 @@ from .routers import (
     upload,
     web_novels,
 )
-from .services.audiobook_queue import get_audiobook_queue
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
-from .services.web_import_queue import get_web_import_queue
 from .services.processing_queue import get_processing_queue
 
 logger = logging.getLogger(__name__)
@@ -60,8 +58,6 @@ class RasterCoverStaticFiles(StaticFiles):
 
 _console_handler, _mem_handler = setup_logging()
 _scheduler = get_scheduler()
-_web_import_queue = get_web_import_queue()
-_audiobook_queue = get_audiobook_queue()
 _processing_queue = get_processing_queue()
 
 
@@ -78,24 +74,17 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up Story Manager services.")
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
-    await _web_import_queue.start()
-    await _audiobook_queue.start()
     await _processing_queue.start()
-    requeued = await _web_import_queue.requeue_pending_books()
-    if requeued:
-        logger.info("Re-queued %s pending web novel imports.", requeued)
     if not is_test_app:
         processing_requeued = await _processing_queue.requeue_pending()
         if processing_requeued:
-            logger.info("Re-queued %s durable processing jobs.", processing_requeued)
+            logger.info("Finalized %s abandoned processing jobs at startup.", processing_requeued)
     if not _scheduler.running:
         _scheduler.start()
     await schedule_next_web_novel_update()
     if not is_test_app:
         await schedule_next_metadata_recheck()
     yield
-    await _web_import_queue.stop()
-    await _audiobook_queue.stop()
     await _processing_queue.stop()
     if _scheduler.running:
         _scheduler.shutdown()

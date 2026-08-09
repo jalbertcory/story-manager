@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Awaitable, Callable, TypeVar
+import socket
+from typing import Awaitable, Callable, TypeVar
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,31 +26,75 @@ from .metadata_jobs import process_metadata_sync_job
 from .transcription_providers import transcription_provider_name
 from .update_scheduler import run_web_novel_update
 from .web_novel import run_book_refresh
+from .web_novel import finish_web_novel_download
 
 logger = logging.getLogger(__name__)
 
 _Result = TypeVar("_Result")
+
+RESOURCE_LANES = ("cpu", "maintenance", "llm", "tts", "transcription")
+JOB_POLICIES: dict[str, tuple[str, int]] = {
+    "clean_book": ("cpu", 3),
+    "clean_all": ("cpu", 3),
+    "refresh_book": ("maintenance", 3),
+    "refresh_all": ("maintenance", 3),
+    "import_web_book": ("maintenance", 3),
+    "retry_cover": ("maintenance", 3),
+    "metadata_sync": ("llm", 3),
+    "audiobook_pipeline": ("llm", 3),
+    "generate_sentence_audio": ("tts", 3),
+    "generate_chapter_preview": ("tts", 3),
+    "import_audiobook": ("cpu", 3),
+    "rematch_imported_audiobook": ("cpu", 3),
+    "align_imported_audiobook": ("transcription", 3),
+}
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        logger.warning("Ignoring invalid %s; using %s.", name, default)
+        return default
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        return max(0.1, float(os.getenv(name, str(default))))
+    except ValueError:
+        logger.warning("Ignoring invalid %s; using %s.", name, default)
+        return default
 
 
 class ProcessingQueue:
     """A durable ledger backed by a small set of resource-aware workers."""
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[int | None] = asyncio.Queue()
-        self._queued_ids: set[int] = set()
         self._worker_tasks: list[asyncio.Task[None]] = []
-        self._lanes = {
-            "audiobook": asyncio.Semaphore(1),
-            "maintenance": asyncio.Semaphore(1),
-        }
+        self._wake = asyncio.Event()
+        self._instance_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._lease_seconds = _positive_int_env("PROCESSING_LEASE_SECONDS", 60)
+        self._heartbeat_seconds = min(
+            _positive_int_env("PROCESSING_HEARTBEAT_SECONDS", 15),
+            max(1, self._lease_seconds // 2),
+        )
+        self._poll_seconds = _positive_float_env("PROCESSING_POLL_SECONDS", 1)
+        self._retry_backoff_seconds = _positive_int_env("PROCESSING_RETRY_BACKOFF_SECONDS", 5)
 
     async def start(self) -> None:
         if self._worker_tasks:
             return
-        worker_count = max(1, int(os.getenv("PROCESSING_WORKERS", "3")))
-        self._worker_tasks = [
-            asyncio.create_task(self._run(), name=f"processing-worker-{index + 1}") for index in range(worker_count)
-        ]
+        for lane in RESOURCE_LANES:
+            count = _positive_int_env(f"PROCESSING_{lane.upper()}_CONCURRENCY", 1)
+            for index in range(count):
+                self._worker_tasks.append(
+                    asyncio.create_task(
+                        self._run(lane, index + 1),
+                        name=f"processing-{lane}-worker-{index + 1}",
+                    )
+                )
+        await get_audiobook_queue().start_background_audio()
+        self._wake.set()
 
     @property
     def is_running(self) -> bool:
@@ -62,72 +107,100 @@ class ProcessingQueue:
             task.cancel()
         await asyncio.gather(*self._worker_tasks, return_exceptions=True)
         self._worker_tasks.clear()
-        self._queued_ids.clear()
-        self._queue = asyncio.Queue()
+        await get_audiobook_queue().stop_background_audio()
+        self._wake = asyncio.Event()
 
     async def enqueue(self, job_id: int) -> bool:
-        if job_id in self._queued_ids:
-            return False
-        self._queued_ids.add(job_id)
-        await self._queue.put(job_id)
+        """Wake database pollers; the job ID is never held as queue ownership."""
+        del job_id
+        self._wake.set()
         return True
 
     async def requeue_pending(self) -> int:
         async with SessionLocal() as db:
-            jobs = await crud.get_pending_processing_jobs(db)
-        return sum([await self.enqueue(job.id) for job in jobs])
+            canceled, exhausted = await crud.recover_abandoned_processing_jobs(db)
+        self._wake.set()
+        return canceled + exhausted
 
-    @asynccontextmanager
-    async def _lane(self, job_type: str) -> AsyncIterator[None]:
-        if job_type in {
-            "audiobook_pipeline",
-            "import_audiobook",
-            "rematch_imported_audiobook",
-            "align_imported_audiobook",
-            "generate_sentence_audio",
-            "generate_chapter_preview",
-        }:
-            semaphore = self._lanes["audiobook"]
-        elif job_type in {"clean_all", "refresh_all"}:
-            semaphore = self._lanes["maintenance"]
-        else:
-            semaphore = None
-        if semaphore is None:
-            yield
-        else:
-            async with semaphore:
-                yield
-
-    async def _run(self) -> None:
+    async def _run(self, lane: str, worker_number: int) -> None:
+        lease_owner = f"{self._instance_id}:{lane}:{worker_number}"
         while True:
-            job_id = await self._queue.get()
-            try:
-                if job_id is None:
-                    return
-                async with SessionLocal() as db:
-                    job = await crud.mark_processing_job_running(db, job_id)
-                if job is None:
-                    continue
+            async with SessionLocal() as db:
+                await crud.recover_abandoned_processing_jobs(db)
+                job = await crud.claim_processing_job(
+                    db,
+                    resource_lane=lane,
+                    lease_owner=lease_owner,
+                    lease_seconds=self._lease_seconds,
+                )
+            if job is None:
+                self._wake.clear()
                 try:
-                    async with self._lane(job.job_type):
-                        async with SessionLocal() as db:
-                            if await crud.is_processing_job_cancel_requested(db, job.id):
-                                await crud.mark_processing_job_canceled(db, job.id)
-                                continue
-                        detail = await self._execute(job)
-                    async with SessionLocal() as db:
-                        if await crud.is_processing_job_cancel_requested(db, job.id):
-                            await crud.mark_processing_job_canceled(db, job.id)
-                        else:
-                            await crud.complete_processing_job(db, job.id, detail)
-                except Exception as exc:
-                    logger.exception("Processing job %s (%s) failed.", job.id, job.job_type)
-                    async with SessionLocal() as db:
-                        await crud.fail_processing_job(db, job.id, str(exc))
-            finally:
-                if job_id is not None:
-                    self._queued_ids.discard(job_id)
-                self._queue.task_done()
+                    await asyncio.wait_for(self._wake.wait(), timeout=self._poll_seconds)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+
+            try:
+                detail = await self._execute_with_heartbeat(job, lease_owner)
+                async with SessionLocal() as db:
+                    if await crud.is_processing_job_cancel_requested(db, job.id):
+                        await crud.mark_processing_job_canceled(db, job.id)
+                    else:
+                        await crud.complete_processing_job(db, job.id, detail, lease_owner=lease_owner)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Processing job %s (%s) failed.", job.id, job.job_type)
+                async with SessionLocal() as db:
+                    status = await crud.fail_processing_job(
+                        db,
+                        job.id,
+                        str(exc),
+                        lease_owner=lease_owner,
+                        retry_backoff_seconds=self._retry_backoff_seconds,
+                    )
+                if status == "queued":
+                    self._wake.set()
+
+    async def _execute_with_heartbeat(self, job: ProcessingJob, lease_owner: str) -> str:
+        operation = asyncio.create_task(self._execute(job), name=f"processing-operation-{job.id}")
+        heartbeat = asyncio.create_task(
+            self._heartbeat(job.id, lease_owner),
+            name=f"processing-heartbeat-{job.id}",
+        )
+        try:
+            done, _pending = await asyncio.wait({operation, heartbeat}, return_when=asyncio.FIRST_COMPLETED)
+            if operation in done:
+                return await operation
+            reason = await heartbeat
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            if reason == "canceled":
+                raise RuntimeError("Processing job was canceled.")
+            raise RuntimeError("Processing job lease ownership was lost.")
+        except asyncio.CancelledError:
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            raise
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _heartbeat(self, job_id: int, lease_owner: str) -> str:
+        while True:
+            await asyncio.sleep(self._heartbeat_seconds)
+            async with SessionLocal() as db:
+                if await crud.is_processing_job_cancel_requested(db, job_id):
+                    return "canceled"
+                renewed = await crud.heartbeat_processing_job(
+                    db,
+                    job_id,
+                    lease_owner=lease_owner,
+                    lease_seconds=self._lease_seconds,
+                )
+            if not renewed:
+                return "lost"
 
     async def _execute(self, job: ProcessingJob) -> str:
         payload = job.payload or {}
@@ -146,6 +219,22 @@ class ProcessingQueue:
                     raise RuntimeError("Book refresh failed; check the application logs.")
                 await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book refreshed")
             return "Book refresh completed"
+        if job.job_type == "import_web_book":
+            if job.book_id is None:
+                raise ValueError("Web import job has no book.")
+            source_url = str(payload.get("source_url") or "")
+            if not source_url:
+                raise ValueError("Web import job has no source URL.")
+            await self._update_progress(job.id, 0, 1, "Downloading web book")
+            await finish_web_novel_download(job.book_id, source_url)
+            async with SessionLocal() as db:
+                book = await db.get(Book, job.book_id)
+                if book is None:
+                    raise ValueError("Web import book no longer exists.")
+                if book.download_status == "error":
+                    raise RuntimeError(f"Web import failed: {book.title}")
+                await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book imported")
+            return "Web book import completed"
         if job.job_type == "refresh_all":
 
             async def refresh_all() -> bool:
@@ -550,6 +639,10 @@ async def queue_processing_job(
     dedupe_key: str | None = None,
     progress_detail: str | None = "Queued",
 ) -> ProcessingJob:
+    try:
+        resource_lane, max_attempts = JOB_POLICIES[job_type]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported processing job type: {job_type}") from exc
     owns_session = db is None
     session = db or SessionLocal()
     try:
@@ -563,6 +656,8 @@ async def queue_processing_job(
             parent_job_id=parent_job_id,
             payload=payload,
             dedupe_key=dedupe_key,
+            resource_lane=resource_lane,
+            max_attempts=max_attempts,
             progress_detail=progress_detail,
         )
         if created and get_processing_queue().is_running:

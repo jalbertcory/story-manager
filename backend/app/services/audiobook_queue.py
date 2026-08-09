@@ -58,7 +58,16 @@ class AudiobookQueue:
         if self._worker_task and not self._worker_task.done():
             return
         self._worker_task = asyncio.create_task(self._run(), name="audiobook-worker")
-        worker_count = max(1, int(os.getenv("AUDIOBOOK_TTS_WORKERS", "1")))
+        await self.start_background_audio()
+
+    async def start_background_audio(self) -> None:
+        """Start internal TTS batching used by leased processing jobs."""
+        if self._background_audio_tasks:
+            return
+        worker_count = max(
+            1,
+            int(os.getenv("PROCESSING_TTS_CONCURRENCY", os.getenv("AUDIOBOOK_TTS_WORKERS", "1"))),
+        )
         self._background_audio_tasks = [
             asyncio.create_task(
                 self._run_background_audio(),
@@ -70,19 +79,23 @@ class AudiobookQueue:
     async def stop(self) -> None:
         if not self._worker_task:
             return
-        tasks = [self._worker_task, *self._background_audio_tasks]
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        self._worker_task.cancel()
+        await asyncio.gather(self._worker_task, return_exceptions=True)
         self._worker_task = None
-        self._background_audio_tasks.clear()
+        await self.stop_background_audio()
         self._queue = asyncio.Queue()
-        self._background_audio_queue = asyncio.PriorityQueue()
-        self._background_audio_sequence = itertools.count()
         self._queued_book_ids.clear()
         self._rerun_book_ids.clear()
         self._queued_preview_ids.clear()
         self._queued_sentence_ids.clear()
+
+    async def stop_background_audio(self) -> None:
+        for task in self._background_audio_tasks:
+            task.cancel()
+        await asyncio.gather(*self._background_audio_tasks, return_exceptions=True)
+        self._background_audio_tasks.clear()
+        self._background_audio_queue = asyncio.PriorityQueue()
+        self._background_audio_sequence = itertools.count()
         self._background_audio_ids.clear()
 
     async def enqueue(self, book_id: int) -> bool:

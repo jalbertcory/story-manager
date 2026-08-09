@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, schemas
 from ..database import get_db
-from ..services.processing_queue import get_processing_queue, queue_processing_job
+from ..services.processing_queue import queue_processing_job
 
 router = APIRouter()
 
@@ -121,8 +121,6 @@ async def retry_processing_job(job_id: int, db: AsyncSession = Depends(get_db)) 
     job = await crud.retry_processing_job(db, job_id)
     if job is None:
         raise HTTPException(status_code=409, detail="Only failed or canceled jobs can be retried")
-    if get_processing_queue().is_running:
-        await get_processing_queue().enqueue(job.id)
     return _response(job)
 
 

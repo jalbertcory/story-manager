@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.sql import func
 from .database import Base
@@ -135,6 +136,7 @@ class ProcessingJob(Base):
     id = Column(Integer, primary_key=True)
     job_type = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default="queued", server_default="queued", index=True)
+    resource_lane = Column(String, nullable=False, default="maintenance", server_default="maintenance", index=True)
     book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=True, index=True)
     target_type = Column(String, nullable=True)
     target_id = Column(Integer, nullable=True)
@@ -146,12 +148,27 @@ class ProcessingJob(Base):
     progress_total = Column(Integer, nullable=False, default=0, server_default="0")
     progress_detail = Column(String, nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts = Column(Integer, nullable=False, default=3, server_default="3")
+    available_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    lease_owner = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     cancel_requested = Column(Boolean, nullable=False, default=False, server_default="false")
     error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "uq_processing_jobs_active_dedupe",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('queued', 'running')"),
+            sqlite_where=text("dedupe_key IS NOT NULL AND status IN ('queued', 'running')"),
+        ),
+    )
 
 
 class SeriesMetadata(Base):

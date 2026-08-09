@@ -55,7 +55,8 @@ In the Unraid web UI, open **Docker**, choose **Add Container**, switch to **Adv
 
 The FanFicFare mapping is optional. If it is present, put custom settings in
 `/mnt/user/appdata/story-manager/fanficfare/personal.ini`. The production image always starts one application worker
-because Story Manager's scheduler and background queues run in process.
+because Story Manager runs its API and PostgreSQL-backed processing workers together by default. Worker concurrency
+can be tuned per resource lane; see `docs/deployment.md`.
 
 For a terminal-based installation, the equivalent command is:
 

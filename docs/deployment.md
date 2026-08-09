@@ -18,9 +18,31 @@ The default `docker-compose.yml` stores persistent data under `./config`:
 
 The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container.
 
-Story Manager's production image always starts one application worker because its scheduler and background queues
-run in process. The worker count is intentionally not configurable until distributed job coordination is
-implemented.
+Story Manager keeps a single-container deployment by default: the API, scheduler, and processing workers start in
+the same application process. Processing ownership lives in PostgreSQL rather than process memory, so an interrupted
+job is reclaimed after its lease expires and multiple application processes can claim different jobs safely.
+
+Each kind of constrained work has its own concurrency setting. All values default to `1`:
+
+| Variable | Work controlled |
+|---|---|
+| `PROCESSING_CPU_CONCURRENCY` | EPUB cleaning, audiobook import, and chapter matching |
+| `PROCESSING_MAINTENANCE_CONCURRENCY` | Web imports, refreshes, covers, and scheduled maintenance |
+| `PROCESSING_LLM_CONCURRENCY` | Metadata and AI audiobook analysis jobs |
+| `PROCESSING_TTS_CONCURRENCY` | Speech and chapter-preview generation |
+| `PROCESSING_TRANSCRIPTION_CONCURRENCY` | Human-audiobook timestamp alignment |
+
+Operational tuning is also available through `PROCESSING_LEASE_SECONDS` (default `60`),
+`PROCESSING_HEARTBEAT_SECONDS` (default `15`), `PROCESSING_POLL_SECONDS` (default `1`), and
+`PROCESSING_RETRY_BACKOFF_SECONDS` (default `5`). A failed job is attempted at most three times with exponential
+backoff. User-triggered retry resets that attempt budget. Cancellation is immediate for queued jobs and cooperative
+at heartbeat/progress boundaries for running jobs.
+
+Every job type has one resource lane and a stable deduplication key for its target. PostgreSQL rejects a second
+queued or running job with that key, while terminal history is retained. Handlers resume from persisted book,
+metadata, and audiobook state, so a worker can safely reclaim an expired lease instead of depending on an in-memory
+queue notification. Claims use row locks with `SKIP LOCKED`; only the current lease owner may heartbeat or finish a
+job.
 
 ## Admin Authentication
 

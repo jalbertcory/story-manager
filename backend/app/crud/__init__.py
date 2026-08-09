@@ -95,14 +95,16 @@ from .api_keys import (  # noqa: F401
     revoke_api_key,
 )
 from .processing import (  # noqa: F401
+    claim_processing_job,
     complete_processing_job,
     create_processing_job,
     fail_processing_job,
-    get_pending_processing_jobs,
     get_processing_job,
     get_processing_jobs,
+    heartbeat_processing_job,
     is_processing_job_cancel_requested,
-    mark_processing_job_running,
+    mark_processing_job_canceled,
+    recover_abandoned_processing_jobs,
     request_processing_job_cancel,
     retry_processing_job,
     update_processing_job_progress,
