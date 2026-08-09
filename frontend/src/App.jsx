@@ -14,6 +14,8 @@ import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
 import ProcessingJobs from "./components/ProcessingJobs.jsx";
 import { getProcessingJobs } from "./api/processing";
+import { getAttentionDashboard } from "./api/dashboard";
+import AttentionDashboard from "./components/AttentionDashboard.jsx";
 import useDebouncedValue from "./hooks/useDebouncedValue";
 import useLibraryCatalog from "./hooks/useLibraryCatalog";
 import {
@@ -165,6 +167,14 @@ function App() {
     refetchInterval: 3000,
   });
 
+  const attentionQuery = useQuery({
+    queryKey: ["attention-dashboard"],
+    queryFn: () => getAttentionDashboard(5),
+    enabled: Boolean(authStatus?.authenticated),
+    staleTime: 30_000,
+    refetchInterval: activeProcessingJobs.length > 0 ? 5000 : 60_000,
+  });
+
   const handleClearSearch = () => {
     setQ("");
   };
@@ -280,6 +290,16 @@ function App() {
 
   const renderTabContent = () => {
     switch (activeTab) {
+      case "attention":
+        return (
+          <AttentionDashboard
+            data={attentionQuery.data}
+            isLoading={attentionQuery.isLoading}
+            error={attentionQuery.error}
+            onRefresh={attentionQuery.refetch}
+            isRefreshing={attentionQuery.isFetching}
+          />
+        );
       case "configs":
         return <CleaningConfigs />;
       case "scheduler":
@@ -398,6 +418,9 @@ function App() {
             {tab.label}
             {tab.key === "processing" && activeProcessingJobs.length > 0 && (
               <span className="nav-job-count">{activeProcessingJobs.length}</span>
+            )}
+            {tab.key === "attention" && attentionQuery.data?.total_count > 0 && (
+              <span className="nav-job-count">{attentionQuery.data.total_count}</span>
             )}
           </button>
         ))}

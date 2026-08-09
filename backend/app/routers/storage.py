@@ -11,15 +11,12 @@ from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..logging_config import _LOG_BUFFER
+from ..services.library_health import inspect_library_files, is_failed_web_import_placeholder
 
 logger = logging.getLogger(__name__)
 _ui_logger = logging.getLogger("frontend")
 
 router = APIRouter()
-
-
-def _is_failed_web_import_placeholder(book) -> bool:
-    return bool(book.source_url and book.download_status == "error" and not book.immutable_path and not book.current_path)
 
 
 class ClientLogEntry(BaseModel):
@@ -55,32 +52,7 @@ async def validate_library(db: AsyncSession = Depends(get_db)):
     Returns a list of issues found (empty list means everything is healthy).
     """
     books = await crud.get_books(db, limit=100000)
-    issues: list[dict] = []
-    for book in books:
-        book_info = {"book_id": book.id, "title": book.title, "author": book.author}
-        if book.source_url and not book.immutable_path and not book.current_path:
-            if book.download_status == "pending":
-                issues.append({**book_info, "issue": "pending_web_import", "source_url": book.source_url})
-                continue
-            if _is_failed_web_import_placeholder(book):
-                issues.append({**book_info, "issue": "failed_web_import", "source_url": book.source_url})
-                continue
-        if not book.immutable_path:
-            issues.append({**book_info, "issue": "missing_immutable_path"})
-        else:
-            full = LIBRARY_PATH.parent / book.immutable_path
-            if not full.exists():
-                issues.append({**book_info, "issue": "immutable_file_not_found", "path": book.immutable_path})
-        if not book.current_path:
-            issues.append({**book_info, "issue": "missing_current_path"})
-        else:
-            full = LIBRARY_PATH.parent / book.current_path
-            if not full.exists():
-                issues.append({**book_info, "issue": "current_file_not_found", "path": book.current_path})
-        if book.cover_path:
-            full = LIBRARY_PATH.parent / book.cover_path
-            if not full.exists():
-                issues.append({**book_info, "issue": "cover_file_not_found", "path": book.cover_path})
+    issues = inspect_library_files(books, library_path=LIBRARY_PATH)
 
     if issues:
         logger.warning("Library validation found %d issue(s)", len(issues))
@@ -108,7 +80,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             "issue": "failed_web_import",
         }
         for book in books
-        if _is_failed_web_import_placeholder(book)
+        if is_failed_web_import_placeholder(book)
     ]
 
     # Refuse to run if any downloads are still in progress — their files
@@ -156,7 +128,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             logger.info("Storage cleanup: deleting %s", f["path"])
             full.unlink(missing_ok=True)
         for book in books:
-            if not _is_failed_web_import_placeholder(book):
+            if not is_failed_web_import_placeholder(book):
                 continue
             logger.info("Storage cleanup: deleting failed web import placeholder book %s (%s)", book.id, book.source_url)
             await crud.delete_book(db, book=book)

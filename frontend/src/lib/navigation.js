@@ -1,5 +1,6 @@
 export const TABS = [
   { key: "library", label: "Library", path: "/" },
+  { key: "attention", label: "Needs Attention", path: "/attention" },
   { key: "configs", label: "Cleaning Configs", path: "/configs" },
   { key: "scheduler", label: "Scheduler", path: "/scheduler" },
   { key: "processing", label: "Processing", path: "/processing" },

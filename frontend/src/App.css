@@ -28,6 +28,168 @@
   margin-right: auto;
 }
 
+/* ─── Needs Attention dashboard ─────────────────────────── */
+.attention-page {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.attention-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.attention-page-header p {
+  color: var(--text-muted);
+  margin: 0.35rem 0 0;
+  max-width: 42rem;
+}
+
+.attention-eyebrow {
+  display: block;
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin-bottom: 0.25rem;
+}
+
+.attention-healthy {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--success) 55%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface));
+  padding: 1rem 1.1rem;
+}
+
+.attention-healthy span {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.attention-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.attention-card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 1rem;
+  min-width: 0;
+}
+
+.attention-card--open {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+.attention-card-header,
+.attention-card-header > div {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.attention-card-header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.attention-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention-card--open .attention-count {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 65%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.attention-card > p {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin: 0.8rem 0;
+}
+
+.attention-card .attention-clear {
+  color: var(--success);
+  margin-bottom: 0;
+}
+
+.attention-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.9rem 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.attention-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.15rem 0.75rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.attention-item > a,
+.attention-item > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-item > span {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-item > small {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-item > .attention-item-error {
+  color: var(--danger);
+}
+
+.attention-more {
+  display: block;
+  color: var(--text-muted);
+  margin-top: 0.6rem;
+}
+
+@media (max-width: 700px) {
+  .attention-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .attention-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .attention-page-header > button {
+    align-self: flex-start;
+  }
+}
+
 .login-panel {
   display: flex;
   justify-content: center;

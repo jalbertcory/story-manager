@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { buildBookPath, parseLocation } from "./navigation";
 
 describe("book navigation", () => {
+  it("parses the Needs Attention dashboard route", () => {
+    expect(parseLocation("/attention", "", "")).toEqual({
+      view: "tab",
+      tab: "attention",
+      libraryView: "series",
+    });
+  });
+
   it("parses canonical book sections and audiobook tabs", () => {
     expect(
       parseLocation(

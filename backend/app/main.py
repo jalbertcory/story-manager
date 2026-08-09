@@ -27,6 +27,7 @@ from .routers import (
     books,
     cleaning,
     covers,
+    dashboard,
     metadata,
     processing,
     reader,
@@ -124,6 +125,7 @@ app.include_router(upload.router)
 app.include_router(web_novels.router)
 app.include_router(cleaning.router)
 app.include_router(covers.router)
+app.include_router(dashboard.router)
 app.include_router(scheduler.router)
 app.include_router(storage.router)
 app.include_router(api_keys.router)
