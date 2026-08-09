@@ -1,13 +1,70 @@
-export const TABS = [
-  { key: "library", label: "Library", path: "/" },
-  { key: "attention", label: "Needs Attention", path: "/attention" },
-  { key: "configs", label: "Cleaning Configs", path: "/configs" },
-  { key: "scheduler", label: "Scheduler", path: "/scheduler" },
-  { key: "processing", label: "Processing", path: "/processing" },
-  { key: "logs", label: "Logs", path: "/logs" },
-  { key: "utilities", label: "Utilities", path: "/utilities" },
-  { key: "audio-settings", label: "Audio Settings", path: "/audio-settings" },
+export const PRIMARY_NAV = [
+  { key: "library", label: "Library", path: "/", defaultTab: "library" },
+  {
+    key: "activity",
+    label: "Activity",
+    path: "/activity",
+    defaultTab: "attention",
+  },
+  {
+    key: "settings",
+    label: "Settings",
+    path: "/settings",
+    defaultTab: "configs",
+  },
 ];
+
+export const SECTION_NAV = {
+  activity: [
+    { key: "attention", label: "Overview", path: "/activity" },
+    {
+      key: "processing",
+      label: "Processing jobs",
+      path: "/activity/processing",
+    },
+    {
+      key: "scheduler",
+      label: "Scheduled runs",
+      path: "/activity/scheduled-runs",
+    },
+  ],
+  settings: [
+    { key: "configs", label: "Cleaning rules", path: "/settings" },
+    {
+      key: "audio-settings",
+      label: "Audio & AI",
+      path: "/settings/audio-ai",
+    },
+    {
+      key: "utilities",
+      label: "Library tools",
+      path: "/settings/library-tools",
+    },
+    { key: "logs", label: "Logs", path: "/settings/logs" },
+  ],
+};
+
+const ROUTES = [
+  { key: "library", path: "/", section: "library" },
+  ...SECTION_NAV.activity.map((route) => ({
+    ...route,
+    section: "activity",
+  })),
+  ...SECTION_NAV.settings.map((route) => ({
+    ...route,
+    section: "settings",
+  })),
+];
+
+const LEGACY_ROUTES = {
+  "/attention": "attention",
+  "/processing": "processing",
+  "/scheduler": "scheduler",
+  "/configs": "configs",
+  "/audio-settings": "audio-settings",
+  "/utilities": "utilities",
+  "/logs": "logs",
+};
 
 export const LIBRARY_VIEWS = ["series", "standalone", "web"];
 
@@ -23,11 +80,28 @@ export const AUDIOBOOK_TABS = [
   { key: "chapter-assembly", label: "Chapter Assembly" },
 ];
 
+function normalizePath(pathname) {
+  return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+}
+
+export function getRoute(tabKey) {
+  return ROUTES.find((route) => route.key === tabKey) || ROUTES[0];
+}
+
+export function getPrimarySection(tabKey) {
+  return getRoute(tabKey).section;
+}
+
 export function parseLocation(pathname, hash, search = "") {
-  const match = pathname.match(/^\/books\/(\d+)(?:\/(details|audiobooks))?\/?$/);
+  const normalizedPath = normalizePath(pathname);
+  const match = normalizedPath.match(
+    /^\/books\/(\d+)(?:\/(details|audiobooks))?$/,
+  );
   if (match) {
     const requestedTab = new URLSearchParams(search).get("tab");
-    const audiobookTab = AUDIOBOOK_TABS.some((tab) => tab.key === requestedTab)
+    const audiobookTab = AUDIOBOOK_TABS.some(
+      (tab) => tab.key === requestedTab,
+    )
       ? requestedTab
       : "sources";
     return {
@@ -39,9 +113,19 @@ export function parseLocation(pathname, hash, search = "") {
     };
   }
 
-  const tab = TABS.find((item) => item.path === pathname);
-  const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1)) ? hash.slice(1) : "series";
-  return { view: "tab", tab: tab?.key || "library", libraryView };
+  const legacyTab = LEGACY_ROUTES[normalizedPath];
+  const route = legacyTab
+    ? getRoute(legacyTab)
+    : ROUTES.find((item) => item.path === normalizedPath) || ROUTES[0];
+  const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1))
+    ? hash.slice(1)
+    : "series";
+  return {
+    view: "tab",
+    tab: route.key,
+    libraryView,
+    ...(legacyTab ? { redirectPath: route.path } : {}),
+  };
 }
 
 export function buildBookPath(
@@ -59,7 +143,9 @@ export function buildBookPath(
   return `/books/${bookId}/details`;
 }
 
-export function buildTabPath(tabKey, libraryView) {
-  const tab = TABS.find((item) => item.key === tabKey) || TABS[0];
-  return tab.key === "library" ? `${tab.path}#${libraryView}` : tab.path;
+export function buildTabPath(tabKey, libraryView = "series") {
+  const route = getRoute(tabKey);
+  return route.key === "library"
+    ? `${route.path}#${libraryView}`
+    : route.path;
 }

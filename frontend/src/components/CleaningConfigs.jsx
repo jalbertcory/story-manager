@@ -199,12 +199,12 @@ function CleaningConfigs({ onBack }) {
 
   return (
     <div className={onBack ? "cleaning-configs" : undefined}>
-      {onBack && (
-        <div className="settings-header">
+      <div className="settings-header">
+        {onBack && (
           <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
-          <h2>Cleaning Configs</h2>
-        </div>
-      )}
+        )}
+        <h2>Cleaning Rules</h2>
+      </div>
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
 

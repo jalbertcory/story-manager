@@ -139,7 +139,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           title="Failed processing"
           description="Durable jobs that stopped before completing. Retry them after reviewing the error."
           category={data.failed_jobs}
-          actionHref="/processing?status=error"
+          actionHref="/activity/processing?status=error"
           actionLabel="Review jobs"
         >
           {data.failed_jobs.items.map((item) => <JobItem key={item.id} item={item} />)}
@@ -159,7 +159,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           title="Stale audiobooks"
           description="Audio that no longer matches the current cleaned book text."
           category={data.stale_audiobooks}
-          actionHref="/processing"
+          actionHref="/activity/processing"
           actionLabel="View processing"
         >
           {data.stale_audiobooks.items.map((item) => (
@@ -171,7 +171,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           title="Metadata decisions"
           description="Matches or proposed metadata waiting for approval or dismissal."
           category={data.metadata_proposals}
-          actionHref="/utilities?section=metadata"
+          actionHref="/settings/library-tools?section=metadata"
           actionLabel="Review metadata"
         >
           {data.metadata_proposals.items.map((item) => (
@@ -183,7 +183,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           title="Broken library files"
           description="Book records whose original or current EPUB file cannot be found."
           category={data.broken_files}
-          actionHref="/utilities?section=audit"
+          actionHref="/settings/library-tools?section=audit"
           actionLabel="Run audit"
         >
           {data.broken_files.items.map((item, index) => (
@@ -195,7 +195,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           title="Missing covers"
           description="Completed books with no usable local cover image."
           category={data.missing_covers}
-          actionHref="/utilities?section=audit"
+          actionHref="/settings/library-tools?section=audit"
           actionLabel="Review library"
         >
           {data.missing_covers.items.map((item) => (

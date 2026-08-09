@@ -8,9 +8,10 @@ describe("Utilities", () => {
     vi.restoreAllMocks();
     vi.stubGlobal("confirm", vi.fn(() => true));
     vi.stubGlobal("alert", vi.fn());
+    window.history.replaceState(null, "", "/settings/library-tools");
   });
 
-  it("organizes utilities into focused tabs and shows the audit by default", () => {
+  it("organizes utilities into focused tabs and shows the audit by default", async () => {
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
@@ -43,6 +44,16 @@ describe("Utilities", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Reader Access" }));
     expect(screen.getByRole("heading", { name: "Reader API Keys" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?section=reader-access");
+
+    window.history.replaceState(null, "", "/settings/library-tools?section=metadata");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Metadata" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
   });
 
   it("runs library audit and shows results", async () => {

@@ -1,13 +1,47 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBookPath, parseLocation } from "./navigation";
+import {
+  buildBookPath,
+  buildTabPath,
+  getPrimarySection,
+  parseLocation,
+  PRIMARY_NAV,
+} from "./navigation";
 
-describe("book navigation", () => {
-  it("parses the Needs Attention dashboard route", () => {
-    expect(parseLocation("/attention", "", "")).toEqual({
+describe("application navigation", () => {
+  it("exposes only the three user-oriented primary destinations", () => {
+    expect(
+      PRIMARY_NAV.map(({ key, label, path }) => ({ key, label, path })),
+    ).toEqual([
+      { key: "library", label: "Library", path: "/" },
+      { key: "activity", label: "Activity", path: "/activity" },
+      { key: "settings", label: "Settings", path: "/settings" },
+    ]);
+  });
+
+  it("uses Needs Attention as the Activity overview", () => {
+    expect(parseLocation("/activity", "", "")).toEqual({
       view: "tab",
       tab: "attention",
       libraryView: "series",
+    });
+    expect(getPrimarySection("attention")).toBe("activity");
+    expect(buildTabPath("attention")).toBe("/activity");
+  });
+
+  it.each([
+    ["/attention", "attention", "/activity"],
+    ["/processing", "processing", "/activity/processing"],
+    ["/scheduler", "scheduler", "/activity/scheduled-runs"],
+    ["/configs", "configs", "/settings"],
+    ["/audio-settings", "audio-settings", "/settings/audio-ai"],
+    ["/utilities", "utilities", "/settings/library-tools"],
+    ["/logs", "logs", "/settings/logs"],
+  ])("keeps legacy route %s working", (legacyPath, tab, redirectPath) => {
+    expect(parseLocation(legacyPath, "", "?section=metadata")).toMatchObject({
+      view: "tab",
+      tab,
+      redirectPath,
     });
   });
 
