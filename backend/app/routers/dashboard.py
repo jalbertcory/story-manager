@@ -27,10 +27,36 @@ def _book_item(book: models.Book, issue: str, detail: str | None = None) -> sche
 
 
 async def _failed_jobs(db: AsyncSession, limit: int) -> schemas.AttentionJobCategory:
-    count = await db.scalar(
-        select(func.count()).select_from(models.ProcessingJob).where(models.ProcessingJob.status == "error")
+    scope = (
+        models.ProcessingJob.job_type,
+        func.coalesce(models.ProcessingJob.book_id, -1),
+        func.coalesce(models.ProcessingJob.target_type, ""),
+        func.coalesce(models.ProcessingJob.target_id, -1),
     )
-    rows = await crud.get_processing_jobs(db, statuses=["error"], limit=limit)
+    ranked_jobs = select(
+        models.ProcessingJob.id.label("job_id"),
+        func.row_number()
+        .over(
+            partition_by=scope,
+            order_by=(models.ProcessingJob.created_at.desc(), models.ProcessingJob.id.desc()),
+        )
+        .label("recency"),
+    ).subquery()
+    latest_job_ids = select(ranked_jobs.c.job_id).where(ranked_jobs.c.recency == 1)
+    latest_failures = (
+        models.ProcessingJob.status == "error",
+        models.ProcessingJob.id.in_(latest_job_ids),
+    )
+    count = await db.scalar(select(func.count()).select_from(models.ProcessingJob).where(*latest_failures))
+    rows = (
+        await db.execute(
+            select(models.ProcessingJob, models.Book.title)
+            .outerjoin(models.Book, models.ProcessingJob.book_id == models.Book.id)
+            .where(*latest_failures)
+            .order_by(models.ProcessingJob.created_at.desc(), models.ProcessingJob.id.desc())
+            .limit(limit)
+        )
+    ).all()
     return schemas.AttentionJobCategory(
         count=count or 0,
         items=[

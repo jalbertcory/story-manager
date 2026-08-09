@@ -153,3 +153,50 @@ async def test_attention_dashboard_has_clear_healthy_state(app_client, tmp_path,
     data = response.json()
     assert data["total_count"] == 0
     assert all(category["count"] == 0 for key, category in data.items() if key != "total_count")
+
+
+@pytest.mark.asyncio
+async def test_attention_dashboard_hides_failure_after_newer_success(
+    app_client,
+    sqlite_sessionmaker,
+    tmp_path,
+    monkeypatch,
+):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    monkeypatch.setattr(dashboard_router, "LIBRARY_PATH", library_path)
+
+    async with sqlite_sessionmaker() as db:
+        db.add(
+            models.ProcessingJob(
+                job_type="refresh_all",
+                status="error",
+                payload={"trigger": "manual"},
+                progress_current=2,
+                progress_total=5,
+                attempt_count=1,
+                cancel_requested=False,
+                error="One source failed",
+            )
+        )
+        await db.flush()
+        db.add(
+            models.ProcessingJob(
+                job_type="refresh_all",
+                status="completed",
+                payload={"trigger": "manual"},
+                progress_current=5,
+                progress_total=5,
+                attempt_count=1,
+                cancel_requested=False,
+                progress_detail="Refreshed 5 of 5 web books",
+            )
+        )
+        await db.commit()
+
+    response = app_client.get("/api/dashboard/attention")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["failed_jobs"] == {"count": 0, "items": []}
+    assert data["total_count"] == 0

@@ -35,6 +35,7 @@ The dashboard should favor resolution over raw diagnostics. Every category shoul
 - The UI displays each supported category with a count, explanation, and action link.
 - Broken paths and missing covers reuse one library-health implementation rather than duplicating storage-audit rules.
 - Failed jobs and refreshes identify the affected book when possible.
+- A failed job clears automatically when a newer equivalent operation succeeds.
 - The dashboard refreshes while relevant background work is active.
 - Backend and frontend tests cover populated and healthy states.
 
