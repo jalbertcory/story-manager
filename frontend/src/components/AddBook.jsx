@@ -7,7 +7,7 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getBookCatalog } from "../api/books";
+import { getAllBookCatalog } from "../api/books";
 import { uploadImportedAudiobook } from "../api/audiobook";
 import {
   addWebNovel,
@@ -282,7 +282,7 @@ const AddBook = forwardRef(function AddBook(
   const { data: catalog = [] } = useQuery({
     queryKey: ["import-book-catalog"],
     queryFn: () =>
-      getBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
+      getAllBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
     enabled: importType === "audiobook",
     staleTime: 30_000,
   });

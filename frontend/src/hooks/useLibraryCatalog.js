@@ -1,14 +1,38 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 
 import { getBookCatalog } from "../api/books";
 
-function useLibraryCatalog({ q, sortBy, sortOrder, enabled = true }) {
-  return useQuery({
-    queryKey: ["book-catalog", { q, sortBy, sortOrder }],
-    queryFn: () => getBookCatalog({ q, sortBy, sortOrder }),
+function useLibraryCatalog({
+  q,
+  view,
+  review,
+  audiobook,
+  genre,
+  sortBy,
+  sortOrder,
+  enabled = true,
+}) {
+  return useInfiniteQuery({
+    queryKey: [
+      "book-catalog",
+      { q, view, review, audiobook, genre, sortBy, sortOrder },
+    ],
+    queryFn: ({ pageParam }) =>
+      getBookCatalog({
+        q,
+        view,
+        review,
+        audiobook,
+        genre,
+        sortBy,
+        sortOrder,
+        cursor: pageParam,
+      }),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled,
     refetchInterval: ({ state }) => {
-      const books = state.data ?? [];
+      const books = state.data?.pages.flatMap((page) => page.items) ?? [];
       const hasInFlight = books.some(
         (book) =>
           book.download_status === "pending" ||

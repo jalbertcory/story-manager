@@ -74,7 +74,7 @@ Preflight inspection should show detected metadata, likely duplicates, audiobook
 
 ## 4. Recoverable destructive changes
 
-**Status:** In progress
+**Status:** Complete
 
 Make deletion and content-changing operations recoverable. Build on the existing immutable EPUB copy to support restoring original content, reviewing cleaning changes, and recovering accidentally deleted records where practical.
 
@@ -91,7 +91,7 @@ The design should cover book deletion, bulk deletion, chapter removal, cleaning-
 
 ## 5. Server-side catalog pagination and filtering
 
-**Status:** Planned
+**Status:** In progress
 
 Stop loading the entire library for every catalog view. Introduce cursor-based pagination, server-side filtering, stable sorting, and aggregate facet counts while preserving the current series-oriented presentation.
 

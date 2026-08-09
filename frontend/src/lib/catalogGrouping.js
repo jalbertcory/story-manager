@@ -100,8 +100,12 @@ export function buildCatalogGroups(books, sortBy = "title", sortOrder = "asc") {
       return dir * (latestA - latestB);
     }
     if (sortBy === "audiobook_enabled") {
-      const enabledA = booksA.some((book) => book.audiobook_enabled);
-      const enabledB = booksB.some((book) => book.audiobook_enabled);
+      const enabledA = booksA.some(
+        (book) => book.audiobook_enabled || book.audiobook_types?.length,
+      );
+      const enabledB = booksB.some(
+        (book) => book.audiobook_enabled || book.audiobook_types?.length,
+      );
       const byEnabled = Number(enabledA) - Number(enabledB);
       return byEnabled !== 0 ? dir * byEnabled : a.localeCompare(b);
     }

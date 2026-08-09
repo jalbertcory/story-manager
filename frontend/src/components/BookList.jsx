@@ -57,10 +57,13 @@ function getWebNovelStatus(book) {
 }
 
 function LibraryFilters({
-  reviewFilter,
-  onReviewFilterChange,
-  audiobookFilter,
-  onAudiobookFilterChange,
+  reviewFilter = "",
+  onReviewFilterChange = () => {},
+  audiobookFilter = "",
+  onAudiobookFilterChange = () => {},
+  genreFilter = "",
+  onGenreFilterChange = () => {},
+  genres,
 }) {
   return (
     <div className="library-filters" aria-label="Library filters">
@@ -83,8 +86,22 @@ function LibraryFilters({
           onChange={(event) => onAudiobookFilterChange(event.target.value)}
         >
           <option value="">All books</option>
-          <option value="enabled">Available</option>
-          <option value="disabled">No audiobook</option>
+          <option value="available">Available</option>
+          <option value="none">No audiobook</option>
+        </select>
+      </label>
+      <label>
+        Genre
+        <select
+          value={genreFilter}
+          onChange={(event) => onGenreFilterChange(event.target.value)}
+        >
+          <option value="">All genres</option>
+          {genres.map((genre) => (
+            <option key={genre.name} value={genre.name}>
+              {genre.name} ({genre.count})
+            </option>
+          ))}
         </select>
       </label>
     </div>
@@ -146,24 +163,30 @@ function StandaloneTagAction({ book, seriesOptions }) {
   );
 }
 
-const TAB_PAGE_SIZE = 30;
-
 function BookList({
   books = [],
+  facets,
+  totalCount = 0,
   onEdit,
   libraryView: libraryViewProp,
   onLibraryViewChange,
+  reviewFilter,
+  onReviewFilterChange,
+  audiobookFilter,
+  onAudiobookFilterChange,
+  genreFilter,
+  onGenreFilterChange,
   sortBy = "title",
   sortOrder = "asc",
+  fetchNextPage,
+  hasNextPage = false,
+  isFetchingNextPage = false,
 }) {
   const sentinelRef = useRef(null);
   const [internalView, setInternalView] = useState("series");
   const libraryView = libraryViewProp ?? internalView;
-  const [tabVisibleCount, setTabVisibleCount] = useState(TAB_PAGE_SIZE);
   const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] =
     useState(false);
-  const [reviewFilter, setReviewFilter] = useState("");
-  const [audiobookFilter, setAudiobookFilter] = useState("");
 
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
@@ -174,11 +197,10 @@ function BookList({
   const handleTabChange = (tab) => {
     if (onLibraryViewChange) onLibraryViewChange(tab);
     else setInternalView(tab);
-    setTabVisibleCount(TAB_PAGE_SIZE);
   };
 
   const handleReviewFilterChange = (value) => {
-    setReviewFilter(value);
+    onReviewFilterChange(value);
     if (value === "missing-series") {
       handleTabChange("standalone");
     } else if (value === "refreshing" || value === "refresh-error") {
@@ -186,65 +208,31 @@ function BookList({
     }
   };
 
-  const filteredBooks = useMemo(
-    () =>
-      books.filter((book) => {
-        const hasAudiobook = Boolean(
-          book.audiobook_types?.length || book.audiobook_enabled,
-        );
-        if (audiobookFilter === "enabled" && !hasAudiobook) {
-          return false;
-        }
-        if (audiobookFilter === "disabled" && hasAudiobook) {
-          return false;
-        }
-        if (reviewFilter === "missing-series") {
-          return (
-            !book.series && book.source_type !== "web" && !book.download_status
-          );
-        }
-        if (reviewFilter === "refreshing") {
-          return ["queued", "processing"].includes(book.refresh_status);
-        }
-        if (reviewFilter === "refresh-error") {
-          return book.refresh_status === "error";
-        }
-        return true;
-      }),
-    [audiobookFilter, books, reviewFilter],
-  );
-
-  const { seriesMap, sortedSeries, standaloneBooks, webBooks, counts } =
+  const { seriesMap, sortedSeries, standaloneBooks, webBooks } =
     useMemo(
-      () => buildCatalogGroups(filteredBooks, sortBy, sortOrder),
-      [filteredBooks, sortBy, sortOrder],
+      () => buildCatalogGroups(books, sortBy, sortOrder),
+      [books, sortBy, sortOrder],
     );
-
-  const tabItems =
-    libraryView === "series"
-      ? sortedSeries
-      : libraryView === "standalone"
-        ? standaloneBooks
-        : webBooks;
+  const counts = {
+    series: facets?.series ?? 0,
+    standalone: facets?.standalone ?? 0,
+    web: facets?.web ?? 0,
+  };
 
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || tabVisibleCount >= tabItems.length) return;
+    if (!el || !hasNextPage || isFetchingNextPage) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setTabVisibleCount((c) => c + TAB_PAGE_SIZE);
+          void fetchNextPage();
         }
       },
       { rootMargin: "200px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [libraryView, tabVisibleCount, tabItems.length]);
-
-  if (!books.length) {
-    return <p>No books found.</p>;
-  }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, libraryView]);
 
   return (
     <div className="book-list">
@@ -252,7 +240,10 @@ function BookList({
         reviewFilter={reviewFilter}
         onReviewFilterChange={handleReviewFilterChange}
         audiobookFilter={audiobookFilter}
-        onAudiobookFilterChange={setAudiobookFilter}
+        onAudiobookFilterChange={onAudiobookFilterChange}
+        genreFilter={genreFilter}
+        onGenreFilterChange={onGenreFilterChange}
+        genres={facets?.genres ?? []}
       />
       <LibraryViewTabs
         view={libraryView}
@@ -261,17 +252,15 @@ function BookList({
       />
       {libraryView === "series" &&
         (sortedSeries.length ? (
-          sortedSeries
-            .slice(0, tabVisibleCount)
-            .map((series) => (
-              <SeriesSummaryRow
-                key={series}
-                series={series}
-                books={seriesMap[series]}
-                onEdit={onEdit}
-                allSeries={allSeries}
-              />
-            ))
+          sortedSeries.map((series) => (
+            <SeriesSummaryRow
+              key={series}
+              series={series}
+              books={seriesMap[series]}
+              onEdit={onEdit}
+              allSeries={allSeries}
+            />
+          ))
         ) : (
           <p>No series found.</p>
         ))}
@@ -280,8 +269,8 @@ function BookList({
           <>
             <div className="standalone-header">
               <p>
-                {standaloneBooks.length} book
-                {standaloneBooks.length === 1 ? "" : "s"} without a series.
+                {totalCount} book
+                {totalCount === 1 ? "" : "s"} without a series.
               </p>
               <button
                 type="button"
@@ -292,7 +281,7 @@ function BookList({
               </button>
             </div>
             <div className="book-rows">
-              {standaloneBooks.slice(0, tabVisibleCount).map((book) => (
+              {standaloneBooks.map((book) => (
                 <BookRow
                   key={book.id}
                   book={book}
@@ -322,7 +311,7 @@ function BookList({
       {libraryView === "web" &&
         (webBooks.length ? (
           <div className="book-rows book-rows--web">
-            {webBooks.slice(0, tabVisibleCount).map((book) => (
+            {webBooks.map((book) => (
               <BookRow
                 key={book.id}
                 book={book}
@@ -336,6 +325,7 @@ function BookList({
           <p>No web novels found.</p>
         ))}
       <div ref={sentinelRef} style={{ height: 1 }} />
+      {isFetchingNextPage && <p className="catalog-loading-more">Loading more…</p>}
     </div>
   );
 }

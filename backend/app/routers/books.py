@@ -4,7 +4,7 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH, RECYCLE_BIN_RETENTION_DAYS
 from ..database import get_db
-from ..services.catalog import build_book_catalog, normalize_genre_tags
+from ..services.catalog import build_book_catalog_page, normalize_genre_tags
 from ..services.chapter_history import build_chapter_update_history
 from ..services.library_paths import remove_empty_parent_dirs
 from ..services.metadata_jobs import queue_metadata_sync_job
@@ -98,14 +98,31 @@ async def get_all_books(
     return [schemas.Book.model_validate(book) for book in books]
 
 
-@router.get("/api/books/catalog", response_model=List[schemas.BookCatalogEntry])
+@router.get("/api/books/catalog", response_model=schemas.BookCatalogPage)
 async def get_book_catalog(
     q: Optional[str] = None,
-    sort_by: str = "title",
-    sort_order: str = "asc",
+    view: Literal["all", "series", "standalone", "web"] = "series",
+    review: Optional[Literal["missing-series", "refreshing", "refresh-error"]] = None,
+    audiobook: Optional[Literal["available", "none"]] = None,
+    genre: Optional[str] = None,
+    sort_by: Literal["title", "author", "word_count", "updated_at", "audiobook_enabled"] = "title",
+    sort_order: Literal["asc", "desc"] = "asc",
+    limit: int = Query(default=30, ge=1, le=100),
+    cursor: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-) -> List[schemas.BookCatalogEntry]:
-    return await build_book_catalog(db, q=q, sort_by=sort_by, sort_order=sort_order)
+) -> schemas.BookCatalogPage:
+    return await build_book_catalog_page(
+        db,
+        q=q,
+        view=view,
+        review=review,
+        audiobook=audiobook,
+        genre=genre,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @router.get("/api/series", response_model=List[str])

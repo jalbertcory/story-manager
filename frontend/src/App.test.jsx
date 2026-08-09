@@ -27,7 +27,11 @@ describe("App", () => {
     ];
 
     globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+      if (
+        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
@@ -189,14 +193,20 @@ describe("App", () => {
     ];
 
     globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+      if (
+        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([]),
         });
       }
       if (
-        url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc"
+        url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc" ||
+        url ===
+          "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc&view=standalone"
       ) {
         return Promise.resolve({
           ok: true,
@@ -269,7 +279,11 @@ describe("App", () => {
     ];
 
     globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+      if (
+        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(catalogBooks),
@@ -482,7 +496,11 @@ describe("App", () => {
     ];
 
     globalThis.fetch = vi.fn((url, options) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
+      if (
+        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockBooks),
@@ -576,11 +594,24 @@ describe("App", () => {
     globalThis.fetch = vi.fn((url) => {
       if (
         url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url === "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc"
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone" ||
+        url ===
+          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone&audiobook=available" ||
+        url ===
+          "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone&audiobook=available"
       ) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(mockBooks),
+          json: () =>
+            Promise.resolve(
+              url.includes("audiobook=available")
+                ? mockBooks.filter(
+                    (book) =>
+                      book.audiobook_enabled || book.audiobook_types?.length,
+                  )
+                : mockBooks,
+            ),
         });
       }
       if (url === "/api/series") {
@@ -602,9 +633,9 @@ describe("App", () => {
     expect(screen.getByText("Text Only")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Audiobook"), {
-      target: { value: "enabled" },
+      target: { value: "available" },
     });
-    expect(screen.getByText("Audio Ready")).toBeInTheDocument();
+    expect(await screen.findByText("Audio Ready")).toBeInTheDocument();
     expect(screen.getByText("Human Audio")).toBeInTheDocument();
     expect(screen.queryByText("Text Only")).not.toBeInTheDocument();
 
@@ -613,7 +644,7 @@ describe("App", () => {
     });
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc",
+        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone&audiobook=available",
       );
     });
   });
@@ -704,6 +735,6 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /back/i }));
     expect(window.location.pathname).toBe("/");
     expect(window.location.hash).toBe("#series");
-    expect(await screen.findByText("No books found.")).toBeInTheDocument();
+    expect(await screen.findByText("No series found.")).toBeInTheDocument();
   });
 });
