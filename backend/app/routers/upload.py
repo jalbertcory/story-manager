@@ -8,8 +8,8 @@ from collections.abc import Iterator
 from typing import List, Optional
 
 from ebooklib import epub
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +65,28 @@ class EpubUploadResult(BaseModel):
     status: str  # "success" | "skipped" | "error"
     book: Optional[schemas.Book] = None
     error: Optional[str] = None
+
+
+class ImportPreviewItem(BaseModel):
+    key: str
+    input_type: str
+    name: str
+    status: str
+    title: Optional[str] = None
+    author: Optional[str] = None
+    series: Optional[str] = None
+    source_url: Optional[str] = None
+    duplicate_book_id: Optional[int] = None
+    cleaning_configs: list[str] = Field(default_factory=list)
+    detail: Optional[str] = None
+
+
+class ImportPreviewResponse(BaseModel):
+    items: list[ImportPreviewItem]
+    ready_count: int
+    duplicate_count: int
+    unsupported_count: int
+    error_count: int
 
 
 def _is_zip_upload(file: UploadFile) -> bool:
@@ -262,6 +284,208 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
     payload = await read_and_validate_upload(file)
     return await _upload_epub_bytes(file.filename, payload, db)
+
+
+def _first_epub_metadata(epub_book, namespace: str, key: str) -> Optional[str]:
+    try:
+        values = epub_book.get_metadata(namespace, key)
+    except KeyError:
+        return None
+    if not values:
+        return None
+    value = values[0][0]
+    return str(value).strip() if value is not None else None
+
+
+async def _preview_epub_bytes(
+    *,
+    key: str,
+    name: str,
+    payload: bytes,
+    db: AsyncSession,
+    seen_books: set[tuple[str, str]],
+) -> ImportPreviewItem:
+    try:
+        epub_book = epub.read_epub(BytesIO(_fix_nested_epub(payload)))
+        title = _first_epub_metadata(epub_book, "DC", "title")
+        author = _first_epub_metadata(epub_book, "DC", "creator")
+        series = _first_epub_metadata(epub_book, "calibre", "series")
+        source_url = _first_epub_metadata(epub_book, "DC", "source")
+        if source_url and not source_url.lower().startswith(("http://", "https://")):
+            source_url = None
+        if not title or not author:
+            raise ValueError("EPUB metadata must include a title and author.")
+    except Exception as exc:
+        return ImportPreviewItem(
+            key=key,
+            input_type="epub",
+            name=name,
+            status="error",
+            detail=f"Could not read EPUB metadata: {exc}",
+        )
+
+    normalized = (title.casefold(), author.casefold())
+    existing_book = await crud.get_book_by_title_and_author(db, title=title, author=author)
+    existing = existing_book if existing_book and existing_book.source_type == models.SourceType.epub else None
+    duplicate_in_batch = normalized in seen_books
+    seen_books.add(normalized)
+    configs = await crud.get_all_matching_cleaning_configs(db, source_url) if source_url else []
+    duplicate_detail = None
+    if existing:
+        duplicate_detail = f"Already in the library as book {existing.id}."
+    elif duplicate_in_batch:
+        duplicate_detail = "The same title and author appear more than once in this import."
+
+    return ImportPreviewItem(
+        key=key,
+        input_type="epub",
+        name=name,
+        status="duplicate" if duplicate_detail else "ready",
+        title=title,
+        author=author,
+        series=series,
+        source_url=source_url,
+        duplicate_book_id=existing.id if existing else None,
+        cleaning_configs=[config.name for config in configs],
+        detail=duplicate_detail,
+    )
+
+
+@router.post("/api/imports/preview", response_model=ImportPreviewResponse)
+async def preview_imports(
+    files: List[UploadFile] = File(default=[]),
+    urls: List[str] = Form(default=[]),
+    db: AsyncSession = Depends(get_db),
+) -> ImportPreviewResponse:
+    """Inspect book files and web URLs without creating records or queueing work."""
+    items: list[ImportPreviewItem] = []
+    seen_books: set[tuple[str, str]] = set()
+    seen_urls: set[str] = set()
+
+    for file_index, file in enumerate(files):
+        filename = file.filename or f"upload-{file_index + 1}"
+        lower_name = filename.lower()
+        if not lower_name.endswith((".epub", ".zip")):
+            items.append(
+                ImportPreviewItem(
+                    key=f"file:{file_index}",
+                    input_type="file",
+                    name=filename,
+                    status="unsupported",
+                    detail="Choose an EPUB or ZIP containing EPUB files.",
+                )
+            )
+            continue
+
+        try:
+            if _is_zip_upload(file):
+                payload = await read_upload_limited(file, MAX_UPLOAD_BYTES, filename)
+                validate_upload(payload, filename)
+                entry_count = 0
+                for entry_index, (display_name, entry_payload, _safe_name) in enumerate(
+                    _extract_epubs_from_zip(filename, payload)
+                ):
+                    entry_count += 1
+                    items.append(
+                        await _preview_epub_bytes(
+                            key=f"file:{file_index}:{entry_index}",
+                            name=display_name,
+                            payload=entry_payload,
+                            db=db,
+                            seen_books=seen_books,
+                        )
+                    )
+                if entry_count == 0:
+                    items.append(
+                        ImportPreviewItem(
+                            key=f"file:{file_index}",
+                            input_type="zip",
+                            name=filename,
+                            status="unsupported",
+                            detail="No EPUB files were found in this ZIP archive.",
+                        )
+                    )
+                continue
+
+            payload = await read_and_validate_upload(file)
+            items.append(
+                await _preview_epub_bytes(
+                    key=f"file:{file_index}",
+                    name=filename,
+                    payload=payload,
+                    db=db,
+                    seen_books=seen_books,
+                )
+            )
+        except HTTPException as exc:
+            items.append(
+                ImportPreviewItem(
+                    key=f"file:{file_index}",
+                    input_type="file",
+                    name=filename,
+                    status="error",
+                    detail=str(exc.detail),
+                )
+            )
+        except Exception as exc:
+            items.append(
+                ImportPreviewItem(
+                    key=f"file:{file_index}",
+                    input_type="file",
+                    name=filename,
+                    status="error",
+                    detail=str(exc),
+                )
+            )
+
+    url_adapter = TypeAdapter(HttpUrl)
+    for url_index, raw_url in enumerate(urls):
+        candidate = raw_url.strip()
+        if not candidate:
+            continue
+        try:
+            normalized_url = str(url_adapter.validate_python(candidate))
+        except ValidationError:
+            items.append(
+                ImportPreviewItem(
+                    key=f"url:{url_index}",
+                    input_type="web",
+                    name=candidate,
+                    status="error",
+                    detail="Enter a valid HTTP or HTTPS web novel URL.",
+                )
+            )
+            continue
+
+        existing = await crud.get_book_by_source_url(db, source_url=normalized_url)
+        duplicate_in_batch = normalized_url in seen_urls
+        seen_urls.add(normalized_url)
+        configs = await crud.get_all_matching_cleaning_configs(db, normalized_url)
+        detail = None
+        if existing:
+            detail = f"This source is already attached to {existing.title}."
+        elif duplicate_in_batch:
+            detail = "This URL appears more than once in this import."
+        items.append(
+            ImportPreviewItem(
+                key=f"url:{url_index}",
+                input_type="web",
+                name=normalized_url,
+                status="duplicate" if detail else "ready",
+                source_url=normalized_url,
+                duplicate_book_id=existing.id if existing else None,
+                cleaning_configs=[config.name for config in configs],
+                detail=detail or "Metadata will be collected when the durable web import runs.",
+            )
+        )
+
+    return ImportPreviewResponse(
+        items=items,
+        ready_count=sum(item.status == "ready" for item in items),
+        duplicate_count=sum(item.status == "duplicate" for item in items),
+        unsupported_count=sum(item.status == "unsupported" for item in items),
+        error_count=sum(item.status == "error" for item in items),
+    )
 
 
 @router.post(

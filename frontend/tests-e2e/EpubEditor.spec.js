@@ -37,8 +37,8 @@ test("EpubEditor interactions", async ({ page }) => {
   // Delete the book if it exists
   await page.request.delete("/api/books/by-title/Test Book");
 
-  // Expand the Add Books section
-  await page.locator(".add-book-summary").click();
+  // Open the guided import workflow.
+  await page.getByRole("button", { name: "Add to library" }).click();
 
   // Upload a book
   const filePath = path.resolve("test.epub");
@@ -51,11 +51,27 @@ test("EpubEditor interactions", async ({ page }) => {
   );
 
   await Promise.all([
-    page.waitForResponse((r) => r.url().includes("/api/books/upload_epubs") && r.status() === 200),
-    page.getByRole("button", { name: /add book/i }).click(),
+    page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/imports/preview") &&
+        response.status() === 200,
+    ),
+    page.getByRole("button", { name: "Inspect selection" }).click(),
   ]);
 
-  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Review before importing" }),
+  ).toBeVisible();
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/books/upload_epubs") &&
+        response.status() === 200,
+    ),
+    page.getByRole("button", { name: /import 1 ready/i }).click(),
+  ]);
+
+  await page.getByRole("link", { name: "Library", exact: true }).click();
 
   // Narrow the library down so "Test Book" is in the first page (list renders 30 items at a time).
   await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");

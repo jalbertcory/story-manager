@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import { getAuthStatus, logout } from "./api/auth";
@@ -37,10 +37,9 @@ function App() {
   const [audiobookTab, setAudiobookTab] = useState("sources");
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
-  const [addBookOpen, setAddBookOpen] = useState(false);
+  const [pendingImportEntries, setPendingImportEntries] = useState([]);
   const [globalDragging, setGlobalDragging] = useState(false);
   const [authStatus, setAuthStatus] = useState(null);
-  const addBookRef = useRef(null);
   const debouncedQuery = useDebouncedValue(q.trim(), 300);
 
   useEffect(() => {
@@ -233,6 +232,10 @@ function App() {
     setAuthStatus(nextStatus);
   };
 
+  const handleImportEntriesConsumed = useCallback(() => {
+    setPendingImportEntries([]);
+  }, []);
+
   useEffect(() => {
     const onDragOver = (e) => {
       e.preventDefault();
@@ -260,9 +263,14 @@ function App() {
           entry.name.toLowerCase().endsWith(".zip"),
       );
       if (hasRelevant) {
-        setActiveTab("library");
-        setAddBookOpen(true);
-        addBookRef.current?.addFilesFromEntries(entries);
+        window.history.pushState(
+          { view: "tab", tab: "import" },
+          "",
+          "/import?type=books",
+        );
+        setEditingBook(null);
+        setActiveTab("import");
+        setPendingImportEntries(entries);
       }
     };
     window.addEventListener("dragover", onDragOver);
@@ -314,11 +322,25 @@ function App() {
         return <Utilities />;
       case "audio-settings":
         return <AudiobookSettings />;
+      case "import":
+        return (
+          <AddBook
+            initialEntries={pendingImportEntries}
+            onEntriesConsumed={handleImportEntriesConsumed}
+          />
+        );
       default:
         return (
           <>
             <div className="library-page-heading">
               <h2>Library</h2>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => navigate("import")}
+              >
+                Add to library
+              </button>
             </div>
             <div className="search-controls">
               <div className="search-input-wrap">
@@ -372,18 +394,6 @@ function App() {
                 </button>
               </div>
             </div>
-            <details className="add-book-details" open={addBookOpen}>
-              <summary
-                className="add-book-summary"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setAddBookOpen((o) => !o);
-                }}
-              >
-                Add Books
-              </summary>
-              <AddBook ref={addBookRef} />
-            </details>
             {isLoading && <p>Loading...</p>}
             {error && <p className="error">{error.message}</p>}
             <BookList

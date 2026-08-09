@@ -1,59 +1,72 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-const uploadEpubs = async (files) => {
-  const formData = new FormData();
-  for (const file of files) {
-    formData.append("files", file);
-  }
-  const res = await fetch("/api/books/upload_epubs", {
-    method: "POST",
-    body: formData,
-  });
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.detail || "File upload failed");
-  }
-  return res.json(); // List<EpubUploadResult>
-};
+import { getBookCatalog } from "../api/books";
+import { uploadImportedAudiobook } from "../api/audiobook";
+import {
+  addWebNovel,
+  previewBookImports,
+  uploadEpubs,
+} from "../api/imports";
+import LibationBackupImport from "./LibationBackupImport.jsx";
 
-const addWebNovel = async (url) => {
-  const res = await fetch("/api/books/add_web_novel", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.detail || "Failed to add web novel");
-  }
-  return res.json();
-};
+const IMPORT_TYPES = [
+  {
+    key: "books",
+    label: "Book files",
+    description: "EPUB files, ZIP archives, or folders",
+  },
+  {
+    key: "web",
+    label: "Web novels",
+    description: "One or more source URLs",
+  },
+  {
+    key: "audiobook",
+    label: "Audiobook",
+    description: "Human narration for a library book",
+  },
+  {
+    key: "libation",
+    label: "Libation backup",
+    description: "Match and queue an entire backup",
+  },
+];
 
-const formatImportSummary = ({ totalProcessed, succeeded, skipped, failed }) => {
-  if (totalProcessed === 0) {
-    return "No books were processed.";
-  }
+const AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".cue",
+  ".flac",
+  ".m4a",
+  ".m4b",
+  ".mp3",
+  ".mp4",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".zip",
+]);
 
-  const parts = [`Imported ${succeeded.length} of ${totalProcessed} book${totalProcessed === 1 ? "" : "s"}.`];
-  if (skipped.length > 0) {
-    parts.push(`${skipped.length} skipped.`);
-  }
-  if (failed.length > 0) {
-    parts.push(`${failed.length} failed.`);
-  }
-  return parts.join(" ");
-};
+function requestedImportType() {
+  const requested = new URLSearchParams(window.location.search).get("type");
+  return IMPORT_TYPES.some((item) => item.key === requested)
+    ? requested
+    : "books";
+}
 
-const formatSkippedMessage = (error) => {
-  const message = error || "Skipped";
-  const duplicateMatch = message.match(/A book with title '(.+)' by '(.+)' already exists/);
-  if (duplicateMatch) {
-    const [, title, author] = duplicateMatch;
-    return `"${title}" by ${author} is already in your library.`;
-  }
-  return message;
-};
+function requestedBookId() {
+  const value = Number.parseInt(
+    new URLSearchParams(window.location.search).get("book_id"),
+    10,
+  );
+  return Number.isInteger(value) ? value : null;
+}
 
 const readDirEntries = (reader) =>
   new Promise((resolve, reject) => reader.readEntries(resolve, reject));
@@ -61,7 +74,7 @@ const readDirEntries = (reader) =>
 const getFileFromEntry = (fileEntry) =>
   new Promise((resolve, reject) => fileEntry.file(resolve, reject));
 
-const extractEpubsFromEntries = async (entries) => {
+async function extractEpubsFromEntries(entries) {
   const readDir = async (dirEntry) => {
     const reader = dirEntry.createReader();
     const files = [];
@@ -69,13 +82,11 @@ const extractEpubsFromEntries = async (entries) => {
     do {
       batch = await readDirEntries(reader);
       for (const entry of batch) {
-        if (entry.isFile) {
-          if (entry.name.toLowerCase().endsWith(".epub")) {
-            try {
-              files.push(await getFileFromEntry(entry));
-            } catch {
-              // skip unreadable files
-            }
+        if (entry.isFile && entry.name.toLowerCase().endsWith(".epub")) {
+          try {
+            files.push(await getFileFromEntry(entry));
+          } catch {
+            // Unreadable files are reported by omission in the selection summary.
           }
         } else if (entry.isDirectory) {
           files.push(...(await readDir(entry)));
@@ -91,7 +102,7 @@ const extractEpubsFromEntries = async (entries) => {
       try {
         files.push(...(await readDir(entry)));
       } catch {
-        // skip unreadable directories
+        // Ignore unreadable directories.
       }
     } else if (entry.isFile) {
       const lower = entry.name.toLowerCase();
@@ -99,249 +110,651 @@ const extractEpubsFromEntries = async (entries) => {
         try {
           files.push(await getFileFromEntry(entry));
         } catch {
-          // skip
+          // Ignore unreadable files.
         }
       }
     }
   }
   return files;
-};
+}
 
-const AddBook = forwardRef(function AddBook(_props, ref) {
+function extension(name) {
+  const index = name.lastIndexOf(".");
+  return index < 0 ? "" : name.slice(index).toLowerCase();
+}
+
+function selectAudiobookFiles(selectedFiles) {
+  const supported = Array.from(selectedFiles || []).filter((file) =>
+    AUDIO_EXTENSIONS.has(extension(file.name)),
+  );
+  const hasM4b = supported.some((file) => extension(file.name) === ".m4b");
+  if (!hasM4b) return supported;
+  return supported.filter(
+    (file) =>
+      ![
+        ".aac",
+        ".flac",
+        ".m4a",
+        ".mp3",
+        ".mp4",
+        ".ogg",
+        ".opus",
+        ".wav",
+      ].includes(extension(file.name)) || extension(file.name) === ".m4b",
+  );
+}
+
+function previewStatusLabel(status) {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "duplicate":
+      return "Duplicate — will skip";
+    case "unsupported":
+      return "Unsupported";
+    default:
+      return "Needs correction";
+  }
+}
+
+function resultLabel(status) {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+const AddBook = forwardRef(function AddBook(
+  { initialEntries = [], onEntriesConsumed },
+  ref,
+) {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const audioDirectoryRef = useRef(null);
+  const [importType, setImportType] = useState(requestedImportType);
   const [files, setFiles] = useState([]);
   const [urls, setUrls] = useState([""]);
+  const [audioFiles, setAudioFiles] = useState([]);
+  const [selectedBookId, setSelectedBookId] = useState(requestedBookId);
+  const [editionName, setEditionName] = useState("");
+  const [autoAlign, setAutoAlign] = useState(true);
   const [dragging, setDragging] = useState(false);
-  const [pending, setPending] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [duplicatesReviewed, setDuplicatesReviewed] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [results, setResults] = useState(null);
-  const fileInputRef = useRef(null);
 
-  useImperativeHandle(ref, () => ({
-    addFilesFromEntries: async (entries) => {
-      const newFiles = await extractEpubsFromEntries(entries);
-      if (newFiles.length > 0) setFiles((prev) => [...prev, ...newFiles]);
-    },
-  }));
+  const { data: catalog = [] } = useQuery({
+    queryKey: ["import-book-catalog"],
+    queryFn: () =>
+      getBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
+    enabled: importType === "audiobook",
+    staleTime: 30_000,
+  });
 
-  const handleFileChange = (e) => {
-    setFiles((prev) => [...prev, ...Array.from(e.target.files)]);
-    e.target.value = "";
+  const addEntryFiles = async (entries) => {
+    const newFiles = await extractEpubsFromEntries(entries);
+    if (newFiles.length) {
+      setImportType("books");
+      setFiles((current) => [...current, ...newFiles]);
+      setPreview(null);
+      setResults(null);
+    }
   };
 
-  const removeFile = (index) => setFiles((prev) => prev.filter((_, i) => i !== index));
+  useImperativeHandle(ref, () => ({ addFilesFromEntries: addEntryFiles }));
 
-  const handleUrlChange = (index, value) =>
-    setUrls((prev) => prev.map((u, i) => (i === index ? value : u)));
+  useEffect(() => {
+    if (!initialEntries.length) return;
+    void addEntryFiles(initialEntries).finally(() => onEntriesConsumed?.());
+    // The parent clears the consumed entries; this effect should only rerun for
+    // a genuinely new browser drop, not because a callback identity changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEntries]);
 
-  const addUrlField = () => setUrls((prev) => [...prev, ""]);
+  useEffect(() => {
+    const onPopState = () => {
+      setImportType(requestedImportType());
+      setSelectedBookId(requestedBookId());
+      setPreview(null);
+      setResults(null);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
-  const removeUrlField = (index) => setUrls((prev) => prev.filter((_, i) => i !== index));
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragging(true);
+  const resetInspection = () => {
+    setPreview(null);
+    setPreviewError("");
+    setDuplicatesReviewed(false);
+    setResults(null);
   };
 
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const chooseType = (type) => {
+    if (type === importType) return;
+    const params = new URLSearchParams();
+    params.set("type", type);
+    window.history.pushState(
+      { view: "tab", tab: "import" },
+      "",
+      `/import?${params}`,
+    );
+    setImportType(type);
+    resetInspection();
+  };
+
+  const handleDrop = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     setDragging(false);
-  };
-
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragging(false);
-    const entries = Array.from(e.dataTransfer.items)
+    const entries = Array.from(event.dataTransfer.items)
       .map((item) => item.webkitGetAsEntry?.())
       .filter(Boolean);
-    if (entries.length > 0) {
-      const newFiles = await extractEpubsFromEntries(entries);
-      setFiles((prev) => [...prev, ...newFiles]);
-    } else {
-      // Fallback for environments where webkitGetAsEntry is unavailable (e.g. synthetic events in tests).
-      // items[n].getAsFile() is more reliable than dataTransfer.files for programmatic DataTransfer objects.
-      const seen = new Set();
-      const newFiles = [
-        ...Array.from(e.dataTransfer.items)
-          .filter((item) => item.kind === "file")
-          .map((item) => item.getAsFile()),
-        ...Array.from(e.dataTransfer.files),
-      ]
-        .filter((f) => f && !seen.has(f.name) && seen.add(f.name))
-        .filter((f) => {
-          const lower = f.name.toLowerCase();
-          return lower.endsWith(".epub") || lower.endsWith(".zip");
+    if (entries.length) {
+      await addEntryFiles(entries);
+      return;
+    }
+    const selected = Array.from(event.dataTransfer.files).filter((file) =>
+      file.name.toLowerCase().endsWith(".epub") ||
+      file.name.toLowerCase().endsWith(".zip"),
+    );
+    setFiles((current) => [...current, ...selected]);
+    resetInspection();
+  };
+
+  const inspect = async () => {
+    setPreviewing(true);
+    setPreviewError("");
+    setResults(null);
+    setDuplicatesReviewed(false);
+    try {
+      if (importType === "books") {
+        setPreview(await previewBookImports(files, []));
+      } else if (importType === "web") {
+        setPreview(
+          await previewBookImports(
+            [],
+            urls.map((url) => url.trim()).filter(Boolean),
+          ),
+        );
+      } else if (importType === "audiobook") {
+        const book = catalog.find((item) => item.id === selectedBookId);
+        if (!book || !audioFiles.length) {
+          throw new Error("Choose a library book and at least one supported audio file.");
+        }
+        setPreview({
+          ready_count: 1,
+          duplicate_count: 0,
+          unsupported_count: 0,
+          error_count: 0,
+          items: [
+            {
+              key: "audiobook:0",
+              input_type: "audiobook",
+              name: editionName.trim() || audioFiles[0].name,
+              status: "ready",
+              title: book.title,
+              author: book.author,
+              detail: `${audioFiles.length} supported ${audioFiles.length === 1 ? "file" : "files"} will be attached to this book.`,
+            },
+          ],
         });
-      setFiles((prev) => [...prev, ...newFiles]);
+      }
+    } catch (error) {
+      setPreviewError(error.message);
+    } finally {
+      setPreviewing(false);
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    const activeUrls = urls.filter((u) => u.trim());
-    if (files.length === 0 && activeUrls.length === 0) return;
-
-    setPending(true);
-    setResults(null);
-
-    const succeeded = [];
-    const skipped = [];
-    const failed = [];
-
-    if (files.length > 0) {
-      try {
-        const epubResults = await uploadEpubs(files);
-        for (const r of epubResults) {
-          if (r.status === "success") {
-            succeeded.push(r.book?.title || r.filename);
-          } else if (r.status === "skipped") {
-            skipped.push({ name: r.filename, error: formatSkippedMessage(r.error) });
-          } else {
-            failed.push({ name: r.filename, error: r.error || "Upload failed" });
+  const execute = async () => {
+    setImporting(true);
+    const completed = [];
+    try {
+      if (importType === "books") {
+        try {
+          const response = await uploadEpubs(files);
+          response.forEach((item) => {
+            completed.push({
+              name: item.book?.title || item.filename,
+              status:
+                item.status === "success"
+                  ? "succeeded"
+                  : item.status === "skipped"
+                    ? "skipped"
+                    : "failed",
+              detail: item.error,
+            });
+          });
+        } catch (error) {
+          files.forEach((file) =>
+            completed.push({
+              name: file.name,
+              status: "failed",
+              detail: error.message,
+            }),
+          );
+        }
+      } else if (importType === "web") {
+        for (const item of preview.items.filter((entry) => entry.status === "ready")) {
+          try {
+            const book = await addWebNovel(item.source_url);
+            completed.push({
+              name: book.title || item.source_url,
+              status: "queued",
+              detail: "The durable web import will continue in Activity.",
+            });
+          } catch (error) {
+            completed.push({
+              name: item.source_url,
+              status: "failed",
+              detail: error.message,
+            });
           }
         }
-      } catch (err) {
-        for (const file of files) {
-          failed.push({ name: file.name, error: err.message });
+      } else if (importType === "audiobook") {
+        try {
+          const edition = await uploadImportedAudiobook(
+            selectedBookId,
+            audioFiles,
+            editionName,
+            autoAlign,
+          );
+          completed.push({
+            name: edition.name || editionName || audioFiles[0].name,
+            status: "queued",
+            detail: "Import and chapter matching will continue in Activity.",
+          });
+        } catch (error) {
+          completed.push({
+            name: editionName || audioFiles[0].name,
+            status: "failed",
+            detail: error.message,
+          });
         }
       }
-    }
 
-    for (const url of activeUrls) {
-      try {
-        const book = await addWebNovel(url);
-        succeeded.push(book.title || url);
-      } catch (err) {
-        failed.push({ name: url, error: err.message });
+      if (importType === "web") {
+        preview.items
+          .filter((item) => item.status !== "ready")
+          .forEach((item) =>
+            completed.push({
+              name: item.title || item.source_url || item.name,
+              status: item.status === "duplicate" ? "skipped" : "failed",
+              detail: item.detail,
+            }),
+          );
       }
+      setResults(completed);
+      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+    } finally {
+      setImporting(false);
     }
-
-    queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-    setFiles([]);
-    setUrls([""]);
-    setPending(false);
-    setResults({ succeeded, skipped, failed, totalProcessed: succeeded.length + skipped.length + failed.length });
   };
 
-  const total = files.length + urls.filter((u) => u.trim()).length;
+  const activeUrls = urls.map((url) => url.trim()).filter(Boolean);
+  const canInspect =
+    (importType === "books" && files.length > 0) ||
+    (importType === "web" && activeUrls.length > 0) ||
+    (importType === "audiobook" && selectedBookId && audioFiles.length > 0);
+  const stage = results ? 3 : preview ? 2 : 1;
+  const canImport =
+    (preview?.ready_count > 0 || preview?.duplicate_count > 0) &&
+    (preview.duplicate_count === 0 || duplicatesReviewed);
+
+  if (importType === "libation") {
+    return (
+      <div className="import-workflow">
+        <ImportHeader stage={1} />
+        <ImportTypePicker selected={importType} onSelect={chooseType} />
+        <LibationBackupImport />
+      </div>
+    );
+  }
 
   return (
-    <div className="add-book-container">
-      <form onSubmit={handleSubmit}>
-        <div className="add-book-columns">
-          <div
-            id="drop-zone"
-            className={`drop-zone ${dragging ? "dragging" : ""} ${files.length > 0 ? "drop-zone--has-files" : ""}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current.click()}
-          >
-            {files.length > 0 ? (
-              <ul className="file-list" onClick={(e) => e.stopPropagation()}>
-                {files.map((f, i) => (
-                  <li key={i}>
-                    <span>{f.name}</span>
-                    <button type="button" className="remove-btn" onClick={() => removeFile(i)}>
-                      ×
-                    </button>
-                  </li>
-                ))}
-                <li className="add-more-hint">+ more files</li>
-              </ul>
-            ) : (
-              <div className="drop-zone-empty">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="28" height="28">
-                  <path d="M12 16V6m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M20 16.7V19a2 2 0 01-2 2H6a2 2 0 01-2-2v-2.3" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                <span>Drop EPUBs, ZIPs, or folders here, or click to browse</span>
-              </div>
-            )}
-            <input
-              id="file-upload"
-              type="file"
-              accept=".epub,.zip"
-              multiple
-              onChange={handleFileChange}
-              ref={fileInputRef}
-              style={{ display: "none" }}
-            />
-          </div>
+    <div className="import-workflow">
+      <ImportHeader stage={stage} />
+      <ImportTypePicker selected={importType} onSelect={chooseType} />
 
-          <div className="add-book-divider">
-            <span>or</span>
-          </div>
+      {!preview && !results && (
+        <section className="import-panel" aria-labelledby="import-input-heading">
+          <span className="import-step-code">01 / SELECT</span>
+          <h3 id="import-input-heading">Choose what to inspect</h3>
 
-          <div className="url-section">
-            {urls.map((url, i) => (
-              <div key={i} className="url-row">
+          {importType === "books" && (
+            <>
+              <div
+                id="drop-zone"
+                className={`drop-zone import-drop-zone${dragging ? " dragging" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <strong>Drop EPUBs, ZIPs, or folders here</strong>
+                <span>or click to browse for files</span>
                 <input
-                  type="text"
-                  placeholder="Paste a web novel URL"
-                  value={url}
-                  onChange={(e) => handleUrlChange(i, e.target.value)}
+                  id="file-upload"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".epub,.zip"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    setFiles((current) => [
+                      ...current,
+                      ...Array.from(event.target.files),
+                    ]);
+                    resetInspection();
+                    event.target.value = "";
+                  }}
                 />
-                {urls.length > 1 && (
-                  <button type="button" className="remove-btn" onClick={() => removeUrlField(i)}>
-                    ×
-                  </button>
-                )}
               </div>
-            ))}
-            <button type="button" className="add-url-btn" onClick={addUrlField}>
-              + Add another URL
+              <SelectedFiles files={files} onRemove={(index) => {
+                setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                resetInspection();
+              }} />
+            </>
+          )}
+
+          {importType === "web" && (
+            <div className="import-url-list">
+              {urls.map((url, index) => (
+                <label key={index}>
+                  Web novel URL {urls.length > 1 ? index + 1 : ""}
+                  <span className="import-url-row">
+                    <input
+                      type="url"
+                      placeholder="https://example.com/story/..."
+                      value={url}
+                      onChange={(event) => {
+                        setUrls((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? event.target.value : item,
+                          ),
+                        );
+                        resetInspection();
+                      }}
+                    />
+                    {urls.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn-text"
+                        onClick={() =>
+                          setUrls((current) => {
+                            resetInspection();
+                            return current.filter(
+                              (_, itemIndex) => itemIndex !== index,
+                            );
+                          })
+                        }
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </span>
+                </label>
+              ))}
+              <button
+                type="button"
+                className="btn-text"
+                onClick={() => setUrls((current) => [...current, ""])}
+              >
+                + Add another URL
+              </button>
+            </div>
+          )}
+
+          {importType === "audiobook" && (
+            <div className="import-audiobook-inputs">
+              <label>
+                Attach narration to
+                <select
+                  value={selectedBookId || ""}
+                  onChange={(event) => {
+                    setSelectedBookId(Number(event.target.value) || null);
+                    resetInspection();
+                  }}
+                >
+                  <option value="">Choose a library book</option>
+                  {catalog.map((book) => (
+                    <option key={book.id} value={book.id}>
+                      {book.title} — {book.author || "Unknown author"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Edition name (optional)
+                <input
+                  value={editionName}
+                  onChange={(event) => setEditionName(event.target.value)}
+                  placeholder="For example, Audible / Jeff Hays"
+                />
+              </label>
+              <div className="import-audio-pickers">
+                <label>
+                  Audiobook files or ZIP
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    multiple
+                    accept=".zip,.cue,.m4b,.m4a,.mp3,.mp4,.aac,.flac,.ogg,.opus,.wav,audio/*"
+                    onChange={(event) => {
+                      setAudioFiles(selectAudiobookFiles(event.target.files));
+                      resetInspection();
+                    }}
+                  />
+                </label>
+                <label>
+                  Or audiobook directory
+                  <input
+                    ref={audioDirectoryRef}
+                    type="file"
+                    multiple
+                    webkitdirectory=""
+                    directory=""
+                    onChange={(event) => {
+                      setAudioFiles(selectAudiobookFiles(event.target.files));
+                      resetInspection();
+                    }}
+                  />
+                </label>
+              </div>
+              <SelectedFiles files={audioFiles} />
+              <label className="import-checkbox">
+                <input
+                  type="checkbox"
+                  checked={autoAlign}
+                  onChange={(event) => setAutoAlign(event.target.checked)}
+                />
+                Improve sentence timestamps with configured speech-to-text alignment
+              </label>
+            </div>
+          )}
+
+          <div className="import-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!canInspect || previewing}
+              onClick={inspect}
+            >
+              {previewing ? "Inspecting…" : "Inspect selection"}
             </button>
           </div>
-        </div>
+          {previewError && <p className="error">{previewError}</p>}
+        </section>
+      )}
 
-        <button className="btn-primary add-book-submit" type="submit" disabled={pending || total === 0}>
-          {pending ? "Adding..." : total > 1 ? `Add ${total} Books` : "Add Book"}
-        </button>
-      </form>
+      {preview && !results && (
+        <section className="import-panel" aria-labelledby="import-preview-heading">
+          <span className="import-step-code">02 / REVIEW</span>
+          <h3 id="import-preview-heading">Review before importing</h3>
+          <p className="import-preview-summary" role="status">
+            <strong>{preview.ready_count} ready</strong>
+            {` · ${preview.duplicate_count} duplicate · ${preview.unsupported_count} unsupported · ${preview.error_count} with errors`}
+          </p>
+          <div className="import-preview-list">
+            {preview.items.map((item) => (
+              <article
+                key={item.key}
+                className={`import-preview-item import-preview-item--${item.status}`}
+              >
+                <div>
+                  <strong>{item.title || item.source_url || item.name}</strong>
+                  {item.author && <span>{item.author}</span>}
+                  {item.series && <small>Series: {item.series}</small>}
+                  {item.cleaning_configs?.length > 0 && (
+                    <small>
+                      Cleaning: {item.cleaning_configs.join(", ")}
+                    </small>
+                  )}
+                  {item.detail && <small>{item.detail}</small>}
+                </div>
+                <span className="import-preview-status">
+                  {previewStatusLabel(item.status)}
+                </span>
+              </article>
+            ))}
+          </div>
+          {preview.duplicate_count > 0 && (
+            <label className="import-checkbox import-duplicate-confirmation">
+              <input
+                type="checkbox"
+                checked={duplicatesReviewed}
+                onChange={(event) => setDuplicatesReviewed(event.target.checked)}
+              />
+              I reviewed the duplicates and want to skip them.
+            </label>
+          )}
+          <div className="import-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!canImport || importing}
+              onClick={execute}
+            >
+              {importing
+                ? "Starting import…"
+                : preview.ready_count > 0
+                  ? `Import ${preview.ready_count} ready`
+                  : preview.duplicate_count > 0
+                    ? `Finish with ${preview.duplicate_count} skipped`
+                    : "Nothing ready to import"}
+            </button>
+            <button type="button" className="btn-text" onClick={resetInspection}>
+              Change selection
+            </button>
+          </div>
+        </section>
+      )}
 
       {results && (
-        <div className="add-results">
-          <p className="summary">{formatImportSummary(results)}</p>
-          {results.succeeded.length > 0 && (
-            <p className="success">
-              Added: {results.succeeded.length} book{results.succeeded.length === 1 ? "" : "s"}.
-            </p>
-          )}
-          {results.skipped.length > 0 && (
-            <div className="result-group">
-              <p className="skipped-summary">
-                Skipped: {results.skipped.length} book{results.skipped.length === 1 ? "" : "s"}.
-              </p>
-              <ul className="error-list">
-                {results.skipped.map((f, i) => (
-                  <li key={i} className="skipped">
-                    <strong>{f.name}</strong>: {f.error}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {results.failed.length > 0 && (
-            <div className="result-group">
-              <p className="error-summary">
-                Failed: {results.failed.length} book{results.failed.length === 1 ? "" : "s"}.
-              </p>
-              <ul className="error-list">
-                {results.failed.map((f, i) => (
-                  <li key={i} className="error">
-                    <strong>{f.name}</strong>: {f.error}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+        <section className="import-panel" aria-labelledby="import-results-heading">
+          <span className="import-step-code">03 / RESULTS</span>
+          <h3 id="import-results-heading">Import results</h3>
+          <div className="import-result-list" role="status">
+            {results.map((item, index) => (
+              <div className={`import-result import-result--${item.status}`} key={`${item.name}-${index}`}>
+                <strong>{item.name}</strong>
+                <span>{resultLabel(item.status)}</span>
+                {item.detail && <small>{item.detail}</small>}
+              </div>
+            ))}
+          </div>
+          <div className="import-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                setFiles([]);
+                setAudioFiles([]);
+                setUrls([""]);
+                setPreview(null);
+                setResults(null);
+              }}
+            >
+              Import more
+            </button>
+            <a className="btn" href="/activity/processing">
+              View Activity
+            </a>
+          </div>
+        </section>
       )}
     </div>
   );
 });
+
+function ImportHeader({ stage }) {
+  return (
+    <header className="import-workflow-header">
+      <span className="attention-eyebrow">GUIDED WORKFLOW</span>
+      <h2>Add to library</h2>
+      <p>Inspect inputs, resolve conflicts, and then start durable import work.</p>
+      <ol className="import-steps" aria-label="Import progress">
+        {["Select", "Review", "Results"].map((label, index) => (
+          <li
+            key={label}
+            className={stage >= index + 1 ? "import-steps--active" : ""}
+            aria-current={stage === index + 1 ? "step" : undefined}
+          >
+            <span>{index + 1}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
+    </header>
+  );
+}
+
+function ImportTypePicker({ selected, onSelect }) {
+  return (
+    <div className="import-type-picker" role="group" aria-label="Import source type">
+      {IMPORT_TYPES.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className={selected === item.key ? "import-type--active" : ""}
+          aria-pressed={selected === item.key}
+          onClick={() => onSelect(item.key)}
+        >
+          <strong>{item.label}</strong>
+          <span>{item.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SelectedFiles({ files, onRemove }) {
+  if (!files.length) return null;
+  return (
+    <ul className="import-selected-files">
+      {files.map((file, index) => (
+        <li key={`${file.name}-${index}`}>
+          <span>{file.webkitRelativePath || file.name}</span>
+          {onRemove && (
+            <button
+              type="button"
+              className="btn-text"
+              aria-label={`Remove ${file.name}`}
+              onClick={() => onRemove(index)}
+            >
+              Remove
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default AddBook;
