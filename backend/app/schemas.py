@@ -392,6 +392,7 @@ class ProcessingJob(BaseModel):
     id: int
     job_type: str
     status: str
+    resource_lane: str
     book_id: Optional[int] = None
     book_title: Optional[str] = None
     target_type: Optional[str] = None
@@ -403,6 +404,10 @@ class ProcessingJob(BaseModel):
     progress_total: int
     progress_detail: Optional[str] = None
     attempt_count: int
+    max_attempts: int
+    available_at: datetime
+    lease_expires_at: Optional[datetime] = None
+    heartbeat_at: Optional[datetime] = None
     cancel_requested: bool
     error: Optional[str] = None
     created_at: datetime
