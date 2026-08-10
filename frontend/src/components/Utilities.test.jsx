@@ -30,6 +30,7 @@ describe("Utilities", () => {
     expect(screen.getByRole("tab", { name: "Audiobooks" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Recycle Bin" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Backup & Restore" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Reader Access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Library Audit" })).toBeInTheDocument();
 
@@ -54,6 +55,55 @@ describe("Utilities", () => {
         "aria-selected",
         "true",
       );
+    });
+  });
+
+  it("creates, downloads, verifies, and deliberately deletes backups", async () => {
+    const filename = "story-manager-20260809T120000Z-abcd1234.story-manager.zip";
+    const backup = {
+      filename,
+      created_at: "2026-08-09T12:00:00Z",
+      size_bytes: 2048,
+      library_file_count: 2,
+      library_size_bytes: 1024,
+      valid_manifest: true,
+      verified_at_creation: true,
+      error: null,
+      download_url: `/api/backups/${filename}/download`,
+    };
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/metadata/jobs/latest") return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      if (url === "/api/metadata/inbox") return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      if (String(url).startsWith("/api/processing/jobs?")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/backups" && !options) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ retention_count: 10, backups: [backup] }) });
+      }
+      if (url === `/api/backups/${filename}` && options?.method === "DELETE") {
+        return Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(null) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "queued" }) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Backup & Restore" }));
+
+    expect(await screen.findByText("✓ Checksums verified when created")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", backup.download_url);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create backup" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backups", { method: "POST" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify now" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, { method: "POST" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/cannot be undone/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete backup" }));
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, { method: "DELETE" });
     });
   });
 

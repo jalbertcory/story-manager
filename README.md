@@ -50,6 +50,7 @@ In the Unraid web UI, open **Docker**, choose **Add Container**, switch to **Adv
 | WebUI | `http://[IP]:[PORT:8889]`                                                 |
 | Port | Host `8889` -> Container `8000`                                           |
 | Library path | `/mnt/user/appdata/story-manager/library` -> `/app/library` (read/write)  |
+| Backup path | `/mnt/user/appdata/story-manager/backups` -> `/app/backups` (read/write)  |
 | Database path | `/mnt/user/appdata/story-manager/pgdata` -> `/tmp/pgdata` (read/write)    |
 | FanFicFare config | `/mnt/user/appdata/story-manager/fanficfare` -> `/app/config` (read-only) |
 
@@ -61,13 +62,14 @@ can be tuned per resource lane; see `docs/deployment.md`.
 For a terminal-based installation, the equivalent command is:
 
 ```bash
-mkdir -p /mnt/user/appdata/story-manager/{library,pgdata,fanficfare}
+mkdir -p /mnt/user/appdata/story-manager/{library,backups,pgdata,fanficfare}
 
 docker run -d \
   --name story-manager \
   --restart unless-stopped \
   -p 8889:8000 \
   -v /mnt/user/appdata/story-manager/library:/app/library \
+  -v /mnt/user/appdata/story-manager/backups:/app/backups \
   -v /mnt/user/appdata/story-manager/pgdata:/tmp/pgdata \
   -v /mnt/user/appdata/story-manager/fanficfare:/app/config:ro \
   ghcr.io/jalbertcory/story-manager:latest

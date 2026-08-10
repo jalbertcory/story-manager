@@ -182,6 +182,22 @@ async def heartbeat_processing_job(
     return bool(result.rowcount)
 
 
+async def defer_processing_job_for_backup(db: AsyncSession, job_id: int, *, lease_owner: str) -> bool:
+    """Return a just-claimed job to the queue when the backup barrier won the race."""
+    job = await db.get(ProcessingJob, job_id)
+    if job is None or job.status != ProcessingJobStatus.RUNNING.value or job.lease_owner != lease_owner:
+        return False
+    transition_state(job, "status", PROCESSING_JOB, ProcessingJobStatus.QUEUED, context=f"processing job {job.id}")
+    job.attempt_count = max(0, (job.attempt_count or 0) - 1)
+    job.started_at = None
+    job.lease_owner = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
+    job.progress_detail = "Waiting for library backup to finish"
+    await db.commit()
+    return True
+
+
 async def recover_abandoned_processing_jobs(db: AsyncSession) -> tuple[int, int]:
     """Cancel or exhaust expired leases; claimable jobs remain available to workers."""
     now = datetime.now(timezone.utc)

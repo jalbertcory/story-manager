@@ -7,6 +7,12 @@ APP_DIR = Path(__file__).parent.resolve()
 # Absolute path to the library/ directory at the project root
 LIBRARY_PATH = (APP_DIR / ".." / ".." / "library").resolve()
 
+# Backups live outside the library tree so a backup never recursively includes
+# older archives. Production mounts this directory as a separate persistent
+# volume; local development can override it in the same way.
+BACKUP_PATH = Path(os.getenv("STORY_MANAGER_BACKUP_DIR", str(LIBRARY_PATH.parent / "backups"))).resolve()
+BACKUP_RETENTION_COUNT = max(0, int(os.getenv("STORY_MANAGER_BACKUP_RETENTION_COUNT", "10")))
+
 # Application logs survive ordinary restarts and rotate in a bounded directory.
 LOG_DIR = Path(os.getenv("STORY_MANAGER_LOG_DIR", str(LIBRARY_PATH.parent / "logs"))).resolve()
 LOG_MAX_BYTES = max(64 * 1024, int(os.getenv("STORY_MANAGER_LOG_MAX_BYTES", str(5 * 1024 * 1024))))

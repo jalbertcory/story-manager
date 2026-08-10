@@ -23,6 +23,8 @@ const JOB_LABELS = {
   generate_sentence_audio: "Generate sentence audio",
   generate_chapter_preview: "Generate chapter preview",
   retry_cover: "Re-extract book cover",
+  create_backup: "Create library backup",
+  verify_backup: "Verify library backup",
 };
 
 const QUEUE_OPERATIONS = [

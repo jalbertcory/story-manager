@@ -15,6 +15,8 @@ import {
   permanentlyDeleteRecycledBook,
   restoreRecycledBook,
 } from "../api/books";
+import { createBackup, deleteBackup, getBackups, verifyBackup } from "../api/backups";
+import { getProcessingJobs } from "../api/processing";
 
 const utilityTabs = [
   { key: "audit", label: "Audit" },
@@ -23,6 +25,7 @@ const utilityTabs = [
   { key: "audiobooks", label: "Audiobooks" },
   { key: "recycle-bin", label: "Recycle Bin" },
   { key: "storage", label: "Storage" },
+  { key: "backups", label: "Backup & Restore" },
   { key: "reader-access", label: "Reader Access" },
 ];
 
@@ -35,7 +38,8 @@ function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 async function runCleanup(dryRun) {
@@ -111,6 +115,7 @@ function Utilities({ onBack }) {
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState(null);
+  const [backupDeleteTarget, setBackupDeleteTarget] = useState(null);
 
   useEffect(() => {
     const onPopState = () => setActiveTab(getRequestedUtilityTab());
@@ -219,6 +224,47 @@ function Utilities({ onBack }) {
     onSuccess: () => {
       setPermanentDeleteTarget(null);
       queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+    },
+  });
+
+  const { data: backupJobs = [] } = useQuery({
+    queryKey: ["backup-jobs"],
+    queryFn: () => getProcessingJobs({ limit: 100 }),
+    enabled: activeTab === "backups",
+    select: (jobs) => jobs.filter((job) => ["create_backup", "verify_backup"].includes(job.job_type)),
+    refetchInterval: ({ state }) =>
+      (state.data || []).some((job) => ["queued", "running"].includes(job.status)) ? 3000 : false,
+  });
+  const activeBackupJob = backupJobs.find((job) => ["queued", "running"].includes(job.status));
+  const latestBackupJob = backupJobs[0];
+
+  const { data: backupInventory, isLoading: backupsLoading } = useQuery({
+    queryKey: ["backups"],
+    queryFn: getBackups,
+    enabled: activeTab === "backups",
+    refetchInterval: activeBackupJob ? 3000 : false,
+  });
+  const backups = backupInventory?.backups || [];
+
+  useEffect(() => {
+    if (latestBackupJob?.completed_at) queryClient.invalidateQueries({ queryKey: ["backups"] });
+  }, [latestBackupJob?.completed_at, queryClient]);
+
+  const createBackupMutation = useMutation({
+    mutationFn: createBackup,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+  });
+
+  const verifyBackupMutation = useMutation({
+    mutationFn: verifyBackup,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+  });
+
+  const deleteBackupMutation = useMutation({
+    mutationFn: deleteBackup,
+    onSuccess: () => {
+      setBackupDeleteTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["backups"] });
     },
   });
 
@@ -713,6 +759,109 @@ function Utilities({ onBack }) {
           </section>
         )}
 
+        {activeTab === "backups" && (
+          <section className="settings-section">
+            <h3>Backup & Restore</h3>
+            <p className="hint">
+              Create a portable snapshot of the PostgreSQL catalog and every library file. Story Manager briefly
+              pauses changes, verifies every file checksum, and only then publishes the backup for download.
+            </p>
+            <div className="settings-actions">
+              <button
+                type="button"
+                onClick={() => createBackupMutation.mutate()}
+                disabled={Boolean(activeBackupJob) || createBackupMutation.isPending}
+              >
+                {activeBackupJob?.job_type === "create_backup"
+                  ? activeBackupJob.progress_detail || "Creating backup…"
+                  : "Create backup"}
+              </button>
+            </div>
+
+            {latestBackupJob?.status === "error" && (
+              <p className="error">{latestBackupJob.error || latestBackupJob.progress_detail}</p>
+            )}
+            {activeBackupJob && (
+              <p className="hint" aria-live="polite">{activeBackupJob.progress_detail || "Backup work is running…"}</p>
+            )}
+            {(createBackupMutation.isError || verifyBackupMutation.isError || deleteBackupMutation.isError) && (
+              <p className="error">
+                {(createBackupMutation.error || verifyBackupMutation.error || deleteBackupMutation.error)?.message}
+              </p>
+            )}
+
+            <div className="backup-restore-warning">
+              <strong>Restore is intentionally offline.</strong>
+              <span>
+                Stop Story Manager and use the documented restore command. This prevents a running worker or browser
+                request from changing data during recovery.
+              </span>
+            </div>
+            <details className="backup-restore-details">
+              <summary>Show restore command</summary>
+              <p className="hint">Run this from the directory containing your Docker Compose file:</p>
+              <code>docker compose stop story-manager</code>
+              <code>
+                docker compose run --rm story-manager ./run-container.sh restore /app/backups/&lt;filename&gt; --confirm-replace
+              </code>
+              <p className="hint">Start Story Manager again only after the restore command succeeds.</p>
+            </details>
+
+            <h4>Available backups</h4>
+            {backupInventory && (
+              <p className="hint">
+                {backupInventory.retention_count === 0
+                  ? "Backups are kept until you delete them."
+                  : `The newest ${backupInventory.retention_count} backup${backupInventory.retention_count === 1 ? " is" : "s are"} kept automatically.`}
+              </p>
+            )}
+            {backupsLoading ? (
+              <p className="hint">Loading backups…</p>
+            ) : backups.length === 0 ? (
+              <p className="hint">No backups have been created yet.</p>
+            ) : (
+              <ul className="backup-list">
+                {backups.map((backup) => (
+                  <li className="backup-list-item" key={backup.filename}>
+                    <div>
+                      <strong>{new Date(backup.created_at).toLocaleString()}</strong>
+                      <p className="hint">
+                        {formatBytes(backup.size_bytes)} · {backup.library_file_count} library file
+                        {backup.library_file_count === 1 ? "" : "s"} · {formatBytes(backup.library_size_bytes)} of library data
+                      </p>
+                      <p className={backup.valid_manifest ? "backup-status-ok" : "error"}>
+                        {backup.valid_manifest && backup.verified_at_creation
+                          ? "✓ Checksums verified when created"
+                          : backup.error || "Manifest could not be validated"}
+                      </p>
+                    </div>
+                    <div className="backup-actions">
+                      <a className="btn btn-secondary" href={backup.download_url} download>
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => verifyBackupMutation.mutate(backup.filename)}
+                        disabled={Boolean(activeBackupJob) || verifyBackupMutation.isPending}
+                      >
+                        Verify now
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => setBackupDeleteTarget(backup)}
+                        disabled={Boolean(activeBackupJob) || deleteBackupMutation.isPending}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
         {activeTab === "reader-access" && <ReaderKeys />}
       </div>
 
@@ -728,6 +877,19 @@ function Utilities({ onBack }) {
       >
         <p>This removes the database record, EPUBs, cover, audiobook files, and saved revision history.</p>
         <p><strong>This cannot be undone.</strong></p>
+      </ConfirmActionDialog>
+      <ConfirmActionDialog
+        open={Boolean(backupDeleteTarget)}
+        title="Delete this backup?"
+        confirmLabel="Delete backup"
+        busyLabel="Deleting…"
+        danger
+        isPending={deleteBackupMutation.isPending}
+        onCancel={() => setBackupDeleteTarget(null)}
+        onConfirm={() => deleteBackupMutation.mutate(backupDeleteTarget.filename)}
+      >
+        <p>{backupDeleteTarget?.filename}</p>
+        <p><strong>This removes the only copy of this backup from Story Manager and cannot be undone.</strong></p>
       </ConfirmActionDialog>
     </div>
   );

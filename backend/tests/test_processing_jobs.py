@@ -39,6 +39,45 @@ async def test_processing_jobs_use_explicit_resource_policies(sqlite_sessionmake
             assert job.resource_lane == lane
             assert job.max_attempts == 3
 
+    async with sqlite_sessionmaker() as db:
+        backup = await queue_processing_job(db=db, job_type="create_backup", dedupe_key="backup-lane-test")
+        assert backup.resource_lane == "maintenance"
+        assert backup.max_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_processing_queue_creates_backup_under_write_barrier(sqlite_sessionmaker, monkeypatch, tmp_path):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="create_backup",
+            resource_lane="maintenance",
+            max_attempts=1,
+        )
+        job.status = "running"
+        await db.commit()
+        await db.refresh(job)
+
+    observed = {}
+
+    def create_backup(**kwargs):
+        observed.update(kwargs)
+        assert processing_queue_module.backup_barrier.backup_active is True
+        return {"filename": "test.story-manager.zip"}
+
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "create_backup_archive", create_backup)
+    monkeypatch.setattr(processing_queue_module, "LIBRARY_PATH", tmp_path / "library")
+    monkeypatch.setattr(processing_queue_module, "BACKUP_PATH", tmp_path / "backups")
+    monkeypatch.setattr(processing_queue_module, "DATABASE_URL", "postgresql+psycopg://localhost/test")
+
+    detail = await ProcessingQueue()._execute(job)
+
+    assert detail == "Backup created and verified: test.story-manager.zip"
+    assert observed["library_path"] == tmp_path / "library"
+    assert observed["backup_path"] == tmp_path / "backups"
+    assert processing_queue_module.backup_barrier.backup_active is False
+
 
 @pytest.mark.asyncio
 async def test_processing_job_claim_is_exclusive_and_heartbeated(sqlite_sessionmaker):

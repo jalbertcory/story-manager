@@ -13,12 +13,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
-from ..database import SessionLocal
+from ..config import BACKUP_PATH, BACKUP_RETENTION_COUNT, LIBRARY_PATH
+from ..database import DATABASE_URL, SessionLocal
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
     IMPORTED_AUDIOBOOK,
     AudiobookPublicationStatus,
     ImportedAudiobookStatus,
+    ProcessingJobStatus,
     transition_state,
 )
 from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
@@ -30,6 +32,8 @@ from .audiobook_queue import get_audiobook_queue
 from .audiobook_tts import generate_audio_for_sentence
 from .audiobook_assembly import assemble_chapter_preview
 from .audiobook_tts import generate_audio_for_chapter_preview
+from .backup_barrier import backup_barrier
+from .backups import create_backup_archive, resolve_backup, verify_backup_archive
 from .cover_processing import reextract_book_cover
 from .metadata_jobs import process_metadata_sync_job
 from .transcription_providers import transcription_provider_name
@@ -56,6 +60,8 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "import_audiobook": ("cpu", 3),
     "rematch_imported_audiobook": ("cpu", 3),
     "align_imported_audiobook": ("transcription", 3),
+    "create_backup": ("maintenance", 1),
+    "verify_backup": ("maintenance", 1),
 }
 
 
@@ -164,6 +170,7 @@ class ProcessingQueue:
         lease_owner = f"{self._instance_id}:{lane}:{worker_number}"
         while True:
             try:
+                await backup_barrier.wait_until_writes_allowed()
                 async with SessionLocal() as db:
                     await crud.recover_abandoned_processing_jobs(db)
                     job = await crud.claim_processing_job(
@@ -184,6 +191,13 @@ class ProcessingQueue:
                     await asyncio.wait_for(self._wake.wait(), timeout=self._poll_seconds)
                 except asyncio.TimeoutError:
                     pass
+                continue
+
+            if backup_barrier.backup_active and job.job_type != "create_backup":
+                async with SessionLocal() as db:
+                    await crud.defer_processing_job_for_backup(db, job.id, lease_owner=lease_owner)
+                await backup_barrier.wait_until_writes_allowed()
+                self._wake.set()
                 continue
 
             with correlation_context(request_id=job.request_id, job_id=job.id):
@@ -250,6 +264,37 @@ class ProcessingQueue:
 
     async def _execute(self, job: ProcessingJob) -> str:
         payload = job.payload or {}
+        if job.job_type == "create_backup":
+            async with backup_barrier.backup():
+                async with SessionLocal() as db:
+                    running_jobs = await db.scalar(
+                        select(func.count(ProcessingJob.id)).where(
+                            ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
+                            ProcessingJob.id != job.id,
+                        )
+                    )
+                if running_jobs:
+                    raise RuntimeError(
+                        f"Backup paused because {running_jobs} other processing job(s) are still running. "
+                        "Try again when Activity is idle."
+                    )
+                await self._update_progress(job.id, 0, 2, "Creating database and library snapshot")
+                summary = await asyncio.to_thread(
+                    create_backup_archive,
+                    database_url=DATABASE_URL,
+                    library_path=LIBRARY_PATH,
+                    backup_path=BACKUP_PATH,
+                    retention_count=BACKUP_RETENTION_COUNT,
+                )
+                await self._update_progress(job.id, 2, 2, f"Verified {summary['filename']}")
+                return f"Backup created and verified: {summary['filename']}"
+        if job.job_type == "verify_backup":
+            filename = str(payload.get("filename") or "")
+            archive = resolve_backup(BACKUP_PATH, filename)
+            await self._update_progress(job.id, 0, 1, f"Verifying {filename}")
+            await asyncio.to_thread(verify_backup_archive, archive)
+            await self._update_progress(job.id, 1, 1, f"Verified {filename}")
+            return f"Backup verified: {filename}"
         if job.job_type == "clean_book":
             return await self._clean_book(job.id, job.book_id)
         if job.job_type == "clean_all":

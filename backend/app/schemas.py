@@ -376,6 +376,8 @@ PROCESSING_JOB_TYPES = Literal[
     "generate_sentence_audio",
     "generate_chapter_preview",
     "retry_cover",
+    "create_backup",
+    "verify_backup",
 ]
 
 
@@ -418,6 +420,23 @@ class ProcessingJob(BaseModel):
 
 class ProcessingJobsCreated(BaseModel):
     jobs: List[ProcessingJob] = Field(default_factory=list)
+
+
+class BackupArchive(BaseModel):
+    filename: str
+    created_at: datetime
+    size_bytes: int
+    library_file_count: int
+    library_size_bytes: int
+    valid_manifest: bool
+    verified_at_creation: bool
+    error: Optional[str] = None
+    download_url: str
+
+
+class BackupInventory(BaseModel):
+    retention_count: int
+    backups: List[BackupArchive] = Field(default_factory=list)
 
 
 class AttentionBookItem(BaseModel):
