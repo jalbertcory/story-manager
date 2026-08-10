@@ -192,6 +192,7 @@ backend.log
 # where the books are stored
 library
 config
+/backups/
 
 # Mac specific files
 .DS_Store

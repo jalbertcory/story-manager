@@ -35,14 +35,60 @@ until su postgres -c "$PG_BIN/pg_isready -h localhost" >/dev/null 2>&1; do
 done
 echo "--- PostgreSQL started ---"
 
+APP_PID=""
+cleanup() {
+  echo "--- Shutting down processes ---"
+  if [ -n "$APP_PID" ]; then
+    kill "$APP_PID" 2>/dev/null || true
+  fi
+  su postgres -c "$PG_BIN/pg_ctl -D $PGDATA -m fast stop" >/dev/null 2>&1 || true
+  echo "--- Processes shut down ---"
+}
+trap cleanup EXIT
+
 # Ensure the application database exists
 echo "--- Ensuring database exists ---"
 su postgres -c "$PG_BIN/psql -h localhost -tc \"SELECT 1 FROM pg_database WHERE datname='story_manager'\" | grep -q 1 || $PG_BIN/psql -h localhost -c \"CREATE DATABASE story_manager\"" >/dev/null
 echo "--- Database ensured ---"
 
-# Set DATABASE_URL and run migrations
-echo "--- Running database migrations ---"
+# Set DATABASE_URL before serving or running an offline recovery command.
 export DATABASE_URL="postgresql+psycopg://postgres@localhost:5432/story_manager?client_encoding=utf8"
+MODE="${1:-serve}"
+
+if [ "$MODE" = "verify" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: ./run-container.sh verify /app/backups/<filename>" >&2
+    exit 2
+  fi
+  PYTHONPATH=/app python -m backend.app.backup_cli verify "$2"
+  exit
+fi
+
+if [ "$MODE" = "restore" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: ./run-container.sh restore /app/backups/<filename> --confirm-replace" >&2
+    exit 2
+  fi
+  ARCHIVE_PATH="$2"
+  shift 2
+  PYTHONPATH=/app python -m backend.app.backup_cli restore \
+    "$ARCHIVE_PATH" \
+    --library-path /app/library \
+    --database-url "$DATABASE_URL" \
+    "$@"
+  echo "--- Upgrading restored database ---"
+  PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
+  echo "--- Restore complete ---"
+  exit
+fi
+
+if [ "$MODE" != "serve" ]; then
+  echo "Unknown mode: $MODE (expected serve, verify, or restore)" >&2
+  exit 2
+fi
+
+# Run migrations for the normal application startup path.
+echo "--- Running database migrations ---"
 PYTHONPATH=/app alembic -c backend/alembic.ini upgrade head
 echo "--- Database migrations complete ---"
 
@@ -53,9 +99,6 @@ PYTHONPATH=/app uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --worker
 APP_PID=$!
 
 echo "--- Application started (PID: $APP_PID) ---"
-
-# Ensure all processes are cleaned up, including PostgreSQL
-trap "echo '--- Shutting down processes ---'; kill $APP_PID; su postgres -c \"$PG_BIN/pg_ctl -D $PGDATA -m fast stop\"; echo '--- Processes shut down ---'" EXIT
 
 wait
 

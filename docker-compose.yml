@@ -5,6 +5,9 @@ services:
       - "8000:8000"  # UI + API
     volumes:
       - ./config/library:/app/library
+      - ./config/backups:/app/backups
       - ./config/fanficfare:/app/config:ro
       - ./config/pgdata:/tmp/pgdata
+    environment:
+      STORY_MANAGER_BACKUP_DIR: /app/backups
     restart: unless-stopped

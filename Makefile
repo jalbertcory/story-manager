@@ -112,6 +112,7 @@ run-ui:
 
 run-api:
 	$(MAKE) migrate
+	STORY_MANAGER_PG_DUMP_CONTAINER=story-manager-db \
 	PYTHONPATH=backend .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 run-db: ensure-db

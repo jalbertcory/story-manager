@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
 from .admin_auth_middleware import AdminAuthMiddleware
+from .backup_middleware import BackupWriteBarrierMiddleware
 from .auth import validate_admin_auth_configuration
 from .config import LIBRARY_PATH
 from .errors import install_error_handlers
@@ -24,6 +25,7 @@ from .routers import (
     api_keys,
     auth,
     audiobook,
+    backups,
     books,
     cleaning,
     covers,
@@ -96,6 +98,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Story Manager", lifespan=lifespan)
 install_error_handlers(app)
+app.add_middleware(BackupWriteBarrierMiddleware)
 app.add_middleware(AdminAuthMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.mount(
@@ -112,6 +115,7 @@ app.mount(
 )
 
 app.include_router(audiobook.router)
+app.include_router(backups.router)
 app.include_router(processing.router)
 app.include_router(observability.router)
 app.include_router(books.router)

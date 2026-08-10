@@ -20,6 +20,7 @@ This roadmap captures the next major product and technical improvements for Stor
 6. [Consolidated background execution](#6-consolidated-background-execution)
 7. [Centralized state-machine definitions](#7-centralized-state-machine-definitions)
 8. [Stronger observability](#8-stronger-observability)
+9. [Backup and disaster recovery](#9-backup-and-disaster-recovery)
 
 ## 1. Needs Attention dashboard
 
@@ -144,7 +145,7 @@ State machines should define valid transitions, terminal states, retry behavior,
 
 ## 8. Stronger observability
 
-**Status:** In progress
+**Status:** Complete
 
 Make failures diagnosable without reading raw container output. Connect request IDs to log records, expose worker and dependency health, measure job behavior, and provide a user-downloadable diagnostic bundle with secrets removed.
 
@@ -158,3 +159,24 @@ Observability should remain useful for a small self-hosted deployment and should
 - Logs required for recent diagnostics survive ordinary application restarts.
 - Users can download a redacted diagnostic bundle from the UI.
 - Metrics and logs never expose API keys, session secrets, book contents, or generated audio.
+
+## 9. Backup and disaster recovery
+
+**Status:** In progress
+
+Protect a self-hosted library from database loss, disk failure, and failed host migrations. Backups should be
+portable, independently verifiable, and stored outside the library tree so one archive never includes another.
+Restores must be an explicit offline operation rather than a browser action against a running service.
+
+### Acceptance criteria
+
+- Users can queue a complete database-and-library backup from Library Tools and follow its durable job progress.
+- New writes pause during snapshot creation, and a backup refuses to run alongside active processing work.
+- Every archive contains a versioned manifest, full file inventory, sizes, and SHA-256 checksums.
+- An archive is checksum-verified before it appears in backup history or becomes downloadable.
+- Backup history enforces a configurable retention count, with zero available for manual retention.
+- Existing backups can be downloaded, re-verified, and deliberately deleted from the UI.
+- The bundled offline restore command validates the archive before replacing data and rolls library files back if
+  PostgreSQL restore fails.
+- Docker Compose persists backups separately from both the library and PostgreSQL data directories.
+- Tests cover archive tampering, unsafe paths, API behavior, successful restore, and restore rollback.
