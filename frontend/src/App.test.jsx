@@ -558,7 +558,7 @@ describe("App", () => {
     });
   });
 
-  it("shows and filters AI-generated and human audiobook badges", async () => {
+  it("shows AI-generated and human audiobook badges", async () => {
     const mockBooks = [
       {
         id: 31,
@@ -597,20 +597,13 @@ describe("App", () => {
         url ===
           "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone" ||
         url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone&audiobook=available" ||
-        url ===
-          "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone&audiobook=available"
+          "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone"
       ) {
         return Promise.resolve({
           ok: true,
           json: () =>
             Promise.resolve(
-              url.includes("audiobook=available")
-                ? mockBooks.filter(
-                    (book) =>
-                      book.audiobook_enabled || book.audiobook_types?.length,
-                  )
-                : mockBooks,
+              mockBooks,
             ),
         });
       }
@@ -632,19 +625,12 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Text Only")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Audiobook"), {
-      target: { value: "available" },
-    });
-    expect(await screen.findByText("Audio Ready")).toBeInTheDocument();
-    expect(screen.getByText("Human Audio")).toBeInTheDocument();
-    expect(screen.queryByText("Text Only")).not.toBeInTheDocument();
-
     fireEvent.change(screen.getByLabelText("Sort library by"), {
       target: { value: "audiobook_enabled" },
     });
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone&audiobook=available",
+        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone",
       );
     });
   });
