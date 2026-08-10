@@ -31,6 +31,7 @@ from .routers import (
     lifecycles,
     metadata,
     processing,
+    observability,
     reader,
     scheduler,
     storage,
@@ -57,7 +58,7 @@ class RasterCoverStaticFiles(StaticFiles):
         return response
 
 
-_console_handler, _mem_handler = setup_logging()
+_console_handler, _mem_handler, _file_handler = setup_logging()
 _scheduler = get_scheduler()
 _processing_queue = get_processing_queue()
 
@@ -72,6 +73,8 @@ async def lifespan(app: FastAPI):
         root_logger.addHandler(_console_handler)
     if _mem_handler not in root_logger.handlers:
         root_logger.addHandler(_mem_handler)
+    if _file_handler not in root_logger.handlers:
+        root_logger.addHandler(_file_handler)
     logger.info("Starting up Story Manager services.")
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
@@ -93,8 +96,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Story Manager", lifespan=lifespan)
 install_error_handlers(app)
-app.add_middleware(RequestIdMiddleware)
 app.add_middleware(AdminAuthMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.mount(
     "/library/covers",
     RasterCoverStaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
@@ -110,6 +113,7 @@ app.mount(
 
 app.include_router(audiobook.router)
 app.include_router(processing.router)
+app.include_router(observability.router)
 app.include_router(books.router)
 app.include_router(upload.router)
 app.include_router(web_novels.router)
@@ -137,6 +141,21 @@ async def health_check(db: AsyncSession = Depends(get_db)):
             status_code=503,
             content={"status": "unhealthy", "database": "unavailable"},
         )
+
+
+@app.get("/health/live")
+async def liveness_check():
+    """Process-only health check that never depends on external services."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness_check(db: AsyncSession = Depends(get_db)):
+    """Required-dependency readiness check for container orchestration."""
+    from .services.observability import health_report
+
+    report = await health_report(db, _processing_queue)
+    return JSONResponse(status_code=200 if report["status"] == "healthy" else 503, content=report)
 
 
 # Serve the Vite-built frontend in production. The build output lives at

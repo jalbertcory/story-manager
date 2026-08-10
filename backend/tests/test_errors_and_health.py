@@ -16,6 +16,7 @@ class TestStructuredErrors:
         assert data["error"] == "not_found"
         assert "detail" in data
         assert data["status_code"] == 404
+        assert data["request_id"] == response.headers["X-Request-ID"]
 
     @pytest.mark.asyncio
     async def test_400_returns_structured_error(self, app_client):
@@ -56,6 +57,7 @@ class TestAdminApiAuth:
 
         unauthorized = app_client.get("/api/books")
         assert unauthorized.status_code == 401
+        assert unauthorized.headers["X-Request-ID"]
 
         bad_login = app_client.post("/api/auth/login", json={"password": "wrong"})
         assert bad_login.status_code == 401

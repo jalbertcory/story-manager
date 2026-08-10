@@ -64,6 +64,7 @@ describe("ProcessingJobs", () => {
             target_id: 7,
             target_content_version: 2,
             parent_job_id: null,
+            request_id: "request-42",
             payload: {},
             progress_current: 1,
             progress_total: 3,
@@ -92,6 +93,7 @@ describe("ProcessingJobs", () => {
     expect(screen.getByText("Cleaning chapters")).toBeInTheDocument();
     expect(screen.getByText("33% · 1 / 3")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveValue(1);
+    expect(screen.getByText(/Request request-42/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 

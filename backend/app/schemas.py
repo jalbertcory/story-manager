@@ -399,6 +399,7 @@ class ProcessingJob(BaseModel):
     target_id: Optional[int] = None
     target_content_version: Optional[int] = None
     parent_job_id: Optional[int] = None
+    request_id: str
     payload: dict = Field(default_factory=dict)
     progress_current: int
     progress_total: int

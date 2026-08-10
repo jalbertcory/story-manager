@@ -10,22 +10,61 @@ const LEVEL_COLORS = {
   DEBUG: "#9ca3af",
 };
 
+async function fetchJson(path, message) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(message);
+  return response.json();
+}
+
+function HealthCard({ label, status, detail }) {
+  const healthy = ["alive", "available", "configured"].includes(status);
+  return (
+    <div className={`observability-card observability-card--${healthy ? "healthy" : "muted"}`}>
+      <span>{label}</span>
+      <strong>{status || "unknown"}</strong>
+      {detail && <small>{detail}</small>}
+    </div>
+  );
+}
+
+function formatDuration(value) {
+  if (value == null) return "—";
+  if (value < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(1)} s`;
+}
+
 function Logs({ onBack }) {
   const [level, setLevel] = useState("ALL");
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const { data: logs = [], isLoading, dataUpdatedAt, refetch } = useQuery({
+  const logsQuery = useQuery({
     queryKey: ["logs", level],
-    queryFn: async () => {
+    queryFn: () => {
       const param = level !== "ALL" ? `&level=${level}` : "";
-      const res = await fetch(`/api/logs?limit=500${param}`);
-      if (!res.ok) throw new Error("Failed to fetch logs");
-      return res.json();
+      return fetchJson(`/api/logs?limit=500${param}`, "Failed to fetch logs");
     },
     refetchInterval: autoRefresh ? 3000 : false,
   });
+  const healthQuery = useQuery({
+    queryKey: ["observability-health"],
+    queryFn: () => fetchJson("/api/observability/health", "Failed to fetch system health"),
+    refetchInterval: autoRefresh ? 10000 : false,
+  });
+  const metricsQuery = useQuery({
+    queryKey: ["observability-job-metrics"],
+    queryFn: () => fetchJson("/api/observability/job-metrics?window_hours=24", "Failed to fetch job metrics"),
+    refetchInterval: autoRefresh ? 10000 : false,
+  });
 
+  const logs = logsQuery.data || [];
+  const health = healthQuery.data;
+  const metrics = metricsQuery.data;
   const reversed = [...logs].reverse();
+  const refreshAll = () => {
+    logsQuery.refetch();
+    healthQuery.refetch();
+    metricsQuery.refetch();
+  };
 
   return (
     <div className={onBack ? "book-settings" : undefined}>
@@ -38,87 +77,127 @@ function Logs({ onBack }) {
         <h2>Application Logs</h2>
       </div>
 
+      <section className="settings-section observability-overview">
+        <div className="observability-heading">
+          <div>
+            <h3>System health</h3>
+            <p className="hint">Required services and optional AI providers, without exposing credentials.</p>
+          </div>
+          <a className="btn-secondary" href="/api/observability/diagnostics" download>
+            Download diagnostic bundle
+          </a>
+        </div>
+        {healthQuery.isLoading && <p>Loading health…</p>}
+        {health && (
+          <div className="observability-grid">
+            <HealthCard label="Database" status={health.database.status} />
+            <HealthCard
+              label="Workers"
+              status={health.workers.status}
+              detail={`${health.workers.active_workers}/${health.workers.configured_workers} active`}
+            />
+            <HealthCard
+              label="Storage"
+              status={health.storage.status}
+              detail={health.storage.percent_free != null ? `${health.storage.percent_free}% free` : undefined}
+            />
+            {health.providers.map((provider) => (
+              <HealthCard
+                key={provider.capability}
+                label={provider.capability.toUpperCase()}
+                status={provider.status}
+                detail={provider.configured_endpoints ? `${provider.configured_endpoints} endpoint(s)` : "Optional"}
+              />
+            ))}
+          </div>
+        )}
+
+        {metrics && (
+          <div className="observability-metrics">
+            <h3>Background jobs · last 24 hours</h3>
+            {Object.keys(metrics.by_job_type).length === 0 ? (
+              <p className="hint">No background jobs during this window.</p>
+            ) : (
+              <div className="observability-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Job type</th>
+                      <th>Total</th>
+                      <th>Failed</th>
+                      <th>Canceled</th>
+                      <th>Retries</th>
+                      <th>Queue delay</th>
+                      <th>Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(metrics.by_job_type).map(([jobType, values]) => (
+                      <tr key={jobType}>
+                        <td>{jobType.replaceAll("_", " ")}</td>
+                        <td>{values.total}</td>
+                        <td>{values.failed}</td>
+                        <td>{values.canceled}</td>
+                        <td>{values.retries}</td>
+                        <td>{formatDuration(values.average_queue_delay_ms)}</td>
+                        <td>{formatDuration(values.average_duration_ms)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
       <section className="settings-section">
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <select value={level} onChange={(e) => setLevel(e.target.value)}>
-            {LEVELS.map((l) => (
-              <option key={l} value={l}>{l}</option>
+        <div className="observability-controls">
+          <select aria-label="Log level" value={level} onChange={(event) => setLevel(event.target.value)}>
+            {LEVELS.map((item) => (
+              <option key={item} value={item}>{item}</option>
             ))}
           </select>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.875rem" }}>
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
+          <label>
+            <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
             Auto-refresh
           </label>
-          <button onClick={() => refetch()} style={{ marginLeft: "auto" }}>
-            Refresh
-          </button>
-          {dataUpdatedAt > 0 && (
-            <span className="hint" style={{ fontSize: "0.75rem" }}>
-              Updated {new Date(dataUpdatedAt).toLocaleTimeString()}
-            </span>
+          <button onClick={refreshAll} style={{ marginLeft: "auto" }}>Refresh</button>
+          {logsQuery.dataUpdatedAt > 0 && (
+            <span className="hint">Updated {new Date(logsQuery.dataUpdatedAt).toLocaleTimeString()}</span>
           )}
         </div>
 
-        {isLoading && <p>Loading...</p>}
-        {!isLoading && reversed.length === 0 && (
-          <p className="hint">No log entries.</p>
-        )}
+        {logsQuery.isLoading && <p>Loading…</p>}
+        {!logsQuery.isLoading && reversed.length === 0 && <p className="hint">No log entries.</p>}
 
-        <div
-          style={{
-            fontFamily: "monospace",
-            fontSize: "0.78rem",
-            overflowY: "auto",
-            maxHeight: "70vh",
-            background: "var(--surface, #1a1a2e)",
-            borderRadius: "6px",
-            padding: "0.5rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1px",
-          }}
-        >
-          {reversed.map((entry, i) => (
-            <div
-              key={i}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "160px 56px 1fr",
-                gap: "0.5rem",
-                padding: "2px 4px",
-                borderRadius: "3px",
-                lineHeight: "1.4",
-              }}
-            >
-              <span style={{ color: "#6b7280", whiteSpace: "nowrap" }}>
+        <div className="observability-logs">
+          {reversed.map((entry, index) => (
+            <div className="observability-log-row" key={`${entry.timestamp}-${index}`}>
+              <span className="observability-time">
                 {new Date(entry.timestamp).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
                   second: "2-digit",
                 })}
               </span>
-              <span
-                style={{
-                  color: LEVEL_COLORS[entry.level] ?? "#9ca3af",
-                  fontWeight: "600",
-                  textAlign: "right",
-                }}
-              >
+              <span className="observability-level" style={{ color: LEVEL_COLORS[entry.level] ?? "#9ca3af" }}>
                 {entry.level}
               </span>
-              <span style={{ color: "#e2e8f0", wordBreak: "break-all" }}>
+              <span className="observability-message">
                 {entry.message}
+                {(entry.request_id || entry.job_id != null) && (
+                  <small>
+                    {entry.request_id && `request ${entry.request_id}`}
+                    {entry.request_id && entry.job_id != null && " · "}
+                    {entry.job_id != null && `job ${entry.job_id}`}
+                  </small>
+                )}
               </span>
             </div>
           ))}
         </div>
-        <p className="hint" style={{ marginTop: "0.5rem" }}>
-          Showing {reversed.length} entries (last 500, most recent first). Buffer holds up to 1000.
-        </p>
+        <p className="hint">Showing {reversed.length} entries (last 500, most recent first). Recent logs survive restarts.</p>
       </section>
     </div>
   );

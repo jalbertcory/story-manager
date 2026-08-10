@@ -384,6 +384,7 @@ function ProcessingJobs() {
                 </div>
                 <small>
                   #{job.id} · {formatDate(job.created_at)}
+                  {job.request_id && ` · Request ${job.request_id}`}
                 </small>
               </div>
               <p>{job.progress_detail || "Waiting"}</p>
