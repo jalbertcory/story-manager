@@ -2179,6 +2179,21 @@
   overflow: auto;
 }
 
+.libation-review-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.libation-review-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .libation-match {
   display: flex;
   justify-content: space-between;
@@ -2192,6 +2207,43 @@
 
 .libation-match--matched {
   border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.libation-match-copy {
+  display: grid;
+  flex: 1;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.libation-book-search {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 44rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.libation-book-search input {
+  width: 100%;
+}
+
+.libation-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+}
+
+.libation-suggestions .btn-text {
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.libation-include-match {
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .libation-match-status {
@@ -2213,6 +2265,10 @@
 
 @media (max-width: 640px) {
   .libation-match {
+    display: grid;
+  }
+
+  .libation-review-toolbar {
     display: grid;
   }
 }

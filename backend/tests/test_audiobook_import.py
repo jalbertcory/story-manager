@@ -273,7 +273,7 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
             author="Author One",
             immutable_path="library/identifier-immutable.epub",
             current_path="library/identifier.epub",
-            metadata_remote_ids={"isbn_10": "1980085722"},
+            metadata_remote_ids={"isbn_13": "9781980085720"},
         )
         title_book = Book(
             title="Title Match",
@@ -281,13 +281,19 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
             immutable_path="library/title-immutable.epub",
             current_path="library/title.epub",
         )
+        title_variant_book = Book(
+            title="Rhythm of War (The Stormlight Archive)",
+            author="Brandon Sanderson",
+            immutable_path="library/rhythm-immutable.epub",
+            current_path="library/rhythm.epub",
+        )
         existing_book = Book(
             title="Already Here",
             author="Author Three",
             immutable_path="library/existing-immutable.epub",
             current_path="library/existing.epub",
         )
-        db.add_all([identifier_book, title_book, existing_book])
+        db.add_all([identifier_book, title_book, title_variant_book, existing_book])
         await db.flush()
         existing = ImportedAudiobook(
             book_id=existing_book.id,
@@ -304,6 +310,7 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
             "source_paths": [
                 "Backup/Store Name [1980085722]/book.m4b",
                 "Backup/Title Match [B012345678]/book.m4b",
+                "Backup/Rhythm of War [1250759781]/book.m4b",
                 "Backup/Already Here [B111111111]/book.m4b",
                 "Backup/Not In Library [B222222222]/book.m4b",
                 "Backup/Not In Library [B222222222]/cover.jpg",
@@ -313,7 +320,7 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["matched_count"] == 2
+    assert payload["matched_count"] == 3
     assert payload["unmatched_count"] == 1
     assert payload["already_imported_count"] == 1
     assert payload["ignored_file_count"] == 1
@@ -321,9 +328,54 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
     assert matches["1980085722"]["match_method"] == "identifier"
     assert matches["1980085722"]["book_title"] == "Different Store Title"
     assert matches["B012345678"]["match_method"] == "title"
+    assert matches["1250759781"]["match_method"] == "title_variant"
+    assert matches["1250759781"]["book_title"] == "Rhythm of War (The Stormlight Archive)"
     assert matches["B111111111"]["status"] == "already_imported"
     assert matches["B111111111"]["existing_edition_id"] is not None
     assert matches["B222222222"]["status"] == "unmatched"
+    assert {book["book_title"] for book in payload["library_books"]} >= {
+        "Different Store Title",
+        "Rhythm of War (The Stormlight Archive)",
+    }
+
+
+@pytest.mark.asyncio
+async def test_libation_backup_preview_requires_review_for_ambiguous_title_variants(
+    app_client,
+    sqlite_sessionmaker,
+):
+    async with sqlite_sessionmaker() as db:
+        db.add_all(
+            [
+                Book(
+                    title="Shared Title (Series One)",
+                    author="Author One",
+                    immutable_path="library/shared-one-immutable.epub",
+                    current_path="library/shared-one.epub",
+                ),
+                Book(
+                    title="Shared Title: Anniversary Edition",
+                    author="Author Two",
+                    immutable_path="library/shared-two-immutable.epub",
+                    current_path="library/shared-two.epub",
+                ),
+            ]
+        )
+        await db.commit()
+
+    response = app_client.post(
+        "/api/audiobook/libation-backup/preview",
+        json={"source_paths": ["Backup/Shared Title [B012345678]/book.m4b"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ambiguous_count"] == 1
+    assert payload["matched_count"] == 0
+    assert {candidate["book_author"] for candidate in payload["groups"][0]["candidates"]} == {
+        "Author One",
+        "Author Two",
+    }
 
 
 @pytest.mark.asyncio
