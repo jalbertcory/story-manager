@@ -93,10 +93,10 @@ describe("LibationBackupImport", () => {
       target: { files: [matchedM4b, duplicateMp3, unmatchedM4b] },
     });
 
-    expect(await screen.findByText("1 ready to import")).toBeInTheDocument();
+    expect(await screen.findByText("1 selected to import")).toBeInTheDocument();
     expect(screen.getByText("No library match")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Import 1 Matched Book" }),
+      screen.getByRole("button", { name: "Import 1 Selected Book" }),
     );
 
     await waitFor(() => {
@@ -105,5 +105,80 @@ describe("LibationBackupImport", () => {
       ).toBeInTheDocument();
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the user review a suggestion before including an unmatched book", async () => {
+    const audiobook = backupFile(
+      "Rhythm.m4b",
+      "Backup/Rhythm of War [1250759781]/Rhythm.m4b",
+    );
+
+    globalThis.fetch = vi.fn((url) => {
+      if (url === "/api/audiobook/libation-backup/preview") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              matched_count: 0,
+              unmatched_count: 1,
+              ambiguous_count: 0,
+              already_imported_count: 0,
+              ignored_file_count: 0,
+              library_books: [
+                {
+                  book_id: 9,
+                  book_title: "Rhythm of War (The Stormlight Archive)",
+                  book_author: "Brandon Sanderson",
+                },
+              ],
+              groups: [
+                {
+                  source_key: "Backup/Rhythm of War [1250759781]",
+                  source_title: "Rhythm of War",
+                  product_id: "1250759781",
+                  status: "unmatched",
+                  candidates: [
+                    {
+                      book_id: 9,
+                      book_title: "Rhythm of War (The Stormlight Archive)",
+                      book_author: "Brandon Sanderson",
+                      match_score: 0.98,
+                    },
+                  ],
+                },
+              ],
+            }),
+        });
+      }
+      if (url === "/api/books/9/audiobook/imports") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: 20 }),
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderWithClient(<LibationBackupImport />);
+    fireEvent.change(screen.getByLabelText("Libation backup directory"), {
+      target: { files: [audiobook] },
+    });
+
+    expect(await screen.findByText("0 selected to import")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Rhythm of War (The Stormlight Archive) by Brandon Sanderson",
+      }),
+    );
+    expect(screen.getByText("1 selected to import")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Import 1 Selected Book" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Queued 1 of 1 matched books."),
+      ).toBeInTheDocument();
+    });
   });
 });

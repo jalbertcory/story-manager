@@ -69,7 +69,9 @@ function statusLabel(group) {
     case "matched":
       return group.match_method === "identifier"
         ? "Matched by identifier"
-        : "Matched by title";
+        : group.match_method === "title_variant"
+          ? "Matched by title variant"
+          : "Matched by title";
     case "already_imported":
       return "Already imported";
     case "ambiguous":
@@ -77,6 +79,11 @@ function statusLabel(group) {
     default:
       return "No library match";
   }
+}
+
+function bookOptionLabel(book) {
+  if (!book?.book_id) return "";
+  return `${book.book_title}${book.book_author ? ` — ${book.book_author}` : ""} (#${book.book_id})`;
 }
 
 function LibationBackupImport() {
@@ -88,6 +95,8 @@ function LibationBackupImport() {
   const [previewing, setPreviewing] = useState(false);
   const [autoAlign, setAutoAlign] = useState(true);
   const [importState, setImportState] = useState(null);
+  const [review, setReview] = useState({});
+  const [matchFilter, setMatchFilter] = useState("all");
 
   const inspectFiles = async (selectedFiles) => {
     const selected = Array.from(selectedFiles || []);
@@ -100,6 +109,19 @@ function LibationBackupImport() {
     try {
       const result = await previewLibationBackup(selected.map(sourcePath));
       setPreview(result);
+      setReview(
+        Object.fromEntries(
+          (result.groups || []).map((group) => [
+            group.source_key,
+            {
+              bookId: group.book_id || null,
+              included: group.status === "matched",
+              input: group.book_id ? bookOptionLabel(group) : "",
+            },
+          ]),
+        ),
+      );
+      setMatchFilter("all");
     } catch (error) {
       setPreviewError(error.message);
     } finally {
@@ -108,9 +130,15 @@ function LibationBackupImport() {
   };
 
   const importMatches = async () => {
-    const matches = (preview?.groups || []).filter(
-      (group) => group.status === "matched",
-    );
+    const matches = (preview?.groups || [])
+      .filter((group) => {
+        const selection = review[group.source_key];
+        return selection?.included && selection.bookId;
+      })
+      .map((group) => ({
+        ...group,
+        book_id: review[group.source_key].bookId,
+      }));
     const groupedFiles = filesBySourceKey(files);
     const results = [];
     setImportState({ current: 0, total: matches.length, results, done: false });
@@ -148,7 +176,34 @@ function LibationBackupImport() {
     setPreview(null);
     setPreviewError("");
     setImportState(null);
+    setReview({});
+    setMatchFilter("all");
     if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const updateBookMatch = (group, input) => {
+    const option = (preview?.library_books || []).find(
+      (book) => bookOptionLabel(book) === input,
+    );
+    setReview((current) => ({
+      ...current,
+      [group.source_key]: {
+        bookId: option?.book_id || null,
+        included: Boolean(option),
+        input,
+      },
+    }));
+  };
+
+  const chooseCandidate = (group, candidate) => {
+    setReview((current) => ({
+      ...current,
+      [group.source_key]: {
+        bookId: candidate.book_id,
+        included: true,
+        input: bookOptionLabel(candidate),
+      },
+    }));
   };
 
   const queuedCount =
@@ -157,15 +212,39 @@ function LibationBackupImport() {
   const failedCount =
     importState?.results.filter((result) => result.result === "failed")
       .length || 0;
+  const selectedCount = (preview?.groups || []).filter((group) => {
+    const selection = review[group.source_key];
+    return selection?.included && selection.bookId;
+  }).length;
+  const needsReviewCount = (preview?.groups || []).filter((group) => {
+    const selection = review[group.source_key];
+    return (
+      group.status !== "already_imported" &&
+      !(selection?.included && selection.bookId)
+    );
+  }).length;
+  const optionById = new Map(
+    (preview?.library_books || []).map((book) => [book.book_id, book]),
+  );
+  const visibleGroups = (preview?.groups || []).filter((group) => {
+    const selection = review[group.source_key];
+    const isSelected = Boolean(selection?.included && selection.bookId);
+    if (matchFilter === "ready") return isSelected;
+    if (matchFilter === "review") {
+      return group.status !== "already_imported" && !isSelected;
+    }
+    if (matchFilter === "imported") return group.status === "already_imported";
+    return true;
+  });
 
   return (
     <section className="settings-section libation-backup-import">
       <h3>Import a Libation Backup</h3>
       <p className="hint">
         Choose the directory that contains all of your Libation book folders.
-        Story Manager previews identifier and exact-title matches before any
-        audio is transferred, skips books that are not in this library, and
-        queues each matched book separately.
+        Story Manager compares identifiers and title variants before any audio
+        is transferred. Review or change every match, skip anything you do not
+        want, and then queue the selected books together.
       </p>
       <label className="libation-directory-picker">
         Libation backup directory
@@ -189,11 +268,8 @@ function LibationBackupImport() {
       {preview && (
         <>
           <p className="libation-preview-summary" role="status">
-            <strong>{preview.matched_count} ready to import</strong>
-            {` · ${preview.already_imported_count} already imported · ${preview.unmatched_count} unmatched`}
-            {preview.ambiguous_count
-              ? ` · ${preview.ambiguous_count} ambiguous`
-              : ""}
+            <strong>{selectedCount} selected to import</strong>
+            {` · ${needsReviewCount} need review · ${preview.already_imported_count} already imported`}
           </p>
           {preview.ignored_file_count > 0 && (
             <p className="hint">
@@ -203,30 +279,112 @@ function LibationBackupImport() {
               ignored.
             </p>
           )}
-          <div className="libation-match-list">
-            {preview.groups.map((group) => (
-              <div
-                className={`libation-match libation-match--${group.status}`}
-                key={group.source_key}
+          <div className="libation-review-toolbar">
+            <label>
+              Show{" "}
+              <select
+                value={matchFilter}
+                disabled={Boolean(importState)}
+                onChange={(event) => setMatchFilter(event.target.value)}
               >
-                <div>
-                  <strong>{group.source_title}</strong>
-                  <span className="hint"> · {group.product_id}</span>
-                  {group.book_title && (
-                    <p className="hint">
-                      Library: {group.book_title}
-                      {group.book_author ? ` by ${group.book_author}` : ""}
-                    </p>
-                  )}
-                  {!group.book_title && group.detail && (
-                    <p className="hint">{group.detail}</p>
-                  )}
-                </div>
-                <span className="libation-match-status">
-                  {statusLabel(group)}
-                </span>
-              </div>
+                <option value="all">All {preview.groups.length}</option>
+                <option value="review">Needs review {needsReviewCount}</option>
+                <option value="ready">Selected {selectedCount}</option>
+                <option value="imported">
+                  Already imported {preview.already_imported_count}
+                </option>
+              </select>
+            </label>
+            <span className="hint">
+              Title variants include series, volume, and edition suffixes.
+            </span>
+          </div>
+          <datalist id="libation-library-books">
+            {(preview.library_books || []).map((book) => (
+              <option value={bookOptionLabel(book)} key={book.book_id} />
             ))}
+          </datalist>
+          <div className="libation-match-list">
+            {visibleGroups.map((group) => {
+              const selection = review[group.source_key] || {};
+              const selectedBook = optionById.get(selection.bookId);
+              const canImport = group.status !== "already_imported";
+              return (
+                <div
+                  className={`libation-match libation-match--${group.status}`}
+                  key={group.source_key}
+                >
+                  <div className="libation-match-copy">
+                    <div>
+                      <strong>{group.source_title}</strong>
+                      <span className="hint"> · {group.product_id}</span>
+                    </div>
+                    {group.detail && !group.book_title && (
+                      <p className="hint">{group.detail}</p>
+                    )}
+                    {canImport && (
+                      <label className="libation-book-search">
+                        Library match
+                        <input
+                          type="text"
+                          list="libation-library-books"
+                          value={selection.input || ""}
+                          placeholder="Type a title or author…"
+                          disabled={Boolean(importState)}
+                          aria-label={`Library match for ${group.source_title}`}
+                          onChange={(event) =>
+                            updateBookMatch(group, event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                    {!selection.bookId && group.candidates?.length > 0 && (
+                      <div className="libation-suggestions">
+                        <span className="hint">Possible matches:</span>
+                        {group.candidates.map((candidate) => (
+                          <button
+                            type="button"
+                            className="btn-text"
+                            key={candidate.book_id}
+                            disabled={Boolean(importState)}
+                            onClick={() => chooseCandidate(group, candidate)}
+                          >
+                            {candidate.book_title}
+                            {candidate.book_author
+                              ? ` by ${candidate.book_author}`
+                              : ""}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {selectedBook && (
+                      <label className="libation-include-match">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selection.included)}
+                          disabled={Boolean(importState)}
+                          onChange={(event) =>
+                            setReview((current) => ({
+                              ...current,
+                              [group.source_key]: {
+                                ...current[group.source_key],
+                                included: event.target.checked,
+                              },
+                            }))
+                          }
+                        />{" "}
+                        Include this audiobook in the import
+                      </label>
+                    )}
+                  </div>
+                  <span className="libation-match-status">
+                    {selection.bookId && group.status !== "matched"
+                      ? "Match reviewed"
+                      : statusLabel(group)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
           <label>
             <input
@@ -243,14 +401,12 @@ function LibationBackupImport() {
               type="button"
               className="btn-primary"
               disabled={
-                preview.matched_count === 0 ||
-                Boolean(importState) ||
-                previewing
+                selectedCount === 0 || Boolean(importState) || previewing
               }
               onClick={importMatches}
             >
-              Import {preview.matched_count} Matched{" "}
-              {preview.matched_count === 1 ? "Book" : "Books"}
+              Import {selectedCount} Selected{" "}
+              {selectedCount === 1 ? "Book" : "Books"}
             </button>
             <button
               type="button"
@@ -282,8 +438,9 @@ function LibationBackupImport() {
         </div>
       )}
       <p className="hint">
-        Unmatched books are not uploaded. Add their EPUBs to Story Manager and
-        select this backup again later; already imported books will be skipped.
+        Books left unchecked or without a library match are not uploaded. Add
+        missing EPUBs and select this backup again later; already imported books
+        are skipped.
       </p>
     </section>
   );
