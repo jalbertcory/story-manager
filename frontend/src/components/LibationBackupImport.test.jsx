@@ -181,4 +181,81 @@ describe("LibationBackupImport", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("clearly shows existing human audio and skips another edition by default", async () => {
+    const audiobook = backupFile(
+      "Matched.m4b",
+      "Backup/Matched Book [B012345678]/Matched.m4b",
+    );
+    const existingAudio = {
+      edition_id: 22,
+      name: "Existing Libation audio",
+      status: "ready",
+      source_type: "libation",
+      product_id: "B999999999",
+    };
+
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            matched_count: 1,
+            unmatched_count: 0,
+            ambiguous_count: 0,
+            already_imported_count: 0,
+            existing_audio_match_count: 1,
+            ignored_file_count: 0,
+            library_books: [
+              {
+                book_id: 7,
+                book_title: "Matched Book (Series Name)",
+                book_author: "Writer",
+                existing_audiobooks: [existingAudio],
+              },
+            ],
+            groups: [
+              {
+                source_key: "Backup/Matched Book [B012345678]",
+                source_title: "Matched Book",
+                product_id: "B012345678",
+                status: "matched",
+                match_method: "title_variant",
+                book_id: 7,
+                book_title: "Matched Book (Series Name)",
+                book_author: "Writer",
+                existing_audiobooks: [existingAudio],
+              },
+            ],
+          }),
+      }),
+    );
+
+    renderWithClient(<LibationBackupImport />);
+    fireEvent.change(screen.getByLabelText("Libation backup directory"), {
+      target: { files: [audiobook] },
+    });
+
+    expect(await screen.findByText("0 selected to import")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "1 already have human audio",
+    );
+    expect(
+      screen.getByText("This library book already has human audio."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Existing Libation audio · ready · B999999999"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Already has audio — skipped")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open existing audio" }),
+    ).toHaveAttribute("href", "/books/7/audiobooks?tab=sources");
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Import another audio edition anyway",
+      }),
+    );
+    expect(screen.getByText("1 selected to import")).toBeInTheDocument();
+  });
 });

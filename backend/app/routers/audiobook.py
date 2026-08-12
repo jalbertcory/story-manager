@@ -385,12 +385,21 @@ class LibationBackupPreviewRequest(BaseModel):
     source_paths: list[str] = Field(min_length=1, max_length=50_000)
 
 
+class LibationExistingAudioResponse(BaseModel):
+    edition_id: int
+    name: str
+    status: str
+    source_type: str
+    product_id: Optional[str] = None
+
+
 class LibationBookOptionResponse(BaseModel):
     book_id: int
     book_title: str
     book_author: Optional[str] = None
     book_series: Optional[str] = None
     match_score: Optional[float] = None
+    existing_audiobooks: list[LibationExistingAudioResponse] = Field(default_factory=list)
 
 
 class LibationBackupMatchResponse(BaseModel):
@@ -407,6 +416,7 @@ class LibationBackupMatchResponse(BaseModel):
     existing_edition_id: Optional[int] = None
     detail: Optional[str] = None
     candidates: list[LibationBookOptionResponse] = Field(default_factory=list)
+    existing_audiobooks: list[LibationExistingAudioResponse] = Field(default_factory=list)
 
 
 class LibationBackupPreviewResponse(BaseModel):
@@ -415,6 +425,7 @@ class LibationBackupPreviewResponse(BaseModel):
     unmatched_count: int
     ambiguous_count: int
     already_imported_count: int
+    existing_audio_match_count: int
     ignored_file_count: int
     library_books: list[LibationBookOptionResponse] = Field(default_factory=list)
 
@@ -630,13 +641,32 @@ def _libation_title_keys(value: str) -> set[str]:
     return aliases
 
 
-def _book_option(book: Book, *, match_score: float | None = None) -> LibationBookOptionResponse:
+def _existing_audio_options(editions: list[ImportedAudiobook]) -> list[LibationExistingAudioResponse]:
+    return [
+        LibationExistingAudioResponse(
+            edition_id=edition.id,
+            name=edition.name,
+            status=edition.status,
+            source_type=edition.source_type,
+            product_id=edition.asin,
+        )
+        for edition in editions
+    ]
+
+
+def _book_option(
+    book: Book,
+    *,
+    match_score: float | None = None,
+    existing_editions: list[ImportedAudiobook] | None = None,
+) -> LibationBookOptionResponse:
     return LibationBookOptionResponse(
         book_id=book.id,
         book_title=book.title or "Untitled book",
         book_author=book.author,
         book_series=book.series,
         match_score=round(match_score, 3) if match_score is not None else None,
+        existing_audiobooks=_existing_audio_options(existing_editions or []),
     )
 
 
@@ -644,6 +674,7 @@ def _suggested_libation_books(
     source_title: str,
     books_by_title_variant: dict[str, list[Book]],
     library_title_keys: tuple[str, ...],
+    imports_by_book: dict[int, list[ImportedAudiobook]],
 ) -> list[LibationBookOptionResponse]:
     scores_by_book: dict[int, tuple[float, Book]] = {}
     for source_key in _libation_title_keys(source_title):
@@ -660,7 +691,15 @@ def _suggested_libation_books(
     if not scored or scored[0][0] < 0.6:
         return []
     minimum = max(0.6, scored[0][0] - 0.12)
-    return [_book_option(book, match_score=score) for score, book in scored[:3] if score >= minimum]
+    return [
+        _book_option(
+            book,
+            match_score=score,
+            existing_editions=imports_by_book.get(book.id, []),
+        )
+        for score, book in scored[:3]
+        if score >= minimum
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +720,21 @@ async def preview_libation_backup(
     books = list(
         (await db.execute(select(Book).where(Book.deleted_at.is_(None)).order_by(Book.title, Book.id))).scalars().all()
     )
-    imports = list((await db.execute(select(ImportedAudiobook))).scalars().all())
+    imports = list(
+        (
+            await db.execute(
+                select(ImportedAudiobook).order_by(
+                    ImportedAudiobook.created_at.desc(),
+                    ImportedAudiobook.id.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    imports_by_book: dict[int, list[ImportedAudiobook]] = {}
+    for edition in imports:
+        imports_by_book.setdefault(edition.book_id, []).append(edition)
     imports_by_book_and_id = {
         (edition.book_id, identifier): edition
         for edition in imports
@@ -732,7 +785,11 @@ async def preview_libation_backup(
                     status="ambiguous",
                     detail="More than one library book has this identifier or title.",
                     candidates=[
-                        _book_option(book, match_score=1.0)
+                        _book_option(
+                            book,
+                            match_score=1.0,
+                            existing_editions=imports_by_book.get(book.id, []),
+                        )
                         for book in {book.id: book for book in ambiguous_candidates}.values()
                     ],
                 )
@@ -752,6 +809,7 @@ async def preview_libation_backup(
                         group.title,
                         books_by_title_variant,
                         library_title_keys,
+                        imports_by_book,
                     ),
                 )
             )
@@ -765,6 +823,7 @@ async def preview_libation_backup(
             ),
             None,
         )
+        existing_editions = imports_by_book.get(matched_book.id, [])
         status = "already_imported" if existing else "matched"
         matches.append(
             LibationBackupMatchResponse(
@@ -780,6 +839,7 @@ async def preview_libation_backup(
                 book_author=matched_book.author,
                 existing_edition_id=existing.id if existing else None,
                 detail=(f"Already attached as {existing.name} ({existing.status})." if existing else None),
+                existing_audiobooks=_existing_audio_options(existing_editions),
             )
         )
 
@@ -789,8 +849,9 @@ async def preview_libation_backup(
         unmatched_count=sum(match.status == "unmatched" for match in matches),
         ambiguous_count=sum(match.status == "ambiguous" for match in matches),
         already_imported_count=sum(match.status == "already_imported" for match in matches),
+        existing_audio_match_count=sum(bool(match.existing_audiobooks) for match in matches),
         ignored_file_count=ignored_file_count,
-        library_books=[_book_option(book) for book in books],
+        library_books=[_book_option(book, existing_editions=imports_by_book.get(book.id, [])) for book in books],
     )
 
 

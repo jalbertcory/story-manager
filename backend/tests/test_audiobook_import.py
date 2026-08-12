@@ -301,7 +301,13 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
             asin="B111111111",
             status="ready",
         )
-        db.add(existing)
+        other_edition = ImportedAudiobook(
+            book_id=title_book.id,
+            name="Uploaded narration",
+            asin="B999999999",
+            status="ready",
+        )
+        db.add_all([existing, other_edition])
         await db.commit()
 
     response = app_client.post(
@@ -323,20 +329,34 @@ async def test_libation_backup_preview_matches_identifiers_titles_and_skips_exis
     assert payload["matched_count"] == 3
     assert payload["unmatched_count"] == 1
     assert payload["already_imported_count"] == 1
+    assert payload["existing_audio_match_count"] == 2
     assert payload["ignored_file_count"] == 1
     matches = {group["product_id"]: group for group in payload["groups"]}
     assert matches["1980085722"]["match_method"] == "identifier"
     assert matches["1980085722"]["book_title"] == "Different Store Title"
     assert matches["B012345678"]["match_method"] == "title"
+    assert matches["B012345678"]["status"] == "matched"
+    assert matches["B012345678"]["existing_audiobooks"] == [
+        {
+            "edition_id": other_edition.id,
+            "name": "Uploaded narration",
+            "status": "ready",
+            "source_type": "upload",
+            "product_id": "B999999999",
+        }
+    ]
     assert matches["1250759781"]["match_method"] == "title_variant"
     assert matches["1250759781"]["book_title"] == "Rhythm of War (The Stormlight Archive)"
     assert matches["B111111111"]["status"] == "already_imported"
     assert matches["B111111111"]["existing_edition_id"] is not None
+    assert matches["B111111111"]["existing_audiobooks"][0]["name"] == "Prior Libation import"
     assert matches["B222222222"]["status"] == "unmatched"
     assert {book["book_title"] for book in payload["library_books"]} >= {
         "Different Store Title",
         "Rhythm of War (The Stormlight Archive)",
     }
+    title_option = next(book for book in payload["library_books"] if book["book_title"] == "Title Match")
+    assert title_option["existing_audiobooks"][0]["name"] == "Uploaded narration"
 
 
 @pytest.mark.asyncio

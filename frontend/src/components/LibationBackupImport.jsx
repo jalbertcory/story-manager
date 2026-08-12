@@ -64,16 +64,17 @@ function filesBySourceKey(files) {
   return groups;
 }
 
-function statusLabel(group) {
+function statusLabel(group, existingAudioCount = 0) {
   switch (group.status) {
     case "matched":
+      if (existingAudioCount) return "Already has audio — skipped";
       return group.match_method === "identifier"
         ? "Matched by identifier"
         : group.match_method === "title_variant"
           ? "Matched by title variant"
           : "Matched by title";
     case "already_imported":
-      return "Already imported";
+      return "Exact edition already imported";
     case "ambiguous":
       return "Needs a unique match";
     default:
@@ -83,7 +84,14 @@ function statusLabel(group) {
 
 function bookOptionLabel(book) {
   if (!book?.book_id) return "";
-  return `${book.book_title}${book.book_author ? ` — ${book.book_author}` : ""} (#${book.book_id})`;
+  const audioLabel = book.existing_audiobooks?.length
+    ? " — AUDIO ALREADY ATTACHED"
+    : "";
+  return `${book.book_title}${book.book_author ? ` — ${book.book_author}` : ""}${audioLabel} (#${book.book_id})`;
+}
+
+function audioStatusLabel(status) {
+  return (status || "unknown").replaceAll("_", " ");
 }
 
 function LibationBackupImport() {
@@ -115,7 +123,9 @@ function LibationBackupImport() {
             group.source_key,
             {
               bookId: group.book_id || null,
-              included: group.status === "matched",
+              included:
+                group.status === "matched" &&
+                !group.existing_audiobooks?.length,
               input: group.book_id ? bookOptionLabel(group) : "",
             },
           ]),
@@ -189,7 +199,7 @@ function LibationBackupImport() {
       ...current,
       [group.source_key]: {
         bookId: option?.book_id || null,
-        included: Boolean(option),
+        included: Boolean(option) && !option.existing_audiobooks?.length,
         input,
       },
     }));
@@ -200,7 +210,7 @@ function LibationBackupImport() {
       ...current,
       [group.source_key]: {
         bookId: candidate.book_id,
-        included: true,
+        included: !candidate.existing_audiobooks?.length,
         input: bookOptionLabel(candidate),
       },
     }));
@@ -212,6 +222,17 @@ function LibationBackupImport() {
   const failedCount =
     importState?.results.filter((result) => result.result === "failed")
       .length || 0;
+  const optionById = new Map(
+    (preview?.library_books || []).map((book) => [book.book_id, book]),
+  );
+  const existingAudioCount = (preview?.groups || []).filter((group) => {
+    const selection = review[group.source_key];
+    if (!selection?.bookId) return false;
+    const selectedBook = optionById.get(selection.bookId);
+    return Boolean(
+      (selectedBook?.existing_audiobooks ?? group.existing_audiobooks)?.length,
+    );
+  }).length;
   const selectedCount = (preview?.groups || []).filter((group) => {
     const selection = review[group.source_key];
     return selection?.included && selection.bookId;
@@ -223,9 +244,6 @@ function LibationBackupImport() {
       !(selection?.included && selection.bookId)
     );
   }).length;
-  const optionById = new Map(
-    (preview?.library_books || []).map((book) => [book.book_id, book]),
-  );
   const visibleGroups = (preview?.groups || []).filter((group) => {
     const selection = review[group.source_key];
     const isSelected = Boolean(selection?.included && selection.bookId);
@@ -233,7 +251,13 @@ function LibationBackupImport() {
     if (matchFilter === "review") {
       return group.status !== "already_imported" && !isSelected;
     }
-    if (matchFilter === "imported") return group.status === "already_imported";
+    if (matchFilter === "audio") {
+      const selectedBook = optionById.get(selection?.bookId);
+      return Boolean(
+        (selectedBook?.existing_audiobooks ?? group.existing_audiobooks)
+          ?.length,
+      );
+    }
     return true;
   });
 
@@ -269,7 +293,10 @@ function LibationBackupImport() {
         <>
           <p className="libation-preview-summary" role="status">
             <strong>{selectedCount} selected to import</strong>
-            {` · ${needsReviewCount} need review · ${preview.already_imported_count} already imported`}
+            {` · ${needsReviewCount} need review · ${existingAudioCount} already have human audio`}
+            {preview.already_imported_count
+              ? ` · ${preview.already_imported_count} exact ${preview.already_imported_count === 1 ? "edition" : "editions"} already imported`
+              : ""}
           </p>
           {preview.ignored_file_count > 0 && (
             <p className="hint">
@@ -290,8 +317,8 @@ function LibationBackupImport() {
                 <option value="all">All {preview.groups.length}</option>
                 <option value="review">Needs review {needsReviewCount}</option>
                 <option value="ready">Selected {selectedCount}</option>
-                <option value="imported">
-                  Already imported {preview.already_imported_count}
+                <option value="audio">
+                  Already has audio {existingAudioCount}
                 </option>
               </select>
             </label>
@@ -309,9 +336,14 @@ function LibationBackupImport() {
               const selection = review[group.source_key] || {};
               const selectedBook = optionById.get(selection.bookId);
               const canImport = group.status !== "already_imported";
+              const existingAudiobooks = selection.bookId
+                ? (selectedBook?.existing_audiobooks ??
+                  group.existing_audiobooks ??
+                  [])
+                : [];
               return (
                 <div
-                  className={`libation-match libation-match--${group.status}`}
+                  className={`libation-match libation-match--${group.status}${existingAudiobooks.length ? " libation-match--has-audio" : ""}`}
                   key={group.source_key}
                 >
                   <div className="libation-match-copy">
@@ -321,6 +353,31 @@ function LibationBackupImport() {
                     </div>
                     {group.detail && !group.book_title && (
                       <p className="hint">{group.detail}</p>
+                    )}
+                    {existingAudiobooks.length > 0 && (
+                      <div className="libation-existing-audio">
+                        <strong>
+                          {group.status === "already_imported"
+                            ? "This exact Libation edition is already attached."
+                            : "This library book already has human audio."}
+                        </strong>
+                        <ul>
+                          {existingAudiobooks.map((edition) => (
+                            <li key={edition.edition_id}>
+                              {edition.name} ·{" "}
+                              {audioStatusLabel(edition.status)}
+                              {edition.product_id
+                                ? ` · ${edition.product_id}`
+                                : ""}
+                            </li>
+                          ))}
+                        </ul>
+                        <a
+                          href={`/books/${selection.bookId}/audiobooks?tab=sources`}
+                        >
+                          Open existing audio
+                        </a>
+                      </div>
                     )}
                     {canImport && (
                       <label className="libation-book-search">
@@ -373,14 +430,18 @@ function LibationBackupImport() {
                             }))
                           }
                         />{" "}
-                        Include this audiobook in the import
+                        {existingAudiobooks.length
+                          ? "Import another audio edition anyway"
+                          : "Include this audiobook in the import"}
                       </label>
                     )}
                   </div>
                   <span className="libation-match-status">
-                    {selection.bookId && group.status !== "matched"
+                    {selection.bookId &&
+                    group.status !== "matched" &&
+                    group.status !== "already_imported"
                       ? "Match reviewed"
-                      : statusLabel(group)}
+                      : statusLabel(group, existingAudiobooks.length)}
                   </span>
                 </div>
               );
