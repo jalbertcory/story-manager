@@ -2159,6 +2159,11 @@
   border-color: color-mix(in srgb, var(--success) 35%, var(--border));
 }
 
+.libation-match--has-audio {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 5%, var(--surface));
+}
+
 .libation-match-copy {
   display: grid;
   flex: 1;
@@ -2177,6 +2182,29 @@
 
 .libation-book-search input {
   width: 100%;
+}
+
+.libation-existing-audio {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 44rem;
+  padding: 0.65rem 0.75rem;
+  border-left: 0.25rem solid var(--warning);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.libation-existing-audio ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--text-muted);
+}
+
+.libation-existing-audio a {
+  width: fit-content;
+  font-weight: 600;
 }
 
 .libation-suggestions {
