@@ -4,7 +4,7 @@ import "./App.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
 import AdminLogin from "./components/AdminLogin.jsx";
-import BookList from "./components/BookList";
+import BookList, { LibraryViewTabs } from "./components/BookList";
 import BookSettings from "./components/BookSettings";
 import AddBook from "./components/AddBook.jsx";
 import AudiobookSettings from "./components/AudiobookSettings.jsx";
@@ -37,9 +37,6 @@ function App() {
   const [audiobookTab, setAudiobookTab] = useState("sources");
   const [activeTab, setActiveTab] = useState("library");
   const [libraryView, setLibraryView] = useState("series");
-  const [reviewFilter, setReviewFilter] = useState("");
-  const [audiobookFilter, setAudiobookFilter] = useState("");
-  const [genreFilter, setGenreFilter] = useState("");
   const [pendingImportEntries, setPendingImportEntries] = useState([]);
   const [globalDragging, setGlobalDragging] = useState(false);
   const [authStatus, setAuthStatus] = useState(null);
@@ -175,9 +172,6 @@ function App() {
   } = useLibraryCatalog({
     q: debouncedQuery,
     view: libraryView,
-    review: reviewFilter,
-    audiobook: audiobookFilter,
-    genre: genreFilter,
     sortBy,
     sortOrder,
     enabled: Boolean(authStatus?.authenticated),
@@ -354,6 +348,15 @@ function App() {
                 Add to library
               </button>
             </div>
+            <LibraryViewTabs
+              view={libraryView}
+              onChange={handleLibraryViewChange}
+              counts={{
+                series: catalogSummary?.facets?.series ?? 0,
+                standalone: catalogSummary?.facets?.standalone ?? 0,
+                web: catalogSummary?.facets?.web ?? 0,
+              }}
+            />
             <div className="search-controls">
               <div className="search-input-wrap">
                 <svg
@@ -386,6 +389,7 @@ function App() {
                 )}
               </div>
               <div className="sort-controls">
+                <span className="sort-control-label">Sort by</span>
                 <select
                   aria-label="Sort library by"
                   value={sortBy}
@@ -398,9 +402,12 @@ function App() {
                   <option value="audiobook_enabled">Audiobook Enabled</option>
                 </select>
                 <button
+                  type="button"
                   className="sort-order-btn"
                   onClick={handleToggleSortOrder}
-                  aria-label="Toggle sort order"
+                  aria-label={
+                    sortOrder === "asc" ? "Sort descending" : "Sort ascending"
+                  }
                 >
                   {sortOrder === "asc" ? "↑" : "↓"}
                 </button>
@@ -410,17 +417,9 @@ function App() {
             {error && <p className="error">{error.message}</p>}
             <BookList
               books={catalog}
-              facets={catalogSummary?.facets}
               totalCount={catalogSummary?.total_count ?? 0}
               onEdit={handleEdit}
               libraryView={libraryView}
-              onLibraryViewChange={handleLibraryViewChange}
-              reviewFilter={reviewFilter}
-              onReviewFilterChange={setReviewFilter}
-              audiobookFilter={audiobookFilter}
-              onAudiobookFilterChange={setAudiobookFilter}
-              genreFilter={genreFilter}
-              onGenreFilterChange={setGenreFilter}
               sortBy={sortBy}
               sortOrder={sortOrder}
               fetchNextPage={fetchNextPage}

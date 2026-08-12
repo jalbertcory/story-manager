@@ -7,7 +7,7 @@ import { buildCatalogGroups } from "../lib/catalogGrouping";
 import { BookRow } from "./book-list/BookCards";
 import SeriesSummaryRow from "./book-list/SeriesSummaryRow";
 
-function LibraryViewTabs({ view, onChange, counts }) {
+export function LibraryViewTabs({ view, onChange, counts }) {
   const tabs = [
     { id: "series", label: "Series", count: counts.series },
     { id: "standalone", label: "Standalone", count: counts.standalone },
@@ -54,58 +54,6 @@ function getWebNovelStatus(book) {
     label: `Library updated ${new Date(book.updated_at).toLocaleDateString()}`,
     tone: "muted",
   };
-}
-
-function LibraryFilters({
-  reviewFilter = "",
-  onReviewFilterChange = () => {},
-  audiobookFilter = "",
-  onAudiobookFilterChange = () => {},
-  genreFilter = "",
-  onGenreFilterChange = () => {},
-  genres,
-}) {
-  return (
-    <div className="library-filters" aria-label="Library filters">
-      <label>
-        Review
-        <select
-          value={reviewFilter}
-          onChange={(event) => onReviewFilterChange(event.target.value)}
-        >
-          <option value="">Everything</option>
-          <option value="missing-series">Missing series</option>
-          <option value="refreshing">Refreshing or queued</option>
-          <option value="refresh-error">Refresh needs attention</option>
-        </select>
-      </label>
-      <label>
-        Audiobook
-        <select
-          value={audiobookFilter}
-          onChange={(event) => onAudiobookFilterChange(event.target.value)}
-        >
-          <option value="">All books</option>
-          <option value="available">Available</option>
-          <option value="none">No audiobook</option>
-        </select>
-      </label>
-      <label>
-        Genre
-        <select
-          value={genreFilter}
-          onChange={(event) => onGenreFilterChange(event.target.value)}
-        >
-          <option value="">All genres</option>
-          {genres.map((genre) => (
-            <option key={genre.name} value={genre.name}>
-              {genre.name} ({genre.count})
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
-  );
 }
 
 function StandaloneTagAction({ book, seriesOptions }) {
@@ -165,17 +113,9 @@ function StandaloneTagAction({ book, seriesOptions }) {
 
 function BookList({
   books = [],
-  facets,
   totalCount = 0,
   onEdit,
-  libraryView: libraryViewProp,
-  onLibraryViewChange,
-  reviewFilter,
-  onReviewFilterChange,
-  audiobookFilter,
-  onAudiobookFilterChange,
-  genreFilter,
-  onGenreFilterChange,
+  libraryView = "series",
   sortBy = "title",
   sortOrder = "asc",
   fetchNextPage,
@@ -183,8 +123,6 @@ function BookList({
   isFetchingNextPage = false,
 }) {
   const sentinelRef = useRef(null);
-  const [internalView, setInternalView] = useState("series");
-  const libraryView = libraryViewProp ?? internalView;
   const [showStandaloneSeriesEdit, setShowStandaloneSeriesEdit] =
     useState(false);
 
@@ -194,31 +132,11 @@ function BookList({
     staleTime: 60_000,
   });
 
-  const handleTabChange = (tab) => {
-    if (onLibraryViewChange) onLibraryViewChange(tab);
-    else setInternalView(tab);
-  };
-
-  const handleReviewFilterChange = (value) => {
-    onReviewFilterChange(value);
-    if (value === "missing-series") {
-      handleTabChange("standalone");
-    } else if (value === "refreshing" || value === "refresh-error") {
-      handleTabChange("web");
-    }
-  };
-
   const { seriesMap, sortedSeries, standaloneBooks, webBooks } =
     useMemo(
       () => buildCatalogGroups(books, sortBy, sortOrder),
       [books, sortBy, sortOrder],
     );
-  const counts = {
-    series: facets?.series ?? 0,
-    standalone: facets?.standalone ?? 0,
-    web: facets?.web ?? 0,
-  };
-
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasNextPage || isFetchingNextPage) return;
@@ -236,20 +154,6 @@ function BookList({
 
   return (
     <div className="book-list">
-      <LibraryFilters
-        reviewFilter={reviewFilter}
-        onReviewFilterChange={handleReviewFilterChange}
-        audiobookFilter={audiobookFilter}
-        onAudiobookFilterChange={onAudiobookFilterChange}
-        genreFilter={genreFilter}
-        onGenreFilterChange={onGenreFilterChange}
-        genres={facets?.genres ?? []}
-      />
-      <LibraryViewTabs
-        view={libraryView}
-        onChange={handleTabChange}
-        counts={counts}
-      />
       {libraryView === "series" &&
         (sortedSeries.length ? (
           sortedSeries.map((series) => (
