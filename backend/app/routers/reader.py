@@ -124,7 +124,7 @@ def _reader_book_payload(
     has_human_audiobook: bool = False,
 ) -> dict:
     base_url = str(request.base_url).rstrip("/")
-    generated_audiobook = _reader_audiobook_capability(book, audiobook_chapters or [])
+    audiobook = _reader_audiobook_capability(book, audiobook_chapters or [])
     return {
         "id": book.id,
         "title": book.title,
@@ -139,9 +139,9 @@ def _reader_book_payload(
         "effective_genre_tags": _effective_genre_tags(book, series_user_genre_tags),
         "download_url": f"{base_url}/reader/books/{book.id}/download",
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
-        "audiobook": generated_audiobook,
+        "audiobook": audiobook,
         "audiobook_types": [
-            *(["ai_generated"] if generated_audiobook is not None else []),
+            *(["ai_generated"] if book.audiobook_enabled and audiobook is not None else []),
             *(["human_narrated"] if has_human_audiobook else []),
         ],
     }
@@ -161,9 +161,10 @@ def _reader_audiobook_capability(
     book: models.Book,
     chapters: list[models.AudiobookChapter],
 ) -> dict | None:
-    if not book.audiobook_enabled:
+    has_current_text = _has_current_audiobook_text(book)
+    if not book.audiobook_enabled and not has_current_text:
         return None
-    if not book.audiobook_pipeline_status and not book.audiobook_revision and not chapters:
+    if not has_current_text and not book.audiobook_pipeline_status and not book.audiobook_revision and not chapters:
         return None
     ready_chapters = [
         chapter
@@ -189,6 +190,11 @@ def _reader_audiobook_capability(
         "ready_audio_bytes": ready_bytes,
         "manifest_url": f"/reader/books/{book.id}/audiobook/manifest",
     }
+
+
+def _has_current_audiobook_text(book: models.Book) -> bool:
+    content_version = book.content_version or 1
+    return book.audiobook_text_content_version == content_version and text_reader_path(book) is not None
 
 
 @router.get("/reader/opds")
@@ -416,8 +422,11 @@ async def get_reader_updates(
 
 async def _reader_audiobook_book(book_id: int, db: AsyncSession) -> models.Book:
     book = await crud.get_reader_book(db, book_id)
-    if not book.audiobook_enabled or (not book.audiobook_pipeline_status and not book.audiobook_revision):
-        raise HTTPException(status_code=404, detail="Generated audiobook is not available")
+    has_generated_audiobook = book.audiobook_enabled and (
+        bool(book.audiobook_pipeline_status) or bool(book.audiobook_revision)
+    )
+    if not has_generated_audiobook and not _has_current_audiobook_text(book):
+        raise HTTPException(status_code=404, detail="Synchronized audiobook text is not available")
     return book
 
 
