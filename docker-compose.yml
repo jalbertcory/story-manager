@@ -10,4 +10,8 @@ services:
       - ./config/pgdata:/tmp/pgdata
     environment:
       STORY_MANAGER_BACKUP_DIR: /app/backups
+      GOOGLE_BOOKS_API_KEY: ${GOOGLE_BOOKS_API_KEY:-}
+      GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED: ${GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED:-true}
+      AMAZON_METADATA_ENABLED: ${AMAZON_METADATA_ENABLED:-false}
+      AMAZON_METADATA_DOMAIN: ${AMAZON_METADATA_DOMAIN:-com}
     restart: unless-stopped

@@ -16,6 +16,9 @@ export function useBookSettingsForm(initialBook) {
   const [isbn13, setIsbn13] = useState(
     initialBook.metadata_remote_ids?.isbn_13 || "",
   );
+  const [asin, setAsin] = useState(
+    initialBook.metadata_remote_ids?.asin || "",
+  );
   const [googleBooksVolumeId, setGoogleBooksVolumeId] = useState(
     initialBook.metadata_remote_ids?.google_books_volume_id || "",
   );
@@ -57,6 +60,7 @@ export function useBookSettingsForm(initialBook) {
     setNotes(initialBook.notes || "");
     setIsbn10(initialBook.metadata_remote_ids?.isbn_10 || "");
     setIsbn13(initialBook.metadata_remote_ids?.isbn_13 || "");
+    setAsin(initialBook.metadata_remote_ids?.asin || "");
     setGoogleBooksVolumeId(
       initialBook.metadata_remote_ids?.google_books_volume_id || "",
     );
@@ -109,6 +113,7 @@ export function useBookSettingsForm(initialBook) {
       ...extraRemoteIds,
       ...(isbn10.trim() ? { isbn_10: isbn10.trim() } : {}),
       ...(isbn13.trim() ? { isbn_13: isbn13.trim() } : {}),
+      ...(asin.trim() ? { asin: asin.trim() } : {}),
       ...(googleBooksVolumeId.trim()
         ? { google_books_volume_id: googleBooksVolumeId.trim() }
         : {}),
@@ -156,6 +161,8 @@ export function useBookSettingsForm(initialBook) {
     setIsbn10,
     isbn13,
     setIsbn13,
+    asin,
+    setAsin,
     googleBooksVolumeId,
     setGoogleBooksVolumeId,
     openLibraryWorkKey,

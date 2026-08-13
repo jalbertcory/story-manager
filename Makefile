@@ -237,7 +237,7 @@ test-migrations:
 	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM processing_jobs WHERE request_id LIKE 'legacy-%') THEN RAISE EXCEPTION 'processing request id was not backfilled'; END IF; IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'processing_jobs' AND indexname = 'ix_processing_jobs_request_id') THEN RAISE EXCEPTION 'processing request id index was not created'; END IF; END \$$\$$;"; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade -1; \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0033; \
 	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
 		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'processing_jobs' AND column_name = 'request_id') THEN RAISE EXCEPTION 'processing request id column survived downgrade'; END IF; END \$$\$$;"
 

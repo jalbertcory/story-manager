@@ -7,6 +7,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable
 
+from .metadata.scoring import infer_series_metadata
+
 _ROMAN = re.compile(
     r"^M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
     re.IGNORECASE,
@@ -181,3 +183,36 @@ def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
     books = [SeriesBook(title=title, author="") for title in titles]
     assignments = detect_series_from_books(books)
     return {title: assignments[("", title)] for title in titles if ("", title) in assignments}
+
+
+def enrich_series_metadata(books: list[object], *, target_ids: set[int] | None = None) -> list[object]:
+    """Fill only missing series names and positions from deterministic title evidence."""
+
+    without_series = [
+        SeriesBook(title=str(getattr(book, "title", "")), author=str(getattr(book, "author", "")))
+        for book in books
+        if not getattr(book, "series", None)
+    ]
+    detected = detect_series_from_books(without_series) if len(without_series) >= 2 else {}
+    changed: list[object] = []
+    for book in books:
+        if target_ids is not None and getattr(book, "id", None) not in target_ids:
+            continue
+        series_name = getattr(book, "series", None) or detected.get(
+            (str(getattr(book, "author", "")), str(getattr(book, "title", "")))
+        )
+        book_changed = False
+        if not getattr(book, "series", None) and series_name:
+            setattr(book, "series", series_name)
+            book_changed = True
+        if getattr(book, "series_index", None) is None and series_name:
+            _inferred_series, inferred_index = infer_series_metadata(
+                str(getattr(book, "title", "")),
+                str(series_name),
+            )
+            if inferred_index is not None:
+                setattr(book, "series_index", inferred_index)
+                book_changed = True
+        if book_changed:
+            changed.append(book)
+    return changed

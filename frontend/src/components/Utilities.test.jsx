@@ -255,6 +255,7 @@ describe("Utilities", () => {
                 book_title: "Dragon One",
                 book_author: "Author A",
                 book_series: "Dragon Saga",
+                book_series_index: 7,
                 match: {
                   id: 7,
                   book_id: 1,
@@ -294,6 +295,13 @@ describe("Utilities", () => {
                     remote_author: "Author A",
                     remote_url: "https://openlibrary.org/works/OL8W",
                     remote_ids: {},
+                    remote_metadata: {
+                      series: "Dragon Saga",
+                      series_index: 8,
+                    },
+                    match_issues: [
+                      "Series position conflict: local book is #7, candidate is #8.",
+                    ],
                     last_checked_at: "2026-03-29T00:00:02Z",
                     approved_at: null,
                     rejected_at: null,
@@ -368,6 +376,11 @@ describe("Utilities", () => {
     expect(screen.getByText("Proposed genres: Fantasy")).toBeInTheDocument();
     expect(screen.getByText("Possible missing in series: Dragon Two")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Suggested match"), { target: { value: "8" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Verify this match");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Series position conflict: local book is #7, candidate is #8.",
+    );
+    expect(screen.getByText(/Local series: Dragon Saga #7 · Candidate series: Dragon Saga #8/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Queue Library Metadata Sync" }));
 

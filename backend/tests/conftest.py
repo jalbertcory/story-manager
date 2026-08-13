@@ -1,5 +1,6 @@
 """Shared backend test fixtures."""
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -9,6 +10,15 @@ from backend.app.database import Base, get_db
 from backend.app.main import app
 
 SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def disable_unconfigured_network_metadata(mocker):
+    """Unit tests opt providers in explicitly when their HTTP calls are mocked."""
+
+    mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED", False)
+    mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS", 0)
+    mocker.patch("backend.app.services.metadata.clients.AMAZON_METADATA_ENABLED", False)
 
 
 @pytest_asyncio.fixture

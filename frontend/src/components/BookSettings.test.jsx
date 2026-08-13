@@ -235,6 +235,13 @@ describe("BookSettings", () => {
           user_genre_tags: ["Cozy"],
           metadata_sync_source: "open_library",
           metadata_synced_at: "2026-03-28T10:00:00Z",
+          metadata_details: {
+            publisher: "Dragon Press",
+            published_date: "2024-05-01",
+            language: "en",
+            page_count: 412,
+            description: "A richly detailed online description.",
+          },
           source_type: "epub",
           source_url: null,
           immutable_path: "library/original.epub",
@@ -254,6 +261,10 @@ describe("BookSettings", () => {
     expect(screen.getByText("Character Growth")).toBeInTheDocument();
     expect(screen.getByText("Female Protagonist")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Cozy")).toBeInTheDocument();
+    expect(screen.getByText("Dragon Press")).toBeInTheDocument();
+    expect(screen.getByText("2024-05-01")).toBeInTheDocument();
+    expect(screen.getByText("412")).toBeInTheDocument();
+    expect(screen.getByText("A richly detailed online description.")).toBeInTheDocument();
     expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
   });
 

@@ -5374,3 +5374,25 @@ body {
     justify-content: flex-start;
   }
 }
+.metadata-details dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0.45rem 0 0;
+}
+
+.metadata-details dt {
+  color: var(--text-muted);
+}
+
+.metadata-details dd {
+  margin: 0;
+}
+
+.metadata-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  margin-top: 0.5rem;
+}

@@ -129,6 +129,8 @@ function BookSettings({
     setIsbn10,
     isbn13,
     setIsbn13,
+    asin,
+    setAsin,
     googleBooksVolumeId,
     setGoogleBooksVolumeId,
     openLibraryWorkKey,
@@ -521,6 +523,39 @@ function BookSettings({
                 <SourceTagList tags={book.source_tags || []} />
               </div>
             )}
+            {book.metadata_details && Object.keys(book.metadata_details).length > 0 && (
+              <div className="metadata-details">
+                <span className="settings-field-label">Online Details</span>
+                <dl>
+                  {book.metadata_details.publisher && (
+                    <><dt>Publisher</dt><dd>{book.metadata_details.publisher}</dd></>
+                  )}
+                  {book.metadata_details.published_date && (
+                    <><dt>Published</dt><dd>{book.metadata_details.published_date}</dd></>
+                  )}
+                  {book.metadata_details.language && (
+                    <><dt>Language</dt><dd>{book.metadata_details.language}</dd></>
+                  )}
+                  {book.metadata_details.page_count && (
+                    <><dt>Pages</dt><dd>{book.metadata_details.page_count}</dd></>
+                  )}
+                  {book.metadata_details.amazon_rating && (
+                    <>
+                      <dt>Amazon rating</dt>
+                      <dd>
+                        {book.metadata_details.amazon_rating}/5
+                        {book.metadata_details.amazon_review_count
+                          ? ` (${book.metadata_details.amazon_review_count.toLocaleString()} reviews)`
+                          : ""}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+                {book.metadata_details.description && (
+                  <p className="hint metadata-description">{book.metadata_details.description}</p>
+                )}
+              </div>
+            )}
             <label>
               User Genre Tags
               <input
@@ -729,6 +764,8 @@ function BookSettings({
         setIsbn10={setIsbn10}
         isbn13={isbn13}
         setIsbn13={setIsbn13}
+        asin={asin}
+        setAsin={setAsin}
         googleBooksVolumeId={googleBooksVolumeId}
         setGoogleBooksVolumeId={setGoogleBooksVolumeId}
         openLibraryWorkKey={openLibraryWorkKey}

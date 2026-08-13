@@ -182,6 +182,21 @@ ensure_database() {
     info "READY   PostgreSQL (localhost:5432)"
 }
 
+ensure_migrations() {
+    if [ ! -x "$PROJECT_DIR/.venv/bin/alembic" ]; then
+        error "Backend dependencies are missing. Run: make setup"
+        return 1
+    fi
+
+    info "CHECK   Database migrations"
+    if ! make -C "$PROJECT_DIR" migrate; then
+        error "Database migrations failed."
+        return 1
+    fi
+
+    info "READY   Database migrations"
+}
+
 ensure_ollama() {
     if url_ready "http://127.0.0.1:11434/api/tags"; then
         info "READY   Ollama (http://127.0.0.1:11434/api/tags) — already running"
@@ -393,7 +408,12 @@ case "${1:-start}" in
         ensure_ollama || failures=$((failures + 1))
 
         if database_ready; then
-            ensure_api || failures=$((failures + 1))
+            if ensure_migrations; then
+                ensure_api || failures=$((failures + 1))
+            else
+                error "Skipping API startup because database migrations failed."
+                failures=$((failures + 1))
+            fi
         else
             error "Skipping API startup because PostgreSQL is unavailable."
             failures=$((failures + 1))

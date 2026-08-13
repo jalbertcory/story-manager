@@ -24,6 +24,7 @@ class BookBase(BaseModel):
     source_tags: Optional[List[str]] = Field(default_factory=list)
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
     metadata_remote_ids: Optional[dict] = None
+    metadata_details: Optional[dict] = None
     metadata_sync_source: Optional[str] = None
     metadata_synced_at: Optional[datetime] = None
     master_word_count: Optional[int] = None
@@ -520,13 +521,17 @@ class MetadataSyncBookResult(BaseModel):
     title: str
     author: str
     matched: bool
+    source: Optional[str] = None
     match_confidence: float = 0.0
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
+    remote_ids: Optional[dict] = None
+    metadata_details: Optional[dict] = None
     genre_tags: List[str] = Field(default_factory=list)
     new_genre_tags: List[str] = Field(default_factory=list)
     possible_missing_series_books: List[str] = Field(default_factory=list)
+    match_issues: List[str] = Field(default_factory=list)
     note: Optional[str] = None
 
 
@@ -581,6 +586,11 @@ class MetadataMatch(BaseModel):
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
     remote_ids: Optional[dict] = None
+    remote_metadata: Optional[dict] = None
+    proposed_genre_tags: Optional[List[str]] = None
+    possible_missing_series_books: Optional[List[str]] = None
+    match_issues: Optional[List[str]] = None
+    note: Optional[str] = None
     last_checked_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
     rejected_at: Optional[datetime] = None
@@ -592,6 +602,7 @@ class MetadataProposalSummary(BaseModel):
     book_title: str
     book_author: str
     book_series: Optional[str] = None
+    book_series_index: Optional[float] = None
     match: Optional[MetadataMatch] = None
     candidate_matches: List[MetadataMatch] = Field(default_factory=list)
     proposed_genre_tags: List[str] = Field(default_factory=list)

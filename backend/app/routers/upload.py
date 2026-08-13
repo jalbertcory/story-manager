@@ -19,7 +19,7 @@ from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
 from ..services.library_paths import build_book_paths
 from ..services.metadata_jobs import queue_metadata_sync_job
-from ..services.series import SeriesBook, detect_series_from_books
+from ..services.series import enrich_series_metadata
 from ..services.processing_queue import queue_audio_reconciliation
 from ..upload_validation import MAX_UPLOAD_BYTES, read_and_validate_upload, read_upload_limited, validate_upload
 
@@ -557,24 +557,21 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
         except Exception as e:
             results.append(EpubUploadResult(filename=file.filename or "upload", status="error", error=str(e)))
 
-    # Detect series across the batch AND existing library books without a series.
+    # Detect series across the batch AND existing library books without a series,
+    # and fill deterministic positions for uploaded books that already named a series.
     batch_ids = {b.id for b in created_books}
-    batch_no_series = [b for b in created_books if not b.series]
     existing_no_series = [b for b in await crud.get_books_without_series(db) if b.id not in batch_ids]
-    all_candidates = batch_no_series + existing_no_series
+    all_candidates = created_books + existing_no_series
 
-    if len(all_candidates) >= 2:
-        series_map = detect_series_from_books([SeriesBook(title=b.title, author=b.author) for b in all_candidates])
-        updated = [b for b in all_candidates if (b.author, b.title) in series_map]
-        if updated:
-            for b in updated:
-                b.series = series_map[(b.author, b.title)]
-            await db.commit()
-            for b in updated:
-                await db.refresh(b)
-            logger.info(
-                f"Auto-detected series for {len(updated)} books: " + ", ".join(f"'{b.title}' → '{b.series}'" for b in updated)
-            )
+    updated = enrich_series_metadata(all_candidates)
+    if updated:
+        await db.commit()
+        for b in updated:
+            await db.refresh(b)
+        logger.info(
+            f"Auto-detected series metadata for {len(updated)} books: "
+            + ", ".join(f"'{b.title}' → '{b.series}' #{b.series_index or '?'}" for b in updated)
+        )
 
     if created_books:
         await queue_metadata_sync_job(db, trigger="new_book", book_ids=[book.id for book in created_books])
@@ -588,20 +585,14 @@ async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict:
     Scans all books without an assigned series and auto-detects groupings
     using title patterns like "<series> <number> [- <subtitle>]".
     """
-    candidates = await crud.get_books_without_series(db)
-    if len(candidates) < 2:
-        return {"updated": 0, "series_detected": []}
-
-    series_map = detect_series_from_books([SeriesBook(title=b.title, author=b.author) for b in candidates])
-    to_update = [b for b in candidates if (b.author, b.title) in series_map]
+    candidates = await crud.get_books(db, limit=100000)
+    to_update = enrich_series_metadata(candidates)
 
     if not to_update:
         return {"updated": 0, "series_detected": []}
 
-    for b in to_update:
-        b.series = series_map[(b.author, b.title)]
     await db.commit()
 
-    series_detected = sorted(set(series_map.values()))
+    series_detected = sorted({book.series for book in to_update if book.series})
     logger.info(f"detect-series: updated {len(to_update)} books, series: {series_detected}")
     return {"updated": len(to_update), "series_detected": series_detected}
