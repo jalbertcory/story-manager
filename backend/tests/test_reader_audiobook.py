@@ -443,8 +443,12 @@ async def test_human_only_audiobook_exposes_cues_and_downloads_anchored_text(
             current_path=_relative(library, current_path),
             content_version=1,
             audiobook_enabled=False,
+            audiobook_revision=4,
+            audiobook_source_content_version=1,
             audiobook_text_content_version=1,
             audiobook_text_file_path=_relative(library, reader_path),
+            audiobook_text_size_bytes=reader_path.stat().st_size,
+            audiobook_text_sha256=hashlib.sha256(reader_path.read_bytes()).hexdigest(),
         )
         chapter = models.AudiobookChapter(
             id=801,
@@ -509,6 +513,24 @@ async def test_human_only_audiobook_exposes_cues_and_downloads_anchored_text(
 
     key_response = app_client.post("/api/reader-keys", json={"label": "Human Audio Reader"})
     auth = ("reader", key_response.json()["token"])
+    reader_book = app_client.get("/reader/books/841", auth=auth).json()
+    assert reader_book["audiobook_types"] == ["human_narrated"]
+    assert reader_book["audiobook"] == {
+        "status": "processing",
+        "revision": 4,
+        "source_content_version": 1,
+        "text_content_version": 1,
+        "ready_chapter_count": 0,
+        "total_chapter_count": 1,
+        "ready_audio_bytes": 0,
+        "manifest_url": "/reader/books/841/audiobook/manifest",
+    }
+    manifest = app_client.get(reader_book["audiobook"]["manifest_url"], auth=auth)
+    assert manifest.status_code == 200
+    assert manifest.json()["revision"] == 4
+    assert manifest.json()["text"]["content_version"] == 1
+    assert app_client.get(manifest.json()["text"]["url"], auth=auth).content == reader_path.read_bytes()
+
     download = app_client.get("/reader/books/841/download", auth=auth)
     assert download.status_code == 200
     assert download.content == reader_path.read_bytes()
