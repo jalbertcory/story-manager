@@ -20,6 +20,7 @@ REVISION_FIELDS = (
     "source_tags",
     "user_genre_tags",
     "metadata_remote_ids",
+    "metadata_details",
     "metadata_sync_source",
     "metadata_synced_at",
     "notes",

@@ -105,7 +105,10 @@ function formatMetadataMatchOption(match) {
   const title = match.remote_title || "Unknown title";
   const author = match.remote_author ? ` by ${match.remote_author}` : "";
   const confidence = match.match_confidence != null ? ` (${Math.round(match.match_confidence * 100)}%)` : "";
-  return `${title}${author}${confidence}`;
+  const provider = match.source
+    ? ` · ${match.source.split("+").map((source) => source.replaceAll("_", " ")).join(" + ")}`
+    : "";
+  return `${title}${author}${confidence}${provider}`;
 }
 
 function Utilities({ onBack }) {
@@ -459,6 +462,12 @@ function Utilities({ onBack }) {
                     const candidateMatches = entry.candidate_matches?.length ? entry.candidate_matches : entry.match ? [entry.match] : [];
                     const selectedMatchId = selectedMatchIds[entry.id] ?? entry.match?.id ?? candidateMatches[0]?.id;
                     const selectedMatch = candidateMatches.find((match) => match.id === Number(selectedMatchId)) || entry.match;
+                    const proposedGenres = selectedMatch?.proposed_genre_tags ?? entry.proposed_genre_tags;
+                    const possibleMissingSeries = selectedMatch?.possible_missing_series_books ?? entry.possible_missing_series_books;
+                    const matchIssues = selectedMatch?.match_issues ?? [];
+                    const candidateSeries = selectedMatch?.remote_metadata?.series;
+                    const candidateSeriesIndex = selectedMatch?.remote_metadata?.series_index;
+                    const evidenceNote = selectedMatch?.note ?? entry.note;
 
                     return (
                       <>
@@ -522,19 +531,45 @@ function Utilities({ onBack }) {
                       Suggested match: {formatMetadataMatchOption(selectedMatch)}
                     </p>
                   )}
-                  {entry.proposed_genre_tags.length > 0 && (
+                  {(entry.book_series || candidateSeries) && (
                     <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Proposed genres: {entry.proposed_genre_tags.join(", ")}
+                      Local series: {entry.book_series || "Unknown"}
+                      {entry.book_series_index != null ? ` #${entry.book_series_index}` : ""}
+                      {" · "}
+                      Candidate series: {candidateSeries || "Unknown"}
+                      {candidateSeriesIndex != null ? ` #${candidateSeriesIndex}` : ""}
                     </p>
                   )}
-                  {entry.possible_missing_series_books.length > 0 && (
+                  {proposedGenres.length > 0 && (
                     <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Possible missing in series: {entry.possible_missing_series_books.join(", ")}
+                      Proposed genres: {proposedGenres.join(", ")}
                     </p>
                   )}
-                  {entry.note && (
+                  {matchIssues.length > 0 && (
+                    <div
+                      role="alert"
+                      style={{
+                        marginTop: "0.6rem",
+                        padding: "0.6rem 0.7rem",
+                        borderRadius: "6px",
+                        border: "1px solid rgba(251, 191, 36, 0.45)",
+                        background: "rgba(120, 53, 15, 0.22)",
+                      }}
+                    >
+                      <strong>Verify this match</strong>
+                      <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.2rem" }}>
+                        {matchIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {possibleMissingSeries.length > 0 && (
                     <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      {entry.note}
+                      Possible missing in series: {possibleMissingSeries.join(", ")}
+                    </p>
+                  )}
+                  {evidenceNote && (
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      {evidenceNote}
                     </p>
                   )}
                       </>

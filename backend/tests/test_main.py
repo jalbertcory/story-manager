@@ -3730,6 +3730,10 @@ async def test_detect_series_endpoint_uses_author_aware_patterns(db_session):
     assert books[("Author One", "Shared Saga 1")] is None
     assert books[("Author Two", "Shared Saga 2")] is None
 
+    indexed_books = {(book["author"], book["title"]): book["series_index"] for book in response.json()}
+    assert indexed_books[("Will Wight", "Soulsmith (Cradle Book 2)")] == 2.0
+    assert indexed_books[("William D. Arand", "Cultivating Chaos 3")] == 3.0
+
 
 @pytest.mark.asyncio
 async def test_create_reader_key_and_use_reader_updates(db_session):

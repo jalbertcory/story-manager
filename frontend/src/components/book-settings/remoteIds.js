@@ -1,6 +1,7 @@
 const COMMON_REMOTE_ID_KEYS = [
   "isbn_10",
   "isbn_13",
+  "asin",
   "google_books_volume_id",
   "open_library_work_key",
   "open_library_edition_key",

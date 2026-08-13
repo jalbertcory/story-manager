@@ -48,6 +48,8 @@ export function BookIdentifiersSection({
   setIsbn10,
   isbn13,
   setIsbn13,
+  asin,
+  setAsin,
   googleBooksVolumeId,
   setGoogleBooksVolumeId,
   openLibraryWorkKey,
@@ -71,12 +73,13 @@ export function BookIdentifiersSection({
       >
         <h3>
           Identifiers
-          {(isbn10 || isbn13 || googleBooksVolumeId || openLibraryWorkKey) && (
+          {(isbn10 || isbn13 || asin || googleBooksVolumeId || openLibraryWorkKey) && (
             <span className="field-count">
               {
                 [
                   isbn10,
                   isbn13,
+                  asin,
                   googleBooksVolumeId,
                   openLibraryWorkKey,
                   openLibraryEditionKey,
@@ -111,6 +114,14 @@ export function BookIdentifiersSection({
               />
             </label>
           </div>
+          <label>
+            Amazon ASIN
+            <input
+              value={asin}
+              onChange={(e) => setAsin(e.target.value)}
+              placeholder="B0ABC12345"
+            />
+          </label>
           <label>
             Google Books Volume ID
             <input
