@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBookCatalog } from "../api/books";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import useLifecycleDefinitions from "../hooks/useLifecycleDefinitions";
+import { upgradeAllImportedAudiobooks } from "../api/audiobook";
 import {
   cancelProcessingJob,
   getProcessingJobs,
@@ -17,6 +18,7 @@ const JOB_LABELS = {
   refresh_all: "Refresh web library",
   audiobook_pipeline: "Generate AI audiobook",
   import_audiobook: "Import human audiobook",
+  upgrade_imported_audiobook: "Upgrade human audiobook files",
   rematch_imported_audiobook: "Rematch human audiobook",
   align_imported_audiobook: "Align human audiobook",
   metadata_sync: "Sync metadata",
@@ -160,6 +162,15 @@ function ProcessingJobs() {
       refresh();
     },
   });
+  const upgradeAllMutation = useMutation({
+    mutationFn: upgradeAllImportedAudiobooks,
+    onSuccess: (data) => {
+      setQueueNotice(
+        `${data.queued_count} human audiobook upgrade${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
+      );
+      refresh();
+    },
+  });
   const retryMutation = useMutation({
     mutationFn: retryProcessingJob,
     onSuccess: refresh,
@@ -213,7 +224,7 @@ function ProcessingJobs() {
       <details className="settings-section processing-queue-panel">
         <summary className="processing-queue-summary">
           <span className="processing-queue-summary-heading">
-          <span className="processing-section-code">01 / DISPATCH</span>
+            <span className="processing-section-code">01 / DISPATCH</span>
             <span className="processing-queue-title">Queue work</span>
           </span>
           <span className="hint">
@@ -245,6 +256,14 @@ function ProcessingJobs() {
             disabled={queueMutation.isPending}
           >
             Refresh all web books
+          </button>
+          <button
+            onClick={() => upgradeAllMutation.mutate()}
+            disabled={upgradeAllMutation.isPending}
+          >
+            {upgradeAllMutation.isPending
+              ? "Queueing audiobook upgrades…"
+              : "Upgrade stored human audiobooks"}
           </button>
         </div>
         <div className="processing-book-picker">

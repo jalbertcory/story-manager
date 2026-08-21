@@ -215,6 +215,8 @@ test-migrations:
 		< scripts/migration-preexisting-audiobook-setup.sql; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Pre-existing imported edition' AND derived_revision = 0 AND derived_format_version = 0) THEN RAISE EXCEPTION '0036 did not backfill imported audiobook revision metadata'; END IF; IF NOT EXISTS (SELECT 1 FROM imported_audiobook_tracks WHERE title = 'Existing chapter' AND source_audio_file_path = audio_file_path AND source_clip_begin_ms = source_start_ms AND source_clip_end_ms = source_end_ms) THEN RAISE EXCEPTION '0036 did not preserve immutable imported track coordinates'; END IF; END \$$\$$;"; \
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
 	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \

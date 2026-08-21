@@ -8,6 +8,7 @@ import {
   rebuildAudioOnly,
   rematchImportedAudiobook,
   retryImportedAudiobook,
+  upgradeImportedAudiobook,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
 
@@ -56,6 +57,13 @@ function AudiobookSources({
   const deleteMutation = useMutation({
     mutationFn: deleteImportedAudiobook,
     onSuccess: invalidate,
+  });
+  const upgradeMutation = useMutation({
+    mutationFn: upgradeImportedAudiobook,
+    onSuccess: () => {
+      setJobNotice("Human audiobook chapter-file upgrade queued.");
+      invalidate();
+    },
   });
   const alignMutation = useMutation({
     mutationFn: alignImportedAudiobook,
@@ -276,6 +284,22 @@ function AudiobookSources({
                         ? "Improve Timestamps with Whisper"
                         : "Re-align Timestamps"}
                   </button>
+                  <button
+                    type="button"
+                    disabled={upgradeMutation.isPending}
+                    onClick={() => upgradeMutation.mutate(edition.id)}
+                  >
+                    {upgradeMutation.isPending
+                      ? "Queueing…"
+                      : edition.needs_upgrade
+                        ? "Upgrade Chapter Files"
+                        : "Rebuild Chapter Files"}
+                  </button>
+                  <p className="hint">
+                    Source M4B and CUE files are retained. Derived revision{" "}
+                    {edition.derived_revision || 0}, format v
+                    {edition.derived_format_version || 0}.
+                  </p>
                   {edition.progress_detail && (
                     <p className="hint">{edition.progress_detail}</p>
                   )}
@@ -347,6 +371,7 @@ function AudiobookSources({
       {(retryMutation.isError ||
         alignMutation.isError ||
         rematchMutation.isError ||
+        upgradeMutation.isError ||
         deleteMutation.isError ||
         matchMutation.isError) && (
         <p className="error">
@@ -354,6 +379,7 @@ function AudiobookSources({
             retryMutation.error ||
             alignMutation.error ||
             rematchMutation.error ||
+            upgradeMutation.error ||
             deleteMutation.error ||
             matchMutation.error
           )?.message || "Audiobook action failed"}

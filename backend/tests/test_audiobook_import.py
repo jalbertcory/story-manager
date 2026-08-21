@@ -98,6 +98,7 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     library = tmp_path / "library"
     library.mkdir()
     monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
+    monkeypatch.setattr(audiobook_router, "LIBRARY_PATH", library)
     book, chapter = await _seed_book_text(db)
     edition = ImportedAudiobook(
         book_id=book.id,
@@ -163,9 +164,142 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     assert len(tracks) == 2
     assert tracks[0].matched_chapter_id == chapter.id
     assert tracks[1].matched_chapter_id is None
+    assert tracks[0].audio_file_path != tracks[1].audio_file_path
+    assert all("/derived/revision-1/" in track.audio_file_path for track in tracks)
+    assert all(track.source_audio_file_path.endswith(".mp3") for track in tracks)
+    assert tracks[0].source_start_ms == tracks[1].source_start_ms == 0
+    assert all((library.parent / track.audio_file_path).is_file() for track in tracks)
     assert len(cues) == 2
     assert cues[0].clip_begin_ms == 0
     assert cues[-1].clip_end_ms == tracks[0].source_end_ms
+
+    response = await audiobook_router._imported_audiobook_response(edition, db)
+    assert {track.audio_url for track in response.tracks} == {
+        f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio" for track in tracks
+    }
+    smil = await audiobook_router.get_imported_track_smil(edition.id, tracks[0].id, db)
+    assert f'src="/api/imported-audiobooks/{edition.id}/tracks/{tracks[0].id}/audio"'.encode() in smil.body
+    assert b'clipBegin="0.000s"' in smil.body
+    assert edition.source_manifest_sha256
+    assert edition.source_size_bytes == source_mp3.stat().st_size + len(
+        'FILE "Import Test.mp3" MP3\n'
+        "TRACK 1 AUDIO\n"
+        '  TITLE "Chapter 1"\n'
+        "  INDEX 01 0:00:00\n"
+        "TRACK 2 AUDIO\n"
+        '  TITLE "End Credits"\n'
+        "  INDEX 01 0:01:00\n"
+    )
+    assert edition.derived_revision == 1
+    assert edition.derived_format_version == audiobook_import.CURRENT_DERIVED_FORMAT_VERSION
+
+
+@pytest.mark.asyncio
+async def test_upgrades_legacy_tracks_from_immutable_source_and_cleans_old_revisions(db, tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required")
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
+    book, chapter = await _seed_book_text(db)
+    edition = ImportedAudiobook(book_id=book.id, name="Legacy edition", status="ready")
+    db.add(edition)
+    await db.flush()
+    edition_dir = audiobook_import.imported_audiobook_dir(book.id, edition.id)
+    source = edition_dir / "source" / "legacy.m4b"
+    source.parent.mkdir(parents=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=24000:cl=mono",
+            "-t",
+            "2",
+            "-c:a",
+            "aac",
+            str(source),
+        ],
+        check=True,
+    )
+    (edition_dir / "source" / "legacy.cue").write_text("TRACK 01 AUDIO\n", encoding="utf-8")
+    relative_source = audiobook_import.relative_library_path(source)
+    tracks = [
+        ImportedAudiobookTrack(
+            imported_audiobook_id=edition.id,
+            matched_chapter_id=chapter.id,
+            sequence_order=index,
+            title=f"Chapter {index}",
+            audio_file_path=relative_source,
+            media_type="audio/mp4",
+            source_start_ms=(index - 1) * 1_000,
+            source_end_ms=index * 1_000,
+            duration_ms=1_000,
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(tracks)
+    await db.flush()
+    sentence_ids = list(
+        (
+            await db.execute(
+                select(AudiobookSentence.id)
+                .where(AudiobookSentence.chapter_id == chapter.id)
+                .order_by(AudiobookSentence.sequence_order)
+            )
+        ).scalars()
+    )
+    db.add_all(
+        [
+            ImportedAudiobookCue(
+                track_id=track.id,
+                sentence_id=sentence_ids[index - 1],
+                sequence_order=0,
+                clip_begin_ms=(index - 1) * 1_000 + 100,
+                clip_end_ms=(index - 1) * 1_000 + 900,
+                method="transcribed",
+            )
+            for index, track in enumerate(tracks, start=1)
+        ]
+    )
+    obsolete = edition_dir / "derived" / "revision-0"
+    obsolete.mkdir(parents=True)
+    (obsolete / "old.m4a").write_bytes(b"old")
+    await db.commit()
+    track_ids = [track.id for track in tracks]
+
+    revision = await audiobook_import.upgrade_imported_audiobook(edition.id, db)
+    await db.refresh(edition)
+    upgraded = list(
+        (
+            await db.execute(
+                select(ImportedAudiobookTrack)
+                .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+                .order_by(ImportedAudiobookTrack.sequence_order)
+            )
+        ).scalars()
+    )
+    cues = list((await db.execute(select(ImportedAudiobookCue).order_by(ImportedAudiobookCue.track_id))).scalars())
+
+    assert revision == edition.derived_revision == 1
+    assert [track.id for track in upgraded] == track_ids
+    assert {track.source_audio_file_path for track in upgraded} == {relative_source}
+    assert [(track.source_start_ms, track.source_end_ms) for track in upgraded] == [(0, 1_000), (0, 1_000)]
+    assert all("/derived/revision-1/" in track.audio_file_path for track in upgraded)
+    assert [(cue.clip_begin_ms, cue.clip_end_ms) for cue in cues] == [(100, 900), (100, 900)]
+    assert not obsolete.exists()
+    assert (edition_dir / "source" / "manifest.json").is_file()
+    assert source.is_file()
+
+    second_revision = await audiobook_import.upgrade_imported_audiobook(edition.id, db)
+    cues = list((await db.execute(select(ImportedAudiobookCue).order_by(ImportedAudiobookCue.track_id))).scalars())
+    assert second_revision == 2
+    assert not (edition_dir / "derived" / "revision-1").exists()
+    assert (edition_dir / "derived" / "revision-2").is_dir()
+    assert [(cue.clip_begin_ms, cue.clip_end_ms) for cue in cues] == [(100, 900), (100, 900)]
 
 
 @pytest.mark.asyncio
@@ -502,6 +636,98 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     assert response.json()["status"] == "aligning"
     assert response.json()["progress_total"] == 1
     assert queue.queued == [edition_id]
+
+
+@pytest.mark.asyncio
+async def test_upgrade_endpoints_queue_legacy_editions_and_skip_current_or_active(
+    app_client,
+    sqlite_sessionmaker,
+):
+    async with sqlite_sessionmaker() as db:
+        book, chapter = await _seed_book_text(db)
+        legacy = ImportedAudiobook(book_id=book.id, name="Legacy", status="ready")
+        current = ImportedAudiobook(
+            book_id=book.id,
+            name="Current",
+            status="ready",
+            source_manifest_sha256="a" * 64,
+            derived_revision=2,
+            derived_format_version=audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+        )
+        active = ImportedAudiobook(book_id=book.id, name="Active", status="aligning")
+        db.add_all([legacy, current, active])
+        await db.flush()
+        for edition in (legacy, current, active):
+            db.add(
+                ImportedAudiobookTrack(
+                    imported_audiobook_id=edition.id,
+                    matched_chapter_id=chapter.id,
+                    sequence_order=1,
+                    title="Chapter 1",
+                    audio_file_path=f"library/{edition.id}.m4b",
+                    media_type="audio/mp4",
+                    source_start_ms=0,
+                    source_end_ms=10_000,
+                    duration_ms=10_000,
+                )
+            )
+        await db.commit()
+        legacy_id = legacy.id
+        active_id = active.id
+
+    response = app_client.post(f"/api/imported-audiobooks/{legacy_id}/upgrade")
+    assert response.status_code == 200
+    assert response.json()["needs_upgrade"] is True
+    assert response.json()["progress_detail"] == "Chapter-audio upgrade queued"
+
+    active_response = app_client.post(f"/api/imported-audiobooks/{active_id}/upgrade")
+    assert active_response.status_code == 409
+
+    bulk = app_client.post("/api/audiobook/imports/upgrade-all")
+    assert bulk.status_code == 200
+    assert bulk.json() == {"queued_count": 1, "skipped_count": 2}
+    async with sqlite_sessionmaker() as db:
+        jobs = list(
+            (await db.execute(select(ProcessingJob).where(ProcessingJob.job_type == "upgrade_imported_audiobook"))).scalars()
+        )
+        assert len(jobs) == 1
+        assert jobs[0].target_id == legacy_id
+        assert jobs[0].payload == {"format_version": audiobook_import.CURRENT_DERIVED_FORMAT_VERSION}
+
+
+@pytest.mark.asyncio
+async def test_delete_imported_edition_removes_source_and_derived_files(
+    app_client,
+    sqlite_sessionmaker,
+    tmp_path,
+    monkeypatch,
+):
+    async with sqlite_sessionmaker() as db:
+        book, _chapter = await _seed_book_text(db)
+        edition = ImportedAudiobook(book_id=book.id, name="Disposable edition", status="ready")
+        db.add(edition)
+        await db.commit()
+        await db.refresh(edition)
+        edition_id = edition.id
+        book_id = book.id
+
+    monkeypatch.setattr(
+        audiobook_router,
+        "imported_audiobook_dir",
+        lambda selected_book_id, selected_edition_id: tmp_path / str(selected_book_id) / str(selected_edition_id),
+    )
+    edition_dir = tmp_path / str(book_id) / str(edition_id)
+    (edition_dir / "source").mkdir(parents=True)
+    (edition_dir / "source" / "original.m4b").write_bytes(b"source")
+    (edition_dir / "derived" / "revision-1").mkdir(parents=True)
+    (edition_dir / "derived" / "revision-1" / "track.m4a").write_bytes(b"derived")
+
+    response = app_client.delete(f"/api/imported-audiobooks/{edition_id}")
+
+    assert response.status_code == 204
+    assert not edition_dir.exists()
+    async with sqlite_sessionmaker() as db:
+        assert await db.get(ImportedAudiobook, edition_id) is None
 
 
 @pytest.mark.asyncio
