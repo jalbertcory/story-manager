@@ -31,6 +31,7 @@ from ..models import (
     ImportedAudiobookTrack,
 )
 from ..services.audiobook_import import (
+    CURRENT_DERIVED_FORMAT_VERSION,
     IMPORT_EXTENSIONS,
     MAX_AUDIOBOOK_UPLOAD_BYTES,
     asin_from_names,
@@ -367,6 +368,11 @@ class ImportedAudiobookResponse(BaseModel):
     original_filenames: list[str]
     duration_ms: Optional[int]
     audio_size_bytes: int
+    source_size_bytes: Optional[int]
+    source_manifest_sha256: Optional[str]
+    derived_revision: int
+    derived_format_version: int
+    needs_upgrade: bool
     progress_current: int
     progress_total: int
     progress_detail: Optional[str]
@@ -514,6 +520,13 @@ async def _imported_audiobook_response(
         original_filenames=edition.original_filenames or [],
         duration_ms=edition.duration_ms,
         audio_size_bytes=sum(path.stat().st_size for path in audio_paths),
+        source_size_bytes=edition.source_size_bytes,
+        source_manifest_sha256=edition.source_manifest_sha256,
+        derived_revision=edition.derived_revision or 0,
+        derived_format_version=edition.derived_format_version or 0,
+        needs_upgrade=(
+            not edition.source_manifest_sha256 or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
+        ),
         progress_current=edition.progress_current or 0,
         progress_total=edition.progress_total or 0,
         progress_detail=edition.progress_detail,
@@ -983,6 +996,68 @@ async def retry_imported_audiobook(
     )
     await _notify_legacy_queue(get_audiobook_import_queue, "enqueue", edition.id)
     return await _imported_audiobook_response(edition, db)
+
+
+@router.post(
+    "/api/imported-audiobooks/{edition_id}/upgrade",
+    response_model=ImportedAudiobookResponse,
+)
+async def upgrade_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    """Rebuild derived chapter audio from the retained immutable source files."""
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    await _get_book_or_404(edition.book_id, db)
+    if edition.status != ImportedAudiobookStatus.READY.value:
+        raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not ready to upgrade")
+    edition.progress_current = 0
+    edition.progress_total = 0
+    edition.progress_detail = "Chapter-audio upgrade queued"
+    await db.commit()
+    await queue_processing_job(
+        db=db,
+        job_type="upgrade_imported_audiobook",
+        book_id=edition.book_id,
+        target_type="imported_audiobook",
+        target_id=edition.id,
+        payload={"format_version": CURRENT_DERIVED_FORMAT_VERSION},
+        dedupe_key=f"upgrade_imported_audiobook:imported_audiobook:{edition.id}",
+        progress_detail=f"Queued chapter-audio format v{CURRENT_DERIVED_FORMAT_VERSION}",
+    )
+    return await _imported_audiobook_response(edition, db)
+
+
+@router.post("/api/audiobook/imports/upgrade-all")
+async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+    """Queue every ready human audiobook that has rebuildable legacy assets."""
+    result = await db.execute(select(ImportedAudiobook).order_by(ImportedAudiobook.id))
+    editions = list(result.scalars().all())
+    queued = 0
+    skipped = 0
+    for edition in editions:
+        needs_upgrade = (
+            not edition.source_manifest_sha256 or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
+        )
+        if edition.status != ImportedAudiobookStatus.READY.value or not needs_upgrade:
+            skipped += 1
+            continue
+        await queue_processing_job(
+            db=db,
+            job_type="upgrade_imported_audiobook",
+            book_id=edition.book_id,
+            target_type="imported_audiobook",
+            target_id=edition.id,
+            payload={"format_version": CURRENT_DERIVED_FORMAT_VERSION},
+            dedupe_key=f"upgrade_imported_audiobook:imported_audiobook:{edition.id}",
+            progress_detail=f"Queued chapter-audio format v{CURRENT_DERIVED_FORMAT_VERSION}",
+        )
+        edition.progress_detail = "Chapter-audio upgrade queued"
+        queued += 1
+    await db.commit()
+    return {"queued_count": queued, "skipped_count": skipped}
 
 
 @router.post(

@@ -158,6 +158,13 @@ startup. Configure `http://<UNRAID-IP>:8002`, model `large-v3`, and language
 `en`, then click **Save & Test Transcription**. Ready imported editions expose
 an **Improve Timestamps with Whisper** action.
 
+Story Manager retains each imported audiobook's original audio and CUE files as
+immutable sources. Reader-facing chapter files are derived, revisioned assets.
+Use **Upgrade Chapter Files** on one edition, or **Upgrade stored human
+audiobooks** under Processing, to rebuild those assets after importer
+improvements without uploading the audiobook again. Deleting an imported
+edition explicitly removes both its retained source and all derived revisions.
+
 ### LLM for audiobook analysis
 
 The LLM identifies recurring characters and assigns dialogue to speakers. The recommended local runtime is

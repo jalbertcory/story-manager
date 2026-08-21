@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import mimetypes
@@ -11,6 +12,8 @@ import shutil
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Awaitable, Callable
+from uuid import uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".mp4", ".ogg", ".opus", ".wav"}
 IMPORT_EXTENSIONS = AUDIO_EXTENSIONS | {".cue", ".zip"}
+CURRENT_DERIVED_FORMAT_VERSION = 1
+SOURCE_MANIFEST_FORMAT = "story-manager-audiobook-source"
+SOURCE_MANIFEST_VERSION = 1
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 _ASIN_RE = re.compile(r"\[((?:B[0-9A-Z]{9})|(?:[0-9]{9}[0-9X]))\]", re.IGNORECASE)
@@ -57,10 +63,310 @@ class TrackSpec:
     start_ms: int
     end_ms: int
     media_type: str
+    source_audio_path: Path | None = None
+    source_start_ms: int | None = None
+    source_end_ms: int | None = None
 
     @property
     def duration_ms(self) -> int:
         return self.end_ms - self.start_ms
+
+    @property
+    def immutable_audio_path(self) -> Path:
+        return self.source_audio_path or self.audio_path
+
+    @property
+    def immutable_start_ms(self) -> int:
+        return self.start_ms if self.source_start_ms is None else self.source_start_ms
+
+    @property
+    def immutable_end_ms(self) -> int:
+        return self.end_ms if self.source_end_ms is None else self.source_end_ms
+
+
+def _chapter_file_suffix(source: Path) -> str:
+    """Return an audio-only extension that ffmpeg and browsers both understand."""
+    if source.suffix.lower() in {".m4b", ".mp4"}:
+        return ".m4a"
+    return source.suffix.lower()
+
+
+async def _extract_chapter_audio(spec: TrackSpec, destination: Path) -> None:
+    """Copy one chapter range into its own seekable audio file."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to split chaptered audiobooks.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f"{destination.stem}.part{destination.suffix}")
+    temporary.unlink(missing_ok=True)
+    command = [
+        ffmpeg,
+        "-v",
+        "error",
+        "-ss",
+        f"{spec.start_ms / 1000:.3f}",
+        "-i",
+        str(spec.audio_path),
+        "-t",
+        f"{spec.duration_ms / 1000:.3f}",
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-c:a",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-map_metadata",
+        "-1",
+    ]
+    if destination.suffix == ".m4a":
+        command.extend(["-movflags", "+faststart"])
+    command.extend(["-y", str(temporary)])
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, stderr = await process.communicate()
+    if process.returncode:
+        temporary.unlink(missing_ok=True)
+        message = stderr.decode("utf-8", errors="replace")[:500]
+        raise ValueError(f"Could not split {spec.title!r} into a chapter file: {message}")
+    temporary.replace(destination)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(UPLOAD_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: dict) -> bytes:
+    content = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    temporary.write_bytes(content)
+    temporary.replace(path)
+    return content
+
+
+async def build_source_manifest(edition: ImportedAudiobook, edition_dir: Path) -> tuple[Path, str, int]:
+    """Inventory the immutable files from which every derived revision is built."""
+    source_dir = edition_dir / "source"
+    source_files = sorted(path for path in source_dir.iterdir() if path.is_file() and path.name != "manifest.json")
+    if not source_files:
+        raise ValueError("Imported audiobook source files are missing.")
+    entries = []
+    total_size = 0
+    for source in source_files:
+        size = source.stat().st_size
+        total_size += size
+        entries.append(
+            {
+                "name": source.name,
+                "role": "cue" if source.suffix.lower() == ".cue" else "audio",
+                "size_bytes": size,
+                "sha256": await asyncio.to_thread(_sha256_file, source),
+            }
+        )
+    payload = {
+        "format": SOURCE_MANIFEST_FORMAT,
+        "format_version": SOURCE_MANIFEST_VERSION,
+        "asin": edition.asin,
+        "original_filenames": edition.original_filenames or [],
+        "files": entries,
+    }
+    manifest_path = source_dir / "manifest.json"
+    content = _atomic_write_json(manifest_path, payload)
+    return manifest_path, hashlib.sha256(content).hexdigest(), total_size
+
+
+def _next_derived_revision(edition: ImportedAudiobook, edition_dir: Path) -> int:
+    revisions = [edition.derived_revision or 0]
+    derived_dir = edition_dir / "derived"
+    if derived_dir.is_dir():
+        for candidate in derived_dir.glob("revision-*"):
+            try:
+                revisions.append(int(candidate.name.removeprefix("revision-")))
+            except ValueError:
+                continue
+    return max(revisions) + 1
+
+
+async def _materialize_chapter_audio(
+    specs: list[TrackSpec],
+    edition_dir: Path,
+    revision: int,
+    progress: Callable[[int, int], Awaitable[None]] | None = None,
+) -> list[TrackSpec]:
+    """Build a verified, immutable derived revision before it becomes active."""
+    source_counts: dict[Path, int] = {}
+    for spec in specs:
+        source_counts[spec.audio_path] = source_counts.get(spec.audio_path, 0) + 1
+    derived_dir = edition_dir / "derived"
+    final_dir = derived_dir / f"revision-{revision}"
+    staging_dir = derived_dir / f".revision-{revision}-{uuid4().hex}.staging"
+    staging_dir.mkdir(parents=True, exist_ok=False)
+    materialized: list[TrackSpec] = []
+    try:
+        for index, spec in enumerate(specs, start=1):
+            if source_counts[spec.audio_path] == 1:
+                materialized.append(spec)
+            else:
+                suffix = _chapter_file_suffix(spec.audio_path)
+                destination = staging_dir / f"track-{index:04d}{suffix}"
+                await _extract_chapter_audio(spec, destination)
+                await _probe_audio(destination)
+                materialized.append(
+                    TrackSpec(
+                        sequence_order=spec.sequence_order,
+                        title=spec.title,
+                        audio_path=destination,
+                        start_ms=0,
+                        end_ms=spec.duration_ms,
+                        media_type=_media_type(destination),
+                        source_audio_path=spec.immutable_audio_path,
+                        source_start_ms=spec.immutable_start_ms,
+                        source_end_ms=spec.immutable_end_ms,
+                    )
+                )
+            if progress is not None:
+                await progress(index, len(specs))
+        _atomic_write_json(
+            staging_dir / "manifest.json",
+            {
+                "format": "story-manager-audiobook-derived",
+                "format_version": CURRENT_DERIVED_FORMAT_VERSION,
+                "revision": revision,
+                "tracks": [
+                    {
+                        "sequence_order": spec.sequence_order,
+                        "file": spec.audio_path.name if spec.audio_path.is_relative_to(staging_dir) else None,
+                        "duration_ms": spec.duration_ms,
+                    }
+                    for spec in materialized
+                ],
+            },
+        )
+        staging_dir.replace(final_dir)
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+    return [
+        TrackSpec(
+            sequence_order=spec.sequence_order,
+            title=spec.title,
+            audio_path=(final_dir / spec.audio_path.name if spec.audio_path.is_relative_to(staging_dir) else spec.audio_path),
+            start_ms=spec.start_ms,
+            end_ms=spec.end_ms,
+            media_type=spec.media_type,
+            source_audio_path=spec.source_audio_path,
+            source_start_ms=spec.source_start_ms,
+            source_end_ms=spec.source_end_ms,
+        )
+        for spec in materialized
+    ]
+
+
+def cleanup_old_derived_revisions(edition_dir: Path, active_revision: int) -> None:
+    """Remove rebuildable revisions only after the database cutover succeeds."""
+    derived_dir = edition_dir / "derived"
+    if derived_dir.is_dir():
+        for candidate in derived_dir.iterdir():
+            if candidate.name != f"revision-{active_revision}":
+                shutil.rmtree(candidate, ignore_errors=True)
+    # ``tracks`` was used briefly by the pre-revision chapter-splitting implementation.
+    shutil.rmtree(edition_dir / "tracks", ignore_errors=True)
+
+
+async def upgrade_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
+    """Rebuild chapter assets from immutable source files without re-uploading."""
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise ValueError("Imported audiobook no longer exists.")
+    result = await db.execute(
+        select(ImportedAudiobookTrack)
+        .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+        .order_by(ImportedAudiobookTrack.sequence_order)
+    )
+    tracks = list(result.scalars().all())
+    if not tracks:
+        raise ValueError("Imported audiobook has no tracks to upgrade.")
+
+    edition_dir = imported_audiobook_dir(edition.book_id, edition.id)
+    edition.progress_current = 0
+    edition.progress_total = len(tracks)
+    edition.progress_detail = "Verifying immutable audiobook sources"
+    await db.commit()
+    manifest_path, manifest_sha, source_size = await build_source_manifest(edition, edition_dir)
+    edition.source_manifest_file_path = relative_library_path(manifest_path)
+    edition.source_manifest_sha256 = manifest_sha
+    edition.source_size_bytes = source_size
+    revision = _next_derived_revision(edition, edition_dir)
+    source_root = (edition_dir / "source").resolve()
+
+    specs = []
+    for track in tracks:
+        source_path = track.source_audio_file_path or track.audio_file_path
+        source = (LIBRARY_PATH.parent / source_path).resolve()
+        if not source.is_relative_to(source_root):
+            raise ValueError(f"Immutable audio source for {track.title!r} is outside the edition source directory.")
+        if not source.is_file():
+            raise ValueError(f"Immutable audio source for {track.title!r} is missing.")
+        begin = track.source_clip_begin_ms if track.source_clip_begin_ms is not None else track.source_start_ms
+        end = track.source_clip_end_ms if track.source_clip_end_ms is not None else track.source_end_ms
+        specs.append(
+            TrackSpec(
+                sequence_order=track.sequence_order,
+                title=track.title,
+                audio_path=source,
+                start_ms=begin,
+                end_ms=end,
+                media_type=_media_type(source),
+            )
+        )
+
+    async def update_progress(current: int, total: int) -> None:
+        edition.progress_current = current
+        edition.progress_total = total
+        edition.progress_detail = f"Building chapter audio {current} of {total}"
+        await db.commit()
+
+    materialized = await _materialize_chapter_audio(specs, edition_dir, revision, update_progress)
+    cue_result = await db.execute(
+        select(ImportedAudiobookCue).where(ImportedAudiobookCue.track_id.in_([track.id for track in tracks]))
+    )
+    cues_by_track: dict[int, list[ImportedAudiobookCue]] = {}
+    for cue in cue_result.scalars().all():
+        cues_by_track.setdefault(cue.track_id, []).append(cue)
+
+    for track, spec in zip(tracks, materialized, strict=True):
+        offset = track.source_start_ms
+        if track.source_audio_file_path is None:
+            track.source_audio_file_path = relative_library_path(spec.immutable_audio_path)
+            track.source_clip_begin_ms = spec.immutable_start_ms
+            track.source_clip_end_ms = spec.immutable_end_ms
+        track.audio_file_path = relative_library_path(spec.audio_path)
+        track.media_type = spec.media_type
+        track.source_start_ms = spec.start_ms
+        track.source_end_ms = spec.end_ms
+        track.duration_ms = spec.duration_ms
+        for cue in cues_by_track.get(track.id, []):
+            cue.clip_begin_ms = max(0, cue.clip_begin_ms - offset)
+            cue.clip_end_ms = min(spec.duration_ms, max(cue.clip_begin_ms + 1, cue.clip_end_ms - offset))
+
+    edition.derived_revision = revision
+    edition.derived_format_version = CURRENT_DERIVED_FORMAT_VERSION
+    edition.progress_current = len(tracks)
+    edition.progress_total = len(tracks)
+    edition.progress_detail = f"Chapter audio upgraded to format v{CURRENT_DERIVED_FORMAT_VERSION}"
+    edition.error = None
+    await db.commit()
+    cleanup_old_derived_revisions(edition_dir, revision)
+    return revision
 
 
 def imported_audiobook_dir(book_id: int, edition_id: int) -> Path:
@@ -512,6 +818,23 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         edition_dir = imported_audiobook_dir(book.id, edition.id)
         audio_paths, cue_paths = _prepare_sources(edition_dir)
         specs, duration_ms = await _track_specs(audio_paths, cue_paths)
+        manifest_path, manifest_sha, source_size = await build_source_manifest(edition, edition_dir)
+        edition.source_manifest_file_path = relative_library_path(manifest_path)
+        edition.source_manifest_sha256 = manifest_sha
+        edition.source_size_bytes = source_size
+        edition.progress_total = len(specs)
+        edition.progress_current = 0
+        edition.progress_detail = "Preparing chapter audio files"
+        await db.commit()
+        revision = _next_derived_revision(edition, edition_dir)
+
+        async def update_progress(current: int, total: int) -> None:
+            edition.progress_current = current
+            edition.progress_total = total
+            edition.progress_detail = f"Building chapter audio {current} of {total}"
+            await db.commit()
+
+        specs = await _materialize_chapter_audio(specs, edition_dir, revision, update_progress)
         edition.duration_ms = duration_ms
         edition.source_type = "libation" if cue_paths or edition.asin else "upload"
         edition.progress_total = len(specs)
@@ -531,6 +854,9 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
                 title=spec.title,
                 audio_file_path=relative_library_path(spec.audio_path),
                 media_type=spec.media_type,
+                source_audio_file_path=relative_library_path(spec.immutable_audio_path),
+                source_clip_begin_ms=spec.immutable_start_ms,
+                source_clip_end_ms=spec.immutable_end_ms,
                 source_start_ms=spec.start_ms,
                 source_end_ms=spec.end_ms,
                 duration_ms=spec.duration_ms,
@@ -558,11 +884,14 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             context=f"imported audiobook {edition.id}",
         )
         edition.matched_content_version = book.content_version or 1
+        edition.derived_revision = revision
+        edition.derived_format_version = CURRENT_DERIVED_FORMAT_VERSION
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
         edition.progress_detail = f"Ready: {matched_count} of {len(specs)} tracks matched"
         edition.error = None
         await db.commit()
+        cleanup_old_derived_revisions(edition_dir, revision)
         shutil.rmtree(edition_dir / "incoming", ignore_errors=True)
     except Exception as exc:
         logger.exception("Audiobook import %s failed.", edition_id)

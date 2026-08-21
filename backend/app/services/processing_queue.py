@@ -27,7 +27,7 @@ from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, Processing
 from ..logging_config import redact_text
 from ..observability_context import correlation_context
 from .audiobook_alignment import process_alignment
-from .audiobook_import import process_import, rematch_imported_audiobook
+from .audiobook_import import process_import, rematch_imported_audiobook, upgrade_imported_audiobook
 from .audiobook_queue import get_audiobook_queue
 from .audiobook_tts import generate_audio_for_sentence
 from .audiobook_assembly import assemble_chapter_preview
@@ -58,6 +58,7 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "generate_sentence_audio": ("tts", 3),
     "generate_chapter_preview": ("tts", 3),
     "import_audiobook": ("cpu", 3),
+    "upgrade_imported_audiobook": ("cpu", 3),
     "rematch_imported_audiobook": ("cpu", 3),
     "align_imported_audiobook": ("transcription", 3),
     "create_backup": ("maintenance", 1),
@@ -385,6 +386,19 @@ class ProcessingQueue:
                 await self.enqueue(child.id)
                 return "Human audiobook import completed; timestamp alignment queued"
             return "Human audiobook import completed"
+        if job.job_type == "upgrade_imported_audiobook":
+            target_id = _required_target(job)
+
+            async def upgrade_audio() -> int:
+                async with SessionLocal() as db:
+                    return await upgrade_imported_audiobook(target_id, db)
+
+            revision = await self._run_with_progress_mirror(
+                job.id,
+                upgrade_audio,
+                lambda: self._imported_audio_progress(target_id),
+            )
+            return f"Human audiobook chapter assets upgraded to revision {revision}"
         if job.job_type == "rematch_imported_audiobook":
             target_id = _required_target(job)
 

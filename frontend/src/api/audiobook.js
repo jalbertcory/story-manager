@@ -195,6 +195,20 @@ export function retryImportedAudiobook(editionId) {
   });
 }
 
+export function upgradeImportedAudiobook(editionId) {
+  return sendWithoutBody(`/api/imported-audiobooks/${editionId}/upgrade`, {
+    method: "POST",
+    fallbackMessage: "Failed to upgrade audiobook chapter files",
+  });
+}
+
+export function upgradeAllImportedAudiobooks() {
+  return sendWithoutBody("/api/audiobook/imports/upgrade-all", {
+    method: "POST",
+    fallbackMessage: "Failed to queue audiobook upgrades",
+  });
+}
+
 export function alignImportedAudiobook(editionId) {
   return sendWithoutBody(`/api/imported-audiobooks/${editionId}/align`, {
     method: "POST",
