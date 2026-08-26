@@ -50,6 +50,14 @@ export function rebuildAudioOnly(bookId) {
   });
 }
 
+export function setBookTtsProvider(bookId, provider) {
+  return sendJson(`/api/books/${bookId}/audiobook/tts-provider`, {
+    method: "PUT",
+    body: { provider },
+    fallbackMessage: "Failed to change the audiobook TTS provider",
+  });
+}
+
 export function rebuildCharacterRoster(bookId) {
   return sendWithoutBody(`/api/books/${bookId}/audiobook/roster/rebuild`, {
     method: "POST",

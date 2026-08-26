@@ -18,6 +18,7 @@ WORKDIR /app
 COPY services/omnivoice/pyproject.toml services/omnivoice/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
+COPY services/__init__.py services/speaker_similarity.py services/tts_consistency.py /app/services/
 COPY services/omnivoice /app/services/omnivoice
 
 ENV PATH="/app/.venv/bin:${PATH}"

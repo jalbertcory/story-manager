@@ -43,13 +43,24 @@ from ..services.audiobook_import import (
     stream_upload_to_path,
 )
 from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
+from ..services.audiobook_tts import (
+    VOICE_ROSTER_MAX_SIMILARITY,
+    distinctive_voice_prompt,
+    stable_character_seed,
+)
 from ..services.processing_queue import queue_processing_job
 from ..services import audiobook_llm
 from ..services.transcription_providers import (
     transcription_provider_name,
     transcription_service_health,
 )
-from ..services.endpoint_pool import configured_endpoints, primary_provider
+from ..services.endpoint_pool import (
+    configured_endpoints,
+    configured_providers,
+    primary_provider,
+    reset_cooldowns,
+    settings_for_provider,
+)
 from ..services.endpoint_metrics import endpoint_summaries
 from ..services.metadata.scoring import normalize_text, title_similarity
 from ..services.tts_providers import (
@@ -128,6 +139,8 @@ class AudiobookStatusResponse(BaseModel):
     llm_model: Optional[str]
     tts_provider: str
     tts_model: Optional[str]
+    tts_provider_locked: bool
+    available_tts_providers: list[str]
 
 
 class CharacterResponse(BaseModel):
@@ -140,6 +153,7 @@ class CharacterResponse(BaseModel):
     voice_prompt: Optional[str]
     tts_voice_id: Optional[str]
     tts_voice_provider: Optional[str]
+    tts_seed: Optional[int]
     is_narrator: bool
     aliases: Optional[list[str]] = None
     evidence: Optional[list[str]] = None
@@ -154,11 +168,16 @@ class CharacterUpdate(BaseModel):
     description: Optional[str] = None
     voice_prompt: Optional[str] = None
     tts_voice_id: Optional[str] = None
+    tts_seed: Optional[int] = Field(default=None, ge=0, le=2_147_483_647)
     is_narrator: Optional[bool] = None
 
 
 class CharacterVoiceDesign(BaseModel):
     voice_prompt: Optional[str] = None
+
+
+class BookTTSProviderUpdate(BaseModel):
+    provider: str = Field(min_length=1)
 
 
 class SentenceResponse(BaseModel):
@@ -171,6 +190,9 @@ class SentenceResponse(BaseModel):
     tagged_text: Optional[str]
     audio_file_path: Optional[str]
     audio_duration_ms: Optional[int]
+    generation_group_id: Optional[str]
+    voice_similarity: Optional[float]
+    tts_attempts: Optional[int]
     speaker_confidence: Optional[float]
     speaker_reason: Optional[str]
     status: str
@@ -228,6 +250,9 @@ class SettingsResponse(BaseModel):
     tts_base_url: Optional[str]
     tts_model: Optional[str]
     tts_default_voice: Optional[str]
+    tts_max_block_chars: int
+    tts_voice_similarity_threshold: float
+    tts_quality_attempts: int
     transcription_provider: str
     transcription_api_key_set: bool
     transcription_base_url: Optional[str]
@@ -298,6 +323,9 @@ class SettingsUpdate(BaseModel):
     tts_base_url: Optional[str] = None
     tts_model: Optional[str] = None
     tts_default_voice: Optional[str] = None
+    tts_max_block_chars: Optional[int] = Field(default=None, ge=100, le=2000)
+    tts_voice_similarity_threshold: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    tts_quality_attempts: Optional[int] = Field(default=None, ge=1, le=10)
     transcription_provider: Optional[str] = None
     transcription_api_key: Optional[str] = None
     transcription_base_url: Optional[str] = None
@@ -1297,6 +1325,13 @@ async def get_imported_track_smil(
 # ---------------------------------------------------------------------------
 
 
+def _reset_phase_endpoint_cooldowns(phase: str) -> None:
+    """Let an explicit retry probe endpoints immediately after recovery."""
+    capability = {"roster_gen": "llm", "diarizing": "llm", "audio_gen": "tts"}.get(phase)
+    if capability:
+        reset_cooldowns(capability)
+
+
 @router.post("/api/books/{book_id}/audiobook/start")
 async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     book = await _get_audiobook_book_or_404(book_id, db)
@@ -1315,6 +1350,7 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
         return {"status": "complete", "queued": False}
 
     await crud.audiobook.configure_book_pipeline_run(db, book_id, status=resume_status, stop_after_phase=None)
+    _reset_phase_endpoint_cooldowns(resume_status)
 
     await queue_processing_job(
         db=db,
@@ -1348,6 +1384,7 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dic
         return {"status": "complete", "queued": False}
 
     await crud.audiobook.configure_book_pipeline_run(db, book_id, status=next_phase, stop_after_phase=next_phase)
+    _reset_phase_endpoint_cooldowns(next_phase)
     await queue_processing_job(
         db=db,
         job_type="audiobook_pipeline",
@@ -1379,6 +1416,7 @@ async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -
         stop_after_phase=None,
         batch_limit=1,
     )
+    _reset_phase_endpoint_cooldowns(next_phase)
     await queue_processing_job(
         db=db,
         job_type="audiobook_pipeline",
@@ -1511,6 +1549,16 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
     next_phase = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     settings = await crud.audiobook.get_audiobook_settings(db)
     await db.refresh(book)
+    available_tts_providers = configured_providers(settings, "tts")
+    locked_tts_provider = (
+        book.audiobook_tts_provider.strip().lower()
+        if book.audiobook_tts_provider and book.audiobook_tts_provider.strip()
+        else None
+    )
+    selected_tts_provider = locked_tts_provider or tts_provider_name(settings)
+    selected_tts_model = settings.tts_model if settings else None
+    if settings is not None and locked_tts_provider in available_tts_providers:
+        selected_tts_model = settings_for_provider(settings, "tts", locked_tts_provider).tts_model
     total = book.audiobook_progress_total or 0
     percent = round((book.audiobook_progress_current or 0) * 100 / total, 1) if total else None
     return AudiobookStatusResponse(
@@ -1532,14 +1580,64 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
         llm_requests=book.audiobook_llm_requests or 0,
         llm_provider=(settings.llm_provider or "stub") if settings else "stub",
         llm_model=settings.llm_model if settings else None,
-        tts_provider=tts_provider_name(settings),
-        tts_model=settings.tts_model if settings else None,
+        tts_provider=selected_tts_provider,
+        tts_model=selected_tts_model,
+        tts_provider_locked=locked_tts_provider is not None,
+        available_tts_providers=available_tts_providers,
     )
+
+
+@router.put("/api/books/{book_id}/audiobook/tts-provider")
+async def update_book_tts_provider(
+    book_id: int,
+    body: BookTTSProviderUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    book = await _get_audiobook_book_or_404(book_id, db)
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    provider = body.provider.strip().lower()
+    available = configured_providers(settings, "tts")
+    if provider not in available:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Configure a {provider} TTS endpoint in Audio & AI Configuration first. "
+                f"Available providers: {', '.join(available) or 'none'}."
+            ),
+        )
+    try:
+        affected_books = await crud.audiobook.replace_tts_provider_lock(db, book_id, provider)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "provider": provider,
+        "scope": "series" if book.series else "book",
+        "affected_book_ids": [affected.id for affected in affected_books],
+    }
 
 
 # ---------------------------------------------------------------------------
 # Characters
 # ---------------------------------------------------------------------------
+
+
+async def _settings_for_locked_book_provider(
+    db: AsyncSession,
+    book_id: int,
+):
+    settings = await crud.audiobook.get_audiobook_settings(db)
+    try:
+        provider = await crud.audiobook.lock_book_tts_provider(
+            db,
+            book_id,
+            tts_provider_name(settings),
+        )
+        effective_settings = (
+            None if settings is None and provider == "stub" else settings_for_provider(settings, "tts", provider)
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return provider, effective_settings
 
 
 @router.get("/api/books/{book_id}/audiobook/characters", response_model=list[CharacterResponse])
@@ -1558,6 +1656,7 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
             voice_prompt=character.voice_prompt,
             tts_voice_id=character.tts_voice_id,
             tts_voice_provider=character.tts_voice_provider,
+            tts_seed=character.tts_seed,
             is_narrator=character.is_narrator,
             aliases=character.aliases or [],
             evidence=character.evidence or [],
@@ -1571,7 +1670,7 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
 @router.put("/api/audiobook/characters/{char_id}", response_model=CharacterResponse)
 async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession = Depends(get_db)) -> CharacterResponse:
     data = body.model_dump(exclude_unset=True)
-    voice_changed = bool({"voice_prompt", "tts_voice_id"} & data.keys())
+    voice_changed = bool({"voice_prompt", "tts_voice_id", "tts_seed"} & data.keys())
 
     existing = await crud.audiobook.get_character(db, char_id)
     if existing is None:
@@ -1580,7 +1679,7 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
     if (
         "voice_prompt" in data
         and data["voice_prompt"] != existing.voice_prompt
-        and existing.tts_voice_provider == "omnivoice"
+        and existing.tts_voice_provider in {"omnivoice", "qwen3"}
         and "tts_voice_id" not in data
     ):
         # The saved reference represents the old design. A new one will be
@@ -1592,8 +1691,8 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
         if isinstance(voice_id, str):
             voice_id = voice_id.strip() or None
         data["tts_voice_id"] = voice_id
-        settings = await crud.audiobook.get_audiobook_settings(db)
-        data["tts_voice_provider"] = tts_provider_name(settings) if voice_id else None
+        provider, _settings = await _settings_for_locked_book_provider(db, existing.book_id)
+        data["tts_voice_provider"] = provider if voice_id else None
 
     char = await crud.audiobook.update_character(db, char_id, data)
     linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, char)
@@ -1615,17 +1714,33 @@ async def design_character_voice(
     if character is None:
         raise HTTPException(status_code=404, detail="Character not found")
     await _get_audiobook_book_or_404(character.book_id, db)
-    settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None or tts_provider_name(settings) != "omnivoice":
-        raise HTTPException(status_code=409, detail="Select OmniVoice in Audio Settings first")
+    provider, settings = await _settings_for_locked_book_provider(db, character.book_id)
+    if settings is None or provider not in {"omnivoice", "qwen3"}:
+        raise HTTPException(status_code=409, detail="Select OmniVoice or Qwen3-TTS in Audio Settings first")
 
     requested_prompt = body.voice_prompt if "voice_prompt" in body.model_fields_set else character.voice_prompt
-    voice_prompt = requested_prompt or "[gender-neutral][pitch-medium][speed-normal]"
+    voice_prompt = distinctive_voice_prompt(
+        character,
+        requested_prompt or "[gender-neutral][pitch-medium][speed-normal]",
+    )
+    if character.tts_seed is None:
+        character.tts_seed = stable_character_seed(character)
+    avoid_voice_ids = [
+        candidate.tts_voice_id
+        for candidate in await crud.audiobook.get_characters_for_book(db, character.book_id)
+        if candidate.id != character.id and candidate.tts_voice_provider == provider and candidate.tts_voice_id
+    ]
     # Do not replace the saved profile/reference until a new design succeeds.
-    designed = await design_omnivoice_voice(settings, voice_prompt)
+    designed = await design_omnivoice_voice(
+        settings,
+        voice_prompt,
+        seed=character.tts_seed,
+        avoid_voice_ids=avoid_voice_ids,
+        max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
+    )
     character.voice_prompt = voice_prompt
     character.tts_voice_id = designed.id
-    character.tts_voice_provider = "omnivoice"
+    character.tts_voice_provider = provider
     await db.commit()
     linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, character)
     for linked_character in linked_characters:
@@ -1643,11 +1758,11 @@ async def get_character_voice_sample(
     if character is None:
         raise HTTPException(status_code=404, detail="Character not found")
     await _get_audiobook_book_or_404(character.book_id, db)
-    if character.tts_voice_provider != "omnivoice" or not character.tts_voice_id:
-        raise HTTPException(status_code=404, detail="Design a consistent OmniVoice voice first")
-    settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None or tts_provider_name(settings) != "omnivoice":
-        raise HTTPException(status_code=409, detail="Select OmniVoice in Audio Settings first")
+    if character.tts_voice_provider not in {"omnivoice", "qwen3"} or not character.tts_voice_id:
+        raise HTTPException(status_code=404, detail="Design a consistent local voice first")
+    provider, settings = await _settings_for_locked_book_provider(db, character.book_id)
+    if settings is None or provider != character.tts_voice_provider:
+        raise HTTPException(status_code=409, detail="The saved voice does not match this book's locked TTS provider")
     sample = await get_omnivoice_voice_sample(
         settings,
         character.tts_voice_id,
@@ -1958,6 +2073,9 @@ def _settings_response(settings) -> SettingsResponse:
             tts_base_url=None,
             tts_model=None,
             tts_default_voice=None,
+            tts_max_block_chars=500,
+            tts_voice_similarity_threshold=0.45,
+            tts_quality_attempts=3,
             transcription_provider="none",
             transcription_api_key_set=False,
             transcription_base_url=None,
@@ -1980,6 +2098,11 @@ def _settings_response(settings) -> SettingsResponse:
         tts_base_url=settings.tts_base_url,
         tts_model=settings.tts_model,
         tts_default_voice=settings.tts_default_voice,
+        tts_max_block_chars=settings.tts_max_block_chars or 500,
+        tts_voice_similarity_threshold=(
+            settings.tts_voice_similarity_threshold if settings.tts_voice_similarity_threshold is not None else 0.45
+        ),
+        tts_quality_attempts=settings.tts_quality_attempts or 3,
         transcription_provider=settings.transcription_provider or "none",
         transcription_api_key_set=bool(settings.transcription_api_key),
         transcription_base_url=settings.transcription_base_url,
@@ -2082,11 +2205,16 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         "tts_base_url": previous.tts_base_url if previous else None,
         "tts_model": previous.tts_model if previous else None,
         "tts_default_voice": previous.tts_default_voice if previous else None,
+        "tts_max_block_chars": previous.tts_max_block_chars if previous else 500,
+        "tts_voice_similarity_threshold": previous.tts_voice_similarity_threshold if previous else 0.45,
+        "tts_quality_attempts": previous.tts_quality_attempts if previous else 3,
     }
     next_tts = {name: data.get(name, value) for name, value in previous_tts.items()}
     next_tts["tts_provider"] = next_provider
     if "tts_endpoints" in data:
-        tts_changed = _tts_signature(previous_tts_endpoints) != _tts_signature(data["tts_endpoints"])
+        tts_changed = (
+            _tts_signature(previous_tts_endpoints) != _tts_signature(data["tts_endpoints"]) or next_tts != previous_tts
+        )
     else:
         tts_changed = next_tts != previous_tts
     settings = await crud.audiobook.upsert_audiobook_settings(db, data)

@@ -126,12 +126,14 @@ another container. When the AI services publish ports on Unraid, use the server'
 ```text
 Ollama:            http://<UNRAID-IP>:11434
 OmniVoice adapter: http://<UNRAID-IP>:8001
+Qwen3-TTS adapter:  http://<UNRAID-IP>:8003
 Kokoro FastAPI:    http://<UNRAID-IP>:8880
 WhisperX:          http://<UNRAID-IP>:8002
 ```
 
 As an alternative, put Story Manager and its AI services on the same user-defined Docker network and use their
-container names, such as `http://ollama:11434`, `http://story-manager-omnivoice:8001`, or `http://kokoro:8880`.
+container names, such as `http://ollama:11434`, `http://story-manager-omnivoice:8001`,
+`http://story-manager-qwen3-tts:8003`, or `http://kokoro:8880`.
 Do not publish local AI endpoints to the internet; they are not authentication boundaries.
 
 ### Speech-to-text alignment for imported audiobooks
@@ -214,6 +216,7 @@ Text-to-speech is a separate service from Ollama. Story Manager supports:
 
 - The bundled adapter for [`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice), which uses descriptive voice
   profiles and expression tags.
+- The bundled Qwen3-TTS adapter, which supports preset, designed/cloned, and local LoRA voices.
 - OpenAI-compatible `/v1/audio/speech` servers, including
   [Kokoro FastAPI](https://github.com/remsky/Kokoro-FastAPI).
 - OpenAI's speech API.
@@ -221,9 +224,9 @@ Text-to-speech is a separate service from Ollama. Story Manager supports:
 
 ### Sometimes-available gaming PC
 
-The optional [GPU Availability Controller](services/gpu_scheduler/README.md) runs Ollama, OmniVoice, and WhisperX on
-a Windows gaming PC only during configured weekly active hours. Its local control panel starts and stops explicitly
-labeled model containers while Story Manager's ordered endpoint pools route work to an always-on fallback.
+The optional [GPU Availability Controller](services/gpu_scheduler/README.md) runs Ollama, OmniVoice, Qwen3-TTS, and
+WhisperX on a Windows gaming PC only during configured weekly active hours. Its local control panel starts and stops
+explicitly labeled model containers while Story Manager's ordered endpoint pools route work to an always-on fallback.
 
 For a first-time Windows setup, install Docker Desktop with its WSL 2 backend and NVIDIA GPU support, then clone this
 repository and paste the following block into PowerShell from the repository root:
@@ -231,28 +234,31 @@ repository and paste the following block into PowerShell from the repository roo
 ```powershell
 $aiCompose = "services/gpu_scheduler/compose.windows.yaml"
 
-docker compose -f $aiCompose pull gpu-scheduler ollama omnivoice transcription
-docker compose -f $aiCompose up -d gpu-scheduler ollama omnivoice transcription
+docker compose -f $aiCompose pull gpu-scheduler ollama omnivoice qwen3-tts transcription
+docker compose -f $aiCompose up -d gpu-scheduler ollama omnivoice qwen3-tts transcription
 docker exec story-manager-ollama ollama pull qwen3.5:9b
 docker compose -f $aiCompose ps -a
 
 Start-Process "http://127.0.0.1:8765"
 ```
 
-The four containers are the scheduler, Ollama, OmniVoice, and WhisperX. The model services start immediately for
+The five containers are the scheduler, Ollama, OmniVoice, Qwen3-TTS, and WhisperX. The model services start immediately for
 initial setup while the scheduler is in observe-only mode. In the control panel, select the weekly hours when the GPU
 may be used and enable the schedule. Enabling it gives the controller ownership of the model containers, so it may
 stop them immediately when the current time is outside the selected hours. Use **AI on · 2 hours** for a temporary
 override.
 
 In Story Manager's **Audio & AI Configuration**, add the gaming PC's LAN endpoints: Ollama on port `11434`,
-OmniVoice on port `8001`, and WhisperX on port `8002`. Keep these ports restricted to the trusted LAN. See the
+OmniVoice on port `8001`, Qwen3-TTS on port `8003`, and WhisperX on port `8002`. Keep these ports restricted to the trusted LAN. See the
 [GPU Availability Controller guide](services/gpu_scheduler/README.md) for health checks, endpoint examples, the
 `make managed-ai` alternative, and operational details.
 
-OmniVoice remains the recommended local option when you want generated voice characteristics instead of selecting
-from a fixed voice catalog. The character roster stores a provider-neutral voice profile plus an optional provider
-voice ID, so changing providers does not require rebuilding character identity or speaker assignments.
+The Characters tab locks each standalone book—or every book sharing the same series name—to one TTS engine. Endpoint
+failover stays within that engine. Explicitly changing the engine clears incompatible provider voice IDs and generated
+audio across the scope, preventing a book or series from mixing Qwen3-TTS and OmniVoice performances.
+Designed OmniVoice and Qwen clone IDs refer to files in the worker's persistent voice store. Multiple endpoints for
+either engine must share or replicate that store for an existing designed voice to survive endpoint failover;
+otherwise the request fails safely instead of substituting a different voice.
 
 #### OmniVoice
 
@@ -365,12 +371,12 @@ make start
 ```
 
 The command starts only missing services: PostgreSQL, Ollama, the API, the UI,
-OmniVoice, and WhisperX. It waits for health checks, leaves healthy existing
+OmniVoice, Qwen3-TTS, and WhisperX. It waits for health checks, leaves healthy existing
 processes alone, and runs detached services with logs under `.run/logs/`.
 Check their current state at any time with `make services-status`.
 
 The development UI runs at `http://localhost:5173`; the API runs at
-`http://localhost:8000`. The first OmniVoice and WhisperX setups can take
+`http://localhost:8000`. The first OmniVoice, Qwen3-TTS, and WhisperX setups can take
 several minutes. WhisperX stores downloaded models under
 `.run/models/whisperx`. If the recommended Ollama model is missing, install it
 with `make pull-ollama-model`.
@@ -380,6 +386,7 @@ Useful commands:
 ```bash
 make migrate
 make run-omnivoice
+make run-qwen3-tts
 make run-transcription
 make test
 make test-migrations
@@ -388,6 +395,10 @@ make e2e
 
 `make run-omnivoice` installs and runs the optional official local OmniVoice adapter for real audiobook speech.
 See [services/omnivoice/README.md](services/omnivoice/README.md) for hardware notes and configuration.
+
+`make run-qwen3-tts` runs the optional Qwen3-TTS adapter on port 8003. It supports built-in preset voices,
+persistent designed/cloned voices, cross-cast voice-separation checks, and local PEFT LoRA adapters. See
+[services/qwen3_tts/README.md](services/qwen3_tts/README.md) for voice IDs and configuration.
 
 `make run-transcription` installs and runs the local WhisperX word-timestamp
 service. See

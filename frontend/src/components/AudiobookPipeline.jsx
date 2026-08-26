@@ -337,44 +337,44 @@ function AudiobookPipeline({
             )}
             {!readyPipelineStatuses.has(pipelineStatus) &&
               !isActive(pipelineStatus) && (
-              <>
+                <>
                   {batchableStatuses.has(nextPhase) && (
+                    <button
+                      onClick={() => batchMutation.mutate()}
+                      disabled={
+                        batchMutation.isPending ||
+                        stepMutation.isPending ||
+                        startMutation.isPending
+                      }
+                    >
+                      {batchMutation.isPending
+                        ? "Starting Batch…"
+                        : "Run One Batch"}
+                    </button>
+                  )}
                   <button
-                    onClick={() => batchMutation.mutate()}
+                    onClick={() => stepMutation.mutate()}
                     disabled={
-                      batchMutation.isPending ||
                       stepMutation.isPending ||
-                      startMutation.isPending
+                      startMutation.isPending ||
+                      batchMutation.isPending
                     }
                   >
-                    {batchMutation.isPending
-                      ? "Starting Batch…"
-                      : "Run One Batch"}
+                    Run Next Stage: {nextPhaseLabel}
                   </button>
-                )}
-                <button
-                  onClick={() => stepMutation.mutate()}
-                  disabled={
-                    stepMutation.isPending ||
-                    startMutation.isPending ||
-                    batchMutation.isPending
-                  }
-                >
-                  Run Next Stage: {nextPhaseLabel}
-                </button>
-                <button
-                  onClick={() => startMutation.mutate()}
-                  disabled={
-                    startMutation.isPending ||
-                    stepMutation.isPending ||
-                    batchMutation.isPending
-                  }
-                  className="btn-primary"
-                >
-                  Run to Completion
-                </button>
-              </>
-            )}
+                  <button
+                    onClick={() => startMutation.mutate()}
+                    disabled={
+                      startMutation.isPending ||
+                      stepMutation.isPending ||
+                      batchMutation.isPending
+                    }
+                    className="btn-primary"
+                  >
+                    Run to Completion
+                  </button>
+                </>
+              )}
             {isActive(pipelineStatus) && (
               <button
                 onClick={() => pauseMutation.mutate()}
@@ -478,6 +478,8 @@ function AudiobookPipeline({
             pipelineStatus={pipelineStatus}
             series={book.series}
             ttsProvider={statusData?.tts_provider}
+            ttsProviderLocked={statusData?.tts_provider_locked}
+            availableTtsProviders={statusData?.available_tts_providers || []}
           />
         )}
         {subTab === "script-editor" && (

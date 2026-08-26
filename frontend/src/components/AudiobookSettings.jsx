@@ -43,6 +43,7 @@ const CAPABILITIES = {
       "Used to render narration. Put a fast, sometimes-available host above an always-on fallback.",
     providers: [
       ["omnivoice", "OmniVoice"],
+      ["qwen3", "Qwen3-TTS (local)"],
       ["openai-compatible", "OpenAI-compatible (Kokoro / local)"],
       ["openai", "OpenAI"],
       ["elevenlabs", "ElevenLabs"],
@@ -83,7 +84,9 @@ function legacyEndpoint(settings, capability) {
 
 function initialiseEndpoints(settings, capability) {
   const stored = settings?.[`${capability}_endpoints`];
-  const endpoints = stored?.length ? stored : [legacyEndpoint(settings, capability)];
+  const endpoints = stored?.length
+    ? stored
+    : [legacyEndpoint(settings, capability)];
   return endpoints.map((endpoint) => ({
     ...endpoint,
     base_url: endpoint.base_url || "",
@@ -168,7 +171,10 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
         language: "en",
       },
     };
-    setEndpoints((current) => [...current, newEndpoint(capability, presets[capability])]);
+    setEndpoints((current) => [
+      ...current,
+      newEndpoint(capability, presets[capability]),
+    ]);
   };
 
   return (
@@ -214,7 +220,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                     disabled={endpoints.length === 1}
                     onClick={() =>
                       setEndpoints((current) =>
-                        current.filter((_, endpointIndex) => endpointIndex !== index),
+                        current.filter(
+                          (_, endpointIndex) => endpointIndex !== index,
+                        ),
                       )
                     }
                   >
@@ -227,7 +235,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                   Name
                   <input
                     value={endpoint.name}
-                    onChange={(event) => update(index, "name", event.target.value)}
+                    onChange={(event) =>
+                      update(index, "name", event.target.value)
+                    }
                     placeholder="Gaming PC"
                   />
                 </label>
@@ -235,7 +245,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                   Provider
                   <select
                     value={endpoint.provider}
-                    onChange={(event) => update(index, "provider", event.target.value)}
+                    onChange={(event) =>
+                      update(index, "provider", event.target.value)
+                    }
                   >
                     {config.providers.map(([value, label]) => (
                       <option value={value} key={value}>
@@ -250,7 +262,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                     <input
                       type="password"
                       value={endpoint.api_key}
-                      onChange={(event) => update(index, "api_key", event.target.value)}
+                      onChange={(event) =>
+                        update(index, "api_key", event.target.value)
+                      }
                       placeholder={
                         endpoint.api_key_set
                           ? "••••••••  (set — enter a new key to change)"
@@ -265,7 +279,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                     <input
                       type="url"
                       value={endpoint.base_url}
-                      onChange={(event) => update(index, "base_url", event.target.value)}
+                      onChange={(event) =>
+                        update(index, "base_url", event.target.value)
+                      }
                       placeholder={config.baseUrlPlaceholder}
                     />
                   </label>
@@ -275,7 +291,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                     Model
                     <input
                       value={endpoint.model}
-                      onChange={(event) => update(index, "model", event.target.value)}
+                      onChange={(event) =>
+                        update(index, "model", event.target.value)
+                      }
                       placeholder={config.modelPlaceholder}
                     />
                   </label>
@@ -299,7 +317,9 @@ function EndpointPoolEditor({ capability, endpoints, setEndpoints }) {
                     Language
                     <input
                       value={endpoint.language}
-                      onChange={(event) => update(index, "language", event.target.value)}
+                      onChange={(event) =>
+                        update(index, "language", event.target.value)
+                      }
                       placeholder="auto or en"
                     />
                   </label>
@@ -346,25 +366,46 @@ function formatDuration(milliseconds) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
-function EndpointMetrics({ stats, capability, isLoading, error, onRefresh, isRefreshing }) {
+function EndpointMetrics({
+  stats,
+  capability,
+  isLoading,
+  error,
+  onRefresh,
+  isRefreshing,
+}) {
   return (
     <div className="llm-metrics">
       <div className="llm-metrics-heading">
         <div>
           <h4>Connection performance</h4>
           <p className="settings-hint">
-            Successful {capability} requests and endpoint failures are recorded from this upgrade onward.
-            Latency is measured end-to-end for each endpoint attempt.
+            Successful {capability} requests and endpoint failures are recorded
+            from this upgrade onward. Latency is measured end-to-end for each
+            endpoint attempt.
           </p>
         </div>
-        <button type="button" className="btn-secondary" onClick={onRefresh} disabled={isRefreshing}>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+        >
           {isRefreshing ? "Refreshing…" : "Refresh metrics"}
         </button>
       </div>
-      {isLoading && <p className="settings-hint">Loading connection metrics…</p>}
-      {error && <p className="error">{error.message || "Failed to load connection metrics"}</p>}
+      {isLoading && (
+        <p className="settings-hint">Loading connection metrics…</p>
+      )}
+      {error && (
+        <p className="error">
+          {error.message || "Failed to load connection metrics"}
+        </p>
+      )}
       {!isLoading && !error && stats.length === 0 && (
-        <p className="settings-hint">Save an LLM endpoint to begin collecting metrics.</p>
+        <p className="settings-hint">
+          Save an LLM endpoint to begin collecting metrics.
+        </p>
       )}
       {stats.length > 0 && (
         <div className="llm-metric-grid">
@@ -373,25 +414,60 @@ function EndpointMetrics({ stats, capability, isLoading, error, onRefresh, isRef
               <header>
                 <div>
                   <strong>{endpoint.name}</strong>
-                  <span>{endpoint.provider}{endpoint.model ? ` · ${endpoint.model}` : ""}</span>
+                  <span>
+                    {endpoint.provider}
+                    {endpoint.model ? ` · ${endpoint.model}` : ""}
+                  </span>
                 </div>
                 <span className="llm-success-rate">
-                  {endpoint.success_rate === null ? "No data" : `${endpoint.success_rate}% answered`}
+                  {endpoint.success_rate === null
+                    ? "No data"
+                    : `${endpoint.success_rate}% answered`}
                 </span>
               </header>
               <dl className="llm-metric-summary">
-                <div><dt>Answered</dt><dd>{endpoint.answered}</dd></div>
-                <div><dt>Failed attempts</dt><dd>{endpoint.failed}</dd></div>
-                <div><dt>Average</dt><dd>{formatDuration(endpoint.average_ms)}</dd></div>
-                <div><dt>P50</dt><dd>{formatDuration(endpoint.p50_ms)}</dd></div>
-                <div><dt>P95</dt><dd>{formatDuration(endpoint.p95_ms)}</dd></div>
-                <div><dt>Last 24h</dt><dd>{endpoint.answered_24h}</dd></div>
+                <div>
+                  <dt>Answered</dt>
+                  <dd>{endpoint.answered}</dd>
+                </div>
+                <div>
+                  <dt>Failed attempts</dt>
+                  <dd>{endpoint.failed}</dd>
+                </div>
+                <div>
+                  <dt>Average</dt>
+                  <dd>{formatDuration(endpoint.average_ms)}</dd>
+                </div>
+                <div>
+                  <dt>P50</dt>
+                  <dd>{formatDuration(endpoint.p50_ms)}</dd>
+                </div>
+                <div>
+                  <dt>P95</dt>
+                  <dd>{formatDuration(endpoint.p95_ms)}</dd>
+                </div>
+                <div>
+                  <dt>Last 24h</dt>
+                  <dd>{endpoint.answered_24h}</dd>
+                </div>
               </dl>
-              <div className="llm-speed-breakdown" aria-label={`${endpoint.name} speed breakdown`}>
-                <span>&lt;5s <strong>{endpoint.speed_buckets.under_5s}</strong></span>
-                <span>5–15s <strong>{endpoint.speed_buckets.from_5s_to_15s}</strong></span>
-                <span>15–60s <strong>{endpoint.speed_buckets.from_15s_to_60s}</strong></span>
-                <span>60s+ <strong>{endpoint.speed_buckets.over_60s}</strong></span>
+              <div
+                className="llm-speed-breakdown"
+                aria-label={`${endpoint.name} speed breakdown`}
+              >
+                <span>
+                  &lt;5s <strong>{endpoint.speed_buckets.under_5s}</strong>
+                </span>
+                <span>
+                  5–15s <strong>{endpoint.speed_buckets.from_5s_to_15s}</strong>
+                </span>
+                <span>
+                  15–60s{" "}
+                  <strong>{endpoint.speed_buckets.from_15s_to_60s}</strong>
+                </span>
+                <span>
+                  60s+ <strong>{endpoint.speed_buckets.over_60s}</strong>
+                </span>
               </div>
             </article>
           ))}
@@ -418,6 +494,10 @@ function AudiobookSettings() {
   const [transcriptionEndpoints, setTranscriptionEndpoints] = useState([]);
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
+  const [maxBlockChars, setMaxBlockChars] = useState(500);
+  const [voiceSimilarityThreshold, setVoiceSimilarityThreshold] =
+    useState(0.45);
+  const [qualityAttempts, setQualityAttempts] = useState(3);
   const [initialised, setInitialised] = useState(false);
 
   useEffect(() => {
@@ -427,6 +507,11 @@ function AudiobookSettings() {
       setTranscriptionEndpoints(initialiseEndpoints(settings, "transcription"));
       setRosterPrompt(settings.roster_prompt_template || "");
       setDiarizationPrompt(settings.diarization_prompt_template || "");
+      setMaxBlockChars(settings.tts_max_block_chars ?? 500);
+      setVoiceSimilarityThreshold(
+        settings.tts_voice_similarity_threshold ?? 0.45,
+      );
+      setQualityAttempts(settings.tts_quality_attempts ?? 3);
       setInitialised(true);
     }
   }, [initialised, settings]);
@@ -437,6 +522,9 @@ function AudiobookSettings() {
     transcription_endpoints: serialiseEndpoints(transcriptionEndpoints),
     roster_prompt_template: rosterPrompt || null,
     diarization_prompt_template: diarizationPrompt || null,
+    tts_max_block_chars: Number(maxBlockChars),
+    tts_voice_similarity_threshold: Number(voiceSimilarityThreshold),
+    tts_quality_attempts: Number(qualityAttempts),
   });
 
   const refreshSettings = () => {
@@ -495,13 +583,16 @@ function AudiobookSettings() {
       </button>
       {mutation.isSuccess && (
         <p className="success">
-          Connected{mutation.data.endpoint ? ` via ${mutation.data.endpoint}` : ""} to{" "}
+          Connected
+          {mutation.data.endpoint ? ` via ${mutation.data.endpoint}` : ""} to{" "}
           {mutation.data.provider}
           {mutation.data.model ? ` / ${mutation.data.model}` : ""}.
         </p>
       )}
       {mutation.isError && (
-        <p className="error">{mutation.error?.message || `${label} test failed`}</p>
+        <p className="error">
+          {mutation.error?.message || `${label} test failed`}
+        </p>
       )}
     </div>
   );
@@ -510,9 +601,10 @@ function AudiobookSettings() {
     <div className="settings-page">
       <h2>Audio &amp; AI Configuration</h2>
       <p className="settings-hint endpoint-routing-hint">
-        Requests use the highest-priority available endpoint. Connection or model
-        failures put that endpoint on a 60-second cooldown, then the next request
-        tries it again. No background polling runs when there is no work.
+        Requests use the highest-priority available endpoint. Connection or
+        model failures put that endpoint on a 60-second cooldown, then the next
+        request tries it again. No background polling runs when there is no
+        work.
       </p>
       <form onSubmit={handleSave}>
         <section className="settings-section">
@@ -547,6 +639,48 @@ function AudiobookSettings() {
             onRefresh={() => endpointStatsQuery.refetch()}
             isRefreshing={endpointStatsQuery.isFetching}
           />
+          <div className="endpoint-fields">
+            <label>
+              Same-speaker block size
+              <input
+                type="number"
+                min="100"
+                max="2000"
+                value={maxBlockChars}
+                onChange={(event) => setMaxBlockChars(event.target.value)}
+              />
+              <span className="settings-hint">
+                Adjacent sentences use one longer performance up to this many
+                characters, then are sliced back into reader cues.
+              </span>
+            </label>
+            <label>
+              Minimum voice similarity
+              <input
+                type="number"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={voiceSimilarityThreshold}
+                onChange={(event) =>
+                  setVoiceSimilarityThreshold(event.target.value)
+                }
+              />
+              <span className="settings-hint">
+                Local cloned voices below this WavLM score are regenerated.
+              </span>
+            </label>
+            <label>
+              Voice quality attempts
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={qualityAttempts}
+                onChange={(event) => setQualityAttempts(event.target.value)}
+              />
+            </label>
+          </div>
         </section>
 
         <section className="settings-section">
@@ -589,7 +723,9 @@ function AudiobookSettings() {
         </section>
 
         {saveMutation.isError && (
-          <p className="error">{saveMutation.error?.message || "Save failed"}</p>
+          <p className="error">
+            {saveMutation.error?.message || "Save failed"}
+          </p>
         )}
         {saveMutation.isSuccess && <p className="success">Settings saved.</p>}
         <button type="submit" disabled={saveMutation.isPending}>

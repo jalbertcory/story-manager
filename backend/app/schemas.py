@@ -36,6 +36,7 @@ class BookBase(BaseModel):
     refresh_status: Optional[str] = None
     audiobook_enabled: bool = False
     audiobook_pipeline_status: Optional[str] = None
+    audiobook_tts_provider: Optional[str] = None
 
 
 # Pydantic model for creating a new book.

@@ -173,11 +173,14 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | llm_api_key | String | Stored plaintext; masked on GET |
 | llm_base_url | String | Override for custom/local LLMs |
 | llm_model | String | e.g. `"gpt-4o"`, `"claude-opus-4-7"` |
-| tts_provider | String | `"stub"`, `"omnivoice"`, `"openai-compatible"`, `"openai"`, or `"elevenlabs"` |
+| tts_provider | String | `"stub"`, `"omnivoice"`, `"qwen3"`, `"openai-compatible"`, `"openai"`, or `"elevenlabs"` |
 | tts_api_key | String | Optional provider credential; masked on GET |
 | tts_base_url | String | Provider base URL; required for local servers |
 | tts_model | String | Provider model name, when applicable |
 | tts_default_voice | String | Default fixed voice ID, when applicable |
+| tts_max_block_chars | Integer | Maximum text length for an adjacent same-speaker generation block |
+| tts_voice_similarity_threshold | Float | Minimum enrollment/candidate similarity for local cloned voices |
+| tts_quality_attempts | Integer | Maximum signal/speaker validation attempts in a local adapter |
 | roster_prompt_template | Text | Override default roster extraction prompt |
 | diarization_prompt_template | Text | Override default diarization prompt |
 
@@ -202,9 +205,10 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | series_character_id | FK → audiobook_series_characters SET NULL | Shared series voice/profile link |
 | name | String | |
 | description | Text | LLM-generated summary |
-| voice_prompt | String | Provider-neutral attributes e.g. `[gender-male][pitch-low]` |
+| voice_prompt | String | Provider-neutral tokens plus a distinctive acoustic description |
 | tts_voice_id | String | Optional provider voice ID overriding the global default |
 | tts_voice_provider | String | Provider that owns `tts_voice_id`; mismatched IDs are ignored |
+| tts_seed | Integer | Stable per-character seed, shared through the series roster |
 | is_narrator | Boolean | |
 
 **`audiobook_series_characters`** (migration 0021) — the canonical character and voice profile roster shared by
@@ -254,6 +258,10 @@ settings, alignment errors, cached transcript paths, and per-track alignment
 scores. Imported cue rows continue to hold the active timestamps, method, and
 confidence.
 
+Migration `0037_audiobook_voice_consistency.py` adds deterministic character seeds, same-speaker block controls,
+and per-sentence generation-group, speaker-similarity, and attempt diagnostics. It preserves existing roster and
+sentence data; seeds are assigned lazily when a character is next synthesized.
+
 ---
 
 ## TTS Provider Integration
@@ -264,6 +272,7 @@ selected provider:
 | Provider | HTTP contract | Voice selection |
 |---|---|---|
 | `omnivoice` | `POST {base_url}/generate` | Persistent character voice ID plus descriptive `voice_prompt`; expression tags preserved |
+| `qwen3` | `POST {base_url}/generate` | `preset:<speaker>`, persistent designed clone, or `lora:<adapter>` voice ID |
 | `openai-compatible` | `POST {base_url}/v1/audio/speech` | Character/default voice ID; compatible core fields only |
 | `openai` | `POST /v1/audio/speech` | Character/default voice ID; instructions on supported models |
 | `elevenlabs` | `POST /v1/text-to-speech/{voice_id}` | Character/default voice ID |
@@ -271,7 +280,15 @@ selected provider:
 
 For providers without Story Manager expression-tag support, known tags are removed so they are not spoken aloud.
 The compact speed profile maps to the provider's speed parameter. A character voice ID overrides
-`tts_default_voice`.
+`tts_default_voice`. Consecutive single-role sentences assigned to the same character are synthesized as one longer
+block (up to `tts_max_block_chars`) and then split back into sentence MP3s. This preserves the existing SMIL cue
+granularity while giving the model more context. Mixed dialogue/narration sentences stay isolated so each role keeps
+its own voice.
+
+Provider locking prevents endpoint routing from crossing into another TTS engine. Persistent `omnivoice-...` and
+`qwen3-...` voice IDs are backed by files in the worker's voice store, so same-engine fallback endpoints must share or
+replicate that store. If a fallback worker does not have the saved voice, generation fails rather than silently using
+a different performance.
 
 ### OmniVoice HTTP Contract
 
@@ -291,16 +308,32 @@ Accept: audio/mpeg
 {
   "voice": "[gender-female][pitch-high][speed-normal]",
   "voice_id": "omnivoice-0123456789abcdef0123456789abcdef",
+  "seed": 123456789,
+  "min_voice_similarity": 0.45,
+  "quality_attempts": 3,
   "text": "She laughed. [laughter] \"I can't believe it,\" she said."
 }
 
 Response: 200 OK
 Content-Type: audio/mpeg
+X-Voice-Similarity: 0.812345
+X-Generation-Attempts: 1
 Body: raw MP3 bytes
 ```
 
 The `voice_id` is obtained from `POST {tts_base_url}/voices/design`; omit it only when creating an enrollment sample
 or intentionally using one-shot voice design.
+
+For every local character, Story Manager stores a deterministic seed and sends it with each request. Validation
+retries use the reproducible sequence `seed`, `seed + 1`, and so on. Designed/cloned voices are compared with their
+enrollment WAV using WavLM speaker embeddings; outputs below the configured threshold are rejected and retried.
+Similarity scores, attempt counts, and block IDs are returned by the API and shown in the Script Editor.
+
+Qwen3 roster enrollment also compares each new reference with every previously assigned cast reference. A candidate
+above the cross-character limit is discarded and regenerated with the character's deterministic attempt seeds. If
+free-form design exhausts its attempts, Story Manager tries a gender-compatible official CustomVoice speaker, checks
+it against the same cast, and persists the accepted sample as a normal `qwen3-...` clone. Every later line therefore
+uses one durable reference and the same 1.7B clone model, rather than switching model families during the book.
 
 ### Voice Profile Schema
 
@@ -314,9 +347,13 @@ The LLM roster prompt produces provider-neutral voice profile strings using thes
 [age-{young|middle|old}]                     # optional
 ```
 
+The bracket tokens constrain broad traits. Follow them with a unique acoustic description covering timbre,
+resonance, diction, and cadence; token-only profiles are expanded deterministically before enrollment.
+
 Examples:
-- Narrator: `[gender-male][pitch-low][speed-normal][age-middle]`
-- Child character: `[gender-female][pitch-high][speed-fast][age-young]`
+
+- Narrator: `[gender-male][pitch-low][speed-normal][age-middle] Dry baritone with firm chest resonance, crisp diction, and a measured sardonic cadence.`
+- Child character: `[gender-female][pitch-high][speed-fast][age-young] Bright airy soprano with forward resonance, nimble articulation, and playful staccato phrasing.`
 
 Users can manually edit these values in the Character Roster UI.
 
@@ -350,6 +387,22 @@ OmniVoice adapter produces real speech.
 The defaults use 16 diffusion steps for interactive local throughput. Set `OMNIVOICE_NUM_STEPS=32` before
 `make run-omnivoice` for the upstream quality default. Other adapter options are documented in
 `services/omnivoice/README.md`.
+
+### Local Qwen3-TTS
+
+The Qwen3-TTS adapter implements the same local HTTP contract and lazily loads the model variant required by the
+selected voice mode. Start it with:
+
+```bash
+make run-qwen3-tts
+curl http://127.0.0.1:8003/health
+```
+
+Choose **Qwen3-TTS** and use `http://127.0.0.1:8003`. Character voice IDs may be built-in CustomVoice speakers such
+as `preset:Ryan`, persistent `qwen3-...` voices created from the roster, or PEFT adapters named
+`lora:<directory-name>`. Adapter directories and their required `voice.json` enrollment metadata are documented in
+`services/qwen3_tts/README.md`. The service stores model weights, designed reference voices, LoRA files, and the
+WavLM speaker verifier under the configured model cache.
 
 ## Deterministic Local Harness
 

@@ -655,4 +655,69 @@ describe("AudiobookPipeline", () => {
       );
     });
   });
+
+  it("requires confirmation before changing the TTS engine for a series", async () => {
+    const fetchMock = vi.fn((url, options) => {
+      if (url === "/api/books/11/audiobook/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              pipeline_status: "paused",
+              next_phase: "audio_gen",
+              sentence_counts: { ready_for_audio: 1 },
+              tts_provider: "qwen3",
+              tts_provider_locked: true,
+              available_tts_providers: ["qwen3", "omnivoice"],
+            }),
+        });
+      }
+      if (url === "/api/books/11/audiobook/characters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ id: 4, name: "Avery" }]),
+        });
+      }
+      if (url === "/api/books/11/audiobook/chapters") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (
+        url === "/api/books/11/audiobook/tts-provider" &&
+        options?.method === "PUT"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({ provider: "omnivoice", scope: "series" }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    globalThis.fetch = fetchMock;
+
+    renderWithClient(
+      <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Characters" }));
+    fireEvent.change(screen.getByLabelText("Series TTS engine"), {
+      target: { value: "omnivoice" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Change engine" }));
+    expect(
+      screen.getByText(/clears incompatible voices and generated audio/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, change engine" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/tts-provider",
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: "omnivoice" }),
+        },
+      );
+    });
+  });
 });

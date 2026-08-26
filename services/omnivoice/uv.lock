@@ -1345,6 +1345,7 @@ dependencies = [
     { name = "pydub" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "transformers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1356,6 +1357,7 @@ requires-dist = [
     { name = "pydub", specifier = "==0.25.1" },
     { name = "torch", specifier = "==2.8.0" },
     { name = "torchaudio", specifier = "==2.8.0" },
+    { name = "transformers", specifier = ">=4.57,<6" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.51.0" },
 ]
 

@@ -305,6 +305,50 @@ ensure_omnivoice() {
         --port 8001
 }
 
+ensure_qwen3_tts() {
+    local qwen_project="qwen3_tts"
+    local qwen_module="services.qwen3_tts.server:app"
+    local qwen_setup_target="setup-qwen3-tts"
+    local qwen_uvicorn
+
+    if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+        qwen_project="qwen3_tts_mlx"
+        qwen_module="services.qwen3_tts_mlx.server:app"
+        qwen_setup_target="setup-qwen3-tts-mlx"
+    fi
+    qwen_uvicorn="$PROJECT_DIR/services/$qwen_project/.venv/bin/uvicorn"
+
+    if url_ready "http://127.0.0.1:8003/health"; then
+        info "READY   Qwen3-TTS (http://127.0.0.1:8003/health) — already running"
+        return 0
+    fi
+
+    if [ ! -x "$qwen_uvicorn" ]; then
+        if ! command -v uv >/dev/null 2>&1; then
+            error "uv is required to install Qwen3-TTS."
+            return 1
+        fi
+
+        info "SETUP   Qwen3-TTS (first setup may take several minutes)"
+        if ! make -C "$PROJECT_DIR" "$qwen_setup_target"; then
+            error "Qwen3-TTS setup failed."
+            return 1
+        fi
+    fi
+
+    ensure_http_service \
+        "Qwen3-TTS" \
+        "qwen3-tts" \
+        "http://127.0.0.1:8003/health" \
+        "8003" \
+        "900" \
+        env PYTORCH_ENABLE_MPS_FALLBACK=1 \
+        "$qwen_uvicorn" \
+        "$qwen_module" \
+        --host 127.0.0.1 \
+        --port 8003
+}
+
 ensure_transcription() {
     local transcription_uvicorn="$PROJECT_DIR/services/transcription/.venv/bin/uvicorn"
 
@@ -381,6 +425,13 @@ print_status() {
         missing=$((missing + 1))
     fi
 
+    if url_ready "http://127.0.0.1:8003/health"; then
+        info "READY   Qwen3-TTS (http://127.0.0.1:8003)"
+    else
+        info "MISSING Qwen3-TTS (http://127.0.0.1:8003)"
+        missing=$((missing + 1))
+    fi
+
     if url_ready "http://127.0.0.1:8002/health"; then
         info "READY   WhisperX (http://127.0.0.1:8002)"
     else
@@ -421,6 +472,7 @@ case "${1:-start}" in
 
         ensure_ui || failures=$((failures + 1))
         ensure_omnivoice || failures=$((failures + 1))
+        ensure_qwen3_tts || failures=$((failures + 1))
         ensure_transcription || failures=$((failures + 1))
         check_ollama_model || failures=$((failures + 1))
 

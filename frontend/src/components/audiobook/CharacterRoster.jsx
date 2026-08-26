@@ -4,6 +4,7 @@ import {
   designCharacterVoice,
   getCharacterVoiceSampleUrl,
   rebuildCharacterRoster,
+  setBookTtsProvider,
   shareCharacterRosterWithSeries,
   updateCharacter,
 } from "../../api/audiobook";
@@ -14,6 +15,7 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
   const [voicePrompt, setVoicePrompt] = useState(character.voice_prompt || "");
   const [voiceId, setVoiceId] = useState(character.tts_voice_id || "");
   const [voiceIdDirty, setVoiceIdDirty] = useState(false);
+  const [voiceSeed, setVoiceSeed] = useState(character.tts_seed ?? "");
   const [saved, setSaved] = useState(false);
   const [sampleRevision, setSampleRevision] = useState(0);
 
@@ -21,10 +23,15 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
     if (!voiceIdDirty) setVoiceId(character.tts_voice_id || "");
   }, [character.tts_voice_id, voiceIdDirty]);
 
+  useEffect(() => {
+    setVoiceSeed(character.tts_seed ?? "");
+  }, [character.tts_seed]);
+
   const mutation = useMutation({
     mutationFn: (data) => updateCharacter(character.id, data),
     onSuccess: (updatedCharacter) => {
       setVoiceId(updatedCharacter.tts_voice_id || "");
+      setVoiceSeed(updatedCharacter.tts_seed ?? "");
       setVoiceIdDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -54,6 +61,7 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
   const handleSave = () => {
     const payload = {
       voice_prompt: voicePrompt || null,
+      tts_seed: voiceSeed === "" ? null : Number(voiceSeed),
     };
     if (voiceIdDirty) {
       payload.tts_voice_id = voiceId || null;
@@ -109,7 +117,7 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
           type="text"
           value={voicePrompt}
           onChange={(e) => setVoicePrompt(e.target.value)}
-          placeholder="e.g. [gender-male][pitch-low][speed-normal]"
+          placeholder="e.g. [gender-male][pitch-low] Dry baritone, crisp diction, measured cadence"
         />
       </label>
       <p className="character-voice-hint">
@@ -117,8 +125,21 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
         <code>[pitch-low|medium|high]</code>{" "}
         <code>[speed-slow|normal|fast]</code>{" "}
         <code>[age-young|middle|old]</code>{" "}
-        <code>[accent-british|american|…]</code>
+        <code>[accent-british|american|…]</code>. Add a short acoustic
+        description (timbre, resonance, diction, and cadence) so this character
+        is distinguishable from the rest of the cast.
       </p>
+      <label className="character-voice-label">
+        Stable generation seed
+        <input
+          type="number"
+          min="0"
+          max="2147483647"
+          value={voiceSeed}
+          onChange={(event) => setVoiceSeed(event.target.value)}
+          placeholder="Created automatically on first use"
+        />
+      </label>
       <label className="character-voice-label">
         Provider Voice ID
         <input
@@ -133,13 +154,13 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
       </label>
       <p className="character-voice-hint">
         Used by fixed-voice providers such as OpenAI-compatible APIs and
-        ElevenLabs. OmniVoice stores a reusable reference voice here after it is
-        designed.
+        ElevenLabs. Local design-capable providers store a reusable reference
+        voice here after it is designed.
         {character.tts_voice_provider
           ? ` Saved for ${character.tts_voice_provider}.`
           : ""}
       </p>
-      {ttsProvider === "omnivoice" && (
+      {["omnivoice", "qwen3"].includes(ttsProvider) && (
         <div className="character-voice-design">
           <button
             onClick={() => designMutation.mutate()}
@@ -147,11 +168,11 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
           >
             {designMutation.isPending
               ? "Designing sample…"
-              : character.tts_voice_provider === "omnivoice"
+              : character.tts_voice_provider === ttsProvider
                 ? "Replace Voice Design"
                 : "Create Consistent Voice"}
           </button>
-          {(character.tts_voice_provider === "omnivoice" ||
+          {(character.tts_voice_provider === ttsProvider ||
             designMutation.isSuccess) && (
             <audio
               controls
@@ -163,8 +184,11 @@ function CharacterCard({ character, bookId, pipelineActive, ttsProvider }) {
           )}
           <p className="character-voice-hint">
             This creates one reference performance and reuses it for every
-            sentence. Replacing it updates the shared series roster and
-            invalidates clips made with the previous voice.
+            generation block. Qwen3 also accepts preset IDs such as
+            <code> preset:Ryan</code> and installed LoRA IDs such as
+            <code> lora:narrator</code>. Replacing a reference updates the
+            shared series roster and invalidates clips made with the previous
+            voice.
           </p>
         </div>
       )}
@@ -195,6 +219,8 @@ function CharacterRoster({
   pipelineStatus,
   series,
   ttsProvider,
+  ttsProviderLocked,
+  availableTtsProviders = [],
 }) {
   const queryClient = useQueryClient();
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
@@ -202,7 +228,29 @@ function CharacterRoster({
     lifecycleDefinitions?.audiobook_pipeline?.active_states ?? [],
   );
   const pipelineActive = activeStatuses.has(pipelineStatus);
+  const providerOptions = availableTtsProviders.includes(ttsProvider)
+    ? availableTtsProviders
+    : [ttsProvider, ...availableTtsProviders].filter(Boolean);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(ttsProvider || "");
+  const [confirmProviderChange, setConfirmProviderChange] = useState(false);
+  useEffect(() => {
+    setSelectedProvider(ttsProvider || "");
+    setConfirmProviderChange(false);
+  }, [ttsProvider]);
+  const providerMutation = useMutation({
+    mutationFn: () => setBookTtsProvider(bookId, selectedProvider),
+    onSuccess: () => {
+      setConfirmProviderChange(false);
+      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-characters", bookId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["audiobook-chapters", bookId],
+      });
+    },
+  });
   const regenerateMutation = useMutation({
     mutationFn: () => rebuildCharacterRoster(bookId),
     onSuccess: () => {
@@ -236,6 +284,70 @@ function CharacterRoster({
 
   return (
     <>
+      <div className="roster-controls">
+        <label>
+          {series ? "Series TTS engine" : "Book TTS engine"}{" "}
+          <select
+            value={selectedProvider}
+            onChange={(event) => {
+              setSelectedProvider(event.target.value);
+              setConfirmProviderChange(false);
+            }}
+            disabled={pipelineActive || providerMutation.isPending}
+          >
+            {providerOptions.map((provider) => (
+              <option key={provider} value={provider}>
+                {provider === "qwen3"
+                  ? "Qwen3-TTS"
+                  : provider === "omnivoice"
+                    ? "OmniVoice"
+                    : provider}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span>
+          {ttsProviderLocked ? "Locked" : "Will lock on first generation"} to{" "}
+          <strong>{ttsProvider}</strong>. Routing stays within this engine and
+          never falls through to a different one.
+        </span>
+        {selectedProvider &&
+          selectedProvider !== ttsProvider &&
+          (!confirmProviderChange ? (
+            <button
+              onClick={() => setConfirmProviderChange(true)}
+              disabled={pipelineActive}
+            >
+              Change engine
+            </button>
+          ) : (
+            <span className="confirm-inline">
+              This clears incompatible voices and generated audio for the whole
+              {series ? " series" : " book"}.{" "}
+              <button
+                className="btn-danger"
+                onClick={() => providerMutation.mutate()}
+                disabled={providerMutation.isPending}
+              >
+                {providerMutation.isPending
+                  ? "Changing…"
+                  : "Yes, change engine"}
+              </button>{" "}
+              <button
+                className="btn-text"
+                onClick={() => {
+                  setSelectedProvider(ttsProvider || "");
+                  setConfirmProviderChange(false);
+                }}
+              >
+                Cancel
+              </button>
+            </span>
+          ))}
+        {providerMutation.isError && (
+          <span className="error">{providerMutation.error?.message}</span>
+        )}
+      </div>
       <div className="roster-controls">
         <span>
           {characters.length} voice profiles. Regenerating preserves EPUB
