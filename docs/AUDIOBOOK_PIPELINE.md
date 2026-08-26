@@ -285,6 +285,11 @@ block (up to `tts_max_block_chars`) and then split back into sentence MP3s. This
 granularity while giving the model more context. Mixed dialogue/narration sentences stay isolated so each role keeps
 its own voice.
 
+Provider locking prevents endpoint routing from crossing into another TTS engine. Persistent `omnivoice-...` and
+`qwen3-...` voice IDs are backed by files in the worker's voice store, so same-engine fallback endpoints must share or
+replicate that store. If a fallback worker does not have the saved voice, generation fails rather than silently using
+a different performance.
+
 ### OmniVoice HTTP Contract
 
 OmniVoice is a self-hosted TTS worker. The endpoint URL is configured in `audiobook_settings`.

@@ -78,7 +78,14 @@ async def upsert_audiobook_settings(db: AsyncSession, data: dict) -> AudiobookSe
 async def _books_in_tts_scope(db: AsyncSession, book: Book) -> list[Book]:
     if not book.series:
         return [book]
-    result = await db.execute(select(Book).where(func.lower(Book.series) == book.series.lower()).order_by(Book.id))
+    result = await db.execute(
+        select(Book)
+        .where(
+            func.lower(Book.series) == book.series.lower(),
+            Book.deleted_at.is_(None),
+        )
+        .order_by(Book.id)
+    )
     return list(result.scalars().all())
 
 

@@ -534,7 +534,7 @@ async def _generate_sentence_clips(
     block_index = 0
     while block_index < len(blocks):
         block = blocks[block_index]
-        block_sentences = [item[0] for item in block]
+        attempted_sentences = [item[0] for item in block]
         try:
             if len(block) == 1 or len(block[0][1]) != 1:
                 sentence, requests = block[0]
@@ -548,9 +548,10 @@ async def _generate_sentence_clips(
                         break
                     stable_blocks.append(candidate)
                     block_index += 1
+                attempted_sentences = [item[0] for candidate in stable_blocks for item in candidate]
                 await _generate_stable_blocks(settings, book_id, stable_blocks, db)
         except Exception as exc:
-            for sentence in block_sentences:
+            for sentence in attempted_sentences:
                 failures[sentence.id] = exc
             # Provider failures usually affect every later block as well. Stop
             # here so one outage does not turn an entire book into error rows.

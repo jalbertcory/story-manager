@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import shutil
 import zipfile
@@ -1720,6 +1721,62 @@ async def test_generation_batches_multiple_stable_blocks(monkeypatch):
 
     assert not failures
     assert generated_batches == [[[1, 2], [3, 4], [5, 6], [7, 8]]]
+
+
+@pytest.mark.asyncio
+async def test_failed_native_batch_reports_every_attempted_stable_block(monkeypatch):
+    sentences = [
+        models.AudiobookSentence(
+            id=index + 1,
+            chapter_id=10,
+            character_id=20 + index // 2,
+            html_element_id=f"s{index}",
+            sequence_order=index,
+            original_text="Text.",
+        )
+        for index in range(8)
+    ]
+
+    async def build_requests(_settings, sentence, _db):
+        return [
+            audiobook_tts.TTSRequest(
+                text=sentence.original_text,
+                voice_id=f"voice-{sentence.character_id}",
+                seed=sentence.character_id,
+            )
+        ]
+
+    async def fail_stable_blocks(_settings, _book_id, _blocks, _db):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", fail_stable_blocks)
+
+    failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
+
+    assert list(failures) == [sentence.id for sentence in sentences]
+
+
+@pytest.mark.asyncio
+async def test_tts_series_scope_ignores_deleted_books(db):
+    active = await _make_book(db, title="Active Saga", series="Provider Saga", audiobook_enabled=True)
+    deleted = await _make_book(
+        db,
+        title="Deleted Saga",
+        series="Provider Saga",
+        audiobook_enabled=True,
+        audiobook_tts_provider="qwen3",
+    )
+    deleted.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    provider = await crud.audiobook.lock_book_tts_provider(db, active.id, "omnivoice")
+    await db.refresh(active)
+    await db.refresh(deleted)
+
+    assert provider == "omnivoice"
+    assert active.audiobook_tts_provider == "omnivoice"
+    assert deleted.audiobook_tts_provider == "qwen3"
 
 
 def test_block_boundaries_remain_monotonic_for_many_short_sentences():

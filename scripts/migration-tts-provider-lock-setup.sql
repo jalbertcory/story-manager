@@ -3,7 +3,13 @@ VALUES
     ('Provider Saga One', 'Story Manager', 'epub', 'Provider Migration Saga'),
     ('Provider Saga Two', 'Story Manager', 'epub', 'Provider Migration Saga'),
     ('Provider Standalone', 'Story Manager', 'epub', NULL),
-    ('Provider Mixed History', 'Story Manager', 'epub', NULL);
+    ('Provider Mixed History', 'Story Manager', 'epub', NULL),
+    ('Provider Active With Deleted History', 'Story Manager', 'epub', 'Deleted Provider Migration Saga'),
+    ('Provider Deleted History', 'Story Manager', 'epub', 'Deleted Provider Migration Saga');
+
+UPDATE books
+SET deleted_at = CURRENT_TIMESTAMP
+WHERE title = 'Provider Deleted History';
 
 INSERT INTO audiobook_characters (book_id, name, is_narrator, tts_voice_provider)
 SELECT id, 'Narrator', true, 'qwen3'
@@ -24,3 +30,8 @@ CROSS JOIN (
         ('Guest', false, 'omnivoice')
 ) AS voice(name, is_narrator, provider)
 WHERE books.title = 'Provider Mixed History';
+
+INSERT INTO audiobook_characters (book_id, name, is_narrator, tts_voice_provider)
+SELECT id, 'Narrator', true, 'qwen3'
+FROM books
+WHERE title = 'Provider Deleted History';

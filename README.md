@@ -256,6 +256,9 @@ OmniVoice on port `8001`, Qwen3-TTS on port `8003`, and WhisperX on port `8002`.
 The Characters tab locks each standalone book—or every book sharing the same series name—to one TTS engine. Endpoint
 failover stays within that engine. Explicitly changing the engine clears incompatible provider voice IDs and generated
 audio across the scope, preventing a book or series from mixing Qwen3-TTS and OmniVoice performances.
+Designed OmniVoice and Qwen clone IDs refer to files in the worker's persistent voice store. Multiple endpoints for
+either engine must share or replicate that store for an existing designed voice to survive endpoint failover;
+otherwise the request fails safely instead of substituting a different voice.
 
 #### OmniVoice
 

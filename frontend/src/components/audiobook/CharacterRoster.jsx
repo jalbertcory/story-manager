@@ -308,8 +308,8 @@ function CharacterRoster({
         </label>
         <span>
           {ttsProviderLocked ? "Locked" : "Will lock on first generation"} to{" "}
-          <strong>{ttsProvider}</strong>. Failover can use another endpoint for
-          this engine, but never a different engine.
+          <strong>{ttsProvider}</strong>. Routing stays within this engine and
+          never falls through to a different one.
         </span>
         {selectedProvider &&
           selectedProvider !== ttsProvider &&

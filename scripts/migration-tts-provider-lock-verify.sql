@@ -26,4 +26,13 @@ BEGIN
     ) THEN
         RAISE EXCEPTION '0038 silently chose a provider for mixed historical voices';
     END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM books
+        WHERE title = 'Provider Active With Deleted History'
+          AND audiobook_tts_provider IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION '0038 propagated a provider lock from a deleted series book';
+    END IF;
 END $$;

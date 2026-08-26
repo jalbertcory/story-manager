@@ -36,6 +36,7 @@ def upgrade():
         sa.column("id", sa.Integer),
         sa.column("series", sa.String),
         sa.column("audiobook_tts_provider", sa.String),
+        sa.column("deleted_at", sa.DateTime(timezone=True)),
     )
     characters = sa.table(
         "audiobook_characters",
@@ -70,6 +71,7 @@ def upgrade():
         sa.select(books.c.series, books.c.audiobook_tts_provider).where(
             books.c.series.is_not(None),
             books.c.audiobook_tts_provider.is_not(None),
+            books.c.deleted_at.is_(None),
         )
     ).all()
     providers_by_series: dict[str, set[str]] = {}
@@ -88,6 +90,7 @@ def upgrade():
                 .where(
                     sa.func.lower(books.c.series) == display_name_by_key[key].lower(),
                     books.c.audiobook_tts_provider.is_(None),
+                    books.c.deleted_at.is_(None),
                 )
                 .values(audiobook_tts_provider=next(iter(providers)))
             )

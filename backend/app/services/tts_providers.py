@@ -137,8 +137,10 @@ def _local_request_payload(request: TTSRequest, provider: str) -> dict[str, obje
         payload["seed"] = request.seed
     if request.min_voice_similarity is not None:
         payload["min_voice_similarity"] = request.min_voice_similarity
-    if request.quality_attempts != 3:
-        payload["quality_attempts"] = request.quality_attempts
+    # Send the application setting even when it matches our default. Local
+    # workers can override their own default through the environment, but an
+    # explicit per-request value must remain authoritative.
+    payload["quality_attempts"] = request.quality_attempts
     return payload
 
 

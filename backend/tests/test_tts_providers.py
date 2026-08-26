@@ -116,6 +116,7 @@ async def test_omnivoice_uses_descriptive_profile_and_expression_tags():
         "voice": "[gender-female][pitch-low][speed-slow]",
         "voice_id": None,
         "text": "[whisper] Keep quiet.",
+        "quality_attempts": 3,
     }
 
 
@@ -161,8 +162,8 @@ async def test_omnivoice_batches_multiple_sentences_in_one_model_request():
     assert url == "http://omnivoice:8001/generate-batch"
     assert request["json"] == {
         "requests": [
-            {"voice": "[gender-female]", "voice_id": None, "text": "First."},
-            {"voice": "[gender-male]", "voice_id": None, "text": "Second."},
+            {"voice": "[gender-female]", "voice_id": None, "text": "First.", "quality_attempts": 3},
+            {"voice": "[gender-male]", "voice_id": None, "text": "Second.", "quality_attempts": 3},
         ]
     }
 
