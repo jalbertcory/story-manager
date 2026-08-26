@@ -75,6 +75,128 @@ async def upsert_audiobook_settings(db: AsyncSession, data: dict) -> AudiobookSe
     return settings
 
 
+async def _books_in_tts_scope(db: AsyncSession, book: Book) -> list[Book]:
+    if not book.series:
+        return [book]
+    result = await db.execute(select(Book).where(func.lower(Book.series) == book.series.lower()).order_by(Book.id))
+    return list(result.scalars().all())
+
+
+async def lock_book_tts_provider(
+    db: AsyncSession,
+    book_id: int,
+    preferred_provider: str,
+) -> str:
+    """Persist one provider for a book or inherit the existing series lock."""
+    book = await db.get(Book, book_id)
+    if book is None:
+        raise RuntimeError("Audiobook book not found.")
+    preferred = preferred_provider.strip().lower()
+    scoped_books = await _books_in_tts_scope(db, book)
+    providers = {
+        candidate.audiobook_tts_provider.strip().lower()
+        for candidate in scoped_books
+        if candidate.audiobook_tts_provider and candidate.audiobook_tts_provider.strip()
+    }
+    scoped_book_ids = [candidate.id for candidate in scoped_books]
+    character_result = await db.execute(
+        select(AudiobookCharacter.tts_voice_provider)
+        .where(
+            AudiobookCharacter.book_id.in_(scoped_book_ids),
+            AudiobookCharacter.tts_voice_provider.is_not(None),
+        )
+        .distinct()
+    )
+    providers.update(
+        provider.strip().lower() for provider in character_result.scalars().all() if provider and provider.strip()
+    )
+    if book.series:
+        profile_result = await db.execute(
+            select(AudiobookSeriesCharacter.tts_voice_provider)
+            .where(
+                func.lower(AudiobookSeriesCharacter.series_name) == book.series.lower(),
+                AudiobookSeriesCharacter.tts_voice_provider.is_not(None),
+            )
+            .distinct()
+        )
+        providers.update(
+            provider.strip().lower() for provider in profile_result.scalars().all() if provider and provider.strip()
+        )
+    if len(providers) > 1:
+        raise RuntimeError(
+            f"{book.series or book.title} contains voices from multiple TTS providers "
+            f"({', '.join(sorted(providers))}). Choose one provider before generating more audio."
+        )
+    provider = next(iter(providers), preferred)
+    if not provider:
+        raise RuntimeError("Choose a TTS provider before generating audiobook audio.")
+    for candidate in scoped_books:
+        if candidate.audiobook_tts_provider is None:
+            candidate.audiobook_tts_provider = provider
+        elif candidate.audiobook_tts_provider.strip().lower() != provider:
+            raise RuntimeError(
+                f"{book.series or book.title} is locked to multiple TTS providers. "
+                "Choose one provider before generating more audio."
+            )
+    await db.commit()
+    return provider
+
+
+async def replace_tts_provider_lock(
+    db: AsyncSession,
+    book_id: int,
+    provider: str,
+) -> list[Book]:
+    """Explicitly replace the provider for a whole series and invalidate old audio."""
+    book = await db.get(Book, book_id)
+    if book is None:
+        raise RuntimeError("Audiobook book not found.")
+    normalized = provider.strip().lower()
+    if not normalized:
+        raise RuntimeError("A TTS provider is required.")
+    scoped_books = await _books_in_tts_scope(db, book)
+    active = [
+        candidate.title
+        for candidate in scoped_books
+        if candidate.audiobook_pipeline_status in AUDIOBOOK_PIPELINE.active_states
+    ]
+    if active:
+        raise RuntimeError("Pause active audiobook pipelines before changing their series TTS provider.")
+
+    changed_book_ids = [
+        candidate.id for candidate in scoped_books if (candidate.audiobook_tts_provider or "").strip().lower() != normalized
+    ]
+    for candidate in scoped_books:
+        candidate.audiobook_tts_provider = normalized
+
+    scoped_book_ids = [candidate.id for candidate in scoped_books]
+    await db.execute(
+        update(AudiobookCharacter)
+        .where(
+            AudiobookCharacter.book_id.in_(scoped_book_ids),
+            AudiobookCharacter.tts_voice_provider.is_not(None),
+            func.lower(AudiobookCharacter.tts_voice_provider) != normalized,
+        )
+        .values(tts_voice_id=None, tts_voice_provider=None)
+    )
+    if book.series:
+        await db.execute(
+            update(AudiobookSeriesCharacter)
+            .where(
+                func.lower(AudiobookSeriesCharacter.series_name) == book.series.lower(),
+                AudiobookSeriesCharacter.tts_voice_provider.is_not(None),
+                func.lower(AudiobookSeriesCharacter.tts_voice_provider) != normalized,
+            )
+            .values(tts_voice_id=None, tts_voice_provider=None)
+        )
+    await db.commit()
+
+    for changed_book_id in changed_book_ids:
+        if await has_sentence_status(db, changed_book_id, SentenceStatus.AUDIO_GENERATED.value):
+            await reset_audio_generation_for_book(db, changed_book_id)
+    return scoped_books
+
+
 # ---------------------------------------------------------------------------
 # Book pipeline status
 # ---------------------------------------------------------------------------
@@ -459,6 +581,7 @@ def _copy_series_profile_to_book_character(
     character.voice_prompt = profile.voice_prompt
     character.tts_voice_id = profile.tts_voice_id
     character.tts_voice_provider = profile.tts_voice_provider
+    character.tts_seed = profile.tts_seed
     character.is_narrator = profile.is_narrator
     character.aliases = profile.aliases or []
     character.evidence = profile.evidence or []
@@ -490,6 +613,7 @@ async def sync_book_roster_with_series(
                 voice_prompt=character.voice_prompt,
                 tts_voice_id=character.tts_voice_id,
                 tts_voice_provider=character.tts_voice_provider,
+                tts_seed=character.tts_seed,
                 is_narrator=character.is_narrator,
                 aliases=character.aliases or [],
                 evidence=character.evidence or [],
@@ -552,6 +676,7 @@ async def propagate_character_profile_across_series(
     profile.voice_prompt = character.voice_prompt
     profile.tts_voice_id = character.tts_voice_id
     profile.tts_voice_provider = character.tts_voice_provider
+    profile.tts_seed = character.tts_seed
     profile.is_narrator = character.is_narrator
     profile.aliases = character.aliases or []
     profile.evidence = character.evidence or []
@@ -581,7 +706,14 @@ async def cascade_voice_change(db: AsyncSession, char_id: int) -> None:
     await db.execute(
         update(AudiobookSentence)
         .where(AudiobookSentence.character_id == char_id)
-        .values(status=SentenceStatus.READY_FOR_AUDIO.value, audio_file_path=None, audio_duration_ms=None)
+        .values(
+            status=SentenceStatus.READY_FOR_AUDIO.value,
+            audio_file_path=None,
+            audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
+        )
     )
     result = await db.execute(select(AudiobookSentence.chapter_id).where(AudiobookSentence.character_id == char_id).distinct())
     chapter_ids = [row[0] for row in result.all()]
@@ -647,7 +779,14 @@ async def invalidate_generated_audio_for_tts_change(
             AudiobookSentence.chapter_id.in_(chapter_ids),
             AudiobookSentence.status == SentenceStatus.AUDIO_GENERATED.value,
         )
-        .values(status=SentenceStatus.READY_FOR_AUDIO.value, audio_file_path=None, audio_duration_ms=None)
+        .values(
+            status=SentenceStatus.READY_FOR_AUDIO.value,
+            audio_file_path=None,
+            audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
+        )
     )
     if chapter_ids:
         await db.execute(
@@ -679,6 +818,9 @@ async def reset_roster_and_diarization_for_book(db: AsyncSession, book_id: int) 
             tagged_text=AudiobookSentence.original_text,
             audio_file_path=None,
             audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
             speaker_confidence=None,
             speaker_reason=None,
             status=SentenceStatus.PENDING_DIARIZATION.value,
@@ -719,6 +861,9 @@ async def reset_audio_generation_for_book(db: AsyncSession, book_id: int) -> int
         .values(
             audio_file_path=None,
             audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
             status=SentenceStatus.READY_FOR_AUDIO.value,
         )
     )
@@ -912,13 +1057,25 @@ async def mark_sentences_as_narration(
     await db.commit()
 
 
-async def update_sentence_audio(db: AsyncSession, sentence_id: int, audio_file_path: str, audio_duration_ms: int) -> None:
+async def update_sentence_audio(
+    db: AsyncSession,
+    sentence_id: int,
+    audio_file_path: str,
+    audio_duration_ms: int,
+    *,
+    generation_group_id: str | None = None,
+    voice_similarity: float | None = None,
+    tts_attempts: int | None = None,
+) -> None:
     await db.execute(
         update(AudiobookSentence)
         .where(AudiobookSentence.id == sentence_id)
         .values(
             audio_file_path=audio_file_path,
             audio_duration_ms=audio_duration_ms,
+            generation_group_id=generation_group_id,
+            voice_similarity=voice_similarity,
+            tts_attempts=tts_attempts,
             status=SentenceStatus.AUDIO_GENERATED.value,
         )
     )
@@ -937,7 +1094,14 @@ async def reset_error_sentences_for_book(db: AsyncSession, book_id: int) -> int:
             AudiobookSentence.chapter_id.in_(chapter_ids),
             AudiobookSentence.status == SentenceStatus.ERROR.value,
         )
-        .values(status=SentenceStatus.READY_FOR_AUDIO.value, audio_file_path=None, audio_duration_ms=None)
+        .values(
+            status=SentenceStatus.READY_FOR_AUDIO.value,
+            audio_file_path=None,
+            audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
+        )
     )
     await db.execute(update(AudiobookChapter).where(AudiobookChapter.book_id == book_id).values(needs_reassembly=True))
     await db.commit()
@@ -953,7 +1117,14 @@ async def reset_interrupted_sentences_for_book(db: AsyncSession, book_id: int) -
             AudiobookSentence.chapter_id.in_(chapter_ids),
             AudiobookSentence.status.in_((SentenceStatus.AUDIO_QUEUED.value, SentenceStatus.AUDIO_GENERATING.value)),
         )
-        .values(status=SentenceStatus.READY_FOR_AUDIO.value, audio_file_path=None, audio_duration_ms=None)
+        .values(
+            status=SentenceStatus.READY_FOR_AUDIO.value,
+            audio_file_path=None,
+            audio_duration_ms=None,
+            generation_group_id=None,
+            voice_similarity=None,
+            tts_attempts=None,
+        )
     )
     await db.commit()
     return result.rowcount or 0
@@ -979,6 +1150,9 @@ async def update_sentence_speaker(
     )
     sentence.audio_file_path = None
     sentence.audio_duration_ms = None
+    sentence.generation_group_id = None
+    sentence.voice_similarity = None
+    sentence.tts_attempts = None
     await db.execute(
         update(AudiobookChapter)
         .where(AudiobookChapter.id == sentence.chapter_id)

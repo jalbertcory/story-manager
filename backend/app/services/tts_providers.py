@@ -18,6 +18,7 @@ DEFAULT_VOICE_PROMPT = "[gender-neutral][pitch-medium][speed-normal]"
 SUPPORTED_TTS_PROVIDERS = {
     "stub",
     "omnivoice",
+    "qwen3",
     "openai",
     "openai-compatible",
     "elevenlabs",
@@ -36,12 +37,17 @@ class TTSRequest:
     voice_prompt: str = DEFAULT_VOICE_PROMPT
     voice_id: str | None = None
     voice_provider: str | None = None
+    seed: int | None = None
+    min_voice_similarity: float | None = None
+    quality_attempts: int = 3
 
 
 @dataclass(frozen=True)
 class TTSResult:
     audio_bytes: bytes
     duration_ms: int | None = None
+    voice_similarity: float | None = None
+    attempts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,8 @@ class DesignedVoice:
     id: str
     sample_text: str
     sample_url: str
+    max_cross_voice_similarity: float | None = None
+    attempts: int = 1
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,7 @@ def _openai_speech_url(base_url: str) -> str:
     return root + "/v1/audio/speech"
 
 
-def _omnivoice_root(base_url: str) -> str:
+def _local_tts_root(base_url: str) -> str:
     root = base_url.rstrip("/")
     if root.endswith("/generate"):
         root = root[: -len("/generate")]
@@ -117,6 +125,21 @@ def _request_voice_id(request: TTSRequest, provider: str) -> str | None:
     if request.voice_provider and request.voice_provider != provider:
         return None
     return request.voice_id
+
+
+def _local_request_payload(request: TTSRequest, provider: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "voice": request.voice_prompt,
+        "voice_id": _request_voice_id(request, provider),
+        "text": request.text,
+    }
+    if request.seed is not None:
+        payload["seed"] = request.seed
+    if request.min_voice_similarity is not None:
+        payload["min_voice_similarity"] = request.min_voice_similarity
+    if request.quality_attempts != 3:
+        payload["quality_attempts"] = request.quality_attempts
+    return payload
 
 
 async def _stub_speech(text: str) -> bytes:
@@ -171,18 +194,14 @@ async def _synthesize_speech_endpoint(
         raise RuntimeError("TTS settings are missing.")
 
     timeout = httpx.Timeout(600.0, connect=10.0)
-    if provider == "omnivoice":
+    if provider in {"omnivoice", "qwen3"}:
         if not settings.tts_base_url:
-            raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
-        url = f"{_omnivoice_root(settings.tts_base_url)}/generate"
+            raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
+        url = f"{_local_tts_root(settings.tts_base_url)}/generate"
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
-                json={
-                    "voice": request.voice_prompt,
-                    "voice_id": _request_voice_id(request, provider),
-                    "text": request.text,
-                },
+                json=_local_request_payload(request, provider),
                 headers={"Accept": "audio/mpeg"},
             )
             response.raise_for_status()
@@ -261,15 +280,68 @@ async def _synthesize_speech_endpoint(
         return response.content
 
 
+async def synthesize_speech_result_routed(
+    settings: AudiobookSettings,
+    request: TTSRequest,
+) -> RoutedResult[TTSResult]:
+    return await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _synthesize_speech_result_endpoint(endpoint_settings, request),
+    )
+
+
 async def synthesize_speech_routed(
     settings: AudiobookSettings,
     request: TTSRequest,
 ) -> RoutedResult[bytes]:
+    """Compatibility route for health tests that only need the audio bytes."""
     return await route_request(
         settings,
         "tts",
         lambda endpoint_settings: _synthesize_speech_endpoint(endpoint_settings, request),
     )
+
+
+async def _synthesize_speech_result_endpoint(
+    settings: AudiobookSettings | None,
+    request: TTSRequest,
+) -> TTSResult:
+    provider = tts_provider_name(settings)
+    if provider not in {"omnivoice", "qwen3"} or settings is None:
+        return TTSResult(audio_bytes=await _synthesize_speech_endpoint(settings, request))
+    if not settings.tts_base_url:
+        raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            f"{_local_tts_root(settings.tts_base_url)}/generate",
+            json=_local_request_payload(request, provider),
+            headers={"Accept": "audio/mpeg"},
+        )
+        response.raise_for_status()
+    return TTSResult(
+        audio_bytes=response.content,
+        duration_ms=_optional_int_header(response, "x-audio-duration-ms"),
+        voice_similarity=_optional_float_header(response, "x-voice-similarity"),
+        attempts=_optional_int_header(response, "x-generation-attempts"),
+    )
+
+
+def _optional_int_header(response: httpx.Response, name: str) -> int | None:
+    value = response.headers.get(name)
+    try:
+        return int(value) if value is not None else None
+    except ValueError:
+        return None
+
+
+def _optional_float_header(response: httpx.Response, name: str) -> float | None:
+    value = response.headers.get(name)
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
 
 
 async def synthesize_speech(
@@ -281,20 +353,53 @@ async def synthesize_speech(
         return await _stub_speech("")
     if settings is None:
         return await _stub_speech(request.text)
-    routed = await synthesize_speech_routed(settings, request)
+    routed = await route_request(
+        settings,
+        "tts",
+        lambda endpoint_settings: _synthesize_speech_endpoint(endpoint_settings, request),
+    )
     return routed.value
 
 
-async def _design_omnivoice_voice_endpoint(settings: AudiobookSettings, voice_prompt: str) -> DesignedVoice:
-    if tts_provider_name(settings) != "omnivoice":
-        raise RuntimeError("Consistent voice design is only available for OmniVoice.")
+async def synthesize_speech_result(
+    settings: AudiobookSettings | None,
+    request: TTSRequest,
+) -> TTSResult:
+    if not _has_spoken_content(request.text):
+        return TTSResult(await _stub_speech(""))
+    if settings is None:
+        return TTSResult(await _stub_speech(request.text))
+    routed = await synthesize_speech_result_routed(settings, request)
+    return routed.value
+
+
+async def _design_local_voice_endpoint(
+    settings: AudiobookSettings,
+    voice_prompt: str,
+    *,
+    seed: int | None = None,
+    avoid_voice_ids: list[str] | None = None,
+    max_voice_similarity: float = 0.9,
+    quality_attempts: int = 6,
+) -> DesignedVoice:
+    provider = tts_provider_name(settings)
+    if provider not in {"omnivoice", "qwen3"}:
+        raise RuntimeError("Consistent voice design is only available for a local design-capable provider.")
     if not settings.tts_base_url:
-        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+        raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
     timeout = httpx.Timeout(600.0, connect=10.0)
+    payload: dict[str, object] = {"voice": voice_prompt}
+    if provider == "qwen3":
+        if seed is not None:
+            payload["seed"] = seed
+        if avoid_voice_ids:
+            payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
+            payload["max_voice_similarity"] = max_voice_similarity
+        payload["quality_attempts"] = quality_attempts
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
-            f"{_omnivoice_root(settings.tts_base_url)}/voices/design",
-            json={"voice": voice_prompt},
+            f"{_local_tts_root(settings.tts_base_url)}/voices/design",
+            json=payload,
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
@@ -304,33 +409,96 @@ async def _design_omnivoice_voice_endpoint(settings: AudiobookSettings, voice_pr
             id=str(payload["id"]),
             sample_text=str(payload["sample_text"]),
             sample_url=str(payload["sample_url"]),
+            max_cross_voice_similarity=(
+                float(payload["max_cross_voice_similarity"]) if payload.get("max_cross_voice_similarity") is not None else None
+            ),
+            attempts=int(payload.get("attempts", 1)),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeError("OmniVoice returned an invalid designed voice.") from exc
+        raise RuntimeError(f"{provider} returned an invalid designed voice.") from exc
 
 
-async def design_omnivoice_voice(settings: AudiobookSettings, voice_prompt: str) -> DesignedVoice:
-    """Create one durable reference voice on the first available OmniVoice worker."""
-    routed = await route_request(
+async def design_omnivoice_voice(
+    settings: AudiobookSettings,
+    voice_prompt: str,
+    *,
+    seed: int | None = None,
+    avoid_voice_ids: list[str] | None = None,
+    max_voice_similarity: float = 0.9,
+    quality_attempts: int = 6,
+) -> DesignedVoice:
+    """Create a stateful reference on the primary local worker."""
+    return await _design_local_voice_endpoint(
         settings,
-        "tts",
-        lambda endpoint_settings: _design_omnivoice_voice_endpoint(endpoint_settings, voice_prompt),
+        voice_prompt,
+        seed=seed,
+        avoid_voice_ids=avoid_voice_ids,
+        max_voice_similarity=max_voice_similarity,
+        quality_attempts=quality_attempts,
     )
-    return routed.value
 
 
-async def _get_omnivoice_voice_sample_endpoint(
+design_local_voice = design_omnivoice_voice
+
+
+async def materialize_qwen_preset_voice(
+    settings: AudiobookSettings,
+    preset_voice_id: str,
+    voice_prompt: str,
+    *,
+    seed: int | None = None,
+    avoid_voice_ids: list[str] | None = None,
+    max_voice_similarity: float = 0.9,
+) -> DesignedVoice:
+    """Persist an official Qwen speaker as a clone so synthesis stays on one model."""
+    if tts_provider_name(settings) != "qwen3" or not settings.tts_base_url:
+        raise RuntimeError("Qwen3 base URL is required to materialize a preset voice.")
+    payload: dict[str, object] = {
+        "voice_id": preset_voice_id,
+        "voice": voice_prompt,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    if avoid_voice_ids:
+        payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
+        payload["max_voice_similarity"] = max_voice_similarity
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+        response = await client.post(
+            f"{_local_tts_root(settings.tts_base_url)}/voices/from-preset",
+            json=payload,
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        response_payload = response.json()
+    try:
+        return DesignedVoice(
+            id=str(response_payload["id"]),
+            sample_text=str(response_payload["sample_text"]),
+            sample_url=str(response_payload["sample_url"]),
+            max_cross_voice_similarity=(
+                float(response_payload["max_cross_voice_similarity"])
+                if response_payload.get("max_cross_voice_similarity") is not None
+                else None
+            ),
+            attempts=int(response_payload.get("attempts", 1)),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Qwen3 returned an invalid materialized preset voice.") from exc
+
+
+async def _get_local_voice_sample_endpoint(
     settings: AudiobookSettings,
     voice_id: str,
 ) -> VoiceSample:
-    if tts_provider_name(settings) != "omnivoice":
-        raise RuntimeError("Voice samples are only available for OmniVoice.")
+    provider = tts_provider_name(settings)
+    if provider not in {"omnivoice", "qwen3"}:
+        raise RuntimeError("Voice samples are only available for a local design-capable provider.")
     if not settings.tts_base_url:
-        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+        raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
     timeout = httpx.Timeout(30.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.get(
-            f"{_omnivoice_root(settings.tts_base_url)}/voices/{voice_id}/sample",
+            f"{_local_tts_root(settings.tts_base_url)}/voices/{voice_id}/sample",
             headers={"Accept": "audio/wav"},
         )
         response.raise_for_status()
@@ -342,13 +510,11 @@ async def get_omnivoice_voice_sample(
     settings: AudiobookSettings,
     voice_id: str,
 ) -> VoiceSample:
-    """Fetch the durable reference clip created with an OmniVoice design."""
-    routed = await route_request(
-        settings,
-        "tts",
-        lambda endpoint_settings: _get_omnivoice_voice_sample_endpoint(endpoint_settings, voice_id),
-    )
-    return routed.value
+    """Fetch a durable reference from the primary worker that created it."""
+    return await _get_local_voice_sample_endpoint(settings, voice_id)
+
+
+get_local_voice_sample = get_omnivoice_voice_sample
 
 
 async def synthesize_speech_batch(
@@ -385,27 +551,19 @@ async def _synthesize_speech_batch_endpoint(
     requests: list[TTSRequest],
 ) -> list[TTSResult]:
     """Generate one batch against a specific endpoint."""
-    if tts_provider_name(settings) != "omnivoice":
+    provider = tts_provider_name(settings)
+    if provider not in {"omnivoice", "qwen3"}:
         return [TTSResult(await _synthesize_speech_endpoint(settings, request)) for request in requests]
     if not settings.tts_base_url:
-        raise RuntimeError("OmniVoice base URL is required in Audio Settings.")
+        raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
 
-    root = _omnivoice_root(settings.tts_base_url)
+    root = _local_tts_root(settings.tts_base_url)
     url = f"{root}/generate-batch"
     timeout = httpx.Timeout(600.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             url,
-            json={
-                "requests": [
-                    {
-                        "voice": request.voice_prompt,
-                        "voice_id": _request_voice_id(request, "omnivoice"),
-                        "text": request.text,
-                    }
-                    for request in requests
-                ]
-            },
+            json={"requests": [_local_request_payload(request, provider) for request in requests]},
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
@@ -414,7 +572,7 @@ async def _synthesize_speech_batch_endpoint(
     items = payload.get("items")
     if not isinstance(items, list) or len(items) != len(requests):
         raise RuntimeError(
-            f"OmniVoice returned {len(items) if isinstance(items, list) else 0} "
+            f"{provider} returned {len(items) if isinstance(items, list) else 0} "
             f"batch results for {len(requests)} requests."
         )
 
@@ -423,9 +581,18 @@ async def _synthesize_speech_batch_endpoint(
         try:
             audio_bytes = base64.b64decode(item["audio_base64"], validate=True)
             duration_ms = int(item["duration_ms"])
+            similarity = float(item["voice_similarity"]) if item.get("voice_similarity") is not None else None
+            attempts = int(item["attempts"]) if item.get("attempts") is not None else None
         except (KeyError, TypeError, ValueError, binascii.Error) as exc:
-            raise RuntimeError("OmniVoice returned an invalid batch result.") from exc
+            raise RuntimeError(f"{provider} returned an invalid batch result.") from exc
         if not audio_bytes or duration_ms <= 0:
             raise RuntimeError("OmniVoice returned an empty batch result.")
-        results.append(TTSResult(audio_bytes=audio_bytes, duration_ms=duration_ms))
+        results.append(
+            TTSResult(
+                audio_bytes=audio_bytes,
+                duration_ms=duration_ms,
+                voice_similarity=similarity,
+                attempts=attempts,
+            )
+        )
     return results

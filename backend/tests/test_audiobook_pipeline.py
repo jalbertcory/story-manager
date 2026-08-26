@@ -921,7 +921,9 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     chapter, _character, sentence = await _seed_audio_chapter(db, book.id, sentence_status="error")
     await crud.audiobook.set_book_pipeline_status(db, book.id, "error")
     queue = _FakeQueue()
+    reset_capabilities = []
     monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    monkeypatch.setattr(audiobook_router, "reset_cooldowns", reset_capabilities.append)
 
     response = await audiobook_router.start_pipeline(book.id, db)
 
@@ -933,6 +935,7 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     assert sentence.status == "ready_for_audio"
     assert sentence.audio_file_path is None
     assert chapter.needs_reassembly is True
+    assert reset_capabilities == ["tts"]
 
 
 @pytest.mark.asyncio
@@ -1268,7 +1271,7 @@ async def test_queue_stops_for_review_after_requested_phase(db, sqlite_sessionma
 
 
 @pytest.mark.asyncio
-async def test_restarted_audio_phase_rebuilds_length_bucketed_background_queue(
+async def test_restarted_audio_phase_generates_in_order_without_background_bucketing(
     db,
     sqlite_sessionmaker,
     monkeypatch,
@@ -1303,7 +1306,7 @@ async def test_restarted_audio_phase_rebuilds_length_bucketed_background_queue(
 
     await queue._process(book.id)
 
-    assert enqueued == [(book.id, [sentence.id])]
+    assert enqueued == []
 
 
 @pytest.mark.asyncio
@@ -1344,7 +1347,7 @@ async def test_restarted_audio_phase_reclaims_interrupted_sentences(
 
     await db.refresh(sentence)
     assert sentence.status == "ready_for_audio"
-    assert enqueued == [(book.id, [sentence.id])]
+    assert enqueued == []
 
 
 @pytest.mark.asyncio
@@ -1389,7 +1392,7 @@ async def test_tts_failure_marks_book_error_instead_of_advancing_to_assembly(db,
         request = httpx.Request("POST", "http://tts.example.test/generate")
         raise httpx.ConnectError("connection failed", request=request)
 
-    monkeypatch.setattr(audiobook_tts, "synthesize_speech", fail_tts)
+    monkeypatch.setattr(audiobook_tts, "synthesize_speech_result", fail_tts)
 
     with pytest.raises(RuntimeError, match="TTS failed"):
         await audiobook_tts.generate_audio_for_book(book.id, db)
@@ -1540,12 +1543,14 @@ async def test_omnivoice_design_is_created_once_and_persisted_on_roster(db, monk
     await db.commit()
     calls = []
 
-    async def design_voice(_settings, voice_prompt):
-        calls.append(voice_prompt)
+    async def design_voice(_settings, voice_prompt, **kwargs):
+        calls.append((voice_prompt, kwargs))
         return SimpleNamespace(
             id="omnivoice-0123456789abcdef0123456789abcdef",
             sample_text="Reference text.",
             sample_url="/voices/example/sample",
+            max_cross_voice_similarity=None,
+            attempts=1,
         )
 
     monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", design_voice)
@@ -1554,11 +1559,216 @@ async def test_omnivoice_design_is_created_once_and_persisted_on_roster(db, monk
     second = await audiobook_tts._build_sentence_request(settings, sentence, db)
     await db.refresh(character)
 
-    assert calls == ["[gender-neutral][pitch-medium][speed-normal]"]
+    assert len(calls) == 1
+    assert calls[0][0].startswith("[gender-neutral][pitch-medium][speed-normal] Speak with ")
+    assert "immediately distinguishable" in calls[0][0]
+    assert calls[0][1]["seed"] == character.tts_seed
+    assert calls[0][1]["avoid_voice_ids"] == []
     assert first.voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
     assert second.voice_id == first.voice_id
+    assert first.seed == second.seed == character.tts_seed
+    assert first.seed is not None
     assert character.tts_voice_id == first.voice_id
     assert character.tts_voice_provider == "omnivoice"
+
+
+def test_distinctive_voice_prompt_expands_generic_profiles_per_character():
+    first = models.AudiobookCharacter(
+        book_id=10,
+        name="First Speaker",
+        voice_prompt="[gender-female][pitch-medium][speed-normal]",
+    )
+    second = models.AudiobookCharacter(
+        book_id=10,
+        name="Second Speaker",
+        voice_prompt="[gender-female][pitch-medium][speed-normal]",
+    )
+
+    first_prompt = audiobook_tts.distinctive_voice_prompt(first)
+    second_prompt = audiobook_tts.distinctive_voice_prompt(second)
+
+    assert first_prompt != second_prompt
+    assert "immediately distinguishable" in first_prompt
+    assert audiobook_tts.distinctive_voice_prompt(first, first_prompt) == first_prompt
+
+
+@pytest.mark.asyncio
+async def test_qwen_distinctness_conflict_materializes_compatible_preset(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    _chapter, character, sentence = await _seed_audio_chapter(db, book.id)
+    character.voice_prompt = "[gender-female][pitch-medium] A clear, measured alto voice."
+    settings = models.AudiobookSettings(
+        tts_provider="qwen3",
+        tts_base_url="http://qwen3:8003",
+    )
+    db.add(settings)
+    await db.commit()
+    presets = []
+
+    async def saturated_design(*_args, **_kwargs):
+        request = httpx.Request("POST", "http://qwen3:8003/voices/design")
+        response = httpx.Response(409, request=request)
+        raise httpx.HTTPStatusError("cast saturated", request=request, response=response)
+
+    async def materialize(_settings, preset_voice_id, _voice_prompt, **kwargs):
+        presets.append((preset_voice_id, kwargs))
+        return SimpleNamespace(
+            id="qwen3-0123456789abcdef0123456789abcdef",
+            sample_text="Reference text.",
+            sample_url="/voices/example/sample",
+            max_cross_voice_similarity=0.73,
+            attempts=1,
+        )
+
+    monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", saturated_design)
+    monkeypatch.setattr(audiobook_tts, "materialize_qwen_preset_voice", materialize)
+
+    request = await audiobook_tts._build_sentence_request(settings, sentence, db)
+    await db.refresh(character)
+
+    assert presets
+    assert presets[0][0] in {"preset:Vivian", "preset:Serena", "preset:Ono_Anna", "preset:Sohee"}
+    assert presets[0][1]["seed"] == character.tts_seed
+    assert request.voice_id == "qwen3-0123456789abcdef0123456789abcdef"
+    assert character.tts_voice_provider == "qwen3"
+
+
+def test_generation_blocks_keep_adjacent_same_voice_together_and_honor_limits():
+    sentences = [
+        models.AudiobookSentence(
+            id=index + 1,
+            chapter_id=10,
+            character_id=20 if index < 3 else 21,
+            html_element_id=f"s{index}",
+            sequence_order=index,
+            original_text=text,
+        )
+        for index, text in enumerate(("First.", "Second.", "Third.", "Different speaker."))
+    ]
+    requests = [
+        [
+            audiobook_tts.TTSRequest(
+                text=sentence.original_text,
+                voice_id=f"voice-{sentence.character_id}",
+                voice_provider="qwen3",
+                seed=sentence.character_id,
+            )
+        ]
+        for sentence in sentences
+    ]
+
+    blocks = audiobook_tts._generation_blocks(sentences, requests, max_chars=20)
+
+    assert [[sentence.id for sentence, _requests in block] for block in blocks] == [
+        [1, 2],
+        [3],
+        [4],
+    ]
+
+
+def test_generation_blocks_isolate_mixed_role_sentence_requests():
+    sentences = [
+        models.AudiobookSentence(
+            id=index + 1,
+            chapter_id=10,
+            character_id=20,
+            html_element_id=f"s{index}",
+            sequence_order=index,
+            original_text="Text.",
+        )
+        for index in range(3)
+    ]
+    one = audiobook_tts.TTSRequest(text="Text.", voice_id="voice-20")
+    requests = [[one], [one, audiobook_tts.TTSRequest(text="Narration.")], [one]]
+
+    blocks = audiobook_tts._generation_blocks(sentences, requests, max_chars=500)
+
+    assert [[sentence.id for sentence, _requests in block] for block in blocks] == [[1], [2], [3]]
+
+
+@pytest.mark.asyncio
+async def test_generation_batches_multiple_stable_blocks(monkeypatch):
+    sentences = [
+        models.AudiobookSentence(
+            id=index + 1,
+            chapter_id=10,
+            character_id=20 + index // 2,
+            html_element_id=f"s{index}",
+            sequence_order=index,
+            original_text="Text.",
+        )
+        for index in range(8)
+    ]
+    generated_batches = []
+
+    async def build_requests(_settings, sentence, _db):
+        return [
+            audiobook_tts.TTSRequest(
+                text=sentence.original_text,
+                voice_id=f"voice-{sentence.character_id}",
+                seed=sentence.character_id,
+            )
+        ]
+
+    async def generate_stable_blocks(_settings, _book_id, blocks, _db):
+        generated_batches.append([[sentence.id for sentence, _requests in block] for block in blocks])
+
+    monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", generate_stable_blocks)
+
+    failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
+
+    assert not failures
+    assert generated_batches == [[[1, 2], [3, 4], [5, 6], [7, 8]]]
+
+
+def test_block_boundaries_remain_monotonic_for_many_short_sentences():
+    boundaries = audiobook_tts._estimated_block_boundaries(
+        350,
+        ["A.", "B.", "C.", "D.", "E."],
+        [60, 130, 210, 290],
+    )
+
+    assert boundaries[0] == 0
+    assert boundaries[-1] == 350
+    assert len(boundaries) == 6
+    assert all(start < end for start, end in zip(boundaries, boundaries[1:]))
+
+
+@pytest.mark.asyncio
+async def test_generation_stops_after_first_failed_provider_block(monkeypatch):
+    sentences = [
+        models.AudiobookSentence(
+            id=index + 1,
+            chapter_id=10,
+            character_id=index + 20,
+            html_element_id=f"s{index}",
+            sequence_order=index,
+            original_text="Text.",
+        )
+        for index in range(3)
+    ]
+    attempted = []
+
+    async def build_requests(_settings, sentence, _db):
+        return [
+            audiobook_tts.TTSRequest(
+                text=sentence.original_text,
+                voice_id=f"voice-{sentence.character_id}",
+            )
+        ]
+
+    async def fail_generation(_settings, _book_id, sentence, _db, _requests):
+        attempted.append(sentence.id)
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(audiobook_tts, "_generate_sentence_clip", fail_generation)
+
+    failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
+
+    assert attempted == [1]
+    assert list(failures) == [1]
 
 
 @pytest.mark.asyncio
@@ -1620,11 +1830,13 @@ async def test_manual_omnivoice_design_can_be_auditioned(db, monkeypatch):
     db.add(settings)
     await db.commit()
 
-    async def design_voice(_settings, _voice_prompt):
+    async def design_voice(_settings, _voice_prompt, **_kwargs):
         return SimpleNamespace(
             id="omnivoice-0123456789abcdef0123456789abcdef",
             sample_text="Reference text.",
             sample_url="/voices/example/sample",
+            max_cross_voice_similarity=None,
+            attempts=1,
         )
 
     async def get_sample(_settings, voice_id):
@@ -1771,6 +1983,44 @@ def test_smil_uses_real_epub_content_file_name():
     assert 'src="Text/real_chapter.xhtml#ch1_s0"' in smil
     assert 'src="ch0001.mp3"' in smil
     assert 'clipEnd="00:00:01.250"' in smil
+
+
+def test_epub3_sanitizers_repair_broken_resources():
+    book = epub.EpubBook()
+    source = epub.EpubHtml(title="Contents", file_name="text/contents.xhtml")
+    source.content = """
+    <html><body>
+      <a href="chapter.xhtml#missing">Chapter</a>
+      <img src="../images/placeholder.unknown" />
+    </body></html>
+    """
+    chapter = epub.EpubHtml(title="Chapter", file_name="text/chapter.xhtml")
+    chapter.content = '<html><body><p id="real">Text</p></body></html>'
+    placeholder = epub.EpubItem(
+        uid="placeholder",
+        file_name="images/placeholder.unknown",
+        media_type="application/octet-stream",
+        content=b"\xa0\xa0\xa0\xa0",
+    )
+    font = epub.EpubItem(
+        uid="font",
+        file_name="fonts/font.ttf",
+        media_type="application/x-font-truetype",
+        content=b"font",
+    )
+    for item in (source, chapter, placeholder, font):
+        book.add_item(item)
+
+    audiobook_assembly._remove_invalid_placeholder_resources(book)
+    audiobook_assembly._normalize_resource_media_types(book)
+    ids = audiobook_assembly._document_ids(book)
+    audiobook_assembly._sanitize_document_targets(book, ids)
+
+    soup = BeautifulSoup(source.content, "html.parser")
+    assert soup.a["href"] == "chapter.xhtml"
+    assert soup.img is None
+    assert placeholder not in list(book.get_items())
+    assert font.media_type == "font/ttf"
 
 
 def _write_nested_epub(path: Path) -> None:
@@ -2214,6 +2464,96 @@ async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     await crud.audiobook.propagate_character_profile_across_series(db, other_character)
     await db.refresh(other_character)
     assert other_character.series_character_id == first_character.series_character_id
+
+
+@pytest.mark.asyncio
+async def test_series_tts_provider_switch_is_atomic_and_invalidates_incompatible_audio(db):
+    first = await _make_book(
+        db,
+        title="Engine Saga One",
+        series="Engine Saga",
+        audiobook_enabled=True,
+        audiobook_tts_provider="qwen3",
+    )
+    second = await _make_book(
+        db,
+        title="Engine Saga Two",
+        series="Engine Saga",
+        audiobook_enabled=True,
+        audiobook_tts_provider="qwen3",
+    )
+    chapter, character, sentence = await _seed_audio_chapter(
+        db,
+        first.id,
+        sentence_status="audio_generated",
+    )
+    character.tts_voice_id = "qwen3-narrator"
+    character.tts_voice_provider = "qwen3"
+    sentence.audio_file_path = "library/audiobooks/test/snippet.mp3"
+    db.add(
+        models.AudiobookSettings(
+            tts_endpoints=[
+                {"id": "qwen", "provider": "qwen3", "base_url": "http://qwen"},
+                {"id": "omni", "provider": "omnivoice", "base_url": "http://omni"},
+            ]
+        )
+    )
+    await db.commit()
+
+    response = await audiobook_router.update_book_tts_provider(
+        first.id,
+        audiobook_router.BookTTSProviderUpdate(provider="omnivoice"),
+        db,
+    )
+    await db.refresh(first)
+    await db.refresh(second)
+    await db.refresh(character)
+    await db.refresh(sentence)
+    await db.refresh(chapter)
+
+    assert response == {
+        "provider": "omnivoice",
+        "scope": "series",
+        "affected_book_ids": [first.id, second.id],
+    }
+    assert first.audiobook_tts_provider == "omnivoice"
+    assert second.audiobook_tts_provider == "omnivoice"
+    assert character.tts_voice_id is None
+    assert character.tts_voice_provider is None
+    assert sentence.status == "ready_for_audio"
+    assert sentence.audio_file_path is None
+    assert chapter.needs_reassembly is True
+
+
+@pytest.mark.asyncio
+async def test_book_generation_uses_only_the_locked_tts_provider(db, monkeypatch):
+    book = await _make_book(
+        db,
+        title="Locked Engine Book",
+        audiobook_enabled=True,
+        audiobook_tts_provider="qwen3",
+    )
+    db.add(
+        models.AudiobookSettings(
+            tts_endpoints=[
+                {"id": "omni-primary", "provider": "omnivoice", "base_url": "http://omni"},
+                {"id": "qwen-only", "provider": "qwen3", "base_url": "http://qwen"},
+            ]
+        )
+    )
+    await db.commit()
+    captured = {}
+
+    async def fake_generate(settings, _book_id, _sentences, _db):
+        captured["providers"] = [endpoint["provider"] for endpoint in settings.tts_endpoints]
+        captured["base_url"] = settings.tts_base_url
+        return {}
+
+    monkeypatch.setattr(audiobook_tts, "_generate_sentence_clips", fake_generate)
+
+    await audiobook_tts.generate_audio_for_sentences(book.id, [], db)
+
+    assert captured == {"providers": ["qwen3"], "base_url": "http://qwen"}
 
 
 @pytest.mark.asyncio

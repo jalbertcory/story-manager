@@ -1,28 +1,30 @@
-name: OmniVoice image
+name: Qwen3-TTS image
 
 on:
   push:
     branches:
       - main
     paths:
-      - services/omnivoice/**
+      - services/qwen3_tts/**
+      - services/omnivoice/audio_quality.py
       - services/speaker_similarity.py
       - services/tts_consistency.py
       - services/__init__.py
-      - .github/workflows/omnivoice-image.yml
+      - .github/workflows/qwen3-tts-image.yml
   pull_request:
     branches:
       - main
     paths:
-      - services/omnivoice/**
+      - services/qwen3_tts/**
+      - services/omnivoice/audio_quality.py
       - services/speaker_similarity.py
       - services/tts_consistency.py
       - services/__init__.py
-      - .github/workflows/omnivoice-image.yml
+      - .github/workflows/qwen3-tts-image.yml
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-omnivoice
+  IMAGE_NAME: ${{ github.repository }}-qwen3-tts
 
 jobs:
   build:
@@ -57,10 +59,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/omnivoice/Dockerfile
+          file: services/qwen3_tts/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=omnivoice
-          cache-to: type=gha,mode=max,scope=omnivoice
+          cache-from: type=gha,scope=qwen3-tts
+          cache-to: type=gha,mode=max,scope=qwen3-tts

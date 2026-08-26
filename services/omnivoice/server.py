@@ -27,6 +27,8 @@ import torch  # noqa: E402
 from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
+from services.speaker_similarity import get_speaker_verifier  # noqa: E402
+from services.tts_consistency import seed_for_attempt  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,9 @@ class GenerateRequest(BaseModel):
     voice: str | None = None
     voice_id: str | None = None
     language: str | None = None
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    min_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    quality_attempts: int = Field(default=QUALITY_ATTEMPTS, ge=1, le=10)
 
 
 class DesignVoiceRequest(BaseModel):
@@ -75,6 +80,8 @@ class BatchGenerateRequest(BaseModel):
 class BatchGenerateItem(BaseModel):
     audio_base64: str
     duration_ms: int
+    voice_similarity: float | None = None
+    attempts: int = 1
 
 
 class BatchGenerateResponse(BaseModel):
@@ -113,15 +120,21 @@ class OmniVoiceRuntime:
         )
         logger.info("OmniVoice ready at %s Hz.", self.model.sampling_rate)
 
-    def generate(self, request: GenerateRequest) -> tuple[bytes, int]:
+    def generate(self, request: GenerateRequest) -> tuple[bytes, int, float | None, int]:
         return self.generate_batch([request])[0]
 
     def _generate_audio(self, requests: list[GenerateRequest]) -> list[np.ndarray]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
+        if len(requests) > 1 and any(request.seed is not None for request in requests):
+            return [self._generate_audio([request])[0] for request in requests]
         prompts = [translate_generation_prompt(request.voice, request.text) for request in requests]
         with self._generate_lock:
+            if requests[0].seed is not None:
+                torch.manual_seed(requests[0].seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(requests[0].seed)
             clone_prompts = [self._voice_clone_prompt(request.voice_id) if request.voice_id else None for request in requests]
             if any(clone_prompts) and not all(clone_prompts):
                 raise RuntimeError("OmniVoice cannot mix designed and undesigned voices in one native batch.")
@@ -155,7 +168,7 @@ class OmniVoiceRuntime:
             raise RuntimeError("OmniVoice model is not loaded")
         with self._generate_lock:
             translated = translate_generation_prompt(request.voice, VOICE_DESIGN_TEXT)
-            audio = self._generate_valid_audio(
+            audio, _similarity, _attempts = self._generate_valid_audio(
                 GenerateRequest(
                     text=VOICE_DESIGN_TEXT,
                     voice=request.voice,
@@ -176,33 +189,54 @@ class OmniVoiceRuntime:
             )
             return stored
 
-    def _generate_valid_audio(self, request: GenerateRequest, request_number: int) -> np.ndarray:
+    def _generate_valid_audio(self, request: GenerateRequest, request_number: int) -> tuple[np.ndarray, float | None, int]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
         last_error = None
-        for attempt in range(1, QUALITY_ATTEMPTS + 1):
-            audio = self._generate_audio([request])[0]
+        for attempt in range(1, request.quality_attempts + 1):
+            attempt_request = request
+            if request.seed is not None:
+                attempt_request = request.model_copy(update={"seed": seed_for_attempt(request.seed, attempt)})
+            audio = self._generate_audio([attempt_request])[0]
             try:
                 validate_generated_audio(audio, self.model.sampling_rate)
-                return audio
+                similarity = self._voice_similarity(request, audio)
+                if (
+                    request.min_voice_similarity is not None
+                    and similarity is not None
+                    and similarity < request.min_voice_similarity
+                ):
+                    raise AudioQualityError(f"speaker similarity {similarity:.3f} is below {request.min_voice_similarity:.3f}")
+                return audio, similarity, attempt
             except AudioQualityError as exc:
                 last_error = exc
                 logger.warning(
                     "Rejected generated audio for request %d on quality attempt %d/%d: %s",
                     request_number,
                     attempt,
-                    QUALITY_ATTEMPTS,
+                    request.quality_attempts,
                     exc,
                 )
 
         text = request.text.replace("\n", " ")[:120]
         raise AudioQualityError(
             f"request {request_number} ({text!r}) failed quality validation after "
-            f"{QUALITY_ATTEMPTS} attempts: {last_error}"
+            f"{request.quality_attempts} attempts: {last_error}"
         ) from last_error
 
-    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int]]:
+    def _voice_similarity(self, request: GenerateRequest, audio: np.ndarray) -> float | None:
+        if not request.voice_id:
+            return None
+        sample_path = self._voice_store.sample_path(request.voice_id)
+        return get_speaker_verifier().similarity(
+            request.voice_id,
+            sample_path,
+            audio,
+            self.model.sampling_rate,
+        )
+
+    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int, float | None, int]]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
@@ -210,11 +244,20 @@ class OmniVoiceRuntime:
         can_native_batch = all(has_voice_ids) or not any(has_voice_ids)
         if NATIVE_BATCHING and len(requests) > 1 and can_native_batch:
             audios = self._generate_audio(requests)
-            valid_audios = []
+            valid_audios: list[tuple[np.ndarray, float | None, int]] = []
             for index, (request, audio) in enumerate(zip(requests, audios, strict=True), start=1):
                 try:
                     validate_generated_audio(audio, self.model.sampling_rate)
-                    valid_audios.append(audio)
+                    similarity = self._voice_similarity(request, audio)
+                    if (
+                        request.min_voice_similarity is not None
+                        and similarity is not None
+                        and similarity < request.min_voice_similarity
+                    ):
+                        raise AudioQualityError(
+                            f"speaker similarity {similarity:.3f} is below {request.min_voice_similarity:.3f}"
+                        )
+                    valid_audios.append((audio, similarity, 1))
                 except AudioQualityError as exc:
                     logger.warning(
                         "Rejected native batch output for request %d; regenerating individually: %s",
@@ -225,7 +268,10 @@ class OmniVoiceRuntime:
         else:
             valid_audios = [self._generate_valid_audio(request, index) for index, request in enumerate(requests, start=1)]
 
-        return [_encode_audio(audio, self.model.sampling_rate) for audio in valid_audios]
+        return [
+            (*_encode_audio(audio, self.model.sampling_rate), similarity, attempts)
+            for audio, similarity, attempts in valid_audios
+        ]
 
 
 runtime = OmniVoiceRuntime()
@@ -284,7 +330,7 @@ async def voice_sample(voice_id: str) -> FileResponse:
 @app.post("/generate")
 async def generate(request: GenerateRequest) -> Response:
     try:
-        audio, duration_ms = await asyncio.to_thread(runtime.generate, request)
+        audio, duration_ms, similarity, attempts = await asyncio.to_thread(runtime.generate, request)
     except Exception as exc:
         logger.exception("OmniVoice generation failed.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -294,6 +340,8 @@ async def generate(request: GenerateRequest) -> Response:
         headers={
             "X-Audio-Duration-Ms": str(duration_ms),
             "X-OmniVoice-Device": runtime.device,
+            "X-Generation-Attempts": str(attempts),
+            **({"X-Voice-Similarity": f"{similarity:.6f}"} if similarity is not None else {}),
         },
     )
 
@@ -310,7 +358,9 @@ async def generate_batch(request: BatchGenerateRequest) -> BatchGenerateResponse
             BatchGenerateItem(
                 audio_base64=base64.b64encode(audio).decode("ascii"),
                 duration_ms=duration_ms,
+                voice_similarity=similarity,
+                attempts=attempts,
             )
-            for audio, duration_ms in generated
+            for audio, duration_ms, similarity, attempts in generated
         ]
     )

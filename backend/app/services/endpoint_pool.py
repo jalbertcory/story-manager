@@ -55,6 +55,46 @@ def configured_endpoints(settings: AudiobookSettings | None, capability: str) ->
     return [dict(endpoint) for endpoint in stored if isinstance(endpoint, dict)]
 
 
+def configured_providers(settings: AudiobookSettings | None, capability: str) -> list[str]:
+    """Return unique configured providers in endpoint priority order."""
+    return list(
+        dict.fromkeys(
+            str(endpoint.get("provider") or "").strip().lower()
+            for endpoint in configured_endpoints(settings, capability)
+            if str(endpoint.get("provider") or "").strip()
+        )
+    )
+
+
+def settings_for_provider(
+    settings: AudiobookSettings,
+    capability: str,
+    provider: str,
+) -> SimpleNamespace:
+    """Restrict routing to endpoints owned by one persisted provider."""
+    normalized = provider.strip().lower()
+    endpoints = [
+        endpoint
+        for endpoint in configured_endpoints(settings, capability)
+        if str(endpoint.get("provider") or "").strip().lower() == normalized
+    ]
+    if not endpoints:
+        raise RuntimeError(
+            f"This audiobook is locked to {normalized}, but no {normalized} {capability.upper()} endpoint is configured."
+        )
+    values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
+    values[f"{capability}_endpoints"] = endpoints
+    prefix = "transcription" if capability == "transcription" else capability
+    primary = endpoints[0]
+    for field in ("provider", "api_key", "base_url", "model"):
+        values[f"{prefix}_{field}"] = primary.get(field)
+    if capability == "tts":
+        values["tts_default_voice"] = primary.get("default_voice")
+    elif capability == "transcription":
+        values["transcription_language"] = primary.get("language")
+    return SimpleNamespace(**values)
+
+
 def primary_provider(settings: AudiobookSettings | None, capability: str, default: str) -> str:
     endpoints = configured_endpoints(settings, capability)
     provider = endpoints[0].get("provider") if endpoints else default
@@ -74,7 +114,10 @@ def _endpoint_settings(
     endpoint: dict[str, Any],
 ) -> SimpleNamespace:
     """Expose one generic endpoint through the legacy provider field names."""
-    values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
+    if hasattr(settings, "__table__"):
+        values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
+    else:
+        values = dict(vars(settings))
     prefix = "transcription" if capability == "transcription" else capability
     for field in ("provider", "api_key", "base_url", "model"):
         values[f"{prefix}_{field}"] = endpoint.get(field)
@@ -163,6 +206,10 @@ async def _record_endpoint_attempt(
         logger.exception("Failed to record %s endpoint request metric", capability.upper())
 
 
-def reset_cooldowns() -> None:
-    """Clear process-local cooldown state (primarily useful for tests)."""
-    _cooldowns.clear()
+def reset_cooldowns(capability: str | None = None) -> None:
+    """Clear process-local cooldown state, optionally for one capability."""
+    if capability is None:
+        _cooldowns.clear()
+        return
+    for key in [key for key in _cooldowns if key[0] == capability]:
+        _cooldowns.pop(key, None)

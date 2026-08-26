@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
+import posixpath
 import shutil
 import tempfile
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup
@@ -80,6 +81,69 @@ def _sanitize_toc_targets(toc_items, ids_by_name: dict[str, set[str]]) -> None:
                 target.href = file_name
         if isinstance(item, (tuple, list)) and len(item) > 1:
             _sanitize_toc_targets(item[1], ids_by_name)
+
+
+def _document_resource_target(document_name: str, raw_href: str) -> tuple[str, str] | None:
+    """Resolve a package-local document reference and its optional fragment."""
+    if not raw_href or raw_href.startswith(("data:", "mailto:", "tel:")) or "://" in raw_href:
+        return None
+    path, _, fragment = raw_href.partition("#")
+    path = path.partition("?")[0]
+    target = posixpath.normpath(posixpath.join(posixpath.dirname(document_name), path)) if path else document_name
+    return target, fragment
+
+
+def _sanitize_document_targets(ebook, ids_by_name: dict[str, set[str]]) -> None:
+    """Keep inherited hyperlinks usable when their source fragments are stale."""
+    for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        soup = BeautifulSoup(item.content, "html.parser")
+        changed = False
+        for link in soup.find_all(href=True):
+            raw_href = str(link.get("href") or "")
+            resolved = _document_resource_target(item.get_name(), raw_href)
+            if resolved is None:
+                continue
+            target, fragment = resolved
+            if not fragment or target not in ids_by_name or fragment in ids_by_name[target]:
+                continue
+            path = raw_href.partition("#")[0]
+            link["href"] = path or posixpath.basename(item.get_name())
+            changed = True
+        if changed:
+            item.content = str(soup).encode("utf-8")
+
+
+def _remove_invalid_placeholder_resources(ebook) -> None:
+    """Drop tiny, non-image placeholders that EPUB readers cannot render."""
+    placeholders = [
+        item
+        for item in list(ebook.get_items())
+        if item.media_type == "application/octet-stream" and len(item.content or b"") <= 16
+    ]
+    if not placeholders:
+        return
+    placeholder_names = {item.get_name() for item in placeholders}
+    for document in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        soup = BeautifulSoup(document.content, "html.parser")
+        changed = False
+        for node in list(soup.find_all(src=True)):
+            resolved = _document_resource_target(document.get_name(), str(node.get("src") or ""))
+            if resolved is not None and resolved[0] in placeholder_names:
+                node.decompose()
+                changed = True
+        if changed:
+            document.content = str(soup).encode("utf-8")
+    for placeholder in placeholders:
+        ebook.items.remove(placeholder)
+
+
+def _normalize_resource_media_types(ebook) -> None:
+    replacements = {
+        "application/x-font-truetype": "font/ttf",
+        "application/x-font-opentype": "font/otf",
+    }
+    for item in ebook.get_items():
+        item.media_type = replacements.get(item.media_type, item.media_type)
 
 
 def _prepare_epub3_documents(ebook) -> None:
@@ -301,8 +365,12 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
 
     ebook = epub.read_epub(str(working_epub_path))
     _sanitize_epub3_metadata(ebook)
+    _remove_invalid_placeholder_resources(ebook)
+    _normalize_resource_media_types(ebook)
     _prepare_epub3_documents(ebook)
-    _sanitize_toc_targets(ebook.toc, _document_ids(ebook))
+    document_ids = _document_ids(ebook)
+    _sanitize_toc_targets(ebook.toc, document_ids)
+    _sanitize_document_targets(ebook, document_ids)
     _ensure_epub3_navigation(ebook)
 
     all_chapters = await crud.audiobook.get_chapters_for_book(db, book_id)

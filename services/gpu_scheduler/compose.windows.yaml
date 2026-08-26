@@ -46,6 +46,21 @@ services:
       story-manager.gpu-scheduler.managed: "true"
       story-manager.gpu-scheduler.order: "20"
 
+  qwen3-tts:
+    image: ghcr.io/jalbertcory/story-manager-qwen3-tts:latest
+    container_name: story-manager-qwen3-tts
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "8003:8003"
+    environment:
+      QWEN3_TTS_DEVICE: auto
+    volumes:
+      - qwen3-tts-models:/models
+    labels:
+      story-manager.gpu-scheduler.managed: "true"
+      story-manager.gpu-scheduler.order: "30"
+
   transcription:
     image: ghcr.io/jalbertcory/story-manager-transcription:latest
     container_name: story-manager-transcription
@@ -61,10 +76,11 @@ services:
       - whisper-models:/models
     labels:
       story-manager.gpu-scheduler.managed: "true"
-      story-manager.gpu-scheduler.order: "30"
+      story-manager.gpu-scheduler.order: "40"
 
 volumes:
   gpu-scheduler-data:
   ollama-models:
   omnivoice-models:
+  qwen3-tts-models:
   whisper-models:

@@ -69,8 +69,8 @@ function SentenceRow({
     label: statusLabels[sentence.status] || sentence.status,
   };
   const audioUrl = statusGroups.playable.has(sentence.status)
-      ? getSentenceAudioUrl(sentence.id)
-      : null;
+    ? getSentenceAudioUrl(sentence.id)
+    : null;
 
   return (
     <tr className={`sentence-row sentence-row--${sentence.status}`}>
@@ -125,6 +125,21 @@ function SentenceRow({
       <td className="sentence-status" title={statusInfo.label}>
         <span aria-hidden="true">{statusInfo.icon}</span>
         <span>{statusInfo.label}</span>
+        {(sentence.voice_similarity != null ||
+          sentence.tts_attempts != null ||
+          sentence.generation_group_id) && (
+          <small
+            title={`Generated in ${sentence.tts_attempts || 1} attempt(s)`}
+          >
+            {sentence.voice_similarity != null
+              ? `Voice ${sentence.voice_similarity.toFixed(2)}`
+              : "Voice check n/a"}
+            {sentence.tts_attempts > 1
+              ? ` · ${sentence.tts_attempts} attempts`
+              : ""}
+            {sentence.generation_group_id ? " · block" : ""}
+          </small>
+        )}
       </td>
       <td className="sentence-audio">
         {audioUrl ? (

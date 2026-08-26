@@ -381,60 +381,17 @@ class AudiobookQueue:
                             book_id,
                             recovered,
                         )
-                    ready_sentences = await crud.audiobook.get_sentences_ready_for_audio(
-                        db,
-                        book_id,
-                        limit=100_000,
-                    )
-                    await self.enqueue_background_audio(
-                        book_id,
-                        [
-                            sentence.id
-                            for sentence in sorted(
-                                ready_sentences,
-                                key=lambda sentence: len(sentence.tagged_text or sentence.original_text),
-                            )
-                        ],
-                    )
-                    await diarize_sentences(
-                        book_id,
-                        db,
-                        on_sentences_ready=lambda sentence_ids: self.enqueue_background_audio(
-                            book_id,
-                            sentence_ids,
-                        ),
-                    )
+                    # Finish attribution before synthesis so adjacent sentences
+                    # remain available for stable same-speaker generation blocks.
+                    await diarize_sentences(book_id, db)
                 elif phase == "audio_gen":
-                    # A process restart can resume directly in this phase, after
-                    # the in-memory TTS queue has been lost. Rebuild it from
-                    # durable sentence state and preserve length bucketing.
-                    if not self._background_audio_ids.get(book_id):
-                        recovered = await crud.audiobook.reset_interrupted_sentences_for_book(
-                            db,
+                    recovered = await crud.audiobook.reset_interrupted_sentences_for_book(db, book_id)
+                    if recovered:
+                        logger.warning(
+                            "Book %s: reclaiming %d interrupted speech clips.",
                             book_id,
+                            recovered,
                         )
-                        if recovered:
-                            logger.warning(
-                                "Book %s: reclaiming %d interrupted speech clips.",
-                                book_id,
-                                recovered,
-                            )
-                    ready_sentences = await crud.audiobook.get_sentences_ready_for_audio(
-                        db,
-                        book_id,
-                        limit=100_000,
-                    )
-                    await self.enqueue_background_audio(
-                        book_id,
-                        [
-                            sentence.id
-                            for sentence in sorted(
-                                ready_sentences,
-                                key=lambda sentence: len(sentence.tagged_text or sentence.original_text),
-                            )
-                        ],
-                    )
-                    await self._wait_for_background_audio(book_id)
                     recovered = await crud.audiobook.reset_error_sentences_for_book(
                         db,
                         book_id,

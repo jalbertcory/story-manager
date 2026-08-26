@@ -116,6 +116,9 @@ class Book(Base):
     audiobook_pipeline_updated_at = Column(DateTime(timezone=True), nullable=True)
     audiobook_batch_limit = Column(Integer, nullable=True)
     audiobook_llm_requests = Column(Integer, nullable=False, default=0, server_default="0")
+    # Once selected, every TTS request for this book is restricted to this
+    # provider. Named-series books share the same lock.
+    audiobook_tts_provider = Column(String, nullable=True)
     # Reader-facing audiobook publication state. These fields describe the
     # last atomically published modular rendition, independently of work that
     # may still be in progress in the generation pipeline.
@@ -354,6 +357,9 @@ class AudiobookSettings(Base):
     tts_base_url = Column(String, nullable=True)
     tts_model = Column(String, nullable=True)
     tts_default_voice = Column(String, nullable=True)
+    tts_max_block_chars = Column(Integer, nullable=False, default=500, server_default="500")
+    tts_voice_similarity_threshold = Column(Float, nullable=False, default=0.45, server_default="0.45")
+    tts_quality_attempts = Column(Integer, nullable=False, default=3, server_default="3")
     transcription_provider = Column(String, nullable=True)
     transcription_api_key = Column(String, nullable=True)
     transcription_base_url = Column(String, nullable=True)
@@ -451,6 +457,7 @@ class AudiobookSeriesCharacter(Base):
     voice_prompt = Column(String, nullable=True)
     tts_voice_id = Column(String, nullable=True)
     tts_voice_provider = Column(String, nullable=True)
+    tts_seed = Column(Integer, nullable=True)
     is_narrator = Column(Boolean, nullable=False, server_default="false")
     aliases = Column(JSON, nullable=True)
     evidence = Column(JSON, nullable=True)
@@ -474,6 +481,7 @@ class AudiobookCharacter(Base):
     voice_prompt = Column(String, nullable=True)
     tts_voice_id = Column(String, nullable=True)
     tts_voice_provider = Column(String, nullable=True)
+    tts_seed = Column(Integer, nullable=True)
     is_narrator = Column(Boolean, nullable=False, server_default="false")
     aliases = Column(JSON, nullable=True)
     evidence = Column(JSON, nullable=True)
@@ -492,6 +500,9 @@ class AudiobookSentence(Base):
     tagged_text = Column(Text, nullable=True)
     audio_file_path = Column(String, nullable=True)
     audio_duration_ms = Column(Integer, nullable=True)
+    generation_group_id = Column(String(64), nullable=True, index=True)
+    voice_similarity = Column(Float, nullable=True)
+    tts_attempts = Column(Integer, nullable=True)
     speaker_confidence = Column(Float, nullable=True)
     speaker_reason = Column(Text, nullable=True)
     # Values and transitions are defined by lifecycle.SENTENCE.

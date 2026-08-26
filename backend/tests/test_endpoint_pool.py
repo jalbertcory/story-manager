@@ -84,6 +84,45 @@ async def test_all_cooling_endpoints_fail_fast(monkeypatch):
         await endpoint_pool.route_request(settings, "tts", fail)
 
 
+def test_reset_cooldowns_can_target_one_capability(monkeypatch):
+    monkeypatch.setattr(endpoint_pool.time, "monotonic", lambda: 1000.0)
+    endpoint_pool._cooldowns.update(
+        {
+            ("tts", "voice-host"): 1060.0,
+            ("llm", "language-host"): 1060.0,
+        }
+    )
+
+    endpoint_pool.reset_cooldowns("tts")
+
+    assert endpoint_pool._cooldowns == {("llm", "language-host"): 1060.0}
+
+
+@pytest.mark.asyncio
+async def test_provider_restricted_settings_never_fall_through_to_another_tts_engine():
+    settings = models.AudiobookSettings(
+        tts_endpoints=[
+            {"id": "qwen-gaming", "provider": "qwen3", "base_url": "http://qwen-gaming"},
+            {"id": "qwen-backup", "provider": "qwen3", "base_url": "http://qwen-backup"},
+            {"id": "omni", "provider": "omnivoice", "base_url": "http://omni"},
+        ]
+    )
+    restricted = endpoint_pool.settings_for_provider(settings, "tts", "qwen3")
+    calls = []
+
+    async def attempt(endpoint_settings):
+        calls.append(endpoint_settings.tts_base_url)
+        if endpoint_settings.tts_base_url == "http://qwen-gaming":
+            raise RuntimeError("gaming PC offline")
+        return endpoint_settings.tts_provider
+
+    routed = await endpoint_pool.route_request(restricted, "tts", attempt)
+
+    assert routed.value == "qwen3"
+    assert routed.endpoint["id"] == "qwen-backup"
+    assert calls == ["http://qwen-gaming", "http://qwen-backup"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capability", ["llm", "tts", "transcription"])
 async def test_routes_record_successful_endpoint_attempt(monkeypatch, sqlite_sessionmaker, capability):

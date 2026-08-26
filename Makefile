@@ -1,15 +1,16 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui pr-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui pr-check test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
 OMNIVOICE_PORT ?= 8001
+QWEN3_TTS_PORT ?= 8003
 TRANSCRIPTION_PORT ?= 8002
 WHISPER_LANGUAGE ?= en
 WHISPER_MODEL_CACHE ?= .run/models/whisperx
 GPU_SCHEDULER_COMPOSE_FILE ?= services/gpu_scheduler/compose.windows.yaml
 GPU_SCHEDULER_URL ?= http://127.0.0.1:8765
 GPU_SCHEDULER_BUILD ?=
-MANAGED_AI_SERVICES ?= ollama omnivoice transcription
+MANAGED_AI_SERVICES ?= ollama omnivoice qwen3-tts transcription
 GPU_COMPOSE = docker compose -f $(GPU_SCHEDULER_COMPOSE_FILE)
 
 help:
@@ -23,6 +24,8 @@ help:
 	@echo "  make run-ui           Run the Vite frontend"
 	@echo "  make setup-omnivoice  Install official OmniVoice in an isolated environment"
 	@echo "  make run-omnivoice    Run the local MPS/CUDA/CPU OmniVoice adapter"
+	@echo "  make run-qwen3-tts     Run the local Qwen3-TTS preset/clone/LoRA adapter"
+	@echo "  make run-qwen3-tts-mlx Run the Apple-Silicon MLX Qwen3-TTS adapter"
 	@echo "  make run-transcription Run the local WhisperX timestamp service"
 	@echo "  make build-transcription-image Build the production WhisperX image"
 	@echo "  make pull-ollama-model Pull the recommended local audiobook LLM"
@@ -56,6 +59,20 @@ setup-omnivoice:
 run-omnivoice: setup-omnivoice
 	PYTORCH_ENABLE_MPS_FALLBACK=1 services/omnivoice/.venv/bin/uvicorn \
 		services.omnivoice.server:app --host 127.0.0.1 --port $(OMNIVOICE_PORT)
+
+setup-qwen3-tts:
+	uv sync --project services/qwen3_tts --python 3.12
+
+run-qwen3-tts: setup-qwen3-tts
+	services/qwen3_tts/.venv/bin/uvicorn \
+		services.qwen3_tts.server:app --host 127.0.0.1 --port $(QWEN3_TTS_PORT)
+
+setup-qwen3-tts-mlx:
+	uv sync --project services/qwen3_tts_mlx --python 3.12
+
+run-qwen3-tts-mlx: setup-qwen3-tts-mlx
+	services/qwen3_tts_mlx/.venv/bin/uvicorn \
+		services.qwen3_tts_mlx.server:app --host 127.0.0.1 --port $(QWEN3_TTS_PORT)
 
 setup-transcription:
 	uv sync --project services/transcription --python 3.13
@@ -241,7 +258,31 @@ test-migrations:
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0033; \
 	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
-		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'processing_jobs' AND column_name = 'request_id') THEN RAISE EXCEPTION 'processing request id column survived downgrade'; END IF; END \$$\$$;"
+		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'processing_jobs' AND column_name = 'request_id') THEN RAISE EXCEPTION 'processing request id column survived downgrade'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0036; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-consistency-setup.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-consistency-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0036; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-consistency-downgrade-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0037; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-tts-provider-lock-setup.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-tts-provider-lock-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0037; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-tts-provider-lock-downgrade-verify.sql
 
 e2e:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true

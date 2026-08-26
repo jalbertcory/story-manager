@@ -37,10 +37,13 @@ For each character produce:
 - aliases: other names, surnames, nicknames, ranks, or titles used for this person
 - description: a concise description of their personality, relationships, and role
 - evidence: 1-3 short quotations or explicit textual facts supporting the identification
-- voice_prompt: a provider-neutral voice profile using ONLY these tokens:
+- voice_prompt: a provider-neutral voice profile beginning with these tokens:
   [gender-{{male|female|neutral}}] [pitch-{{low|medium|high}}] [speed-{{slow|normal|fast}}]
-  Optional: [accent-{{british|american|australian}}] [age-{{young|middle|old}}]
-  Example: [gender-male][pitch-low][speed-normal][age-middle]
+  Optional tokens: [accent-{{british|american|australian}}] [age-{{young|middle|old}}]. Follow the tokens with one
+  short acoustic description covering timbre, resonance, texture, articulation, and cadence. Give every cast member
+  a clearly distinguishable vocal identity; never reuse the same description for two characters.
+  Example: [gender-male][pitch-low][speed-normal][age-middle] Dark velvet timbre, deep chest resonance, crisp
+  consonants, and an unhurried cadence with firm sentence endings.
 - is_narrator: true only for an entry named exactly "Narrator". In first-person books, the protagonist must be a \
   separate character with is_narrator false so their spoken dialogue has a distinct voice.
 
