@@ -23,6 +23,17 @@ class RoutedResult(Generic[T]):
     endpoint: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class EndpointProbeResult(Generic[T]):
+    """The outcome of directly testing one configured endpoint."""
+
+    endpoint: dict[str, Any]
+    success: bool
+    duration_ms: float
+    value: T | None = None
+    error: str | None = None
+
+
 _cooldowns: dict[tuple[str, str], float] = {}
 
 
@@ -131,6 +142,84 @@ def _endpoint_settings(
 def cooldown_remaining(capability: str, endpoint: dict[str, Any]) -> float:
     remaining = _cooldowns.get(_endpoint_key(capability, endpoint), 0.0) - time.monotonic()
     return max(0.0, remaining)
+
+
+def _error_detail(exc: Exception) -> str:
+    """Include a provider response detail without dumping a large response body."""
+    message = str(exc).strip() or type(exc).__name__
+    response = getattr(exc, "response", None)
+    detail: Any = None
+    if response is not None:
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            payload = None
+        if isinstance(payload, dict):
+            detail = payload.get("detail") or payload.get("message") or payload.get("error")
+            if isinstance(detail, dict):
+                detail = detail.get("message") or str(detail)
+        if not detail:
+            try:
+                detail = response.text
+            except Exception:
+                detail = None
+    if detail:
+        normalized = " ".join(str(detail).split())
+        if normalized and normalized not in message:
+            message = f"{message} — {normalized}"
+    return message[:1000]
+
+
+async def probe_endpoints(
+    settings: AudiobookSettings,
+    capability: str,
+    attempt: Callable[[Any], Awaitable[T]],
+) -> list[EndpointProbeResult[T]]:
+    """Test every endpoint, including endpoints currently in cooldown."""
+    results: list[EndpointProbeResult[T]] = []
+    for endpoint in configured_endpoints(settings, capability):
+        key = _endpoint_key(capability, endpoint)
+        started_at = time.perf_counter()
+        try:
+            value = await attempt(_endpoint_settings(settings, capability, endpoint))
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            await _record_endpoint_attempt(
+                settings,
+                capability,
+                endpoint,
+                success=False,
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+            )
+            _cooldowns[key] = time.monotonic() + COOLDOWN_SECONDS
+            results.append(
+                EndpointProbeResult(
+                    endpoint=endpoint,
+                    success=False,
+                    duration_ms=duration_ms,
+                    error=_error_detail(exc),
+                )
+            )
+            continue
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        await _record_endpoint_attempt(
+            settings,
+            capability,
+            endpoint,
+            success=True,
+            duration_ms=duration_ms,
+        )
+        _cooldowns.pop(key, None)
+        results.append(
+            EndpointProbeResult(
+                endpoint=endpoint,
+                success=True,
+                duration_ms=duration_ms,
+                value=value,
+            )
+        )
+    return results
 
 
 async def route_request(

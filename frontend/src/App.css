@@ -1851,6 +1851,64 @@
   margin: 0;
 }
 
+.endpoint-test-results {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.endpoint-test-partial {
+  color: var(--warning, #a45f00);
+}
+
+.endpoint-test-result-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.endpoint-test-result {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.endpoint-test-result-ready {
+  border-left: 3px solid var(--success);
+}
+
+.endpoint-test-result-error {
+  border-left: 3px solid var(--danger, #b42318);
+}
+
+.endpoint-test-result-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.endpoint-test-result-heading div,
+.endpoint-test-result-heading strong,
+.endpoint-test-result-heading small {
+  display: block;
+}
+
+.endpoint-test-result-heading div > span,
+.endpoint-test-result-heading small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.endpoint-test-result-heading > span {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.endpoint-test-result > p {
+  margin-top: 0.55rem;
+  overflow-wrap: anywhere;
+}
+
 .llm-metrics {
   margin-top: 1.25rem;
   padding-top: 1.25rem;
@@ -1947,6 +2005,7 @@
 @media (max-width: 700px) {
   .endpoint-pool-heading,
   .endpoint-card-header,
+  .endpoint-test-result-heading,
   .llm-metrics-heading {
     align-items: stretch;
     flex-direction: column;

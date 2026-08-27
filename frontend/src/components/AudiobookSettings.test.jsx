@@ -26,10 +26,7 @@ describe("AudiobookSettings", () => {
             }),
         });
       }
-      if (
-        url === "/api/audiobook/settings" &&
-        options?.method === "PUT"
-      ) {
+      if (url === "/api/audiobook/settings" && options?.method === "PUT") {
         const body = JSON.parse(options.body);
         updates.push(body);
         return Promise.resolve({
@@ -75,6 +72,86 @@ describe("AudiobookSettings", () => {
     expect(updates[0].tts_endpoints[0].api_key).toBeNull();
   });
 
+  it("shows the result of every endpoint tested in a fallback pool", async () => {
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/audiobook/settings" && !options) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              llm_provider: "stub",
+              tts_endpoints: [
+                {
+                  id: "qwen-host",
+                  name: "Qwen TTS",
+                  provider: "qwen3",
+                  base_url: "http://qwen:8001",
+                },
+                {
+                  id: "omni-host",
+                  name: "OmniVoice fallback",
+                  provider: "omnivoice",
+                  base_url: "http://omni:8001",
+                },
+              ],
+              transcription_provider: "none",
+            }),
+        });
+      }
+      if (url === "/api/audiobook/settings/test-tts") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              status: "partial",
+              provider: "omnivoice",
+              endpoint: "OmniVoice fallback",
+              results: [
+                {
+                  endpoint_id: "qwen-host",
+                  endpoint: "Qwen TTS",
+                  priority: 1,
+                  provider: "qwen3",
+                  model: null,
+                  status: "error",
+                  duration_ms: 1250,
+                  error: "The worker has a different model loaded.",
+                },
+                {
+                  endpoint_id: "omni-host",
+                  endpoint: "OmniVoice fallback",
+                  priority: 2,
+                  provider: "omnivoice",
+                  model: null,
+                  status: "ready",
+                  duration_ms: 800,
+                  error: null,
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    renderWithClient(<AudiobookSettings />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Save & Test TTS" }),
+    );
+
+    const results = await screen.findByLabelText("TTS endpoint test results");
+    expect(results).toHaveTextContent("1 of 2 endpoints connected");
+    expect(results).toHaveTextContent("Priority 1");
+    expect(results).toHaveTextContent("Qwen TTS");
+    expect(results).toHaveTextContent("Failed · 1.3 s");
+    expect(results).toHaveTextContent(
+      "The worker has a different model loaded.",
+    );
+    expect(results).toHaveTextContent("Priority 2");
+    expect(results).toHaveTextContent("OmniVoice fallback");
+    expect(results).toHaveTextContent("Connected · 800 ms");
+  });
+
   it("reorders endpoint priority before saving", async () => {
     const updates = [];
     globalThis.fetch = vi.fn((url, options) => {
@@ -113,9 +190,7 @@ describe("AudiobookSettings", () => {
     renderWithClient(<AudiobookSettings />);
 
     await screen.findByDisplayValue("Gaming PC");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Move Gaming PC up" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Move Gaming PC up" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => expect(updates).toHaveLength(1));
@@ -222,10 +297,14 @@ describe("AudiobookSettings", () => {
 
     renderWithClient(<AudiobookSettings />);
 
-    expect(await screen.findAllByText("Connection performance")).toHaveLength(3);
+    expect(await screen.findAllByText("Connection performance")).toHaveLength(
+      3,
+    );
     expect(screen.getByText("90% answered")).toBeInTheDocument();
     expect(screen.getByText("2.4 s")).toBeInTheDocument();
-    expect(screen.getByLabelText("Gaming PC speed breakdown")).toHaveTextContent("<5s 8");
+    expect(
+      screen.getByLabelText("Gaming PC speed breakdown"),
+    ).toHaveTextContent("<5s 8");
     expect(screen.getByText("TTS Host")).toBeInTheDocument();
     expect(screen.getByText("800 ms")).toBeInTheDocument();
     expect(screen.getByText("Speech Host")).toBeInTheDocument();
