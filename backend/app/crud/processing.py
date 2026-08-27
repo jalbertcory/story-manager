@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from uuid import uuid4
 
-from sqlalchemy import and_, desc, or_, select, update
+from sqlalchemy import and_, case, desc, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,10 +101,28 @@ async def get_processing_jobs(
     book_id: int | None = None,
     limit: int = 100,
 ) -> list[tuple[ProcessingJob, str | None]]:
+    status_order = case(
+        (ProcessingJob.status == ProcessingJobStatus.RUNNING.value, 0),
+        (ProcessingJob.status == ProcessingJobStatus.QUEUED.value, 1),
+        else_=2,
+    )
+    running_started_at = case((ProcessingJob.status == ProcessingJobStatus.RUNNING.value, ProcessingJob.started_at))
+    queued_available_at = case((ProcessingJob.status == ProcessingJobStatus.QUEUED.value, ProcessingJob.available_at))
+    queued_created_at = case((ProcessingJob.status == ProcessingJobStatus.QUEUED.value, ProcessingJob.created_at))
+    active_id = case((ProcessingJob.status.in_(ACTIVE_PROCESSING_STATUSES), ProcessingJob.id))
+    terminal_created_at = case((~ProcessingJob.status.in_(ACTIVE_PROCESSING_STATUSES), ProcessingJob.created_at))
     query = (
         select(ProcessingJob, Book.title)
         .outerjoin(Book, ProcessingJob.book_id == Book.id)
-        .order_by(desc(ProcessingJob.created_at), desc(ProcessingJob.id))
+        .order_by(
+            status_order,
+            running_started_at,
+            queued_available_at,
+            queued_created_at,
+            active_id,
+            desc(terminal_created_at),
+            desc(ProcessingJob.id),
+        )
         .limit(limit)
     )
     if statuses:
