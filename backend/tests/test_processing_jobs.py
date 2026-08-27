@@ -217,6 +217,68 @@ async def test_active_processing_job_deduplication_includes_running(sqlite_sessi
 
 
 @pytest.mark.asyncio
+async def test_processing_jobs_are_listed_in_execution_order(sqlite_sessionmaker):
+    now = datetime.now(timezone.utc)
+    async with sqlite_sessionmaker() as db:
+        running_first = ProcessingJob(
+            job_type="clean_book",
+            status="running",
+            started_at=now - timedelta(minutes=10),
+            created_at=now - timedelta(minutes=20),
+        )
+        queued_delayed = ProcessingJob(
+            job_type="refresh_book",
+            status="queued",
+            available_at=now + timedelta(minutes=5),
+            created_at=now - timedelta(minutes=15),
+        )
+        terminal_older = ProcessingJob(
+            job_type="metadata_sync",
+            status="completed",
+            created_at=now - timedelta(minutes=8),
+        )
+        queued_next = ProcessingJob(
+            job_type="audiobook_pipeline",
+            status="queued",
+            available_at=now,
+            created_at=now - timedelta(minutes=5),
+        )
+        running_second = ProcessingJob(
+            job_type="clean_all",
+            status="running",
+            started_at=now - timedelta(minutes=2),
+            created_at=now - timedelta(minutes=3),
+        )
+        terminal_newer = ProcessingJob(
+            job_type="refresh_all",
+            status="error",
+            created_at=now - timedelta(minutes=1),
+        )
+        db.add_all(
+            [
+                running_first,
+                queued_delayed,
+                terminal_older,
+                queued_next,
+                running_second,
+                terminal_newer,
+            ]
+        )
+        await db.commit()
+
+        rows = await crud.get_processing_jobs(db)
+
+    assert [job.id for job, _book_title in rows] == [
+        running_first.id,
+        running_second.id,
+        queued_next.id,
+        queued_delayed.id,
+        terminal_newer.id,
+        terminal_older.id,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_canceled_abandoned_job_is_not_reclaimed(sqlite_sessionmaker):
     async with sqlite_sessionmaker() as db:
         job, _created = await crud.create_processing_job(
