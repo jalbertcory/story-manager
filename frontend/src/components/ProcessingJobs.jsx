@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBookCatalog } from "../api/books";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import useLifecycleDefinitions from "../hooks/useLifecycleDefinitions";
-import { upgradeAllImportedAudiobooks } from "../api/audiobook";
 import {
   cancelProcessingJob,
   getProcessingJobs,
@@ -19,6 +18,7 @@ const JOB_LABELS = {
   audiobook_pipeline: "Generate AI audiobook",
   import_audiobook: "Import human audiobook",
   upgrade_imported_audiobook: "Upgrade human audiobook files",
+  rebuild_imported_audiobook: "Rebuild human audiobook",
   rematch_imported_audiobook: "Rematch human audiobook",
   align_imported_audiobook: "Align human audiobook",
   metadata_sync: "Sync metadata",
@@ -162,15 +162,6 @@ function ProcessingJobs() {
       refresh();
     },
   });
-  const upgradeAllMutation = useMutation({
-    mutationFn: upgradeAllImportedAudiobooks,
-    onSuccess: (data) => {
-      setQueueNotice(
-        `${data.queued_count} human audiobook upgrade${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
-      );
-      refresh();
-    },
-  });
   const retryMutation = useMutation({
     mutationFn: retryProcessingJob,
     onSuccess: refresh,
@@ -256,14 +247,6 @@ function ProcessingJobs() {
             disabled={queueMutation.isPending}
           >
             Refresh all web books
-          </button>
-          <button
-            onClick={() => upgradeAllMutation.mutate()}
-            disabled={upgradeAllMutation.isPending}
-          >
-            {upgradeAllMutation.isPending
-              ? "Queueing audiobook upgrades…"
-              : "Upgrade stored human audiobooks"}
           </button>
         </div>
         <div className="processing-book-picker">

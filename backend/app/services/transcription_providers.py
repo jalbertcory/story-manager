@@ -52,16 +52,38 @@ def _headers(settings: AudiobookSettings) -> dict[str, str]:
     return headers
 
 
+def _raise_for_status(response: httpx.Response, action: str) -> None:
+    """Preserve the service's actionable error instead of only exposing an HTTP status."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if detail:
+            raise RuntimeError(f"Transcription service {action} failed: {detail}") from exc
+        raise
+
+
 async def _transcription_service_health_endpoint(settings: AudiobookSettings) -> dict:
     if transcription_provider_name(settings) == "none":
         raise RuntimeError("Configure a transcription provider first.")
     timeout = httpx.Timeout(30.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.get(f"{_service_root(settings)}/health", headers=_headers(settings))
-        response.raise_for_status()
+        _raise_for_status(response, "health check")
         payload = response.json()
     if payload.get("status") != "ready":
         raise RuntimeError(f"Transcription service is not ready: {payload.get('status', 'unknown')}.")
+    configured_model = settings.transcription_model
+    loaded_model = payload.get("model")
+    if configured_model and loaded_model and configured_model != loaded_model:
+        raise RuntimeError(
+            f"Transcription model mismatch: the service has {loaded_model!r} loaded, "
+            f"but Audio Settings request {configured_model!r}."
+        )
     return payload
 
 
@@ -98,7 +120,7 @@ async def _transcribe_file_endpoint(settings: AudiobookSettings, audio_path: Pat
                 files={"file": (audio_path.name, audio, "audio/flac")},
                 headers=_headers(settings),
             )
-            response.raise_for_status()
+            _raise_for_status(response, "request")
             payload = response.json()
 
     raw_words = payload.get("words")

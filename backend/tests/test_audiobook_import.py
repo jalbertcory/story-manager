@@ -41,6 +41,8 @@ async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
         title="1",
         content_file_name="text/chapter1.xhtml",
         stable_chapter_key="src-import-test",
+        logical_chapter_key="src-import-test",
+        logical_part_order=0,
         spine_order=0,
     )
     db.add(chapter)
@@ -335,8 +337,139 @@ async def test_manual_track_rematch_rebuilds_cues(db):
         .all()
     )
     assert cue_count == 2
+    assert track.match_method == "manual"
     assert cues[0].clip_begin_ms == 1_000
     assert cues[-1].clip_end_ms == 11_000
+
+
+@pytest.mark.asyncio
+async def test_human_audiobook_rebuild_preserves_valid_match_and_marks_pipeline_current(db):
+    book, chapter = await _seed_book_text(db)
+    edition = ImportedAudiobook(
+        book_id=book.id,
+        name="Existing human edition",
+        status="ready",
+        alignment_method="transcribed",
+        source_manifest_sha256="a" * 64,
+        derived_revision=3,
+        derived_format_version=audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+        pipeline_version=0,
+    )
+    db.add(edition)
+    await db.flush()
+    track = ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        matched_chapter_id=chapter.id,
+        sequence_order=1,
+        title="A manually corrected title",
+        audio_file_path="library/audio.mp3",
+        media_type="audio/mpeg",
+        source_start_ms=0,
+        source_end_ms=10_000,
+        duration_ms=10_000,
+        alignment_score=0.9,
+    )
+    db.add(track)
+    await db.commit()
+
+    result = await audiobook_import.rebuild_imported_audiobook(edition.id, db)
+    cues = list(
+        (
+            await db.execute(
+                select(ImportedAudiobookCue)
+                .where(ImportedAudiobookCue.track_id == track.id)
+                .order_by(ImportedAudiobookCue.sequence_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert result.matched_track_count == 1
+    assert result.track_count == 1
+    assert result.realign is True
+    assert result.derived_revision == 3
+    assert track.matched_chapter_id == chapter.id
+    assert track.match_method is None
+    assert track.alignment_score is None
+    assert len(cues) == 2
+    assert edition.pipeline_version == audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    assert edition.alignment_method == "estimated"
+
+
+@pytest.mark.asyncio
+async def test_logical_chapter_cues_span_multiple_epub_files(db):
+    book = Book(title="Split Book", author="Author", content_version=1)
+    db.add(book)
+    await db.flush()
+    heading = AudiobookChapter(
+        book_id=book.id,
+        chapter_number=1,
+        title="Chapter 1",
+        content_file_name="text/chapter-1-heading.xhtml",
+        stable_chapter_key="heading",
+        logical_chapter_key="logical-chapter-1",
+        logical_part_order=0,
+        spine_order=0,
+    )
+    continuation = AudiobookChapter(
+        book_id=book.id,
+        chapter_number=2,
+        title="Phase One",
+        content_file_name="text/chapter-1-body.xhtml",
+        stable_chapter_key="body",
+        logical_chapter_key="logical-chapter-1",
+        logical_part_order=1,
+        spine_order=1,
+    )
+    db.add_all([heading, continuation])
+    await db.flush()
+    sentences = [
+        AudiobookSentence(
+            chapter_id=heading.id,
+            html_element_id="heading-1",
+            sequence_order=0,
+            original_text="1",
+        ),
+        AudiobookSentence(
+            chapter_id=continuation.id,
+            html_element_id="body-1",
+            sequence_order=0,
+            original_text="The body starts here.",
+        ),
+        AudiobookSentence(
+            chapter_id=continuation.id,
+            html_element_id="body-2",
+            sequence_order=1,
+            original_text="It continues in the same audio track.",
+        ),
+    ]
+    edition = ImportedAudiobook(book_id=book.id, name="Human", status="ready")
+    db.add_all([*sentences, edition])
+    await db.flush()
+    track = ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        matched_chapter_id=heading.id,
+        sequence_order=1,
+        title="Chapter 1",
+        audio_file_path="library/audio.m4a",
+        media_type="audio/mp4",
+        source_start_ms=0,
+        source_end_ms=60_000,
+        duration_ms=60_000,
+    )
+    db.add(track)
+    await db.commit()
+
+    cue_count = await audiobook_import.rebuild_estimated_cues(track, db)
+    cues = await audiobook_router.get_imported_track_cues(edition.id, track.id, db)
+    smil = await audiobook_router.get_imported_track_smil(edition.id, track.id, db)
+
+    assert cue_count == 3
+    assert [cue.text for cue in cues] == ["1", "The body starts here.", "It continues in the same audio track."]
+    assert b'src="chapter-1-heading.xhtml#heading-1"' in smil.body
+    assert b'src="chapter-1-body.xhtml#body-1"' in smil.body
+    assert b'src="chapter-1-body.xhtml#body-2"' in smil.body
 
 
 def test_prepare_sources_reuses_extracted_files_on_retry(tmp_path, monkeypatch):
@@ -693,6 +826,85 @@ async def test_upgrade_endpoints_queue_legacy_editions_and_skip_current_or_activ
         assert len(jobs) == 1
         assert jobs[0].target_id == legacy_id
         assert jobs[0].payload == {"format_version": audiobook_import.CURRENT_DERIVED_FORMAT_VERSION}
+
+
+@pytest.mark.asyncio
+async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
+    app_client,
+    sqlite_sessionmaker,
+):
+    async with sqlite_sessionmaker() as db:
+        book, chapter = await _seed_book_text(db)
+        shared = {
+            "book_id": book.id,
+            "status": "ready",
+            "source_manifest_sha256": "a" * 64,
+            "derived_format_version": audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+        }
+        outdated = ImportedAudiobook(
+            **shared,
+            name="Outdated",
+            alignment_method="transcribed",
+            pipeline_version=0,
+        )
+        current = ImportedAudiobook(
+            **shared,
+            name="Current",
+            alignment_method="estimated",
+            pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        )
+        active = ImportedAudiobook(
+            book_id=book.id,
+            name="Active",
+            status="aligning",
+            pipeline_version=0,
+        )
+        db.add_all([outdated, current, active])
+        await db.flush()
+        for edition in (outdated, current, active):
+            db.add(
+                ImportedAudiobookTrack(
+                    imported_audiobook_id=edition.id,
+                    matched_chapter_id=chapter.id,
+                    sequence_order=1,
+                    title="Chapter 1",
+                    audio_file_path=f"library/{edition.id}.m4b",
+                    media_type="audio/mp4",
+                    source_start_ms=0,
+                    source_end_ms=10_000,
+                    duration_ms=10_000,
+                )
+            )
+        await db.commit()
+        outdated_id = outdated.id
+
+    preview = app_client.get("/api/audiobook/imports/rebuild-preview")
+    assert preview.status_code == 200
+    assert preview.json() == {
+        "current_pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        "total_count": 3,
+        "rebuild_count": 1,
+        "realign_count": 1,
+        "up_to_date_count": 1,
+        "unavailable_count": 1,
+    }
+
+    response = app_client.post("/api/audiobook/imports/rebuild-all")
+    assert response.status_code == 200
+    assert response.json() == {
+        "queued_count": 1,
+        "skipped_count": 2,
+        "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+    }
+    async with sqlite_sessionmaker() as db:
+        job = (
+            await db.execute(select(ProcessingJob).where(ProcessingJob.job_type == "rebuild_imported_audiobook"))
+        ).scalar_one()
+        assert job.target_id == outdated_id
+        assert job.payload == {
+            "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+            "force": False,
+        }
 
 
 @pytest.mark.asyncio

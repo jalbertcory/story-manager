@@ -2112,6 +2112,30 @@ def _write_nested_epub(path: Path) -> None:
     epub.write_epub(path, book, {})
 
 
+def _write_split_spine_epub(path: Path) -> None:
+    book = epub.EpubBook()
+    book.set_identifier("split-spine-test")
+    book.set_title("Split Spine")
+    book.set_language("en")
+    book.add_author("Author")
+    heading = epub.EpubHtml(title="Chapter 1", file_name="Text/chapter-1-heading.xhtml", lang="en")
+    heading.content = "<html><body><h1>1</h1></body></html>"
+    continuation = epub.EpubHtml(title="Phase One", file_name="Text/chapter-1-body.xhtml", lang="en")
+    continuation.content = "<html><body><h2>Phase One</h2><p>The chapter body continues here.</p></body></html>"
+    chapter_two = epub.EpubHtml(title="Chapter 2", file_name="Text/chapter-2.xhtml", lang="en")
+    chapter_two.content = "<html><body><h1>2</h1><p>The next chapter starts here.</p></body></html>"
+    for item in (heading, continuation, chapter_two):
+        book.add_item(item)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ["nav", heading, continuation, chapter_two]
+    book.toc = (
+        epub.Link(heading.file_name, "Chapter 1", "chapter-1"),
+        epub.Link(chapter_two.file_name, "Chapter 2", "chapter-2"),
+    )
+    epub.write_epub(path, book, {})
+
+
 def _write_incremental_epub(path: Path, chapters: list[tuple[str, str, str]]) -> None:
     book = epub.EpubBook()
     book.set_identifier("incremental-test")
@@ -2202,6 +2226,31 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
     assert len(sentences) >= 2
     assert all(sentence.html_element_id.startswith(f"{chapters[0].stable_chapter_key}-") for sentence in sentences)
     assert all(soup.find("span", id=sentence.html_element_id) is not None for sentence in sentences)
+
+
+@pytest.mark.asyncio
+async def test_ingestion_groups_non_toc_spine_continuation_with_prior_chapter(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "split-spine.epub"
+    _write_split_spine_epub(epub_path)
+    book = await _make_book(
+        db,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+
+    await audiobook_ingestion.ingest_epub(book.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert [chapter.title for chapter in chapters] == ["Chapter 1", "Phase One", "Chapter 2"]
+    assert chapters[0].logical_chapter_key == chapters[1].logical_chapter_key
+    assert [chapters[0].logical_part_order, chapters[1].logical_part_order] == [0, 1]
+    assert chapters[2].logical_chapter_key != chapters[0].logical_chapter_key
+    assert chapters[2].logical_part_order == 0
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,10 @@ import {
 } from "../api/books";
 import { createBackup, deleteBackup, getBackups, verifyBackup } from "../api/backups";
 import { getProcessingJobs } from "../api/processing";
+import {
+  previewHumanAudiobookRebuilds,
+  rebuildAllHumanAudiobooks,
+} from "../api/audiobook";
 
 const utilityTabs = [
   { key: "audit", label: "Audit" },
@@ -119,6 +123,9 @@ function Utilities({ onBack }) {
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState(null);
   const [backupDeleteTarget, setBackupDeleteTarget] = useState(null);
+  const [audiobookRebuildOpen, setAudiobookRebuildOpen] = useState(false);
+  const [audiobookRebuildForce, setAudiobookRebuildForce] = useState(false);
+  const [audiobookRebuildNotice, setAudiobookRebuildNotice] = useState("");
 
   useEffect(() => {
     const onPopState = () => setActiveTab(getRequestedUtilityTab());
@@ -270,6 +277,34 @@ function Utilities({ onBack }) {
       queryClient.invalidateQueries({ queryKey: ["backups"] });
     },
   });
+
+  const {
+    data: audiobookRebuildPreview,
+    isLoading: audiobookRebuildPreviewLoading,
+    error: audiobookRebuildPreviewError,
+  } = useQuery({
+    queryKey: ["human-audiobook-rebuild-preview"],
+    queryFn: previewHumanAudiobookRebuilds,
+    enabled: activeTab === "audiobooks",
+  });
+
+  const audiobookRebuildMutation = useMutation({
+    mutationFn: () => rebuildAllHumanAudiobooks({ force: audiobookRebuildForce }),
+    onSuccess: (data) => {
+      setAudiobookRebuildOpen(false);
+      setAudiobookRebuildForce(false);
+      setAudiobookRebuildNotice(
+        `${data.queued_count} human audiobook rebuild${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["human-audiobook-rebuild-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+    },
+  });
+  const audiobookRebuildTargetCount = audiobookRebuildForce
+    ? (audiobookRebuildPreview?.rebuild_count || 0) +
+      (audiobookRebuildPreview?.up_to_date_count || 0)
+    : audiobookRebuildPreview?.rebuild_count || 0;
 
   const handleDetectSeries = async () => {
     setDetectState("pending");
@@ -588,16 +623,81 @@ function Utilities({ onBack }) {
         )}
 
         {activeTab === "audiobooks" && (
-          <section className="settings-section">
-            <h3>Libation Backup Import</h3>
-            <p className="hint">
-              Preview book matches, resolve ambiguous titles, and queue the
-              selected backup through the guided import workflow.
-            </p>
-            <a className="btn btn-primary" href="/import?type=libation">
-              Open guided Libation import
-            </a>
-          </section>
+          <>
+            <section className="settings-section">
+              <h3>Rebuild Human Audiobooks</h3>
+              <p className="hint">
+                Bring imported human audiobooks forward using the latest source processing,
+                chapter matching, text cue, and timestamp-alignment pipeline. Existing audio,
+                valid chapter corrections, and compatible Whisper transcripts are reused.
+              </p>
+              {audiobookRebuildPreviewLoading ? (
+                <p className="hint">Inspecting imported audiobooks…</p>
+              ) : audiobookRebuildPreviewError ? (
+                <p className="error">{audiobookRebuildPreviewError.message}</p>
+              ) : audiobookRebuildPreview ? (
+                <p className="hint">
+                  {audiobookRebuildPreview.rebuild_count} of {audiobookRebuildPreview.total_count} edition
+                  {audiobookRebuildPreview.total_count === 1 ? "" : "s"} need pipeline v
+                  {audiobookRebuildPreview.current_pipeline_version}
+                  {audiobookRebuildPreview.realign_count > 0
+                    ? ` · ${audiobookRebuildPreview.realign_count} will be timestamp-aligned again`
+                    : ""}
+                  {audiobookRebuildPreview.unavailable_count > 0
+                    ? ` · ${audiobookRebuildPreview.unavailable_count} currently unavailable`
+                    : ""}
+                </p>
+              ) : null}
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAudiobookRebuildForce(false);
+                    setAudiobookRebuildOpen(true);
+                  }}
+                  disabled={
+                    audiobookRebuildPreviewLoading ||
+                    !audiobookRebuildPreview?.rebuild_count ||
+                    audiobookRebuildMutation.isPending
+                  }
+                >
+                  Rebuild outdated human audiobooks
+                </button>
+                <button
+                  type="button"
+                  className="btn-text"
+                  onClick={() => {
+                    setAudiobookRebuildForce(true);
+                    setAudiobookRebuildOpen(true);
+                  }}
+                  disabled={
+                    audiobookRebuildPreviewLoading ||
+                    !(
+                      (audiobookRebuildPreview?.rebuild_count || 0) +
+                      (audiobookRebuildPreview?.up_to_date_count || 0)
+                    ) ||
+                    audiobookRebuildMutation.isPending
+                  }
+                >
+                  Force rebuild all ready editions
+                </button>
+              </div>
+              {audiobookRebuildNotice && <p className="success">{audiobookRebuildNotice}</p>}
+              {audiobookRebuildMutation.isError && (
+                <p className="error">{audiobookRebuildMutation.error.message}</p>
+              )}
+            </section>
+            <section className="settings-section">
+              <h3>Libation Backup Import</h3>
+              <p className="hint">
+                Preview book matches, resolve ambiguous titles, and queue the
+                selected backup through the guided import workflow.
+              </p>
+              <a className="btn btn-primary" href="/import?type=libation">
+                Open guided Libation import
+              </a>
+            </section>
+          </>
         )}
 
         {activeTab === "recycle-bin" && (
@@ -900,6 +1000,31 @@ function Utilities({ onBack }) {
         {activeTab === "reader-access" && <ReaderKeys />}
       </div>
 
+      <ConfirmActionDialog
+        open={audiobookRebuildOpen}
+        title={audiobookRebuildForce ? "Force rebuild all ready human audiobooks?" : "Rebuild outdated human audiobooks?"}
+        confirmLabel="Queue rebuilds"
+        busyLabel="Queueing…"
+        isPending={audiobookRebuildMutation.isPending}
+        onCancel={() => {
+          setAudiobookRebuildOpen(false);
+          setAudiobookRebuildForce(false);
+        }}
+        onConfirm={() => audiobookRebuildMutation.mutate()}
+      >
+        <p>
+          This will queue {audiobookRebuildTargetCount} imported edition
+          {audiobookRebuildTargetCount === 1 ? "" : "s"} for the latest pipeline.
+        </p>
+        {audiobookRebuildForce && (
+          <p><strong>This also rebuilds editions already marked current.</strong></p>
+        )}
+        <p>
+          Original audio and manual chapter corrections are preserved. Compatible cached transcripts
+          are reused; if a required transcript is missing or incompatible, the configured transcription
+          service will be called again.
+        </p>
+      </ConfirmActionDialog>
       <ConfirmActionDialog
         open={Boolean(permanentDeleteTarget)}
         title={`Permanently delete “${permanentDeleteTarget?.title || "this book"}”?`}

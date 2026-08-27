@@ -217,6 +217,23 @@ export function upgradeAllImportedAudiobooks() {
   });
 }
 
+export function previewHumanAudiobookRebuilds() {
+  return getJson(
+    "/api/audiobook/imports/rebuild-preview",
+    "Failed to inspect human audiobooks",
+  );
+}
+
+export function rebuildAllHumanAudiobooks({ force = false } = {}) {
+  return sendWithoutBody(
+    `/api/audiobook/imports/rebuild-all?force=${force}`,
+    {
+      method: "POST",
+      fallbackMessage: "Failed to queue human audiobook rebuilds",
+    },
+  );
+}
+
 export function alignImportedAudiobook(editionId) {
   return sendWithoutBody(`/api/imported-audiobooks/${editionId}/align`, {
     method: "POST",

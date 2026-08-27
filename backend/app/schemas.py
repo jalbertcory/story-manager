@@ -372,6 +372,8 @@ PROCESSING_JOB_TYPES = Literal[
     "refresh_all",
     "audiobook_pipeline",
     "import_audiobook",
+    "upgrade_imported_audiobook",
+    "rebuild_imported_audiobook",
     "rematch_imported_audiobook",
     "align_imported_audiobook",
     "metadata_sync",

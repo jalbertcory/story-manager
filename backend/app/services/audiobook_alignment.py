@@ -26,12 +26,13 @@ from ..lifecycle import (
     transition_state,
 )
 from ..models import (
+    AudiobookChapter,
     AudiobookSentence,
     ImportedAudiobook,
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
 )
-from .audiobook_import import imported_audiobook_dir, relative_library_path
+from .audiobook_import import imported_audiobook_dir, relative_library_path, sentences_for_logical_chapter
 from .endpoint_pool import configured_endpoints
 from .transcription_providers import (
     TranscriptResult,
@@ -85,6 +86,10 @@ class AlignmentResult:
     score: float
     matched_token_count: int
     canonical_token_count: int
+    matched_transcript_token_count: int
+    transcript_token_count: int
+    first_matched_ms: int | None
+    last_matched_ms: int | None
 
 
 @dataclass(frozen=True)
@@ -314,12 +319,37 @@ def align_transcript_to_sentences(
     score = sum(
         len(indices) * confidence for indices, confidence in zip(sentence_token_indices, confidences, strict=True)
     ) / max(1, len(canonical))
+    matched_transcript_indices = sorted({transcript_index for transcript_index, _similarity in matches.values()})
+    matched_word_indices = [transcript[index].word_index for index in matched_transcript_indices]
     return AlignmentResult(
         cues=cues,
         score=score,
         matched_token_count=len(matches),
         canonical_token_count=len(canonical),
+        matched_transcript_token_count=len(matched_transcript_indices),
+        transcript_token_count=len(transcript),
+        first_matched_ms=(transcript_words[matched_word_indices[0]].start_ms if matched_word_indices else None),
+        last_matched_ms=(transcript_words[matched_word_indices[-1]].end_ms if matched_word_indices else None),
     )
+
+
+def _transcript_coverage(result: AlignmentResult) -> float:
+    return result.matched_transcript_token_count / max(1, result.transcript_token_count)
+
+
+def _continuation_improves_alignment(
+    current: AlignmentResult,
+    candidate: AlignmentResult,
+    duration_ms: int,
+) -> bool:
+    """Accept more canonical text only when it explains a material transcript tail."""
+    if current.transcript_token_count < 20 or _transcript_coverage(current) >= 0.75:
+        return False
+    coverage_gain = _transcript_coverage(candidate) - _transcript_coverage(current)
+    current_tail = current.last_matched_ms or 0
+    candidate_tail = candidate.last_matched_ms or 0
+    tail_gain = (candidate_tail - current_tail) / max(1, duration_ms)
+    return candidate.score >= 0.35 and (coverage_gain >= 0.08 or tail_gain >= 0.10)
 
 
 def _resolve_library_path(relative_path: str | None) -> Path | None:
@@ -465,12 +495,65 @@ def _transcription_cache_config(settings) -> tuple[str, str | None, str | None, 
 
 
 async def _sentences_for_track(track: ImportedAudiobookTrack, db: AsyncSession) -> list[AudiobookSentence]:
-    result = await db.execute(
-        select(AudiobookSentence)
-        .where(AudiobookSentence.chapter_id == track.matched_chapter_id)
-        .order_by(AudiobookSentence.sequence_order)
+    if track.matched_chapter_id is None:
+        return []
+    return await sentences_for_logical_chapter(track.matched_chapter_id, db)
+
+
+async def _continuation_sentence_batches(
+    track: ImportedAudiobookTrack,
+    next_track: ImportedAudiobookTrack | None,
+    db: AsyncSession,
+) -> list[list[AudiobookSentence]]:
+    """Return intervening logical groups before the next matched audio track."""
+    if track.matched_chapter_id is None or next_track is None or next_track.matched_chapter_id is None:
+        return []
+    primary = await db.get(AudiobookChapter, track.matched_chapter_id)
+    boundary = await db.get(AudiobookChapter, next_track.matched_chapter_id)
+    if (
+        primary is None
+        or boundary is None
+        or primary.book_id != boundary.book_id
+        or primary.spine_order is None
+        or boundary.spine_order is None
+        or boundary.spine_order <= primary.spine_order
+    ):
+        return []
+
+    current_group_filter = [AudiobookChapter.id == primary.id]
+    if primary.logical_chapter_key:
+        current_group_filter = [
+            AudiobookChapter.book_id == primary.book_id,
+            AudiobookChapter.logical_chapter_key == primary.logical_chapter_key,
+        ]
+    current_end = await db.scalar(
+        select(AudiobookChapter.spine_order)
+        .where(*current_group_filter)
+        .order_by(AudiobookChapter.spine_order.desc())
+        .limit(1)
     )
-    return list(result.scalars().all())
+    if current_end is None:
+        return []
+    result = await db.execute(
+        select(AudiobookChapter)
+        .where(
+            AudiobookChapter.book_id == primary.book_id,
+            AudiobookChapter.spine_order > current_end,
+            AudiobookChapter.spine_order < boundary.spine_order,
+        )
+        .order_by(AudiobookChapter.spine_order)
+    )
+    batches = []
+    seen_groups: set[str] = set()
+    for chapter in result.scalars().all():
+        group_key = chapter.logical_chapter_key or f"chapter-{chapter.id}"
+        if group_key in seen_groups:
+            continue
+        seen_groups.add(group_key)
+        sentences = await sentences_for_logical_chapter(chapter.id, db)
+        if sentences:
+            batches.append(sentences)
+    return batches
 
 
 async def process_alignment(edition_id: int, db: AsyncSession) -> None:
@@ -557,6 +640,19 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
                 duration_ms=track.duration_ms,
                 source_start_ms=track.source_start_ms,
             )
+            next_track = tracks[index] if index < len(tracks) else None
+            for continuation in await _continuation_sentence_batches(track, next_track, db):
+                candidate_sentences = [*sentences, *continuation]
+                candidate = align_transcript_to_sentences(
+                    [(sentence.id, sentence.original_text) for sentence in candidate_sentences],
+                    transcript.words,
+                    duration_ms=track.duration_ms,
+                    source_start_ms=track.source_start_ms,
+                )
+                if not _continuation_improves_alignment(alignment, candidate, track.duration_ms):
+                    break
+                sentences = candidate_sentences
+                alignment = candidate
             await db.execute(delete(ImportedAudiobookCue).where(ImportedAudiobookCue.track_id == track.id))
             db.add_all(
                 [
