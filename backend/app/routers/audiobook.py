@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
-from ..lifecycle import IMPORTED_AUDIOBOOK, ImportedAudiobookStatus, transition_state
+from ..lifecycle import IMPORTED_AUDIOBOOK, AlignmentMethod, ImportedAudiobookStatus, transition_state
 from ..models import (
     AudiobookChapter,
     AudiobookCharacter,
@@ -32,6 +32,7 @@ from ..models import (
 )
 from ..services.audiobook_import import (
     CURRENT_DERIVED_FORMAT_VERSION,
+    CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
     IMPORT_EXTENSIONS,
     MAX_AUDIOBOOK_UPLOAD_BYTES,
     asin_from_names,
@@ -374,6 +375,7 @@ class ImportedTrackResponse(BaseModel):
     title: str
     matched_chapter_id: Optional[int]
     matched_chapter_title: Optional[str]
+    match_method: Optional[str]
     source_start_ms: int
     source_end_ms: int
     duration_ms: int
@@ -400,7 +402,9 @@ class ImportedAudiobookResponse(BaseModel):
     source_manifest_sha256: Optional[str]
     derived_revision: int
     derived_format_version: int
+    pipeline_version: int
     needs_upgrade: bool
+    needs_rebuild: bool
     progress_current: int
     progress_total: int
     progress_detail: Optional[str]
@@ -409,6 +413,15 @@ class ImportedAudiobookResponse(BaseModel):
     created_at: datetime
     is_reader_default: bool = False
     tracks: list[ImportedTrackResponse]
+
+
+class HumanAudiobookRebuildPreview(BaseModel):
+    current_pipeline_version: int
+    total_count: int
+    rebuild_count: int
+    realign_count: int
+    up_to_date_count: int
+    unavailable_count: int
 
 
 class ImportedTrackMatchUpdate(BaseModel):
@@ -537,6 +550,14 @@ async def _imported_audiobook_response(
             .group_by(ImportedAudiobookCue.track_id)
         )
         cue_counts = {track_id: count for track_id, count in cue_result.all()}
+    needs_asset_upgrade = (
+        not edition.source_manifest_sha256 or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
+    )
+    needs_rebuild = (
+        needs_asset_upgrade
+        or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+        or bool(edition.alignment_error)
+    )
     return ImportedAudiobookResponse(
         id=edition.id,
         book_id=edition.book_id,
@@ -552,9 +573,9 @@ async def _imported_audiobook_response(
         source_manifest_sha256=edition.source_manifest_sha256,
         derived_revision=edition.derived_revision or 0,
         derived_format_version=edition.derived_format_version or 0,
-        needs_upgrade=(
-            not edition.source_manifest_sha256 or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
-        ),
+        pipeline_version=edition.pipeline_version or 0,
+        needs_upgrade=needs_asset_upgrade,
+        needs_rebuild=needs_rebuild,
         progress_current=edition.progress_current or 0,
         progress_total=edition.progress_total or 0,
         progress_detail=edition.progress_detail,
@@ -573,6 +594,7 @@ async def _imported_audiobook_response(
                     if track.matched_chapter_id is not None and track.matched_chapter_id in chapters
                     else None
                 ),
+                match_method=track.match_method,
                 source_start_ms=track.source_start_ms,
                 source_end_ms=track.source_end_ms,
                 duration_ms=track.duration_ms,
@@ -1088,6 +1110,98 @@ async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) ->
     return {"queued_count": queued, "skipped_count": skipped}
 
 
+def _needs_human_audiobook_rebuild(edition: ImportedAudiobook) -> bool:
+    return bool(
+        not edition.source_manifest_sha256
+        or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
+        or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+        or edition.alignment_error
+    )
+
+
+async def _human_audiobook_rebuild_inventory(
+    db: AsyncSession,
+) -> tuple[list[ImportedAudiobook], dict[int, int]]:
+    result = await db.execute(select(ImportedAudiobook).order_by(ImportedAudiobook.id))
+    editions = list(result.scalars().all())
+    track_result = await db.execute(
+        select(
+            ImportedAudiobookTrack.imported_audiobook_id,
+            func.count(ImportedAudiobookTrack.id),
+        ).group_by(ImportedAudiobookTrack.imported_audiobook_id)
+    )
+    return editions, {edition_id: count for edition_id, count in track_result.all()}
+
+
+@router.get(
+    "/api/audiobook/imports/rebuild-preview",
+    response_model=HumanAudiobookRebuildPreview,
+)
+async def preview_human_audiobook_rebuilds(
+    db: AsyncSession = Depends(get_db),
+) -> HumanAudiobookRebuildPreview:
+    """Summarize editions that need the current human-audiobook pipeline."""
+    editions, track_counts = await _human_audiobook_rebuild_inventory(db)
+    available = [
+        edition
+        for edition in editions
+        if edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
+    ]
+    rebuild = [edition for edition in available if _needs_human_audiobook_rebuild(edition)]
+    return HumanAudiobookRebuildPreview(
+        current_pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        total_count=len(editions),
+        rebuild_count=len(rebuild),
+        realign_count=sum(
+            edition.alignment_method in {AlignmentMethod.TRANSCRIBED.value, AlignmentMethod.HYBRID.value}
+            or bool(edition.alignment_error)
+            for edition in rebuild
+        ),
+        up_to_date_count=len(available) - len(rebuild),
+        unavailable_count=len(editions) - len(available),
+    )
+
+
+@router.post("/api/audiobook/imports/rebuild-all")
+async def rebuild_all_human_audiobooks(
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Queue ready editions that are behind the current rebuild pipeline."""
+    editions, track_counts = await _human_audiobook_rebuild_inventory(db)
+    queued = 0
+    skipped = 0
+    for edition in editions:
+        available = edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
+        if not available or (not force and not _needs_human_audiobook_rebuild(edition)):
+            skipped += 1
+            continue
+        await queue_processing_job(
+            db=db,
+            job_type="rebuild_imported_audiobook",
+            book_id=edition.book_id,
+            target_type="imported_audiobook",
+            target_id=edition.id,
+            target_content_version=edition.matched_content_version,
+            payload={
+                "pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+                "force": force,
+            },
+            dedupe_key=(
+                f"rebuild_imported_audiobook:imported_audiobook:{edition.id}:" f"v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
+            ),
+            progress_detail=f"Queued human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}",
+        )
+        edition.progress_detail = "Human audiobook rebuild queued"
+        queued += 1
+    await db.commit()
+    return {
+        "queued_count": queued,
+        "skipped_count": skipped,
+        "pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+    }
+
+
 @router.post(
     "/api/imported-audiobooks/{edition_id}/align",
     response_model=ImportedAudiobookResponse,
@@ -1217,20 +1331,22 @@ async def get_imported_track_cues(
     db: AsyncSession = Depends(get_db),
 ) -> list[ImportedCueResponse]:
     edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
-    reading_blocks: dict[str, ReadingBlock] = {}
-    if track.matched_chapter_id is not None:
-        chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
-        # Imported narration is independent of the opt-in AI generation
-        # pipeline. Human-only books still need their synchronized text cues.
-        book = await _get_book_or_404(edition.book_id, db)
-        if chapter is not None:
-            reading_blocks = chapter_reading_blocks(book, chapter)
+    # Imported narration is independent of the opt-in AI generation pipeline.
+    # Human-only books still need synchronized text and block metadata.
+    book = await _get_book_or_404(edition.book_id, db)
     result = await db.execute(
         select(ImportedAudiobookCue, AudiobookSentence)
         .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
         .where(ImportedAudiobookCue.track_id == track.id)
         .order_by(ImportedAudiobookCue.sequence_order)
     )
+    rows = result.all()
+    chapter_ids = {sentence.chapter_id for _cue, sentence in rows}
+    chapters = {}
+    if chapter_ids:
+        chapter_result = await db.execute(select(AudiobookChapter).where(AudiobookChapter.id.in_(chapter_ids)))
+        chapters = {chapter.id: chapter for chapter in chapter_result.scalars().all()}
+    reading_blocks = {chapter_id: chapter_reading_blocks(book, chapter) for chapter_id, chapter in chapters.items()}
     return [
         ImportedCueResponse(
             sentence_id=sentence.id,
@@ -1240,9 +1356,9 @@ async def get_imported_track_cues(
             clip_end_ms=cue.clip_end_ms,
             confidence=cue.confidence,
             method=cue.method,
-            **_reading_block_fields(reading_blocks, sentence.html_element_id),
+            **_reading_block_fields(reading_blocks.get(sentence.chapter_id, {}), sentence.html_element_id),
         )
-        for cue, sentence in result.all()
+        for cue, sentence in rows
     ]
 
 
@@ -1287,7 +1403,9 @@ async def get_imported_track_smil(
     edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
     if track.matched_chapter_id is None:
         raise HTTPException(status_code=404, detail="Track is not matched to book text")
-    chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
+    primary_chapter = await db.get(AudiobookChapter, track.matched_chapter_id)
+    if primary_chapter is None:
+        raise HTTPException(status_code=404, detail="Matched chapter no longer exists")
     canonical_audio_track_id = await _canonical_audio_track_id(track, db)
     result = await db.execute(
         select(ImportedAudiobookCue, AudiobookSentence)
@@ -1295,11 +1413,16 @@ async def get_imported_track_smil(
         .where(ImportedAudiobookCue.track_id == track.id)
         .order_by(ImportedAudiobookCue.sequence_order)
     )
+    rows = result.all()
+    chapter_ids = {sentence.chapter_id for _cue, sentence in rows}
+    chapter_result = await db.execute(select(AudiobookChapter).where(AudiobookChapter.id.in_(chapter_ids)))
+    chapters = {chapter.id: chapter for chapter in chapter_result.scalars().all()}
     root = ET.Element("smil", {"xmlns": "http://www.w3.org/ns/SMIL", "version": "3.0"})
     body = ET.SubElement(root, "body")
     seq = ET.SubElement(body, "seq")
-    chapter_text_href = chapter.content_file_name.replace("\\", "/").rsplit("/", 1)[-1]
-    for cue, sentence in result.all():
+    for cue, sentence in rows:
+        sentence_chapter = chapters.get(sentence.chapter_id, primary_chapter)
+        chapter_text_href = sentence_chapter.content_file_name.replace("\\", "/").rsplit("/", 1)[-1]
         par = ET.SubElement(seq, "par")
         ET.SubElement(
             par,

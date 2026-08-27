@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from sqlalchemy import select
 
 from backend.app import models
-from backend.app.services import audiobook_alignment, transcription_providers
+from backend.app.services import audiobook_alignment, endpoint_pool, transcription_providers
 from backend.app.services.transcription_providers import TranscriptWord
 
 
@@ -96,6 +97,29 @@ def test_unmatched_sentence_is_interpolated_between_transcribed_anchors():
     assert result.cues[1].clip_end_ms == result.cues[2].clip_begin_ms
 
 
+def test_alignment_detects_and_explains_a_large_unused_transcript_tail():
+    transcript_text = ["1", "The", "body", "continues", "through", "the", "next", "physical", "spine", "file"]
+    transcript_text += ["with", "many", "more", "spoken", "words", "that", "belong", "to", "this", "chapter"]
+    words = _words(transcript_text, first_start=0)
+    duration_ms = words[-1].end_ms
+
+    heading_only = audiobook_alignment.align_transcript_to_sentences(
+        [(1, "1")],
+        words,
+        duration_ms=duration_ms,
+    )
+    expanded = audiobook_alignment.align_transcript_to_sentences(
+        [(1, "1"), (2, " ".join(transcript_text[1:]))],
+        words,
+        duration_ms=duration_ms,
+    )
+
+    assert heading_only.matched_transcript_token_count == 1
+    assert heading_only.transcript_token_count == len(transcript_text)
+    assert expanded.matched_transcript_token_count == len(transcript_text)
+    assert audiobook_alignment._continuation_improves_alignment(heading_only, expanded, duration_ms)
+
+
 class _Response:
     def raise_for_status(self):
         return None
@@ -153,6 +177,126 @@ async def test_whisperx_provider_sends_chapter_clip_and_parses_word_timestamps(t
     assert request["data"] == {"model": "large-v3", "language": "en"}
     assert request["headers"]["Authorization"] == "Bearer local-key"
     assert request["files"]["file"][0] == "chapter.flac"
+
+
+@pytest.mark.asyncio
+async def test_whisperx_provider_surfaces_service_error_detail(tmp_path, monkeypatch):
+    endpoint_pool.reset_cooldowns("transcription")
+
+    class ConflictClient(_Client):
+        async def post(self, url, **kwargs):
+            request = httpx.Request("POST", url)
+            response = httpx.Response(
+                409,
+                request=request,
+                json={"detail": "Service has 'large-v3' loaded, not requested model 'tiny.en'."},
+            )
+            return response
+
+    monkeypatch.setattr(transcription_providers.httpx, "AsyncClient", ConflictClient)
+    clip = tmp_path / "chapter.flac"
+    clip.write_bytes(b"flac-data")
+    settings = models.AudiobookSettings(
+        transcription_provider="whisperx",
+        transcription_base_url="http://whisper:8002",
+        transcription_model="tiny.en",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Service has 'large-v3' loaded, not requested model 'tiny.en'",
+    ):
+        await transcription_providers.transcribe_file(settings, clip)
+
+
+@pytest.mark.asyncio
+async def test_whisperx_health_rejects_configured_model_mismatch(monkeypatch):
+    endpoint_pool.reset_cooldowns("transcription")
+
+    class HealthResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ready", "model": "large-v3"}
+
+    class HealthClient(_Client):
+        async def get(self, _url, **_kwargs):
+            return HealthResponse()
+
+    monkeypatch.setattr(transcription_providers.httpx, "AsyncClient", HealthClient)
+    settings = models.AudiobookSettings(
+        transcription_provider="whisperx",
+        transcription_base_url="http://whisper:8002",
+        transcription_model="tiny.en",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="service has 'large-v3' loaded.*Audio Settings request 'tiny.en'",
+    ):
+        await transcription_providers.transcription_service_health(settings)
+
+
+@pytest.mark.asyncio
+async def test_alignment_selects_sentences_from_logical_chapter_continuations(db):
+    book = models.Book(title="Split Book")
+    db.add(book)
+    await db.flush()
+    heading = models.AudiobookChapter(
+        book_id=book.id,
+        chapter_number=1,
+        title="Chapter 1",
+        logical_chapter_key="logical-1",
+        logical_part_order=0,
+        spine_order=0,
+    )
+    body = models.AudiobookChapter(
+        book_id=book.id,
+        chapter_number=2,
+        title="Phase One",
+        logical_chapter_key="logical-1",
+        logical_part_order=1,
+        spine_order=1,
+    )
+    db.add_all([heading, body])
+    await db.flush()
+    db.add_all(
+        [
+            models.AudiobookSentence(
+                chapter_id=heading.id,
+                html_element_id="heading",
+                sequence_order=0,
+                original_text="1",
+            ),
+            models.AudiobookSentence(
+                chapter_id=body.id,
+                html_element_id="body",
+                sequence_order=0,
+                original_text="The body follows the split heading.",
+            ),
+        ]
+    )
+    edition = models.ImportedAudiobook(book_id=book.id, name="Human", status="ready")
+    db.add(edition)
+    await db.flush()
+    track = models.ImportedAudiobookTrack(
+        imported_audiobook_id=edition.id,
+        matched_chapter_id=heading.id,
+        sequence_order=1,
+        title="Chapter 1",
+        audio_file_path="library/chapter.m4a",
+        media_type="audio/mp4",
+        source_start_ms=0,
+        source_end_ms=10_000,
+        duration_ms=10_000,
+    )
+    db.add(track)
+    await db.commit()
+
+    sentences = await audiobook_alignment._sentences_for_track(track, db)
+
+    assert [sentence.original_text for sentence in sentences] == ["1", "The body follows the split heading."]
 
 
 @pytest.mark.asyncio

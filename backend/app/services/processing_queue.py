@@ -27,7 +27,12 @@ from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, Processing
 from ..logging_config import redact_text
 from ..observability_context import correlation_context
 from .audiobook_alignment import process_alignment
-from .audiobook_import import process_import, rematch_imported_audiobook, upgrade_imported_audiobook
+from .audiobook_import import (
+    process_import,
+    rebuild_imported_audiobook,
+    rematch_imported_audiobook,
+    upgrade_imported_audiobook,
+)
 from .audiobook_queue import get_audiobook_queue
 from .audiobook_tts import generate_audio_for_sentence
 from .audiobook_assembly import assemble_chapter_preview
@@ -59,6 +64,7 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "generate_chapter_preview": ("tts", 3),
     "import_audiobook": ("cpu", 3),
     "upgrade_imported_audiobook": ("cpu", 3),
+    "rebuild_imported_audiobook": ("cpu", 3),
     "rematch_imported_audiobook": ("cpu", 3),
     "align_imported_audiobook": ("transcription", 3),
     "create_backup": ("maintenance", 1),
@@ -399,6 +405,35 @@ class ProcessingQueue:
                 lambda: self._imported_audio_progress(target_id),
             )
             return f"Human audiobook chapter assets upgraded to revision {revision}"
+        if job.job_type == "rebuild_imported_audiobook":
+            target_id = _required_target(job)
+
+            async def rebuild_audio():
+                async with SessionLocal() as db:
+                    return await rebuild_imported_audiobook(target_id, db)
+
+            result = await self._run_with_progress_mirror(
+                job.id,
+                rebuild_audio,
+                lambda: self._imported_audio_progress(target_id),
+            )
+            if result.realign:
+                child = await queue_processing_job(
+                    job_type="align_imported_audiobook",
+                    book_id=job.book_id,
+                    target_type="imported_audiobook",
+                    target_id=target_id,
+                    target_content_version=job.target_content_version,
+                    parent_job_id=job.id,
+                    dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
+                    progress_detail="Queued after human-audiobook rebuild",
+                )
+                await self.enqueue(child.id)
+                return (
+                    f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks); "
+                    "timestamp alignment queued"
+                )
+            return f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks)"
         if job.job_type == "rematch_imported_audiobook":
             target_id = _required_target(job)
 

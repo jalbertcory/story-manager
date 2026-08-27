@@ -407,6 +407,7 @@ class AudiobookChapter(Base):
     __tablename__ = "audiobook_chapters"
     __table_args__ = (
         UniqueConstraint("book_id", "stable_chapter_key", name="uq_audiobook_chapter_stable_key"),
+        Index("ix_audiobook_chapters_book_logical_key", "book_id", "logical_chapter_key"),
         _state_check("preview_status", CHAPTER_PREVIEW, "ck_audiobook_chapters_preview_status"),
         _state_check("generation_state", CHAPTER_GENERATION, "ck_audiobook_chapters_generation_state"),
     )
@@ -425,6 +426,10 @@ class AudiobookChapter(Base):
     preview_status = Column(String, nullable=True)
     preview_error = Column(Text, nullable=True)
     stable_chapter_key = Column(String, nullable=True)
+    # Physical EPUB spine items may be fragments of one reader-visible chapter.
+    # Group them without rewriting the user's EPUB or losing per-file anchors.
+    logical_chapter_key = Column(String, nullable=True)
+    logical_part_order = Column(Integer, nullable=True)
     source_href = Column(String, nullable=True)
     source_content_hash = Column(String(64), nullable=True)
     title = Column(String, nullable=True)
@@ -545,6 +550,8 @@ class ImportedAudiobook(Base):
     source_size_bytes = Column(BigInteger, nullable=True)
     derived_revision = Column(Integer, nullable=False, default=0, server_default="0")
     derived_format_version = Column(Integer, nullable=False, default=0, server_default="0")
+    # Version of the complete human-audiobook rebuild pipeline last applied.
+    pipeline_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 
@@ -568,6 +575,8 @@ class ImportedAudiobookTrack(Base):
         nullable=True,
         index=True,
     )
+    # ``None`` means legacy/unknown and is preserved conservatively by rebuilds.
+    match_method = Column(String, nullable=True)
     sequence_order = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
     audio_file_path = Column(String, nullable=False)

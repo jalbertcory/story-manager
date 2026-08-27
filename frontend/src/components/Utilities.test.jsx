@@ -58,6 +58,53 @@ describe("Utilities", () => {
     });
   });
 
+  it("previews and queues versioned human audiobook rebuilds", async () => {
+    window.history.replaceState(null, "", "/settings/library-tools?section=audiobooks");
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === "/api/metadata/jobs/latest") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      }
+      if (url === "/api/metadata/inbox") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === "/api/audiobook/imports/rebuild-preview") {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              current_pipeline_version: 1,
+              total_count: 4,
+              rebuild_count: 2,
+              realign_count: 1,
+              up_to_date_count: 1,
+              unavailable_count: 1,
+            }),
+        });
+      }
+      if (url === "/api/audiobook/imports/rebuild-all?force=false" && options?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ queued_count: 2, skipped_count: 2, pipeline_version: 1 }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    renderWithClient(<Utilities onBack={() => {}} />);
+
+    expect(await screen.findByRole("heading", { name: "Rebuild Human Audiobooks" })).toBeInTheDocument();
+    expect(await screen.findByText(/2 of 4 editions need pipeline v1/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild outdated human audiobooks" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/Original audio and manual chapter corrections are preserved/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Queue rebuilds" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith("/api/audiobook/imports/rebuild-all?force=false", { method: "POST" });
+    });
+    expect(await screen.findByText("2 human audiobook rebuilds queued; 2 skipped.")).toBeInTheDocument();
+  });
+
   it("creates, downloads, verifies, and deliberately deletes backups", async () => {
     const filename = "story-manager-20260809T120000Z-abcd1234.story-manager.zip";
     const backup = {

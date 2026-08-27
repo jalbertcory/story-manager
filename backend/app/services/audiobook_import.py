@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".mp4", ".ogg", ".opus", ".wav"}
 IMPORT_EXTENSIONS = AUDIO_EXTENSIONS | {".cue", ".zip"}
 CURRENT_DERIVED_FORMAT_VERSION = 1
+# Increment when an imported human audiobook must be rebuilt to benefit from
+# changes to text ingestion, chapter matching, cue generation, or alignment.
+CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION = 1
 SOURCE_MANIFEST_FORMAT = "story-manager-audiobook-source"
 SOURCE_MANIFEST_VERSION = 1
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
@@ -82,6 +85,14 @@ class TrackSpec:
     @property
     def immutable_end_ms(self) -> int:
         return self.end_ms if self.source_end_ms is None else self.source_end_ms
+
+
+@dataclass(frozen=True)
+class HumanAudiobookRebuildResult:
+    matched_track_count: int
+    track_count: int
+    realign: bool
+    derived_revision: int
 
 
 def _chapter_file_suffix(source: Path) -> str:
@@ -367,6 +378,97 @@ async def upgrade_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
     await db.commit()
     cleanup_old_derived_revisions(edition_dir, revision)
     return revision
+
+
+async def rebuild_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession,
+    *,
+    force_assets: bool = False,
+) -> HumanAudiobookRebuildResult:
+    """Bring one human audiobook forward using the current complete pipeline."""
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise ValueError("Imported audiobook no longer exists.")
+    book = await db.get(Book, edition.book_id)
+    if book is None:
+        raise ValueError("The selected library book no longer exists.")
+    if edition.status != ImportedAudiobookStatus.READY.value:
+        raise ValueError(f"Audiobook is {edition.status}, not ready to rebuild.")
+
+    previous_alignment_method = edition.alignment_method
+    needs_asset_upgrade = (
+        force_assets
+        or not edition.source_manifest_sha256
+        or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
+    )
+    if needs_asset_upgrade:
+        await upgrade_imported_audiobook(edition.id, db)
+        await db.refresh(edition)
+
+    result = await db.execute(
+        select(ImportedAudiobookTrack)
+        .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+        .order_by(ImportedAudiobookTrack.sequence_order)
+    )
+    tracks = list(result.scalars().all())
+    if not tracks:
+        raise ValueError("Imported audiobook has no tracks to rebuild.")
+    should_realign = (
+        previous_alignment_method in {AlignmentMethod.TRANSCRIBED.value, AlignmentMethod.HYBRID.value}
+        or bool(edition.alignment_error)
+        or any(track.transcript_file_path for track in tracks)
+    )
+
+    edition.progress_current = 0
+    edition.progress_total = len(tracks)
+    edition.progress_detail = "Preparing current book text"
+    await db.commit()
+    chapters = await ensure_span_anchored_text(book, db)
+    chapters_by_id = {chapter.id: chapter for chapter in chapters}
+
+    matched_count = 0
+    for index, track in enumerate(tracks, start=1):
+        # Re-run automatic matching while preserving manual and legacy/unknown
+        # corrections whose chapter still exists.
+        if track.match_method == "automatic" or track.matched_chapter_id not in chapters_by_id:
+            spec = TrackSpec(
+                sequence_order=track.sequence_order,
+                title=track.title,
+                audio_path=(LIBRARY_PATH.parent / track.audio_file_path).resolve(),
+                start_ms=track.source_start_ms,
+                end_ms=track.source_end_ms,
+                media_type=track.media_type,
+            )
+            matched = _chapter_match(spec, chapters)
+            track.matched_chapter_id = matched.id if matched else None
+            track.match_method = "automatic"
+        track.alignment_score = None
+        await rebuild_estimated_cues(track, db)
+        matched_count += int(track.matched_chapter_id is not None)
+        edition.progress_current = index
+        edition.progress_detail = f"Rebuilt track {index} of {len(tracks)}"
+        await db.commit()
+
+    transition_state(
+        edition,
+        "alignment_method",
+        ALIGNMENT_METHOD,
+        AlignmentMethod.ESTIMATED,
+        context=f"imported audiobook {edition.id}",
+    )
+    edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    edition.matched_content_version = book.content_version or 1
+    edition.progress_detail = f"Rebuilt with human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
+    edition.error = None
+    edition.alignment_error = None
+    await db.commit()
+    return HumanAudiobookRebuildResult(
+        matched_track_count=matched_count,
+        track_count=len(tracks),
+        realign=should_realign,
+        derived_revision=edition.derived_revision or 0,
+    )
 
 
 def imported_audiobook_dir(book_id: int, edition_id: int) -> Path:
@@ -730,17 +832,41 @@ def _sentence_weight(text: str) -> int:
     return max(1, len(re.sub(r"\s+", "", text))) + 10
 
 
+async def sentences_for_logical_chapter(
+    chapter_id: int,
+    db: AsyncSession,
+) -> list[AudiobookSentence]:
+    """Return sentences from every physical spine item in one logical chapter."""
+    chapter = await db.get(AudiobookChapter, chapter_id)
+    if chapter is None:
+        return []
+    if chapter.logical_chapter_key:
+        chapter_filter = (
+            AudiobookChapter.book_id == chapter.book_id,
+            AudiobookChapter.logical_chapter_key == chapter.logical_chapter_key,
+        )
+    else:
+        # Pre-migration ingestions remain readable until their next rematch.
+        chapter_filter = (AudiobookChapter.id == chapter.id,)
+    result = await db.execute(
+        select(AudiobookSentence)
+        .join(AudiobookChapter, AudiobookChapter.id == AudiobookSentence.chapter_id)
+        .where(*chapter_filter)
+        .order_by(
+            AudiobookChapter.spine_order,
+            AudiobookChapter.chapter_number,
+            AudiobookSentence.sequence_order,
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def rebuild_estimated_cues(track: ImportedAudiobookTrack, db: AsyncSession) -> int:
     await db.execute(delete(ImportedAudiobookCue).where(ImportedAudiobookCue.track_id == track.id))
     if track.matched_chapter_id is None:
         await db.commit()
         return 0
-    result = await db.execute(
-        select(AudiobookSentence)
-        .where(AudiobookSentence.chapter_id == track.matched_chapter_id)
-        .order_by(AudiobookSentence.sequence_order)
-    )
-    sentences = list(result.scalars().all())
+    sentences = await sentences_for_logical_chapter(track.matched_chapter_id, db)
     if not sentences:
         await db.commit()
         return 0
@@ -778,6 +904,7 @@ async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[Audiob
         chapters
         and book.audiobook_source_content_version == content_version
         and book.audiobook_text_content_version == content_version
+        and all(chapter.logical_chapter_key is not None and chapter.logical_part_order is not None for chapter in chapters)
     )
     if chapters_are_current:
         return chapters
@@ -850,6 +977,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             track = ImportedAudiobookTrack(
                 imported_audiobook_id=edition.id,
                 matched_chapter_id=matched.id if matched else None,
+                match_method="automatic",
                 sequence_order=spec.sequence_order,
                 title=spec.title,
                 audio_file_path=relative_library_path(spec.audio_path),
@@ -886,6 +1014,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         edition.matched_content_version = book.content_version or 1
         edition.derived_revision = revision
         edition.derived_format_version = CURRENT_DERIVED_FORMAT_VERSION
+        edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
         edition.progress_detail = f"Ready: {matched_count} of {len(specs)} tracks matched"
@@ -952,6 +1081,7 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
         )
         matched = _chapter_match(spec, chapters)
         track.matched_chapter_id = matched.id if matched else None
+        track.match_method = "automatic"
         track.alignment_score = None
         await db.commit()
         await rebuild_estimated_cues(track, db)
@@ -975,6 +1105,7 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
         context=f"imported audiobook {edition.id}",
     )
     edition.matched_content_version = book.content_version or 1
+    edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
     edition.progress_detail = f"Ready: {matched_count} of {len(tracks)} tracks matched"
     edition.error = None
     await db.commit()
@@ -992,6 +1123,7 @@ async def rematch_track(
         if chapter is None or edition is None or chapter.book_id != edition.book_id:
             raise ValueError("Chapter does not belong to this audiobook's book.")
     track.matched_chapter_id = chapter_id
+    track.match_method = "manual"
     track.alignment_score = None
     edition = await db.get(ImportedAudiobook, track.imported_audiobook_id)
     if edition is not None:

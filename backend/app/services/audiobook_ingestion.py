@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import shutil
 import tempfile
 from collections import Counter
@@ -37,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 _NLP = None  # lazy-load spaCy model to avoid startup cost
 _SKIP_TEXT_ANCESTORS = {"script", "style", "head", "title", "svg", "math", "audio", "video"}
+_INDEPENDENT_CHAPTER_TITLE_RE = re.compile(
+    r"^(?:chapter(?:\s+|$)|prologue\b|epilogue\b|foreword\b|afterword\b|introduction\b|appendix\b|\d+\s*$)",
+    re.IGNORECASE,
+)
 
 
 def _get_nlp():
@@ -244,6 +249,11 @@ def _chapter_title(
     return f"Chapter {chapter_number}"
 
 
+def _looks_like_independent_chapter(title: str) -> bool:
+    """Recognize a non-TOC spine item that should start its own logical chapter."""
+    return bool(_INDEPENDENT_CHAPTER_TITLE_RE.search(" ".join(title.split())))
+
+
 def _sentence_texts(soup: BeautifulSoup) -> list[str]:
     texts: list[str] = []
     quote_state: str | None = None
@@ -322,11 +332,28 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     changed_chapter_ids: set[int] = set()
     new_chapter_count = 0
     obsolete_paths: set[Path] = set()
+    logical_chapter_key: str | None = None
+    logical_part_order = 0
+    logical_group_started_from_toc = False
 
     for chapter_num, item in enumerate(spine_items, start=1):
         content = item.get_content()
         soup = BeautifulSoup(content, "html.parser")
         href = normalize_resource_href(item.get_name(), chapter_num)
+        chapter_title = _chapter_title(item, soup, chapter_num, toc_titles)
+        starts_toc_chapter = href.casefold() in toc_titles
+        continues_toc_chapter = (
+            logical_chapter_key is not None
+            and logical_group_started_from_toc
+            and not starts_toc_chapter
+            and not _looks_like_independent_chapter(chapter_title)
+        )
+        if continues_toc_chapter:
+            logical_part_order += 1
+        else:
+            logical_chapter_key = stable_chapter_key(href)
+            logical_part_order = 0
+            logical_group_started_from_toc = starts_toc_chapter
         content_hash = _source_content_hash(soup)
         sentence_texts = _sentence_texts(soup)
 
@@ -352,9 +379,11 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
                 chapter_number=chapter_num,
                 content_file_name=href,
                 stable_chapter_key=key,
+                logical_chapter_key=logical_chapter_key,
+                logical_part_order=logical_part_order,
                 source_href=href,
                 source_content_hash=content_hash,
-                title=_chapter_title(item, soup, chapter_num, toc_titles),
+                title=chapter_title,
                 spine_order=chapter_num - 1,
                 generation_state="pending",
                 needs_reassembly=True,
@@ -406,9 +435,11 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         chapter.chapter_number = chapter_num
         chapter.content_file_name = href
         chapter.stable_chapter_key = key
+        chapter.logical_chapter_key = logical_chapter_key
+        chapter.logical_part_order = logical_part_order
         chapter.source_href = href
         chapter.source_content_hash = content_hash
-        chapter.title = _chapter_title(item, soup, chapter_num, toc_titles)
+        chapter.title = chapter_title
         chapter.spine_order = chapter_num - 1
 
         if not unchanged:
