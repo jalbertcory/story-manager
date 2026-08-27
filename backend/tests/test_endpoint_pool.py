@@ -84,6 +84,45 @@ async def test_all_cooling_endpoints_fail_fast(monkeypatch):
         await endpoint_pool.route_request(settings, "tts", fail)
 
 
+@pytest.mark.asyncio
+async def test_pool_probe_tests_every_endpoint_and_ignores_cooldown(monkeypatch):
+    now = 2000.0
+    monkeypatch.setattr(endpoint_pool.time, "monotonic", lambda: now)
+    settings = models.AudiobookSettings(
+        tts_endpoints=[
+            {"id": "qwen", "name": "Qwen", "provider": "qwen3", "base_url": "http://qwen"},
+            {"id": "omni", "name": "OmniVoice", "provider": "omnivoice", "base_url": "http://omni"},
+        ]
+    )
+    endpoint_pool._cooldowns[("tts", "qwen")] = now + 30
+    calls = []
+
+    async def attempt(endpoint_settings):
+        calls.append(endpoint_settings.tts_base_url)
+        if endpoint_settings.tts_provider == "qwen3":
+            request = httpx.Request("POST", "http://qwen/generate")
+            response = httpx.Response(
+                409,
+                json={"detail": "configured model is not loaded"},
+                request=request,
+            )
+            raise httpx.HTTPStatusError(
+                "Qwen request failed",
+                request=request,
+                response=response,
+            )
+        return b"audio"
+
+    results = await endpoint_pool.probe_endpoints(settings, "tts", attempt)
+
+    assert calls == ["http://qwen", "http://omni"]
+    assert [(result.endpoint["id"], result.success) for result in results] == [
+        ("qwen", False),
+        ("omni", True),
+    ]
+    assert results[0].error == "Qwen request failed — configured model is not loaded"
+
+
 def test_reset_cooldowns_can_target_one_capability(monkeypatch):
     monkeypatch.setattr(endpoint_pool.time, "monotonic", lambda: 1000.0)
     endpoint_pool._cooldowns.update(
@@ -270,3 +309,62 @@ async def test_all_endpoint_stats_api_includes_tts_and_transcription(app_client,
     assert payload["llm"][0]["answered"] == 0
     assert payload["tts"][0]["answered"] == 1
     assert payload["transcription"][0]["answered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tts_pool_test_api_returns_each_endpoint_result(
+    app_client,
+    sqlite_sessionmaker,
+    monkeypatch,
+):
+    async with sqlite_sessionmaker() as db:
+        db.add(
+            models.AudiobookSettings(
+                tts_endpoints=[
+                    {"id": "qwen", "name": "Qwen", "provider": "qwen3", "base_url": "http://qwen"},
+                    {"id": "omni", "name": "OmniVoice", "provider": "omnivoice", "base_url": "http://omni"},
+                ]
+            )
+        )
+        await db.commit()
+
+    calls = []
+
+    async def synthesize(endpoint_settings, _request):
+        calls.append(endpoint_settings.tts_base_url)
+        if endpoint_settings.tts_provider == "qwen3":
+            raise RuntimeError("Qwen model is not loaded")
+        return b"mp3"
+
+    monkeypatch.setattr("backend.app.routers.audiobook._synthesize_speech_endpoint", synthesize)
+
+    response = app_client.post("/api/audiobook/settings/test-tts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "partial"
+    assert payload["endpoint"] == "OmniVoice"
+    assert calls == ["http://qwen", "http://omni"]
+    assert payload["results"] == [
+        {
+            "endpoint_id": "qwen",
+            "endpoint": "Qwen",
+            "priority": 1,
+            "provider": "qwen3",
+            "model": None,
+            "status": "error",
+            "duration_ms": payload["results"][0]["duration_ms"],
+            "error": "Qwen model is not loaded",
+        },
+        {
+            "endpoint_id": "omni",
+            "endpoint": "OmniVoice",
+            "priority": 2,
+            "provider": "omnivoice",
+            "model": None,
+            "status": "ready",
+            "duration_ms": payload["results"][1]["duration_ms"],
+            "error": None,
+            "audio_bytes": 3,
+        },
+    ]

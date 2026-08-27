@@ -572,30 +572,86 @@ function AudiobookSettings() {
 
   if (isLoading || !initialised) return <p>Loading settings…</p>;
 
-  const testStatus = (mutation, label) => (
-    <div className="endpoint-test-status">
-      <button
-        type="button"
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
-      >
-        {mutation.isPending ? "Testing pool…" : `Save & Test ${label}`}
-      </button>
-      {mutation.isSuccess && (
-        <p className="success">
-          Connected
-          {mutation.data.endpoint ? ` via ${mutation.data.endpoint}` : ""} to{" "}
-          {mutation.data.provider}
-          {mutation.data.model ? ` / ${mutation.data.model}` : ""}.
-        </p>
-      )}
-      {mutation.isError && (
-        <p className="error">
-          {mutation.error?.message || `${label} test failed`}
-        </p>
-      )}
-    </div>
-  );
+  const testStatus = (mutation, label) => {
+    const results = mutation.data?.results;
+    const readyCount = results?.filter(
+      (result) => result.status === "ready",
+    ).length;
+    return (
+      <div className="endpoint-test-status">
+        <button
+          type="button"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+        >
+          {mutation.isPending ? "Testing pool…" : `Save & Test ${label}`}
+        </button>
+        {mutation.isSuccess && !results && (
+          <p className="success">
+            Connected
+            {mutation.data.endpoint
+              ? ` via ${mutation.data.endpoint}`
+              : ""} to {mutation.data.provider}
+            {mutation.data.model ? ` / ${mutation.data.model}` : ""}.
+          </p>
+        )}
+        {mutation.isSuccess && results && (
+          <div
+            className="endpoint-test-results"
+            aria-label={`${label} endpoint test results`}
+          >
+            <p
+              className={
+                readyCount === results.length && results.length > 0
+                  ? "success"
+                  : readyCount > 0
+                    ? "endpoint-test-partial"
+                    : "error"
+              }
+            >
+              {readyCount} of {results.length} endpoints connected.
+            </p>
+            <div className="endpoint-test-result-list">
+              {results.map((result) => (
+                <article
+                  className={`endpoint-test-result endpoint-test-result-${result.status}`}
+                  key={result.endpoint_id || result.priority}
+                >
+                  <div className="endpoint-test-result-heading">
+                    <div>
+                      <span>Priority {result.priority}</span>
+                      <strong>{result.endpoint || "Unnamed endpoint"}</strong>
+                      <small>
+                        {result.provider}
+                        {result.model ? ` · ${result.model}` : ""}
+                      </small>
+                    </div>
+                    <span
+                      className={
+                        result.status === "ready" ? "success" : "error"
+                      }
+                    >
+                      {result.status === "ready" ? "Connected" : "Failed"}
+                      {result.duration_ms !== null &&
+                      result.duration_ms !== undefined
+                        ? ` · ${formatDuration(result.duration_ms)}`
+                        : ""}
+                    </span>
+                  </div>
+                  {result.error && <p className="error">{result.error}</p>}
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+        {mutation.isError && (
+          <p className="error">
+            {mutation.error?.message || `${label} test failed`}
+          </p>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="settings-page">

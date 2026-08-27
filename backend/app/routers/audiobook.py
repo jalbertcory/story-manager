@@ -52,13 +52,13 @@ from ..services.audiobook_tts import (
 from ..services.processing_queue import queue_processing_job
 from ..services import audiobook_llm
 from ..services.transcription_providers import (
+    _transcription_service_health_endpoint,
     transcription_provider_name,
-    transcription_service_health,
 )
 from ..services.endpoint_pool import (
     configured_endpoints,
     configured_providers,
-    primary_provider,
+    probe_endpoints,
     reset_cooldowns,
     settings_for_provider,
 )
@@ -66,9 +66,9 @@ from ..services.endpoint_metrics import endpoint_summaries
 from ..services.metadata.scoring import normalize_text, title_similarity
 from ..services.tts_providers import (
     TTSRequest,
+    _synthesize_speech_endpoint,
     design_omnivoice_voice,
     get_omnivoice_voice_sample,
-    synthesize_speech_routed,
     tts_provider_name,
 )
 
@@ -2364,29 +2364,69 @@ async def get_endpoint_stats(db: AsyncSession = Depends(get_db)) -> AllEndpointS
     )
 
 
+def _endpoint_test_results(probes, value_details=None) -> list[dict[str, Any]]:
+    results = []
+    for priority, probe in enumerate(probes, start=1):
+        endpoint = probe.endpoint
+        result = {
+            "endpoint_id": endpoint.get("id"),
+            "endpoint": endpoint.get("name") or endpoint.get("base_url") or endpoint.get("id"),
+            "priority": priority,
+            "provider": endpoint.get("provider"),
+            "model": endpoint.get("model"),
+            "status": "ready" if probe.success else "error",
+            "duration_ms": round(probe.duration_ms, 1),
+            "error": probe.error,
+        }
+        if probe.success and isinstance(probe.value, dict):
+            result["response"] = probe.value
+        if probe.success and value_details is not None:
+            result.update(value_details(probe.value))
+        results.append(result)
+    return results
+
+
+def _pool_test_status(results: list[dict[str, Any]]) -> str:
+    ready_count = sum(result["status"] == "ready" for result in results)
+    if ready_count == len(results) and results:
+        return "ready"
+    return "partial" if ready_count else "failed"
+
+
 @router.post("/api/audiobook/settings/test-llm")
 async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
-    if settings is None or primary_provider(settings, "llm", "stub") == "stub":
+    if settings is None:
         return {"status": "ready", "provider": "stub", "model": None, "response": "local harness"}
     schema = {
         "type": "object",
         "properties": {"status": {"type": "string"}},
         "required": ["status"],
     }
-    routed = await audiobook_llm._call_llm_routed(
-        settings,
-        [{"role": "user", "content": "Return JSON with status set to ready."}],
-        response_schema=schema,
-    )
-    raw = routed.value
-    parsed = audiobook_llm._extract_json(raw)
+
+    async def attempt(endpoint_settings):
+        if endpoint_settings.llm_provider == "stub":
+            return {"status": "ready", "response": "local harness"}
+        raw = await audiobook_llm._call_llm_endpoint(
+            endpoint_settings,
+            [{"role": "user", "content": "Return JSON with status set to ready."}],
+            response_schema=schema,
+        )
+        parsed = audiobook_llm._extract_json(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("The LLM test did not return a JSON object.")
+        return parsed
+
+    probes = await probe_endpoints(settings, "llm", attempt)
+    results = _endpoint_test_results(probes)
+    first_ready = next((result for result in results if result["status"] == "ready"), None)
     return {
-        "status": parsed.get("status", "unknown") if isinstance(parsed, dict) else "unknown",
-        "endpoint": routed.endpoint.get("name"),
-        "provider": routed.endpoint.get("provider"),
-        "model": routed.endpoint.get("model"),
-        "response": parsed,
+        "status": _pool_test_status(results),
+        "endpoint": first_ready.get("endpoint") if first_ready else None,
+        "provider": first_ready.get("provider") if first_ready else None,
+        "model": first_ready.get("model") if first_ready else None,
+        "response": first_ready.get("response") if first_ready else None,
+        "results": results,
     }
 
 
@@ -2395,21 +2435,26 @@ async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
         return {"status": "ready", "provider": "stub", "model": None, "audio_bytes": 0}
-    routed = await synthesize_speech_routed(
-        settings,
-        TTSRequest(
-            text="Story Manager text to speech is ready.",
-        ),
-    )
-    audio = routed.value
-    if not audio:
-        raise HTTPException(status_code=502, detail="The TTS provider returned an empty response.")
+
+    async def attempt(endpoint_settings):
+        audio = await _synthesize_speech_endpoint(
+            endpoint_settings,
+            TTSRequest(text="Story Manager text to speech is ready."),
+        )
+        if not audio:
+            raise RuntimeError("The TTS provider returned an empty response.")
+        return audio
+
+    probes = await probe_endpoints(settings, "tts", attempt)
+    results = _endpoint_test_results(probes, value_details=lambda audio: {"audio_bytes": len(audio)})
+    first_ready = next((result for result in results if result["status"] == "ready"), None)
     return {
-        "status": "ready",
-        "endpoint": routed.endpoint.get("name"),
-        "provider": routed.endpoint.get("provider"),
-        "model": routed.endpoint.get("model"),
-        "audio_bytes": len(audio),
+        "status": _pool_test_status(results),
+        "endpoint": first_ready.get("endpoint") if first_ready else None,
+        "provider": first_ready.get("provider") if first_ready else None,
+        "model": first_ready.get("model") if first_ready else None,
+        "audio_bytes": first_ready.get("audio_bytes", 0) if first_ready else 0,
+        "results": results,
     }
 
 
@@ -2418,14 +2463,21 @@ async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dic
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
         raise HTTPException(status_code=409, detail="Configure a transcription provider first.")
-    try:
-        payload = await transcription_service_health(settings)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    probes = await probe_endpoints(settings, "transcription", _transcription_service_health_endpoint)
+    results = _endpoint_test_results(
+        probes,
+        value_details=lambda payload: {
+            "service_status": payload.get("status"),
+            "device": payload.get("device"),
+            "loaded_model": payload.get("model"),
+        },
+    )
+    first_ready = next((result for result in results if result["status"] == "ready"), None)
     return {
-        "status": payload.get("status"),
-        "endpoint": payload.get("endpoint", {}).get("name"),
-        "provider": payload.get("endpoint", {}).get("provider"),
-        "model": payload.get("model"),
-        "device": payload.get("device"),
+        "status": _pool_test_status(results),
+        "endpoint": first_ready.get("endpoint") if first_ready else None,
+        "provider": first_ready.get("provider") if first_ready else None,
+        "model": first_ready.get("loaded_model") if first_ready else None,
+        "device": first_ready.get("device") if first_ready else None,
+        "results": results,
     }
