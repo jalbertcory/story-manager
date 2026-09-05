@@ -41,6 +41,7 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState(null);
   const [authError, setAuthError] = useState("");
   const [pendingImportEntries, setPendingImportEntries] = useState([]);
+  const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const [audioTabs, setAudioTabs] = useState({});
   const [globalDragging, setGlobalDragging] = useState(false);
   const pendingScroll = useRef(null);
@@ -276,6 +277,8 @@ export default function App() {
       default:
         return (
           <LibraryWorkspace
+            filtersOpen={libraryFiltersOpen}
+            onFiltersToggle={setLibraryFiltersOpen}
             key={`${location.search}${location.hash}`}
             search={location.search}
             hash={location.hash}

@@ -1,0 +1,18 @@
+export const JOB_LABELS = {
+  clean_book: "Clean book",
+  clean_all: "Clean library",
+  refresh_book: "Refresh book",
+  refresh_all: "Refresh web library",
+  audiobook_pipeline: "Generate AI audiobook",
+  import_audiobook: "Import human audiobook",
+  upgrade_imported_audiobook: "Upgrade human audiobook files",
+  rebuild_imported_audiobook: "Rebuild human audiobook",
+  rematch_imported_audiobook: "Rematch human audiobook",
+  align_imported_audiobook: "Align human audiobook",
+  metadata_sync: "Sync metadata",
+  generate_sentence_audio: "Generate sentence audio",
+  generate_chapter_preview: "Generate chapter preview",
+  retry_cover: "Re-extract book cover",
+  create_backup: "Create library backup",
+  verify_backup: "Verify library backup",
+};

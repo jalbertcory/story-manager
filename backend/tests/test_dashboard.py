@@ -132,6 +132,8 @@ async def test_attention_dashboard_aggregates_actionable_categories(
 
     assert response.status_code == 200
     data = response.json()
+    assert data["failed_refreshes"]["items"][0]["can_retry_refresh"] is True
+    assert data["missing_covers"]["items"][0]["can_retry_cover"] is True
     assert data["total_count"] == 7
     assert data["failed_jobs"]["count"] == 1
     assert data["failed_jobs"]["items"][0]["book_title"] == "Refresh Me"

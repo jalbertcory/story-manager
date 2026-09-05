@@ -13,12 +13,6 @@ from .books import (  # noqa: F401
     get_book_by_title,
     get_book_by_title_and_author,
     get_book_catalog,
-    build_catalog_filter_conditions,
-    get_catalog_book_page,
-    get_catalog_facets,
-    get_catalog_series_page,
-    get_catalog_snapshot_max_id,
-    get_catalog_total_count,
     get_books,
     get_books_by_author,
     get_books_by_ids,
@@ -126,4 +120,13 @@ from .metadata import (  # noqa: F401
     mark_metadata_sync_job_progress,
     mark_metadata_sync_job_running,
     reset_running_metadata_sync_jobs,
+)
+
+from .catalog import (  # noqa: F401
+    build_catalog_filter_conditions,
+    get_catalog_book_page,
+    get_catalog_facets,
+    get_catalog_series_page,
+    get_catalog_snapshot_max_id,
+    get_catalog_total_count,
 )

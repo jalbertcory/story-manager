@@ -138,3 +138,92 @@ async def test_imported_audio_needs_a_playable_edition_with_tracks(db):
     edition.status = "error"
     await db.commit()
     assert not (await build_book_catalog_page(db, view="all")).items[0].audio_playable
+
+
+@pytest.mark.asyncio
+async def test_group_pages_preserve_filters_counts_covers_and_snapshot(db, app_client):
+    for series in ["A", "B", "C", None]:
+        db.add(
+            models.Book(
+                title=series or "Solo",
+                author="Same",
+                series=series,
+                source_type=models.SourceType.web,
+                refresh_status="error",
+                genre_tags=["Fantasy"],
+                cover_path="cover.jpg",
+            )
+        )
+    db.add(models.Book(title="Excluded", author="Same", series="A", source_type=models.SourceType.epub))
+    await db.commit()
+    params = dict(limit=2, source="web", review="refresh-error", genre="Fantasy", sort_by="author")
+    response = app_client.get("/api/library/groups", params=params)
+    assert response.status_code == 200, response.text
+    first = response.json()
+    assert first["total_count"] == 4
+    assert [g["name"] for g in first["items"]] == ["A", "B"]
+    assert all(g["book_count"] == 1 and len(g["cover_ids"]) == 1 for g in first["items"])
+    assert first["facets"]["genres"] == [{"name": "Fantasy", "count": 4}]
+    db.add(
+        models.Book(
+            title="Later",
+            author="Same",
+            series="D",
+            source_type=models.SourceType.web,
+            refresh_status="error",
+            genre_tags=["Fantasy"],
+        )
+    )
+    await db.commit()
+    second = app_client.get("/api/library/groups", params={**params, "cursor": first["next_cursor"]}).json()
+    assert [g["name"] for g in second["items"]] == ["C", None]
+    assert second["next_cursor"] is None and second["total_count"] == 4
+    assert (
+        app_client.get("/api/library/groups", params={**params, "genre": "Other", "cursor": first["next_cursor"]}).status_code
+        == 400
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sort_order", ["asc", "desc"])
+async def test_series_order_pages_handle_ties_and_unindexed_books(db, sort_order):
+    for i, index in enumerate([2, 1, None, 1, -1, 1.5]):
+        db.add(
+            models.Book(title=f"Book {i}", author="A", series="Saga", series_index=index, source_type=models.SourceType.epub)
+        )
+    await db.commit()
+    kwargs = dict(view="all", series="Saga", sort_by="series_index", sort_order=sort_order, limit=2)
+    page = await build_book_catalog_page(db, **kwargs)
+    items = list(page.items)
+    while page.next_cursor:
+        page = await build_book_catalog_page(db, **kwargs, cursor=page.next_cursor)
+        items.extend(page.items)
+    assert len({item.id for item in items}) == 6
+    expected = [-1, 1, 1, 1.5, 2, None] if sort_order == "asc" else [None, 2, 1.5, 1, 1, -1]
+    assert [item.series_index for item in items] == expected
+
+
+@pytest.mark.asyncio
+async def test_playable_filter_matches_group_and_book_results(db, app_client):
+    books = [
+        models.Book(title=str(i), author="A", series="Saga", source_type=models.SourceType.epub, audiobook_enabled=True)
+        for i in range(2)
+    ]
+    db.add_all(books)
+    await db.flush()
+    db.add(
+        models.AudiobookChapter(
+            book_id=books[0].id,
+            chapter_number=1,
+            content_file_name="1.xhtml",
+            audio_file_path="audio.mp3",
+            needs_reassembly=False,
+        )
+    )
+    await db.commit()
+    for state, index in [("playable", 0), ("unplayable", 1)]:
+        page = await build_book_catalog_page(db, view="all", audiobook=state)
+        assert [b.id for b in page.items] == [books[index].id]
+        response = app_client.get("/api/library/groups", params={"audiobook": state, "limit": 30})
+        assert response.status_code == 200, response.text
+        assert response.json()["items"][0]["book_count"] == 1

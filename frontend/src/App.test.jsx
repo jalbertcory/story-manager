@@ -50,7 +50,8 @@ function mockApi(resolve = () => undefined) {
     let data = resolve(url, options);
     if (data === undefined) {
       if (url.startsWith("/api/library/groups?")) data = [group];
-      else if (url.startsWith("/api/books/catalog?")) data = saga;
+      else if (url.startsWith("/api/books/catalog?"))
+        data = [...saga].sort((a, b) => a.series_index - b.series_index);
       else if (url === "/api/series") data = ["Saga"];
       else if (url === "/api/books/44") data = book;
       else if (url.startsWith("/api/library/books/"))
@@ -83,7 +84,7 @@ describe("App workspaces", () => {
     };
   });
 
-  it("starts with cover groups and loads complete series only when opened", async () => {
+  it("starts with cover groups and pages series books in server order", async () => {
     mockApi();
     renderWithClient(<App />);
     expect(await screen.findByAltText("Saga cover")).toHaveAttribute(
@@ -97,8 +98,8 @@ describe("App workspaces", () => {
     fireEvent.click(screen.getByText("Saga"));
     expect(await screen.findByText("Saga Book 1")).toBeInTheDocument();
     const titles = screen
-      .getAllByRole("heading", { level: 3 })
-      .map((node) => node.textContent);
+      .getAllByRole("link", { name: /Saga Book [12] cover/ })
+      .map((node) => node.querySelector(".book-row-title").textContent);
     expect(titles).toEqual(["Saga Book 1", "Saga Book 2"]);
     expect(screen.getAllByText("Fantasy").length).toBeGreaterThan(0);
     expect(window.location.search).toContain("series=Saga");
@@ -190,17 +191,29 @@ describe("App workspaces", () => {
     });
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=Author+B",
+        "/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30",
       ),
     );
+    const filters = screen.getByRole("button", {
+      name: "Filters",
+      exact: true,
+    });
+    expect(filters).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByLabelText("Library source")).not.toBeVisible();
+    fireEvent.click(filters);
     fireEvent.change(screen.getByLabelText("Library source"), {
       target: { value: "web" },
     });
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=Author+B&source=web",
+        "/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30&source=web",
       ),
     );
+    const activeFilters = screen.getByRole("button", { name: "Filters (1)" });
+    expect(activeFilters).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(activeFilters);
+    expect(screen.getByLabelText("Library source")).not.toBeVisible();
+    expect(screen.getByLabelText("Library source")).toHaveValue("web");
   });
 
   it("navigates universe to series without changing reading order", async () => {
@@ -210,13 +223,16 @@ describe("App workspaces", () => {
         : undefined,
     );
     renderWithClient(<App />);
-    fireEvent.change(await screen.findByLabelText("Group library by"), {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Filters", exact: true }),
+    );
+    fireEvent.change(screen.getByLabelText("Group library by"), {
       target: { value: "universe" },
     });
     fireEvent.click(await screen.findByText("Cosmere"));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=&universe=7",
+        "/api/library/groups?group_by=series&q=&sort_by=title&sort_order=asc&limit=30&universe=7",
       ),
     );
     fireEvent.click(await screen.findByText("Saga"));
@@ -231,6 +247,11 @@ describe("App workspaces", () => {
     window.history.replaceState(null, "", "/?series=Saga");
     mockApi();
     renderWithClient(<App />);
+    const organizer = (await screen.findByText("Organize this series")).closest(
+      "details",
+    );
+    organizer.open = true;
+    fireEvent(organizer, new Event("toggle"));
     fireEvent.click(await screen.findByRole("button", { name: "Genres" }));
     fireEvent.change(
       screen.getByPlaceholderText(
@@ -259,7 +280,7 @@ describe("App workspaces", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Assign series" }),
     );
-    fireEvent.change(screen.getByPlaceholderText("Add to a series"), {
+    fireEvent.change(await screen.findByPlaceholderText("Add to a series"), {
       target: { value: "Saga" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));

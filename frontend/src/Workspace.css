@@ -121,18 +121,32 @@
   outline: 2px solid var(--accent);
   outline-offset: 4px;
 }
+.library-workspace {
+  --library-control-height: 2.75rem;
+}
 .library-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
-  align-items: flex-end;
-  flex-wrap: wrap;
+  align-items: end;
   margin-bottom: 18px;
 }
 .library-toolbar > input {
-  flex: 1;
-  min-width: 180px;
-  padding: 11px 13px;
+  min-width: 0;
   background: var(--bg);
+}
+.library-toolbar :is(input, select, button),
+.library-workspace > .workspace-heading .btn-primary {
+  height: var(--library-control-height);
+  min-height: var(--library-control-height);
+  padding: 0 13px;
+  line-height: 1.25;
+}
+.library-filter-panel {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+.library-filter-panel label {
+  min-width: 0;
 }
 .library-toolbar label,
 .workspace-subnav label,
@@ -143,8 +157,8 @@
   font-size: 0.78rem;
 }
 .library-toolbar select {
-  min-width: 120px;
-  padding: 11px;
+  min-width: 0;
+  max-width: 100%;
 }
 .library-group-row {
   display: flex;
@@ -512,9 +526,6 @@
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  .library-toolbar > input {
-    flex-basis: 100%;
-  }
   .workspace-shell button,
   .workspace-nav-link {
     min-height: 44px;
@@ -523,4 +534,18 @@
   .workspace-shell select {
     font-size: 16px;
   }
+}
+
+.attention-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.attention-bulk-actions {
+  margin-bottom: 0.75rem;
+}
+
+.library-filter-panel[hidden] {
+  display: none;
 }

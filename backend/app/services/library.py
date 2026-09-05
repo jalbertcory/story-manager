@@ -57,51 +57,6 @@ async def library_book_info(db: AsyncSession, book_ids: list[int]) -> dict:
     return {row.id: dict(row._mapping) for row in result}
 
 
-async def library_groups(db: AsyncSession, *, group_by: str, q: str, universe: int | None, source: str | None):
-    from ..crud.books import build_catalog_filter_conditions
-
-    conditions = build_catalog_filter_conditions(q=q, universe=universe, source=source)
-    key = func.lower(models.Book.series) if group_by == "series" else models.Universe.name
-    display_name = func.min(models.Book.series) if group_by == "series" else models.Universe.name
-    # The summary query returns group metadata, never every book's full payload.
-    result = await db.execute(
-        select(
-            display_name.label("name"),
-            func.count(models.Book.id).label("book_count"),
-            func.min(models.Book.author).label("author"),
-            func.count(func.distinct(models.Book.author)).label("author_count"),
-            func.sum(case((playable_audio_expression(), 1), else_=0)).label("audio_count"),
-            func.min(models.Universe.id).label("universe_id"),
-        )
-        .select_from(models.Book)
-        .outerjoin(models.Universe, models.Universe.id == universe_expression())
-        .where(*conditions)
-        .group_by(key)
-        .order_by(key.is_(None), func.lower(key))
-    )
-    groups = [dict(row._mapping) for row in result]
-    covers = (
-        select(
-            key.label("name"),
-            models.Book.id,
-            func.row_number()
-            .over(partition_by=key, order_by=(models.Book.series_index.asc().nulls_last(), models.Book.id))
-            .label("rank"),
-        )
-        .select_from(models.Book)
-        .outerjoin(models.Universe, models.Universe.id == universe_expression())
-        .where(*conditions, models.Book.cover_path.is_not(None))
-        .subquery()
-    )
-    cover_map = {}
-    for row in await db.execute(select(covers).where(covers.c.rank <= 3).order_by(covers.c.rank)):
-        cover_map.setdefault(row.name, []).append(row.id)
-    for group in groups:
-        cover_key = group["name"].lower() if group_by == "series" and group["name"] else group["name"]
-        group["cover_ids"] = cover_map.get(cover_key, [])
-    return groups
-
-
 async def move_series_universe(db: AsyncSession, source: str, target: str):
     """Keep membership when renaming; reject merging incompatible universes."""
     source_key, target_key = source.lower(), target.lower()
@@ -120,3 +75,7 @@ async def move_series_universe(db: AsyncSession, source: str, target: str):
             await db.delete(old)
         else:
             old.series_key = target_key
+
+
+# Preserve the service import used by existing clients.
+from .library_groups import library_groups  # noqa: F401, E402
