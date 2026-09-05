@@ -26,7 +26,7 @@ async def groups(
     group_by: Literal["series", "universe"] = "series",
     q: str = "",
     universe: int | None = Query(default=None, ge=0),
-    source: Literal["web", "epub"] | None = None,
+    source: Literal["web", "epub", "audiobook"] | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     return await library_groups(db, group_by=group_by, q=q, universe=universe, source=source)

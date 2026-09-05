@@ -59,15 +59,18 @@ export default function LibraryWorkspace({
   });
   // A series must load completely before its reorder action is available.
   const seriesBooks = useQuery({
-    queryKey: ["series-books", series],
+    queryKey: ["series-books", series, { source, universe, q: query }],
     queryFn: async () =>
-      (await getAllBookCatalog({ series })).sort(compareSeriesBooks),
+      (await getAllBookCatalog({ series, source, universe, q: query })).sort(
+        compareSeriesBooks,
+      ),
     enabled: Boolean(series),
   });
   const { data: allSeries = [] } = useQuery({
     queryKey: ["series"],
     queryFn: getSeries,
   });
+  const filteredSeries = Boolean(series && (source || query));
   const books = series
     ? seriesBooks.data || []
     : catalog.data?.pages.flatMap((page) => page.items) || [];
@@ -118,7 +121,7 @@ export default function LibraryWorkspace({
     <section className="library-workspace">
       {(series != null || universe != null) && (
         <nav className="breadcrumbs" aria-label="Library location">
-          <a href={libraryPath({ group })}>Library</a>
+          <a href={libraryPath({ group, source: source || null })}>Library</a>
           {universe != null && (
             <>
               <span>/</span>
@@ -127,6 +130,7 @@ export default function LibraryWorkspace({
                   group: "universe",
                   universe,
                   universeName,
+                  source: source || null,
                 })}
               >
                 {universeName}
@@ -185,10 +189,17 @@ export default function LibraryWorkspace({
             >
               <option value="">All sources</option>
               <option value="epub">Book files</option>
+              <option value="audiobook">Audio only (missing EPUB)</option>
               <option value="web">Web novels</option>
             </select>
           </label>
         </div>
+      )}
+      {source === "audiobook" && (
+        <p className="hint">
+          Books missing an EPUB. Upload matching EPUBs to add text to these
+          audiobooks automatically.
+        </p>
       )}
       {loading && <p role="status">Loading library…</p>}
       {error && (
@@ -209,11 +220,13 @@ export default function LibraryWorkspace({
                       universe: item.universe_id || 0,
                       universeName: item.name || "No universe",
                       source: source || null,
+                      q: q || null,
                     }
                   : {
                       ...base,
                       series: item.name || "",
                       source: source || null,
+                      q: q || null,
                     },
               )}
             >
@@ -269,7 +282,7 @@ export default function LibraryWorkspace({
           )}
         </div>
       )}
-      {series && !loading && !error && (
+      {series && !filteredSeries && !loading && !error && (
         <>
           <details className="workspace-disclosure">
             <summary>Organize this series</summary>
@@ -293,7 +306,7 @@ export default function LibraryWorkspace({
           />
         </>
       )}
-      {!grouped && !series && !loading && !error && (
+      {!grouped && (!series || filteredSeries) && !loading && !error && (
         <>
           {series === "" && (
             <button onClick={() => setAssigningSeries((value) => !value)}>
@@ -322,7 +335,7 @@ export default function LibraryWorkspace({
               No books found. Try another search or add a book.
             </p>
           )}
-          {catalog.hasNextPage && (
+          {!series && catalog.hasNextPage && (
             <button
               className="load-more"
               disabled={catalog.isFetchingNextPage}

@@ -18,6 +18,7 @@ from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
 from ..services.library_paths import build_book_paths
+from ..services.book_matching import epub_identifiers, match_epub_to_audio_book
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import enrich_series_metadata
 from ..services.processing_queue import queue_audio_reconciliation
@@ -130,6 +131,61 @@ def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> Iterator[tuple[str
         ) from e
 
 
+async def _existing_epub_target(db, ebook, title, author):
+    existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
+    if existing and (existing.deleted_at is not None or existing.source_type != models.SourceType.audiobook):
+        return existing
+    return await match_epub_to_audio_book(db, ebook, title, author)
+
+
+async def _attach_epub_to_audio_book(book, ebook, title, author, original, current, db):
+    # Include the existing ID in the filename so a same-title EPUB elsewhere in
+    # the library cannot be overwritten when adding this book's text.
+    immutable_path, current_path = build_book_paths(f"{title} - {author} - book {book.id}.epub", author)
+    original.replace(immutable_path)
+    current.replace(current_path)
+    book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
+    book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
+    book.source_type = models.SourceType.epub
+    book.master_word_count = epub_editor.get_word_count(str(immutable_path))
+    book.current_word_count = book.master_word_count
+    if not book.author or book.author == "Unknown author":
+        book.author = author
+    if not book.series:
+        book.series = _first_epub_metadata(ebook, "calibre", "series")
+    tags = get_epub_tag_metadata(immutable_path)
+    book.genre_tags = sorted(set(book.genre_tags or []) | set(tags["genre_tags"]))
+    book.source_tags = sorted(set(book.source_tags or []) | set(tags["source_tags"]))
+    identifiers = epub_identifiers(ebook)
+    book.metadata_remote_ids = {**identifiers, **(book.metadata_remote_ids or {})}
+    book.metadata_details = {
+        **(book.metadata_details or {}),
+        "epub_attachment": {"title": title, "author": author, "identifiers": identifiers},
+    }
+    if not book.cover_path or not (LIBRARY_PATH.parent / book.cover_path).is_file():
+        cover = get_and_save_epub_cover(epub_path=immutable_path, book_id=book.id)
+        if cover:
+            book.cover_path = str(cover.relative_to(LIBRARY_PATH.parent))
+    await crud.touch_book_content(db, book)
+    await db.commit()
+    await db.refresh(book)
+    await epub_editor.apply_book_cleaning(book, db)
+    # Audio-only editions already have a matched_content_version. Always bump
+    # the text version above and reconcile, even when no cleaning was needed.
+    await queue_audio_reconciliation(book, db)
+    _, chapter_count = get_epub_word_and_chapter_count(current_path)
+    await crud.create_book_log(
+        db,
+        schemas.BookLogCreate(
+            book_id=book.id,
+            entry_type="updated",
+            new_chapter_count=chapter_count,
+            words_added=book.master_word_count,
+        ),
+    )
+    return book
+
+
 async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) -> models.Book:
     """
     Saves an EPUB to the library, extracts metadata, creates a DB record,
@@ -161,7 +217,12 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
             detail=f"Failed to parse EPUB file: {e}",
         )
 
-    existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
+    try:
+        existing = await _existing_epub_target(db, epub_book, title, author)
+    except ValueError as exc:
+        temp_immutable_path.unlink(missing_ok=True)
+        temp_current_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if existing and existing.deleted_at is not None:
         temp_immutable_path.unlink(missing_ok=True)
         temp_current_path.unlink(missing_ok=True)
@@ -171,6 +232,8 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
                 f"'{title}' by '{author}' is in the recycle bin. Restore it or permanently delete it before importing again."
             ),
         )
+    if existing and existing.source_type == models.SourceType.audiobook and not existing.current_path:
+        return await _attach_epub_to_audio_book(existing, epub_book, title, author, temp_immutable_path, temp_current_path, db)
     if existing and existing.source_type == models.SourceType.epub:
         # Check if the existing book's files are missing — if so, restore them
         # from the upload instead of rejecting as a duplicate.
@@ -334,7 +397,12 @@ async def _preview_epub_bytes(
         )
 
     normalized = (title.casefold(), author.casefold())
-    existing_book = await crud.get_book_by_title_and_author(db, title=title, author=author)
+    try:
+        existing_book = await _existing_epub_target(db, epub_book, title, author)
+    except ValueError as exc:
+        return ImportPreviewItem(
+            key=key, input_type="epub", name=name, status="error", title=title, author=author, detail=str(exc)
+        )
     existing = existing_book if existing_book and existing_book.source_type == models.SourceType.epub else None
     duplicate_in_batch = normalized in seen_books
     seen_books.add(normalized)
@@ -356,7 +424,12 @@ async def _preview_epub_bytes(
         source_url=source_url,
         duplicate_book_id=existing.id if existing else None,
         cleaning_configs=[config.name for config in configs],
-        detail=duplicate_detail,
+        detail=duplicate_detail
+        or (
+            f'Attach EPUB to "{existing_book.title}" (book {existing_book.id}) and match its audio chapters.'
+            if existing_book and existing_book.source_type == models.SourceType.audiobook
+            else None
+        ),
     )
 
 
