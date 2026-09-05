@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui pr-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui audit-ui pr-check test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -33,7 +33,7 @@ help:
 	@echo "  make managed-ai       Create model containers for control by the scheduler"
 	@echo "  make gpu-services-status Show scheduler and managed-container state"
 	@echo "  make test-gpu-scheduler Run scheduler unit tests"
-	@echo "  make pr-check         Run the required pre-PR lint checks"
+	@echo "  make pr-check         Run lint and frontend dependency audits"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
@@ -174,7 +174,11 @@ lint-backend:
 lint-ui:
 	cd frontend && npm run lint -- --max-warnings=0
 
-pr-check: lint
+audit-ui:
+	cd frontend && npm audit --omit=dev --audit-level=moderate
+	cd frontend && npm audit --audit-level=high
+
+pr-check: lint audit-ui
 
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
