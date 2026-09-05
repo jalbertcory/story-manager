@@ -24,6 +24,7 @@ def _book_item(book: models.Book, issue: str, detail: str | None = None) -> sche
         author=book.author,
         issue=issue,
         detail=detail,
+        can_retry_refresh=book.source_type == models.SourceType.web and bool(book.source_url),
     )
 
 
@@ -77,7 +78,7 @@ async def _failed_jobs(db: AsyncSession, limit: int) -> schemas.AttentionJobCate
 async def _failed_refreshes(db: AsyncSession, limit: int) -> schemas.AttentionBookCategory:
     query = (
         select(models.Book)
-        .where(models.Book.refresh_status == "error")
+        .where(models.Book.refresh_status == "error", models.Book.deleted_at.is_(None))
         .order_by(models.Book.updated_at.desc(), models.Book.id.desc())
     )
     count = await db.scalar(select(func.count()).select_from(query.subquery()))
@@ -90,13 +91,14 @@ async def _failed_refreshes(db: AsyncSession, limit: int) -> schemas.AttentionBo
 
 async def _stale_audiobooks(db: AsyncSession, limit: int) -> schemas.AttentionBookCategory:
     ai_query = select(models.Book).where(
+        models.Book.deleted_at.is_(None),
         models.Book.audiobook_enabled.is_(True),
         models.Book.audiobook_publication_state == "stale",
     )
     human_query = (
         select(models.Book, models.ImportedAudiobook)
         .join(models.ImportedAudiobook, models.ImportedAudiobook.book_id == models.Book.id)
-        .where(models.ImportedAudiobook.status == "stale")
+        .where(models.ImportedAudiobook.status == "stale", models.Book.deleted_at.is_(None))
     )
 
     reasons: dict[int, list[str]] = defaultdict(list)
@@ -176,9 +178,15 @@ async def get_attention_dashboard(
         count=len(broken_files),
         items=[schemas.AttentionFileItem(**issue) for issue in broken_files[:limit]],
     )
+    cover_book_ids = {
+        book.id for book in books if book.immutable_path and (LIBRARY_PATH.parent / book.immutable_path).is_file()
+    }
     cover_category = schemas.AttentionFileCategory(
         count=len(missing_covers),
-        items=[schemas.AttentionFileItem(**issue) for issue in missing_covers[:limit]],
+        items=[
+            schemas.AttentionFileItem(**issue, can_retry_cover=issue["book_id"] in cover_book_ids)
+            for issue in missing_covers[:limit]
+        ],
     )
     total_count = sum(
         category.count

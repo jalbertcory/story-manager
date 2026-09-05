@@ -191,6 +191,8 @@ backend.log
 
 # where the books are stored
 library
+!frontend/src/components/library/
+!frontend/src/components/library/**
 config
 /backups/
 

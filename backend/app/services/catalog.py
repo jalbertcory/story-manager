@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import json
-from datetime import datetime
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
+from ..catalog_pagination import cursor_signature, decode_cursor, encode_cursor
 
 
 def normalize_genre_tags(tags: list[str]) -> list[str]:
@@ -53,43 +49,6 @@ def serialize_catalog_book(
     return schemas.BookCatalogEntry.model_validate(payload)
 
 
-def _cursor_signature(params: dict) -> str:
-    canonical = json.dumps(params, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
-
-
-def _json_value(value):
-    return value.isoformat() if isinstance(value, datetime) else value
-
-
-def _encode_cursor(*, snapshot_max_id: int, position: list, signature: str) -> str:
-    payload = {
-        "v": 1,
-        "snapshot_max_id": snapshot_max_id,
-        "position": [_json_value(value) for value in position],
-        "signature": signature,
-    }
-    raw = json.dumps(payload, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
-def _decode_cursor(cursor: str, *, signature: str, sort_by: str) -> tuple[int, list]:
-    try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
-        payload = json.loads(raw)
-        if payload.get("v") != 1 or payload.get("signature") != signature:
-            raise ValueError
-        snapshot_max_id = int(payload["snapshot_max_id"])
-        position = payload["position"]
-        if not isinstance(position, list) or len(position) != 3:
-            raise ValueError
-        if sort_by == "updated_at":
-            position[0] = datetime.fromisoformat(position[0])
-        return snapshot_max_id, position
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid or stale catalog cursor") from exc
-
-
 def _book_position(
     book: models.Book,
     *,
@@ -97,6 +56,7 @@ def _book_position(
     human_audiobook_book_ids: set[int],
 ) -> list:
     primary = {
+        "series_index": book.series_index if book.series_index is not None else 10000,
         "author": (book.author or "").lower(),
         "word_count": book.current_word_count if book.current_word_count is not None else -1,
         "updated_at": book.updated_at or book.created_at,
@@ -134,9 +94,9 @@ async def build_book_catalog_page(
         "sort_order": sort_order,
         "limit": limit,
     }
-    signature = _cursor_signature(cursor_params)
+    signature = cursor_signature(cursor_params)
     if cursor:
-        snapshot_max_id, position = _decode_cursor(cursor, signature=signature, sort_by=sort_by)
+        snapshot_max_id, position = decode_cursor(cursor, signature=signature, sort_by=sort_by)
     else:
         snapshot_max_id = await crud.get_catalog_snapshot_max_id(db)
         position = None
@@ -226,7 +186,7 @@ async def build_book_catalog_page(
     if has_more and books:
         if view != "series":
             last_position = _book_position(books[-1], sort_by=sort_by, human_audiobook_book_ids=human_ids)
-        next_cursor = _encode_cursor(
+        next_cursor = encode_cursor(
             snapshot_max_id=snapshot_max_id,
             position=last_position,
             signature=signature,

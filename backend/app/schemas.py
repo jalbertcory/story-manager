@@ -454,10 +454,12 @@ class AttentionBookItem(BaseModel):
     author: str
     issue: str
     detail: Optional[str] = None
+    can_retry_refresh: bool = False
 
 
 class AttentionFileItem(AttentionBookItem):
     path: Optional[str] = None
+    can_retry_cover: bool = False
 
 
 class AttentionJobItem(BaseModel):

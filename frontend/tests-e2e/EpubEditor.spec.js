@@ -77,6 +77,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByLabel("Search library").fill("Test Book");
 
   // Show individual books instead of series groups.
+  await page.getByRole("button", { name: /^Filters/ }).click();
   await page.getByLabel("Group library by").selectOption("none");
   await expect(page.getByText("Test Book").first()).toBeVisible({
     timeout: 10000,
@@ -153,6 +154,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.reload();
   await expect(page.getByText("Story Manager")).toBeVisible();
   await page.getByLabel("Search library").fill("Test Book");
+  await page.getByRole("button", { name: /^Filters/ }).click();
   await page.getByLabel("Group library by").selectOption("none");
 
   // Verify the word count has changed

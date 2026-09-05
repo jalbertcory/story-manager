@@ -74,3 +74,40 @@ The series fixture intentionally produces about 15 books per selected series,
 so its payload represents 450 complete book summaries rather than 30 raw
 books. The response remains bounded by the number and size of the selected
 series instead of the size of the full library.
+
+## Library workspace filters and organization
+
+The main Library keeps search visible and hides the other controls behind **Filters**
+initially. The toggle shows the number of active source, genre, audio, and review
+filters. Collapsing the panel preserves your selections; it stays open while you
+change filters and navigate, and starts collapsed after a reload.
+
+The main Library supports source, genre, audio, and review filters alongside search,
+grouping, and ascending/descending sorting. Filters carry through group drill-down,
+book navigation, and the return to the library. “Ready to listen” checks for playable
+media; “Audio imported or enabled” also includes unfinished imports and enabled AI
+pipelines. Genre choices show counts from the current scope, without applying the
+selected genre to those counts.
+
+Expand **Saved views** to name the current search, filters, grouping, and sort order.
+Views are stored in the current browser. Saving an existing name replaces that view;
+deleting a saved view does not affect books.
+
+Both group summaries and individual series load 30 entries at a time. **Load more
+groups/books** requests the next cursor page. Series order supports fractional indices
+and uses title and book ID to break ties. In ascending series order, unnumbered books
+appear last. Open **Organize this series** to fetch the complete, unfiltered series
+before renaming, merging, editing genres, or reordering. Organization is hidden while
+filters limit the series, so an incomplete selection cannot replace its full order.
+
+`GET /api/library/groups` accepts `genre`, `audiobook`, `review`, `sort_by`,
+`sort_order`, `limit`, and `cursor` alongside its existing parameters. Supplying
+`limit` returns `{items, next_cursor, total_count, facets}`; omitting it preserves
+the original array response. Cursors bind to the filters and ordering and exclude
+books added after the first page. As with the book catalog, they are not a database
+snapshot: edits to existing sort keys or membership can change a traversal.
+
+Catalog SQL lives in `backend/app/crud/catalog.py`; group summaries live in
+`backend/app/services/library_groups.py`. Both use the shared cursor utilities in
+`backend/app/catalog_pagination.py`. Library controls, saved views, group cards, and
+the complete-series organizer have separate frontend components.

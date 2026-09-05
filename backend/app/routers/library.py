@@ -27,9 +27,29 @@ async def groups(
     q: str = "",
     universe: int | None = Query(default=None, ge=0),
     source: Literal["web", "epub", "audiobook"] | None = None,
+    genre: str | None = None,
+    audiobook: Literal["available", "none", "playable", "unplayable"] | None = None,
+    review: Literal["missing-series", "refreshing", "refresh-error"] | None = None,
+    sort_by: Literal["title", "author", "word_count", "updated_at"] = "title",
+    sort_order: Literal["asc", "desc"] = "asc",
+    limit: int | None = Query(default=None, ge=1, le=100),
+    cursor: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    return await library_groups(db, group_by=group_by, q=q, universe=universe, source=source)
+    return await library_groups(
+        db,
+        group_by=group_by,
+        q=q,
+        universe=universe,
+        source=source,
+        genre=genre,
+        audiobook=audiobook,
+        review=review,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @router.get("/universes")

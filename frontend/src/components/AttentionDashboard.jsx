@@ -1,102 +1,40 @@
-const JOB_LABELS = {
-  clean_book: "Clean book",
-  clean_all: "Clean library",
-  refresh_book: "Refresh book",
-  refresh_all: "Refresh web library",
-  audiobook_pipeline: "Generate AI audiobook",
-  import_audiobook: "Import human audiobook",
-  rematch_imported_audiobook: "Rematch human audiobook",
-  align_imported_audiobook: "Align human audiobook",
-  metadata_sync: "Sync metadata",
-  generate_sentence_audio: "Generate sentence audio",
-  generate_chapter_preview: "Generate chapter preview",
-  retry_cover: "Re-extract book cover",
-};
+import {
+  BookItem,
+  FileItem,
+  JobItem,
+  MetadataItem,
+  AttentionCard,
+} from "./attention/AttentionCards";
+import useAttentionActions from "./attention/useAttentionActions";
+import AttentionAction from "./attention/AttentionAction";
 
-function BookItem({ item, audiobook = false }) {
-  const href = audiobook
-    ? `/books/${item.book_id}/audiobooks?tab=sources`
-    : `/books/${item.book_id}/details`;
-  return (
-    <li className="attention-item">
-      <a href={href}>{item.title}</a>
-      <span>{item.author || "Unknown author"}</span>
-      {item.detail && <small>{item.detail}</small>}
-    </li>
+function AttentionDashboard({
+  data,
+  isLoading,
+  error,
+  onRefresh,
+  isRefreshing,
+}) {
+  const actions = useAttentionActions(onRefresh);
+  const action = (kind, item) => (
+    <AttentionAction kind={kind} item={item} actions={actions} />
   );
-}
-
-function FileItem({ item }) {
-  return (
-    <li className="attention-item">
-      <a href={`/books/${item.book_id}/details`}>{item.title}</a>
-      <span>{item.issue.replaceAll("_", " ")}</span>
-      {item.path && <small title={item.path}>{item.path}</small>}
-    </li>
-  );
-}
-
-function JobItem({ item }) {
-  return (
-    <li className="attention-item">
-      <strong>{JOB_LABELS[item.job_type] || item.job_type.replaceAll("_", " ")}</strong>
-      {item.book_id ? (
-        <a href={`/books/${item.book_id}/details`}>
-          {item.book_title || `Book ${item.book_id}`}
-        </a>
-      ) : (
-        <span>Library operation</span>
-      )}
-      {item.error && <small className="attention-item-error">{item.error}</small>}
-    </li>
-  );
-}
-
-function MetadataItem({ item }) {
-  return (
-    <li className="attention-item">
-      <a href={`/books/${item.book_id}/details`}>{item.title}</a>
-      <span>{item.author || "Unknown author"}</span>
-      {item.note && <small>{item.note}</small>}
-    </li>
-  );
-}
-
-function AttentionCard({ title, description, category, actionHref, actionLabel, children }) {
-  const hasItems = category.count > 0;
-  return (
-    <article className={`attention-card${hasItems ? " attention-card--open" : ""}`}>
-      <header className="attention-card-header">
-        <div>
-          <span className="attention-count" aria-label={`${category.count} ${title.toLowerCase()}`}>
-            {category.count}
-          </span>
-          <h3>{title}</h3>
-        </div>
-        {hasItems && (
-          <a className="btn btn-sm" href={actionHref}>
-            {actionLabel}
-          </a>
-        )}
-      </header>
-      <p>{description}</p>
-      {hasItems ? (
-        <>
-          <ul className="attention-list">{children}</ul>
-          {category.count > category.items.length && (
-            <small className="attention-more">
-              {category.count - category.items.length} more not shown
-            </small>
-          )}
-        </>
-      ) : (
-        <p className="attention-clear">No attention needed</p>
-      )}
-    </article>
-  );
-}
-
-function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing }) {
+  const bulk = (kind, items, label) => {
+    const eligible = items.filter(
+      (item) =>
+        item[kind === "cover" ? "can_retry_cover" : "can_retry_refresh"] &&
+        !actions.busy(kind, item),
+    );
+    return items.length > 1 ? (
+      <button
+        className="attention-bulk-actions"
+        disabled={!eligible.length}
+        onClick={() => actions.runMany(kind, eligible)}
+      >
+        {label} ({eligible.length})
+      </button>
+    ) : null;
+  };
   if (isLoading) {
     return <p>Checking library health…</p>;
   }
@@ -104,7 +42,9 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
     return (
       <div className="attention-page">
         <h2>Needs attention</h2>
-        <p className="error" role="alert">{error.message}</p>
+        <p className="error" role="alert">
+          {error.message}
+        </p>
         <button onClick={onRefresh}>Try again</button>
       </div>
     );
@@ -117,15 +57,32 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
       <header className="attention-page-header">
         <div>
           <h2>Needs attention</h2>
-          <p>
-            Review failed tasks, missing files, and book suggestions.
-          </p>
+          <p>Review failed tasks, missing files, and book suggestions.</p>
         </div>
-        <button className="btn-text" onClick={onRefresh} disabled={isRefreshing}>
+        <button
+          className="btn-text"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+        >
           {isRefreshing ? "Checking…" : "Refresh"}
         </button>
       </header>
 
+      {actions.results.length > 0 && (
+        <section aria-label="Recent attention actions">
+          {actions.results.map((result) => (
+            <p key={result.key} role={result.error ? "alert" : "status"}>
+              {result.title}: {result.error || result.message}
+            </p>
+          ))}
+          {actions.pollError && (
+            <p role="alert">
+              Could not check task progress.{" "}
+              <a href="/activity/processing">View processing jobs</a>
+            </p>
+          )}
+        </section>
+      )}
       {healthy && (
         <section className="attention-healthy" role="status">
           <strong>Your library looks healthy.</strong>
@@ -141,7 +98,11 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           actionHref="/activity/processing?status=error"
           actionLabel="Review jobs"
         >
-          {data.failed_jobs.items.map((item) => <JobItem key={item.id} item={item} />)}
+          {data.failed_jobs.items.map((item) => (
+            <JobItem key={item.id} item={item}>
+              {action("job", item)}
+            </JobItem>
+          ))}
         </AttentionCard>
 
         <AttentionCard
@@ -150,8 +111,17 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           category={data.failed_refreshes}
           actionHref="/updates"
           actionLabel="Review web updates"
+          bulkAction={bulk(
+            "refresh",
+            data.failed_refreshes.items,
+            "Retry shown checks",
+          )}
         >
-          {data.failed_refreshes.items.map((item) => <BookItem key={item.book_id} item={item} />)}
+          {data.failed_refreshes.items.map((item) => (
+            <BookItem key={item.book_id} item={item}>
+              {item.can_retry_refresh && action("refresh", item)}
+            </BookItem>
+          ))}
         </AttentionCard>
 
         <AttentionCard
@@ -186,7 +156,10 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           actionLabel="Run audit"
         >
           {data.broken_files.items.map((item, index) => (
-            <FileItem key={`${item.book_id}-${item.issue}-${index}`} item={item} />
+            <FileItem
+              key={`${item.book_id}-${item.issue}-${index}`}
+              item={item}
+            />
           ))}
         </AttentionCard>
 
@@ -196,9 +169,20 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
           category={data.missing_covers}
           actionHref="/"
           actionLabel="Review library"
+          bulkAction={bulk(
+            "cover",
+            data.missing_covers.items,
+            "Recover shown covers",
+          )}
         >
           {data.missing_covers.items.map((item) => (
-            <FileItem key={`${item.book_id}-${item.issue}`} item={item} />
+            <FileItem key={`${item.book_id}-${item.issue}`} item={item}>
+              {item.can_retry_cover ? (
+                action("cover", item)
+              ) : (
+                <a href={`/books/${item.book_id}/details`}>Choose a cover</a>
+              )}
+            </FileItem>
           ))}
         </AttentionCard>
       </div>
