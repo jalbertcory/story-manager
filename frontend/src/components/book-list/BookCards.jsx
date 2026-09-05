@@ -25,31 +25,13 @@ export function GenreTagList({ tags, className = "" }) {
 }
 
 export function AudiobookBadge({ book }) {
-  const audiobookTypes = book.audiobook_types?.length
-    ? book.audiobook_types
-    : book.audiobook_enabled
-      ? ["ai_generated"]
-      : [];
-  if (!audiobookTypes.length) return null;
-  const status = book.audiobook_pipeline_status;
-  return (
-    <>
-      {audiobookTypes.includes("ai_generated") && (
-        <span
-          className="badge-audiobook"
-          title={status ? `Audiobook: ${status}` : "Audiobook enabled"}
-        >
-          <span aria-hidden="true">🎧</span>{" "}
-          {status === "complete" ? "Audiobook ready" : "Audiobook"}
-        </span>
-      )}
-      {audiobookTypes.includes("human_narrated") && (
-        <span className="badge-audiobook" title="Human-narrated audiobook">
-          <span aria-hidden="true">🎧</span> Human audiobook
-        </span>
-      )}
-    </>
-  );
+  if (book.audio_playable) {
+    return <span className="badge-audiobook">Audiobook</span>;
+  }
+  if (book.audiobook_types?.includes("human_narrated")) {
+    return <span className="format-pending">Audio imported</span>;
+  }
+  return null;
 }
 
 export function BookCard({ book, onEdit }) {
@@ -61,10 +43,6 @@ export function BookCard({ book, onEdit }) {
     e.target.onerror = null;
     e.target.src = NO_COVER_SVG;
   };
-
-  const formattedDate = book.updated_at
-    ? new Date(book.updated_at).toLocaleDateString()
-    : null;
 
   let coverContent;
   if (isPending) {
@@ -111,7 +89,7 @@ export function BookCard({ book, onEdit }) {
 
   return (
     <a
-      href={isPending ? undefined : buildBookPath(book.id, "details")}
+      href={isPending ? undefined : buildBookPath(book.id, "overview")}
       className={`book-card${isPending ? " book-card--pending" : ""}${isError ? " book-card--error" : ""}`}
       onClick={handleClick}
     >
@@ -137,9 +115,6 @@ export function BookCard({ book, onEdit }) {
               ? book.current_word_count.toLocaleString() + " words"
               : "—"}
           </p>
-        )}
-        {formattedDate && !isPending && (
-          <p className="book-updated">Updated: {formattedDate}</p>
         )}
         {book.source_type === "web" && !isPending && (
           <span className="badge-web">Web</span>
@@ -175,7 +150,7 @@ export function BookRow({
   return (
     <div className="book-row">
       <a
-        href={buildBookPath(book.id, "details")}
+        href={buildBookPath(book.id, "overview")}
         className="book-row-main"
         onClick={handleClick}
       >

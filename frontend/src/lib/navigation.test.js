@@ -9,12 +9,14 @@ import {
 } from "./navigation";
 
 describe("application navigation", () => {
-  it("exposes only the three user-oriented primary destinations", () => {
+  it("exposes the daily workflows and secondary destinations", () => {
     expect(
       PRIMARY_NAV.map(({ key, label, path }) => ({ key, label, path })),
     ).toEqual([
       { key: "library", label: "Library", path: "/" },
-      { key: "activity", label: "Activity", path: "/activity" },
+      { key: "updates", label: "Web updates", path: "/updates" },
+      { key: "review", label: "Review suggestions", path: "/review" },
+      { key: "activity", label: "Background activity", path: "/activity" },
       { key: "settings", label: "Settings", path: "/settings" },
     ]);
   });
@@ -43,7 +45,7 @@ describe("application navigation", () => {
     ["/attention", "attention", "/activity"],
     ["/processing", "processing", "/activity/processing"],
     ["/scheduler", "scheduler", "/activity/scheduled-runs"],
-    ["/configs", "configs", "/settings"],
+    ["/configs", "configs", "/settings/cleaning"],
     ["/audio-settings", "audio-settings", "/settings/audio-ai"],
     ["/utilities", "utilities", "/settings/library-tools"],
     ["/logs", "logs", "/settings/logs"],
@@ -57,11 +59,7 @@ describe("application navigation", () => {
 
   it("parses canonical book sections and audiobook tabs", () => {
     expect(
-      parseLocation(
-        "/books/12/audiobooks",
-        "",
-        "?tab=chapter-assembly",
-      ),
+      parseLocation("/books/12/audiobooks", "", "?tab=chapter-assembly"),
     ).toEqual({
       view: "book",
       bookId: 12,

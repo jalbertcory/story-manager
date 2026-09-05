@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
+from ..crud.metadata import actionable_metadata_proposal_conditions
 from ..services.library_health import find_missing_covers, inspect_library_files
 
 router = APIRouter()
@@ -113,7 +114,9 @@ async def _stale_audiobooks(db: AsyncSession, limit: int) -> schemas.AttentionBo
     return schemas.AttentionBookCategory(
         count=len(ordered),
         items=[
-            _book_item(book, "audiobook_stale", f"{', '.join(reasons[book.id])} needs reconciliation with the current text.")
+            _book_item(
+                book, "audiobook_stale", f"{', '.join(reasons[book.id])} needs updating to match the current book text."
+            )
             for book in ordered[:limit]
         ],
     )
@@ -121,13 +124,16 @@ async def _stale_audiobooks(db: AsyncSession, limit: int) -> schemas.AttentionBo
 
 async def _metadata_proposals(db: AsyncSession, limit: int) -> schemas.AttentionMetadataCategory:
     count = await db.scalar(
-        select(func.count()).select_from(models.MetadataProposal).where(models.MetadataProposal.status == "open")
+        select(func.count())
+        .select_from(models.MetadataProposal)
+        .join(models.Book, models.MetadataProposal.book_id == models.Book.id)
+        .where(*actionable_metadata_proposal_conditions())
     )
     rows = (
         await db.execute(
             select(models.MetadataProposal, models.Book)
             .join(models.Book, models.MetadataProposal.book_id == models.Book.id)
-            .where(models.MetadataProposal.status == "open")
+            .where(*actionable_metadata_proposal_conditions())
             .order_by(models.MetadataProposal.created_at.desc(), models.MetadataProposal.id.desc())
             .limit(limit)
         )

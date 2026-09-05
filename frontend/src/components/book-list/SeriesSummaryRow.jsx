@@ -10,9 +10,17 @@ import {
 import { BookCard, GenreTagList } from "./BookCards";
 import { getCoverUrl, getSeriesGenreTags } from "./catalogDisplay";
 
-export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
+export default function SeriesSummaryRow({
+  series,
+  books,
+  onEdit,
+  allSeries,
+  defaultExpanded = false,
+  hideHeading = false,
+  onSeriesChange,
+}) {
   const queryClient = useQueryClient();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [editing, setEditing] = useState(null); // null | "rename" | "merge" | "genres"
   const [renameValue, setRenameValue] = useState(series);
   const [mergeTarget, setMergeTarget] = useState("");
@@ -41,20 +49,28 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
 
   const renameMutation = useMutation({
     mutationFn: (newName) => renameSeries(series, newName),
-    onSuccess: () => {
+    onSuccess: (_, newName) => {
+      onSeriesChange?.(newName);
       setEditing(null);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
   const mergeMutation = useMutation({
     mutationFn: (target) => mergeSeries(series, target),
-    onSuccess: () => {
+    onSuccess: (_, target) => {
+      onSeriesChange?.(target);
       setEditing(null);
       setMergeTarget("");
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
@@ -65,6 +81,9 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       setDragOverBookId(null);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
     onError: () => {
       setOrderedBooks(books);
@@ -79,6 +98,9 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       setEditing(null);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
@@ -98,22 +120,13 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
       orderedBooks.find((book) => !book.download_status) ??
       orderedBooks[0];
 
-    const latestUpdate = orderedBooks.reduce((latest, book) => {
-      if (!book.updated_at) return latest;
-      const d = new Date(book.updated_at);
-      return d > latest ? d : latest;
-    }, new Date(0));
-
     return {
       authors,
       totalWords,
       hasWebNovel: orderedBooks.some((book) => book.source_type === "web"),
-      audiobookCount: orderedBooks.filter(
-        (book) => book.audiobook_types?.length || book.audiobook_enabled,
-      ).length,
+      audiobookCount: orderedBooks.filter((book) => book.audio_playable).length,
       coverBook,
       coverBooks,
-      latestUpdate: latestUpdate.getTime() > 0 ? latestUpdate : null,
     };
   }, [orderedBooks]);
 
@@ -152,94 +165,88 @@ export default function SeriesSummaryRow({ series, books, onEdit, allSeries }) {
 
   return (
     <div className={`series-group${expanded ? " series-group--expanded" : ""}`}>
-      <button
-        type="button"
-        className="series-header"
-        onClick={toggleExpanded}
-        aria-expanded={expanded}
-        aria-controls={`series-books-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
-      >
-        <div className="series-cover-stack">
-          {summary.coverBooks.length > 1 ? (
-            summary.coverBooks
-              .slice(0, 3)
-              .map((book, i) => (
-                <img
-                  key={book.id}
-                  src={getCoverUrl(book)}
-                  alt={i === 0 ? `${series} cover` : ""}
-                  className="series-cover-image series-cover-stacked"
-                  style={{ "--stack-i": i }}
-                  loading="lazy"
-                  decoding="async"
-                />
-              ))
-          ) : summary.coverBook?.cover_path ? (
-            <img
-              src={getCoverUrl(summary.coverBook)}
-              alt={`${series} cover`}
-              className="series-cover-image"
-              loading="lazy"
-              decoding="async"
-            />
-          ) : (
-            <div className="series-cover-placeholder">
-              <span className="series-cover-placeholder-text">
-                {series.charAt(0)}
+      {!hideHeading && (
+        <button
+          type="button"
+          className="series-header"
+          onClick={toggleExpanded}
+          aria-expanded={expanded}
+          aria-controls={`series-books-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+        >
+          <div className="series-cover-stack">
+            {summary.coverBooks.length > 1 ? (
+              summary.coverBooks
+                .slice(0, 3)
+                .map((book, i) => (
+                  <img
+                    key={book.id}
+                    src={getCoverUrl(book)}
+                    alt={i === 0 ? `${series} cover` : ""}
+                    className="series-cover-image series-cover-stacked"
+                    style={{ "--stack-i": i }}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                ))
+            ) : summary.coverBook?.cover_path ? (
+              <img
+                src={getCoverUrl(summary.coverBook)}
+                alt={`${series} cover`}
+                className="series-cover-image"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : (
+              <div className="series-cover-placeholder">
+                <span className="series-cover-placeholder-text">
+                  {series.charAt(0)}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="series-summary">
+            <div className="series-summary-topline">
+              <span className="series-name">{series}</span>
+              {summary.hasWebNovel && <span className="badge-web">Web</span>}
+              {summary.audiobookCount > 0 && (
+                <span className="badge-audiobook">
+                  <span aria-hidden="true">🎧</span> {summary.audiobookCount}/
+                  {books.length}
+                </span>
+              )}
+            </div>
+            <div className="series-meta">
+              <span className="series-meta-author">
+                {summary.authors.join(", ") || "Unknown author"}
               </span>
             </div>
-          )}
-        </div>
-        <div className="series-summary">
-          <div className="series-summary-topline">
-            <span className="series-name">{series}</span>
-            {summary.hasWebNovel && <span className="badge-web">Web</span>}
-            {summary.audiobookCount > 0 && (
-              <span className="badge-audiobook">
-                <span aria-hidden="true">🎧</span> {summary.audiobookCount}/
-                {books.length}
-              </span>
-            )}
-          </div>
-          <div className="series-meta">
-            <span className="series-meta-author">
-              {summary.authors.join(", ") || "Unknown author"}
-            </span>
-          </div>
-          <div className="series-stats">
-            <span className="series-stat">
-              <span className="series-stat-value">{books.length}</span>
-              <span className="series-stat-label">
-                book{books.length !== 1 ? "s" : ""}
-              </span>
-            </span>
-            {summary.totalWords > 0 && (
+            <div className="series-stats">
               <span className="series-stat">
-                <span className="series-stat-value">
-                  {formatWords(summary.totalWords)}
+                <span className="series-stat-value">{books.length}</span>
+                <span className="series-stat-label">
+                  book{books.length !== 1 ? "s" : ""}
                 </span>
-                <span className="series-stat-label">words</span>
               </span>
-            )}
-            {summary.latestUpdate && (
-              <span className="series-stat series-stat--date">
-                {summary.latestUpdate.toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </span>
-            )}
+              {summary.totalWords > 0 && (
+                <span className="series-stat">
+                  <span className="series-stat-value">
+                    {formatWords(summary.totalWords)}
+                  </span>
+                  <span className="series-stat-label">words</span>
+                </span>
+              )}
+            </div>
+            <GenreTagList
+              tags={seriesGenreTags}
+              className="series-header-genres"
+            />
           </div>
-          <GenreTagList
-            tags={seriesGenreTags}
-            className="series-header-genres"
+          <span
+            className={`series-toggle${expanded ? " series-toggle--open" : ""}`}
+            aria-hidden="true"
           />
-        </div>
-        <span
-          className={`series-toggle${expanded ? " series-toggle--open" : ""}`}
-          aria-hidden="true"
-        />
-      </button>
+        </button>
+      )}
       {expanded && (
         <div
           id={`series-books-${series.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}

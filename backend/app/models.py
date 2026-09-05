@@ -72,6 +72,8 @@ class Book(Base):
     author = Column(String, index=True)
     series = Column(String, nullable=True, index=True)
     series_index = Column(Numeric(6, 2), nullable=True)
+    # Used for standalone books. Series membership takes precedence when set.
+    universe_id = Column(Integer, ForeignKey("universes.id", ondelete="SET NULL"), nullable=True, index=True)
     genre_tags = Column(JSON, nullable=True)
     source_tags = Column(JSON, nullable=True)
     user_genre_tags = Column(JSON, nullable=True)
@@ -153,6 +155,21 @@ def _catalog_search_text(book: Book) -> str:
 @event.listens_for(Book, "before_update")
 def _sync_catalog_search_text(_mapper, _connection, book: Book) -> None:
     book.catalog_search_text = _catalog_search_text(book)
+
+
+class Universe(Base):
+    __tablename__ = "universes"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    name_key = Column(String(200), nullable=False, unique=True)
+
+
+class UniverseSeries(Base):
+    __tablename__ = "universe_series"
+
+    series_key = Column(String, primary_key=True)
+    universe_id = Column(Integer, ForeignKey("universes.id", ondelete="CASCADE"), nullable=False, index=True)
 
 
 class BookRevision(Base):

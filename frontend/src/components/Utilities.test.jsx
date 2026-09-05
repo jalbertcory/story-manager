@@ -1,22 +1,42 @@
-import { screen, fireEvent, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import Utilities from "./Utilities";
 import { renderWithClient } from "../test-utils";
 
+function openUtility(section) {
+  act(() => {
+    window.history.pushState(
+      null,
+      "",
+      `/settings/library-tools?section=${section}`,
+    );
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+}
+
 describe("Utilities", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     vi.stubGlobal("alert", vi.fn());
     window.history.replaceState(null, "", "/settings/library-tools");
   });
 
-  it("organizes utilities into focused tabs and shows the audit by default", async () => {
+  it("opens tools directly from their URLs and follows browser navigation", async () => {
     globalThis.fetch = vi.fn((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -24,47 +44,59 @@ describe("Utilities", () => {
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    expect(screen.getByRole("tab", { name: "Audit" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Series Detection" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Metadata" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Audiobooks" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Recycle Bin" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Storage" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Backup & Restore" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Reader Access" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Library Audit" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Library tool")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Library Audit" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
-    expect(screen.getByRole("heading", { name: "Detect Series" })).toBeInTheDocument();
+    openUtility("series");
+    expect(
+      screen.getByRole("heading", { name: "Detect Series" }),
+    ).toBeInTheDocument();
 
-    expect(screen.queryByRole("heading", { name: "Sync Online Metadata" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Metadata" }));
-    expect(screen.getByRole("heading", { name: "Sync Online Metadata" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Sync Online Metadata" }),
+    ).not.toBeInTheDocument();
+    openUtility("metadata");
+    expect(
+      screen.getByRole("heading", { name: "Sync Online Metadata" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
-    expect(screen.getByRole("heading", { name: "Storage Cleanup" })).toBeInTheDocument();
+    openUtility("storage");
+    expect(
+      screen.getByRole("heading", { name: "Storage Cleanup" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Reader Access" }));
-    expect(screen.getByRole("heading", { name: "Reader API Keys" })).toBeInTheDocument();
+    openUtility("reader-access");
+    expect(
+      screen.getByRole("heading", { name: "Reader API Keys" }),
+    ).toBeInTheDocument();
     expect(window.location.search).toBe("?section=reader-access");
 
-    window.history.replaceState(null, "", "/settings/library-tools?section=metadata");
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    window.history.replaceState(
+      null,
+      "",
+      "/settings/library-tools?section=metadata",
+    );
+    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Metadata" })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
+      expect(
+        screen.getByRole("heading", { name: "Sync Online Metadata" }),
+      ).toBeInTheDocument();
     });
   });
 
   it("previews and queues versioned human audiobook rebuilds", async () => {
-    window.history.replaceState(null, "", "/settings/library-tools?section=audiobooks");
+    window.history.replaceState(
+      null,
+      "",
+      "/settings/library-tools?section=audiobooks",
+    );
     globalThis.fetch = vi.fn((url, options) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/audiobook/imports/rebuild-preview") {
@@ -81,10 +113,18 @@ describe("Utilities", () => {
             }),
         });
       }
-      if (url === "/api/audiobook/imports/rebuild-all?force=false" && options?.method === "POST") {
+      if (
+        url === "/api/audiobook/imports/rebuild-all?force=false" &&
+        options?.method === "POST"
+      ) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ queued_count: 2, skipped_count: 2, pipeline_version: 1 }),
+          json: () =>
+            Promise.resolve({
+              queued_count: 2,
+              skipped_count: 2,
+              pipeline_version: 1,
+            }),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -92,21 +132,39 @@ describe("Utilities", () => {
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    expect(await screen.findByRole("heading", { name: "Rebuild Human Audiobooks" })).toBeInTheDocument();
-    expect(await screen.findByText(/2 of 4 editions need pipeline v1/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rebuild outdated human audiobooks" }));
+    expect(
+      await screen.findByRole("heading", { name: "Rebuild Human Audiobooks" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(/2 of 4 editions need updating/),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rebuild outdated human audiobooks" }),
+    );
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText(/Original audio and manual chapter corrections are preserved/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Queue rebuilds" }));
+    expect(
+      within(dialog).getByText(
+        /Original audio and manual chapter corrections are preserved/,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Queue rebuilds" }),
+    );
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith("/api/audiobook/imports/rebuild-all?force=false", { method: "POST" });
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/audiobook/imports/rebuild-all?force=false",
+        { method: "POST" },
+      );
     });
-    expect(await screen.findByText("2 human audiobook rebuilds queued; 2 skipped.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("2 human audiobook rebuilds queued; 2 skipped."),
+    ).toBeInTheDocument();
   });
 
   it("creates, downloads, verifies, and deliberately deletes backups", async () => {
-    const filename = "story-manager-20260809T120000Z-abcd1234.story-manager.zip";
+    const filename =
+      "story-manager-20260809T120000Z-abcd1234.story-manager.zip";
     const backup = {
       filename,
       created_at: "2026-08-09T12:00:00Z",
@@ -119,38 +177,66 @@ describe("Utilities", () => {
       download_url: `/api/backups/${filename}/download`,
     };
     globalThis.fetch = vi.fn((url, options) => {
-      if (url === "/api/metadata/jobs/latest") return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
-      if (url === "/api/metadata/inbox") return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      if (url === "/api/metadata/jobs/latest")
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
+      if (url.startsWith("/api/metadata/inbox?"))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       if (String(url).startsWith("/api/processing/jobs?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/backups" && !options) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ retention_count: 10, backups: [backup] }) });
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({ retention_count: 10, backups: [backup] }),
+        });
       }
       if (url === `/api/backups/${filename}` && options?.method === "DELETE") {
-        return Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve(null) });
+        return Promise.resolve({
+          ok: true,
+          status: 204,
+          json: () => Promise.resolve(null),
+        });
       }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "queued" }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ status: "queued" }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Backup & Restore" }));
+    openUtility("backups");
 
-    expect(await screen.findByText("✓ Checksums verified when created")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", backup.download_url);
+    expect(
+      await screen.findByText("✓ Checksums verified when created"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
+      "href",
+      backup.download_url,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Create backup" }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backups", { method: "POST" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/backups", { method: "POST" }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Verify now" }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, { method: "POST" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, {
+        method: "POST",
+      }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(/cannot be undone/i)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete backup" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete backup" }),
+    );
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, { method: "DELETE" });
+      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, {
+        method: "DELETE",
+      });
     });
   });
 
@@ -159,7 +245,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/library/validate") {
@@ -201,7 +287,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/library/validate") {
@@ -235,7 +321,9 @@ describe("Utilities", () => {
     });
 
     expect(screen.getAllByText(/^failed web import$/i)[0]).toBeInTheDocument();
-    expect(screen.getByText("https://example.com/story/failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("https://example.com/story/failed"),
+    ).toBeInTheDocument();
   });
 
   it("shows healthy message when audit finds no issues", async () => {
@@ -243,7 +331,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/library/validate") {
@@ -265,7 +353,11 @@ describe("Utilities", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run Library Audit" }));
 
     await waitFor(() => {
-      expect(screen.getByText("All books have valid file paths. Library is healthy.")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "All books have valid file paths. Library is healthy.",
+        ),
+      ).toBeInTheDocument();
     });
   });
 
@@ -291,7 +383,7 @@ describe("Utilities", () => {
             }),
         });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -384,7 +476,10 @@ describe("Utilities", () => {
             }),
         });
       }
-      if (url === "/api/metadata/matches/7/approve" && options?.method === "POST") {
+      if (
+        url === "/api/metadata/matches/7/approve" &&
+        options?.method === "POST"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -396,7 +491,10 @@ describe("Utilities", () => {
             }),
         });
       }
-      if (url === "/api/metadata/matches/8/approve" && options?.method === "POST") {
+      if (
+        url === "/api/metadata/matches/8/approve" &&
+        options?.method === "POST"
+      ) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -409,27 +507,42 @@ describe("Utilities", () => {
         });
       }
 
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ reprocessed: 0 }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Metadata" }));
+    openUtility("metadata");
 
     await waitFor(() => {
-      expect(screen.getByText(/2\/10 processed, 1 matched, 1 proposed, 0 applied/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/2\/10 processed, 1 matched, 1 proposed, 0 applied/),
+      ).toBeInTheDocument();
     });
 
     expect(screen.getByText("Proposed genres: Fantasy")).toBeInTheDocument();
-    expect(screen.getByText("Possible missing in series: Dragon Two")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Suggested match"), { target: { value: "8" } });
+    expect(
+      screen.getByText("Possible missing in series: Dragon Two"),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Suggested match"), {
+      target: { value: "8" },
+    });
     expect(screen.getByRole("alert")).toHaveTextContent("Verify this match");
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Series position conflict: local book is #7, candidate is #8.",
     );
-    expect(screen.getByText(/Local series: Dragon Saga #7 · Candidate series: Dragon Saga #8/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Local series: Dragon Saga #7 · Candidate series: Dragon Saga #8/,
+      ),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Queue Library Metadata Sync" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Queue Library Metadata Sync" }),
+    );
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/jobs", {
@@ -442,9 +555,12 @@ describe("Utilities", () => {
     fireEvent.click(screen.getByRole("button", { name: "Approve Match" }));
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/matches/8/approve", {
-        method: "POST",
-      });
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/metadata/matches/8/approve",
+        {
+          method: "POST",
+        },
+      );
     });
   });
 
@@ -453,22 +569,28 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url.includes("detect-series")) {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({ updated: 2, series_detected: ["Dragon Saga", "Iron Path"] }),
+            Promise.resolve({
+              updated: 2,
+              series_detected: ["Dragon Saga", "Iron Path"],
+            }),
         });
       }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ reprocessed: 0 }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
+    openUtility("series");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Detect Series in Library" }),
@@ -486,7 +608,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url.includes("detect-series")) {
@@ -495,12 +617,15 @@ describe("Utilities", () => {
           json: () => Promise.resolve({ updated: 0, series_detected: [] }),
         });
       }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ reprocessed: 0 }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Series Detection" }));
+    openUtility("series");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Detect Series in Library" }),
@@ -516,7 +641,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url.includes("storage/cleanup")) {
@@ -530,12 +655,15 @@ describe("Utilities", () => {
             }),
         });
       }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ reprocessed: 0 }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    openUtility("storage");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Scan for Orphaned Files" }),
@@ -551,7 +679,7 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url.includes("storage/cleanup")) {
@@ -574,12 +702,15 @@ describe("Utilities", () => {
             }),
         });
       }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ reprocessed: 0 }) });
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ reprocessed: 0 }),
+      });
     });
 
     renderWithClient(<Utilities onBack={() => {}} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Storage" }));
+    openUtility("storage");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Scan for Orphaned Files" }),
@@ -590,8 +721,12 @@ describe("Utilities", () => {
     });
 
     expect(screen.getAllByText(/^failed web import$/i)[0]).toBeInTheDocument();
-    expect(screen.getByText("https://example.com/story/failed-cleanup")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete 1 item" })).toBeInTheDocument();
+    expect(
+      screen.getByText("https://example.com/story/failed-cleanup"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete 1 item" }),
+    ).toBeInTheDocument();
   });
 
   it("restores books and confirms permanent recycle-bin deletion", async () => {
@@ -599,22 +734,25 @@ describe("Utilities", () => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
-      if (url === "/api/metadata/inbox") {
+      if (url.startsWith("/api/metadata/inbox?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       if (url === "/api/recycle-bin") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            retention_days: 30,
-            books: [{
-              id: 41,
-              title: "Recoverable Story",
-              author: "Author",
-              purge_after: "2026-09-08T00:00:00Z",
-              recovery_files_available: true,
-            }],
-          }),
+          json: () =>
+            Promise.resolve({
+              retention_days: 30,
+              books: [
+                {
+                  id: 41,
+                  title: "Recoverable Story",
+                  author: "Author",
+                  purge_after: "2026-09-08T00:00:00Z",
+                  recovery_files_available: true,
+                },
+              ],
+            }),
         });
       }
       if (url === "/api/recycle-bin/41" && options?.method === "DELETE") {
@@ -625,16 +763,20 @@ describe("Utilities", () => {
     globalThis.fetch = fetchMock;
 
     renderWithClient(<Utilities onBack={() => {}} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Recycle Bin" }));
+    openUtility("recycle-bin");
 
     expect(await screen.findByText("Recoverable Story")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Permanently delete" }));
     const dialog = screen.getByRole("dialog", { name: /Permanently delete/ });
     expect(dialog).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Permanently delete" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Permanently delete" }),
+    );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", { method: "DELETE" });
+      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", {
+        method: "DELETE",
+      });
     });
   });
 });

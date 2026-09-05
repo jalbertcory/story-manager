@@ -25,8 +25,11 @@ export function getLatestMetadataJob() {
   return getOptionalJson("/api/metadata/jobs/latest");
 }
 
-export function getMetadataInbox() {
-  return getJson("/api/metadata/inbox", "Failed to load metadata inbox");
+export function getMetadataInbox({ offset = 0, limit = 100 } = {}) {
+  return getJson(
+    `/api/metadata/inbox?offset=${offset}&limit=${limit}`,
+    "Failed to load metadata inbox",
+  );
 }
 
 export function approveMetadataMatch(matchId) {

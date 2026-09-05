@@ -223,6 +223,9 @@ function BookSettings({
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({ queryKey: ["series"] });
     },
   });
@@ -232,6 +235,9 @@ function BookSettings({
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       setBookTab("audiobook");
     },
   });
@@ -241,6 +247,9 @@ function BookSettings({
     onSuccess: () => {
       setJobNotice("EPUB cleaning job queued.");
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({
         queryKey: ["cleaned-chapters", book.id],
       });
@@ -257,6 +266,9 @@ function BookSettings({
       setJobNotice("Source refresh job queued.");
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({
         queryKey: ["book-update-history", book.id],
       });
@@ -267,6 +279,9 @@ function BookSettings({
     mutationFn: () => detachBookSource(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       onBack();
     },
   });
@@ -275,6 +290,9 @@ function BookSettings({
     mutationFn: () => deleteBook(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       onBack();
     },
   });
@@ -286,6 +304,9 @@ function BookSettings({
       setJobNotice("Original EPUB restored.");
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
       queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
       queryClient.invalidateQueries({ queryKey: ["cleaned-chapters", book.id] });
@@ -298,6 +319,9 @@ function BookSettings({
       setConfirmAction(null);
       queryClient.setQueryData(["book", book.id], updatedBook);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
     },
   });
@@ -324,6 +348,9 @@ function BookSettings({
     onSuccess: () => {
       bumpCoverVersion();
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({ queryKey: ["book", book.id] });
     },
   });
@@ -341,6 +368,9 @@ function BookSettings({
     onSuccess: () => {
       bumpCoverVersion();
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.invalidateQueries({ queryKey: ["library-book-info", book.id] });
       queryClient.invalidateQueries({ queryKey: ["book", book.id] });
       setCoverUrl("");
     },
@@ -430,6 +460,7 @@ function BookSettings({
         </div>
       </div>
 
+      {onNavigationChange && <a className="settings-back" href={`/books/${book.id}/overview`}>← Book overview</a>}
       <nav className="book-settings-tabs">
         <button
           className={`book-settings-tab${bookTab === "details" ? " book-settings-tab--active" : ""}`}
@@ -441,7 +472,7 @@ function BookSettings({
           className={`book-settings-tab${bookTab === "audiobook" ? " book-settings-tab--active" : ""}`}
           onClick={() => setBookTab("audiobook")}
         >
-          {book.audiobook_enabled ? "Audiobook Pipeline" : "Audiobooks"}
+          Audiobooks
         </button>
       </nav>
 
@@ -669,8 +700,7 @@ function BookSettings({
         <section className="settings-section">
           <h3>Audiobook</h3>
           <p className="hint">
-            Import an existing human-narrated audiobook, or optionally generate
-            one with synchronized sentence-level AI narration.
+            Import an audiobook or generate AI narration for this book.
           </p>
           <div className="settings-actions">
             <button type="button" onClick={() => setBookTab("audiobook")}>
@@ -683,13 +713,13 @@ function BookSettings({
             >
               {enableAudiobookMutation.isPending
                 ? "Enabling…"
-                : "Enable Audiobook Pipeline"}
+                : "Enable AI narration"}
             </button>
           </div>
           {enableAudiobookMutation.isError && (
             <p className="error">
               {enableAudiobookMutation.error?.message ||
-                "Failed to enable the audiobook pipeline"}
+                "Could not enable AI narration"}
             </p>
           )}
         </section>

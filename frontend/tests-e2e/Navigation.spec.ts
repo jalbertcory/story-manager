@@ -6,18 +6,17 @@ test("groups pages under canonical destinations and preserves history", async ({
   await page.goto("/activity");
 
   const primary = page.getByRole("navigation", { name: "Primary navigation" });
-  await expect(primary.getByRole("link")).toHaveCount(3);
+  await expect(primary.getByRole("link")).toHaveCount(5);
   await expect(primary.getByRole("link", { name: "Library" })).toBeVisible();
-  await expect(primary.getByRole("link", { name: /Activity/ })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await expect(
+    primary.getByRole("link", { name: "Background activity" }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(primary.getByRole("link", { name: "Settings" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Processing jobs" }).click();
+  await page.getByLabel("Activity view").selectOption("processing");
   await expect(page).toHaveURL(/\/activity\/processing$/);
   await expect(
-    page.getByRole("heading", { name: "Processing control" }),
+    page.getByRole("heading", { name: "Processing jobs" }),
   ).toBeVisible();
 
   await page.goBack();
@@ -31,15 +30,23 @@ test("groups pages under canonical destinations and preserves history", async ({
     /\/settings\/library-tools\?section=reader-access$/,
   );
   await expect(
-    page.getByRole("tab", { name: "Reader Access" }),
-  ).toHaveAttribute("aria-selected", "true");
+    page.getByRole("heading", { name: "Reader API Keys", level: 2 }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Library tool")).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "Storage" }).click();
+  await page.getByRole("link", { name: "← Settings", exact: true }).click();
+  await page.getByRole("link", { name: /Storage cleanup/ }).click();
   await expect(page).toHaveURL(/\?section=storage$/);
-  await page.goBack();
   await expect(
-    page.getByRole("tab", { name: "Reader Access" }),
-  ).toHaveAttribute("aria-selected", "true");
+    page.getByRole("heading", { name: "Storage Cleanup", level: 2 }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\?section=reader-access$/);
+  await expect(
+    page.getByRole("heading", { name: "Reader API Keys", level: 2 }),
+  ).toBeVisible();
 });
 
 test("keeps primary navigation visible and keyboard accessible on mobile", async ({
@@ -50,19 +57,17 @@ test("keeps primary navigation visible and keyboard accessible on mobile", async
 
   const primary = page.getByRole("navigation", { name: "Primary navigation" });
   const links = primary.getByRole("link");
-  await expect(links).toHaveCount(3);
+  await expect(links).toHaveCount(5);
   for (const link of await links.all()) {
     await expect(link).toBeVisible();
   }
 
-  const activity = primary.getByRole("link", { name: /Activity/ });
-  await primary.getByRole("link", { name: "Library" }).focus();
+  const activity = primary.getByRole("link", { name: "Background activity" });
+  await primary.getByRole("link", { name: "Review suggestions" }).focus();
   await page.keyboard.press("Tab");
   await expect(activity).toBeFocused();
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(/\/activity$/);
-  await expect(
-    page.getByRole("navigation", { name: "Activity sections" }),
-  ).toBeVisible();
+  await expect(page.getByLabel("Activity view")).toBeVisible();
 });

@@ -10,8 +10,14 @@ export function buildBookCatalogPath({
   sortOrder = "asc",
   limit = 30,
   cursor = "",
+  series,
+  universe,
+  source,
 }) {
   const params = [];
+  if (series != null) params.push(`series=${encodeURIComponent(series)}`);
+  if (universe != null) params.push(`universe=${universe}`);
+  if (source) params.push(`source=${encodeURIComponent(source)}`);
   if (q) params.push(`q=${encodeURIComponent(q)}`);
   params.push(`sort_by=${encodeURIComponent(sortBy)}`);
   params.push(`sort_order=${encodeURIComponent(sortOrder)}`);
@@ -104,13 +110,19 @@ export function permanentlyDeleteRecycledBook(bookId) {
 }
 
 export function getBookRevisions(bookId) {
-  return getJson(`/api/books/${bookId}/revisions`, "Failed to load change history");
+  return getJson(
+    `/api/books/${bookId}/revisions`,
+    "Failed to load change history",
+  );
 }
 
 export function restoreBookRevision(bookId, revisionId) {
-  return sendWithoutBody(`/api/books/${bookId}/revisions/${revisionId}/restore`, {
-    fallbackMessage: "Failed to restore revision",
-  });
+  return sendWithoutBody(
+    `/api/books/${bookId}/revisions/${revisionId}/restore`,
+    {
+      fallbackMessage: "Failed to restore revision",
+    },
+  );
 }
 
 export function restoreOriginalEpub(bookId) {

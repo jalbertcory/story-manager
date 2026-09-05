@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
+import "./Workspace.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
+import { getProcessingJobs } from "./api/processing";
+import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin.jsx";
-import BookList, { LibraryViewTabs } from "./components/BookList";
 import BookSettings from "./components/BookSettings";
+import BookOverview from "./components/BookOverview";
+import LibraryWorkspace from "./components/LibraryWorkspace";
+import WebUpdates from "./components/WebUpdates";
+import SettingsHome from "./components/SettingsHome";
 import AddBook from "./components/AddBook.jsx";
 import AudiobookSettings from "./components/AudiobookSettings.jsx";
 import CleaningConfigs from "./components/CleaningConfigs.jsx";
@@ -13,270 +19,168 @@ import SchedulerStatus from "./components/SchedulerStatus.jsx";
 import Logs from "./components/Logs.jsx";
 import Utilities from "./components/Utilities.jsx";
 import ProcessingJobs from "./components/ProcessingJobs.jsx";
-import { getProcessingJobs } from "./api/processing";
-import { getAttentionDashboard } from "./api/dashboard";
 import AttentionDashboard from "./components/AttentionDashboard.jsx";
-import useDebouncedValue from "./hooks/useDebouncedValue";
-import useLibraryCatalog from "./hooks/useLibraryCatalog";
 import {
   buildBookPath,
-  buildTabPath,
   getPrimarySection,
-  getRoute,
   parseLocation,
   PRIMARY_NAV,
   SECTION_NAV,
 } from "./lib/navigation";
 
-function App() {
-  const [q, setQ] = useState("");
-  const [sortBy, setSortBy] = useState("title");
-  const [sortOrder, setSortOrder] = useState("asc");
-  const [editingBook, setEditingBook] = useState(null);
-  const [bookSection, setBookSection] = useState("details");
-  const [audiobookTab, setAudiobookTab] = useState("sources");
-  const [activeTab, setActiveTab] = useState("library");
-  const [libraryView, setLibraryView] = useState("series");
-  const [pendingImportEntries, setPendingImportEntries] = useState([]);
-  const [globalDragging, setGlobalDragging] = useState(false);
+function currentLocation() {
+  return {
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+  };
+}
+
+export default function App() {
+  const [location, setLocation] = useState(currentLocation);
   const [authStatus, setAuthStatus] = useState(null);
-  const debouncedQuery = useDebouncedValue(q.trim(), 300);
-
-  useEffect(() => {
-    let mounted = true;
-    getAuthStatus().then((status) => {
-      if (mounted) {
-        setAuthStatus(status);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
+  const [authError, setAuthError] = useState("");
+  const [pendingImportEntries, setPendingImportEntries] = useState([]);
+  const [audioTabs, setAudioTabs] = useState({});
+  const [globalDragging, setGlobalDragging] = useState(false);
+  const pendingScroll = useRef(null);
+  const restoreLibraryScroll = useCallback(() => {
+    if (pendingScroll.current != null) {
+      window.scrollTo(0, pendingScroll.current);
+      pendingScroll.current = null;
+    }
   }, []);
-
-  const applyLocation = useCallback(
-    async (pathname, hash, search, stateData = null) => {
-      const parsed = parseLocation(pathname, hash, search);
-      if (parsed.view === "book") {
-        if (parsed.legacyBookPath) {
-          window.history.replaceState(
-            window.history.state,
-            "",
-            buildBookPath(parsed.bookId, "details"),
-          );
-        }
-        setBookSection(parsed.bookSection);
-        setAudiobookTab(parsed.audiobookTab);
-        if (stateData?.id === parsed.bookId) {
-          setEditingBook(stateData);
-          return;
-        }
-
-        const book = await getBook(parsed.bookId);
-        if (book) {
-          setEditingBook(book);
-          return;
-        }
-
-        window.history.replaceState(
-          { view: "tab", tab: "library" },
-          "",
-          buildTabPath("library", "series"),
-        );
-        setEditingBook(null);
-        setActiveTab("library");
-        setLibraryView("series");
-        return;
-      }
-
-      if (parsed.redirectPath) {
-        window.history.replaceState(
-          window.history.state,
-          "",
-          `${parsed.redirectPath}${search}${hash || ""}`,
-        );
-      }
-      setEditingBook(null);
-      setActiveTab(parsed.tab);
-      setLibraryView(parsed.libraryView);
-    },
-    [],
+  const returnTo = useRef(window.history.state?.returnTo || "/");
+  const route = parseLocation(
+    location.pathname,
+    location.hash,
+    location.search,
   );
+  const isBook = route.view === "book";
+  const activeTab = route.tab || "library";
+  const authenticated = Boolean(authStatus?.authenticated);
 
-  const navigate = (view, data = null) => {
-    if (view === "book" && data?.id) {
-      window.history.pushState(
-        { view, data },
-        "",
-        buildBookPath(data.id, "details"),
-      );
-      setEditingBook(data);
-      setBookSection("details");
-      setAudiobookTab("sources");
-    } else {
-      const nextPath = buildTabPath(view, libraryView);
-      const route = getRoute(view);
-      window.history.pushState(
-        { view: "tab", tab: route.key },
-        "",
-        nextPath,
-      );
-      setEditingBook(null);
-      setActiveTab(route.key);
-    }
-  };
-
-  const handleLibraryViewChange = (view) => {
-    setLibraryView(view);
-    window.history.pushState(
-      { view: "tab", tab: "library" },
+  useEffect(() => {
+    getAuthStatus()
+      .then(setAuthStatus)
+      .catch((error) => setAuthError(error.message));
+  }, []);
+  const navigate = useCallback((href, state = {}) => {
+    window.history.replaceState(
+      { ...window.history.state, scrollY: window.scrollY },
       "",
-      buildTabPath("library", view),
     );
-  };
-
-  useEffect(() => {
-    if (!authStatus?.authenticated) {
-      return;
-    }
-    void applyLocation(
-      window.location.pathname,
-      window.location.hash,
-      window.location.search,
+    window.history.pushState(
+      { ...state, returnTo: state.returnTo || returnTo.current },
+      "",
+      href,
     );
-  }, [applyLocation, authStatus?.authenticated]);
-
+    pendingScroll.current = state.scrollY ?? null;
+    setLocation(currentLocation());
+    window.scrollTo(0, state.scrollY || 0);
+  }, []);
   useEffect(() => {
-    if (!authStatus?.authenticated) {
-      return undefined;
-    }
-    const onPop = (e) => {
-      void applyLocation(
-        window.location.pathname,
-        window.location.hash,
-        window.location.search,
-        e.state?.data ?? null,
-      );
+    const onPop = () => {
+      pendingScroll.current = window.history.state?.scrollY ?? null;
+      returnTo.current = window.history.state?.returnTo || "/";
+      setLocation(currentLocation());
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [applyLocation, authStatus?.authenticated]);
+  }, []);
+  useEffect(() => {
+    const parsed = parseLocation(
+      location.pathname,
+      location.hash,
+      location.search,
+    );
+    if (parsed.redirectPath)
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${parsed.redirectPath}${location.search}${location.hash}`,
+      );
+  }, [location]);
 
-  const {
-    data: catalogPages,
-    isLoading,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useLibraryCatalog({
-    q: debouncedQuery,
-    view: libraryView,
-    sortBy,
-    sortOrder,
-    enabled: Boolean(authStatus?.authenticated),
+  const bookQuery = useQuery({
+    queryKey: ["book", route.bookId],
+    queryFn: () => getBook(route.bookId),
+    enabled: authenticated && isBook,
+    refetchInterval: ({ state }) =>
+      ["queued", "processing"].includes(state.data?.refresh_status)
+        ? 2000
+        : false,
   });
-  const catalog = catalogPages?.pages.flatMap((page) => page.items) ?? [];
-  const catalogSummary = catalogPages?.pages[0];
-
-  const { data: activeProcessingJobs = [] } = useQuery({
+  const { data: jobs = [] } = useQuery({
     queryKey: ["active-processing-jobs"],
-    queryFn: () => getProcessingJobs({ statuses: "queued,running", limit: 100 }),
-    enabled: Boolean(authStatus?.authenticated),
-    refetchInterval: 3000,
+    queryFn: () =>
+      getProcessingJobs({ statuses: "queued,running", limit: 100 }),
+    enabled: authenticated,
+    refetchInterval: 5000,
   });
-
-  const attentionQuery = useQuery({
+  const attention = useQuery({
     queryKey: ["attention-dashboard"],
     queryFn: () => getAttentionDashboard(5),
-    enabled: Boolean(authStatus?.authenticated),
-    staleTime: 30_000,
-    refetchInterval: activeProcessingJobs.length > 0 ? 5000 : 60_000,
+    enabled: authenticated && activeTab === "attention",
+    staleTime: 30000,
+    refetchInterval: jobs.length ? 5000 : 60000,
   });
-
-  const handleClearSearch = () => {
-    setQ("");
-  };
-
-  const handleSortByChange = (newSortBy) => {
-    setSortBy(newSortBy);
-    setSortOrder(newSortBy === "audiobook_enabled" ? "desc" : "asc");
-  };
-
-  const handleToggleSortOrder = () => {
-    setSortOrder((current) => (current === "asc" ? "desc" : "asc"));
-  };
-
-  const handleEdit = async (book) => {
-    const fullBook = await getBook(book.id);
-    if (fullBook) {
-      navigate("book", fullBook);
-    }
-  };
-
-  const handleBookNavigation = (nextSection, nextAudiobookTab = audiobookTab) => {
-    if (!editingBook) return;
-    const nextPath = buildBookPath(
-      editingBook.id,
-      nextSection,
-      nextAudiobookTab,
-    );
-    const currentPath = `${window.location.pathname}${window.location.search}`;
-    if (currentPath !== nextPath) {
-      window.history.pushState(
-        { view: "book", data: editingBook },
-        "",
-        nextPath,
+  useEffect(() => {
+    if (isBook && route.bookSection === "audiobooks") {
+      setAudioTabs((tabs) =>
+        tabs[route.bookId] === route.audiobookTab
+          ? tabs
+          : { ...tabs, [route.bookId]: route.audiobookTab },
       );
     }
-    setBookSection(nextSection);
-    setAudiobookTab(nextAudiobookTab);
+  }, [isBook, route.bookId, route.bookSection, route.audiobookTab]);
+  const onEntriesConsumed = useCallback(() => setPendingImportEntries([]), []);
+  const openBook = (book, libraryReturn) => {
+    returnTo.current =
+      libraryReturn || `${location.pathname}${location.search}${location.hash}`;
+    navigate(buildBookPath(book.id, "overview"), {
+      returnTo: returnTo.current,
+      libraryScrollY: window.scrollY,
+    });
   };
-
-  const handleLogout = async () => {
-    const nextStatus = await logout();
-    setAuthStatus(nextStatus);
-  };
-
-  const handleImportEntriesConsumed = useCallback(() => {
-    setPendingImportEntries([]);
-  }, []);
+  const bookSection = (section, tab) =>
+    navigate(
+      buildBookPath(
+        route.bookId,
+        section,
+        tab || audioTabs[route.bookId] || "sources",
+      ),
+      { libraryScrollY: window.history.state?.libraryScrollY },
+    );
+  const backToLibrary = () =>
+    navigate(returnTo.current, {
+      scrollY: window.history.state?.libraryScrollY || 0,
+    });
 
   useEffect(() => {
     const onDragOver = (e) => {
-      e.preventDefault();
-      setGlobalDragging(true);
-    };
-    const onDragLeave = (e) => {
-      // Only clear when the drag exits the browser window entirely
-      if (
-        e.relatedTarget === null ||
-        !document.documentElement.contains(e.relatedTarget)
-      ) {
-        setGlobalDragging(false);
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        setGlobalDragging(true);
       }
     };
+    const onDragLeave = (e) => {
+      if (!e.relatedTarget) setGlobalDragging(false);
+    };
     const onDrop = (e) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
       setGlobalDragging(false);
       const entries = Array.from(e.dataTransfer.items)
         .map((item) => item.webkitGetAsEntry?.())
         .filter(Boolean);
-      const hasRelevant = entries.some(
-        (entry) =>
-          entry.isDirectory ||
-          entry.name.toLowerCase().endsWith(".epub") ||
-          entry.name.toLowerCase().endsWith(".zip"),
-      );
-      if (hasRelevant) {
-        window.history.pushState(
-          { view: "tab", tab: "import" },
-          "",
-          "/import?type=books",
-        );
-        setEditingBook(null);
-        setActiveTab("import");
+      if (
+        entries.some(
+          (entry) => entry.isDirectory || /\.(epub|zip)$/i.test(entry.name),
+        )
+      ) {
         setPendingImportEntries(entries);
+        navigate("/import?type=books");
       }
     };
     window.addEventListener("dragover", onDragOver);
@@ -287,244 +191,199 @@ function App() {
       window.removeEventListener("dragleave", onDragLeave);
       window.removeEventListener("drop", onDrop);
     };
-  }, []);
+  }, [navigate]);
 
-  if (authStatus === null) {
+  if (!authStatus)
     return (
       <div className="app-container">
-        <header className="app-header">
-          <h1>Story Manager</h1>
-        </header>
-        <p>Loading...</p>
+        <h1>Story Manager</h1>
+        <p role={authError ? "alert" : "status"}>{authError || "Loading…"}</p>
       </div>
     );
-  }
+  if (!authenticated) return <AdminLogin onAuthenticated={setAuthStatus} />;
 
-  if (!authStatus.authenticated) {
-    return <AdminLogin onAuthenticated={setAuthStatus} />;
-  }
-
-  const renderTabContent = () => {
+  const renderContent = () => {
+    if (isBook) {
+      if (bookQuery.isLoading) return <p role="status">Loading book…</p>;
+      if (bookQuery.error || !bookQuery.data)
+        return (
+          <p role="alert">
+            This book could not be loaded. <a href="/">Return to library</a>
+          </p>
+        );
+      const book = bookQuery.data;
+      if (route.bookSection === "overview")
+        return (
+          <BookOverview
+            key={book.id}
+            book={book}
+            onBack={backToLibrary}
+            backLabel={
+              returnTo.current.startsWith("/updates")
+                ? "Back to web updates"
+                : "Back to library"
+            }
+            onSection={bookSection}
+          />
+        );
+      return (
+        <BookSettings
+          key={book.id}
+          book={book}
+          onBack={backToLibrary}
+          bookSection={route.bookSection}
+          audiobookTab={route.audiobookTab}
+          onNavigationChange={bookSection}
+        />
+      );
+    }
     switch (activeTab) {
+      case "updates":
+        return <WebUpdates onEdit={openBook} />;
+      case "review":
+        return <Utilities key="review" section="metadata" reviewOnly />;
+      case "settings":
+        return <SettingsHome />;
       case "attention":
         return (
           <AttentionDashboard
-            data={attentionQuery.data}
-            isLoading={attentionQuery.isLoading}
-            error={attentionQuery.error}
-            onRefresh={attentionQuery.refetch}
-            isRefreshing={attentionQuery.isFetching}
+            data={attention.data}
+            isLoading={attention.isLoading}
+            error={attention.error}
+            onRefresh={attention.refetch}
+            isRefreshing={attention.isFetching}
           />
         );
-      case "configs":
-        return <CleaningConfigs />;
-      case "scheduler":
-        return <SchedulerStatus />;
       case "processing":
         return <ProcessingJobs />;
-      case "logs":
-        return <Logs />;
-      case "utilities":
-        return <Utilities />;
+      case "scheduler":
+        return <SchedulerStatus />;
+      case "configs":
+        return <CleaningConfigs />;
       case "audio-settings":
         return <AudiobookSettings />;
+      case "utilities":
+        return <Utilities key={location.search} />;
+      case "logs":
+        return <Logs />;
       case "import":
         return (
           <AddBook
             initialEntries={pendingImportEntries}
-            onEntriesConsumed={handleImportEntriesConsumed}
+            onEntriesConsumed={onEntriesConsumed}
           />
         );
       default:
         return (
-          <>
-            <div className="library-page-heading">
-              <h2>Library</h2>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => navigate("import")}
-              >
-                Add to library
-              </button>
-            </div>
-            <LibraryViewTabs
-              view={libraryView}
-              onChange={handleLibraryViewChange}
-              counts={{
-                series: catalogSummary?.facets?.series ?? 0,
-                standalone: catalogSummary?.facets?.standalone ?? 0,
-                web: catalogSummary?.facets?.web ?? 0,
-              }}
-            />
-            <div className="search-controls">
-              <div className="search-input-wrap">
-                <svg
-                  className="search-icon"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  width="16"
-                  height="16"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.45 4.38l3.09 3.08a.75.75 0 11-1.06 1.06l-3.09-3.08A7 7 0 012 9z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <input
-                  type="text"
-                  placeholder="Search by title, author, series, or tag"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                />
-                {q && (
-                  <button
-                    className="search-clear"
-                    onClick={handleClearSearch}
-                    aria-label="Clear search"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-              <div className="sort-controls">
-                <span className="sort-control-label">Sort by</span>
-                <select
-                  aria-label="Sort library by"
-                  value={sortBy}
-                  onChange={(e) => handleSortByChange(e.target.value)}
-                >
-                  <option value="title">Title</option>
-                  <option value="author">Author</option>
-                  <option value="word_count">Word Count</option>
-                  <option value="updated_at">Last Updated</option>
-                  <option value="audiobook_enabled">Audiobook Enabled</option>
-                </select>
-                <button
-                  type="button"
-                  className="sort-order-btn"
-                  onClick={handleToggleSortOrder}
-                  aria-label={
-                    sortOrder === "asc" ? "Sort descending" : "Sort ascending"
-                  }
-                >
-                  {sortOrder === "asc" ? "↑" : "↓"}
-                </button>
-              </div>
-            </div>
-            {isLoading && <p>Loading...</p>}
-            {error && <p className="error">{error.message}</p>}
-            <BookList
-              books={catalog}
-              totalCount={catalogSummary?.total_count ?? 0}
-              onEdit={handleEdit}
-              libraryView={libraryView}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              fetchNextPage={fetchNextPage}
-              hasNextPage={hasNextPage}
-              isFetchingNextPage={isFetchingNextPage}
-            />
-          </>
+          <LibraryWorkspace
+            key={`${location.search}${location.hash}`}
+            search={location.search}
+            hash={location.hash}
+            onReady={restoreLibraryScroll}
+            onNavigate={navigate}
+            onEdit={openBook}
+          />
         );
     }
   };
-
-  const activePrimary = editingBook
-    ? "library"
-    : getPrimarySection(activeTab);
-  const secondaryItems = editingBook ? [] : SECTION_NAV[activePrimary] || [];
-
-  const renderPrimaryBadge = (sectionKey) => {
-    if (sectionKey !== "activity") return null;
-    return (
-      <span className="nav-status-counts">
-        {attentionQuery.data?.total_count > 0 && (
-          <span
-            className="nav-job-count nav-job-count--attention"
-            aria-label={`${attentionQuery.data.total_count} ${attentionQuery.data.total_count === 1 ? "item needs" : "items need"} attention`}
-          >
-            {attentionQuery.data.total_count}
-          </span>
-        )}
-        {activeProcessingJobs.length > 0 && (
-          <span
-            className="nav-job-count nav-job-count--active"
-            aria-label={`${activeProcessingJobs.length} active processing ${activeProcessingJobs.length === 1 ? "job" : "jobs"}`}
-          >
-            {activeProcessingJobs.length}
-          </span>
-        )}
-      </span>
-    );
+  const activePrimary = isBook ? "library" : getPrimarySection(activeTab);
+  const secondary =
+    !isBook && activePrimary === "activity" ? SECTION_NAV.activity : [];
+  const followInternalLink = (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    const link = event.target.closest("a");
+    if (!link || link.target || link.hasAttribute("download")) return;
+    const url = new URL(link.href);
+    if (
+      url.origin !== window.location.origin ||
+      url.pathname.startsWith("/api/") ||
+      url.pathname.startsWith("/reader")
+    )
+      return;
+    event.preventDefault();
+    if (/^\/books\/\d+/.test(url.pathname) && !isBook)
+      returnTo.current = `${location.pathname}${location.search}${location.hash}`;
+    navigate(`${url.pathname}${url.search}${url.hash}`);
   };
-
   return (
     <div
-      className={`app-container${editingBook ? " app-container--book" : ""}${globalDragging ? " drag-over" : ""}`}
+      className={`app-container workspace-shell${globalDragging ? " drag-over" : ""}`}
+      onClick={followInternalLink}
     >
       <header className="app-header">
-        <h1>Story Manager</h1>
+        <a href="/" className="wordmark">
+          <h1>Story Manager</h1>
+        </a>
         {authStatus.mode === "password" && (
-          <button className="btn-text" onClick={handleLogout}>
-            Sign Out
+          <button
+            className="btn-text"
+            onClick={async () => setAuthStatus(await logout())}
+          >
+            Sign out
           </button>
         )}
       </header>
-      <nav className="main-tabs" aria-label="Primary navigation">
-        {PRIMARY_NAV.map((section) => (
-          <a
-            key={section.key}
-            className={`main-tab${activePrimary === section.key ? " main-tab--active" : ""}`}
-            href={section.path}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(section.defaultTab);
-            }}
-            aria-current={activePrimary === section.key ? "page" : undefined}
-          >
-            {section.label}
-            {renderPrimaryBadge(section.key)}
-          </a>
-        ))}
-      </nav>
-      {secondaryItems.length > 0 && (
-        <nav
-          className="section-navigation"
-          aria-label={`${PRIMARY_NAV.find((item) => item.key === activePrimary)?.label} sections`}
-        >
-          {secondaryItems.map((item) => (
+      <div className="workspace-layout">
+        <nav className="workspace-nav" aria-label="Primary navigation">
+          {PRIMARY_NAV.map((item, index) => (
             <a
               key={item.key}
-              className={`section-navigation-link${activeTab === item.key ? " section-navigation-link--active" : ""}`}
+              className={`workspace-nav-link${index === 3 ? " workspace-nav-secondary" : ""}`}
               href={item.path}
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(item.key);
-              }}
-              aria-current={activeTab === item.key ? "page" : undefined}
+              aria-current={activePrimary === item.key ? "page" : undefined}
             >
               {item.label}
+              {item.key === "activity" && jobs.length > 0 && (
+                <span
+                  className="workspace-count"
+                  aria-label={`${jobs.length} active jobs`}
+                >
+                  {jobs.length}
+                </span>
+              )}
             </a>
           ))}
         </nav>
-      )}
-      <main>
-        {editingBook ? (
-          <BookSettings
-            book={editingBook}
-            onBack={() => navigate("library")}
-            bookSection={bookSection}
-            audiobookTab={audiobookTab}
-            onNavigationChange={handleBookNavigation}
-          />
-        ) : (
-          renderTabContent()
-        )}
-      </main>
+        <main className="workspace-main">
+          {activePrimary === "settings" && activeTab !== "settings" && (
+            <a className="settings-back" href="/settings">
+              ← Settings
+            </a>
+          )}
+          {secondary.length > 0 && (
+            <div className="workspace-subnav">
+              <label>
+                Activity view
+                <select
+                  aria-label="Activity view"
+                  value={activeTab}
+                  onChange={(e) =>
+                    navigate(
+                      secondary.find((item) => item.key === e.target.value)
+                        .path,
+                    )
+                  }
+                >
+                  {secondary.map((item) => (
+                    <option key={item.key} value={item.key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+          {renderContent()}
+        </main>
+      </div>
     </div>
   );
 }
-
-export default App;

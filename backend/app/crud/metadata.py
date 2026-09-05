@@ -147,16 +147,32 @@ async def get_metadata_proposal(db: AsyncSession, proposal_id: int) -> Optional[
     return result.scalars().first()
 
 
+def actionable_metadata_proposal_conditions():
+    """Only proposals with a pending decision belong in the review queue.
+
+    Approved matches can retain open informational proposals about missing
+    series books. Keep that history without treating it as unfinished work.
+    """
+    pending_ids = select(models.BookMetadataMatch.id).where(models.BookMetadataMatch.status == "pending")
+    return (
+        models.MetadataProposal.status == "open",
+        models.Book.deleted_at.is_(None),
+        models.MetadataProposal.match_id.in_(pending_ids),
+    )
+
+
 async def get_metadata_inbox_entries(
     db: AsyncSession,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[tuple[models.MetadataProposal, models.Book, Optional[models.BookMetadataMatch], list[models.BookMetadataMatch]]]:
     result = await db.execute(
         select(models.MetadataProposal, models.Book, models.BookMetadataMatch)
         .join(models.Book, models.MetadataProposal.book_id == models.Book.id)
         .outerjoin(models.BookMetadataMatch, models.MetadataProposal.match_id == models.BookMetadataMatch.id)
-        .where(models.MetadataProposal.status == "open", models.Book.deleted_at.is_(None))
+        .where(*actionable_metadata_proposal_conditions())
         .order_by(models.MetadataProposal.created_at.desc(), models.MetadataProposal.id.desc())
+        .offset(offset)
         .limit(limit)
     )
     rows = result.all()

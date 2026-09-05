@@ -157,12 +157,28 @@ def build_catalog_filter_conditions(
     audiobook: str | None = None,
     genre: str | None = None,
     snapshot_max_id: int | None = None,
+    series: str | None = None,
+    universe: int | None = None,
+    source: str | None = None,
 ):
     conditions = [models.Book.deleted_at.is_(None)]
     if snapshot_max_id is not None:
         conditions.append(models.Book.id <= snapshot_max_id)
     if q and q.strip():
-        conditions.append(models.Book.catalog_search_text.ilike(f"%{q.strip().casefold()}%"))
+        from ..services.library import universe_expression
+
+        pattern = f"%{q.strip().casefold()}%"
+        matching_universe = select(models.Universe.id).where(models.Universe.name_key.ilike(pattern))
+        conditions.append(or_(models.Book.catalog_search_text.ilike(pattern), universe_expression().in_(matching_universe)))
+
+    if series is not None:
+        conditions.append(func.lower(models.Book.series) == series.lower() if series else models.Book.series.is_(None))
+    if universe is not None:
+        from ..services.library import universe_expression
+
+        conditions.append(universe_expression() == universe if universe else universe_expression().is_(None))
+    if source:
+        conditions.append(models.Book.source_type == models.SourceType(source))
 
     has_audiobook = catalog_has_audiobook_expression()
     if audiobook == "available":

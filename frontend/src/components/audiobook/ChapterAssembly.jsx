@@ -27,7 +27,7 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
   if (!chapters || chapters.length === 0) {
     return (
       <p className="empty-state">
-        No chapters yet. Start the pipeline to begin processing.
+        No chapters yet. Start AI narration to prepare them.
       </p>
     );
   }
@@ -103,7 +103,7 @@ function ChapterAssembly({ chapters, bookId, pipelineActive = false }) {
                       !analyzed
                         ? `Analyze all ${chapter.sentence_count} sentences first`
                         : pipelineActive
-                          ? "Pause the full-book pipeline first"
+                          ? "Pause book-wide audio generation first"
                           : "Generate audio using the current voice profiles"
                     }
                   >

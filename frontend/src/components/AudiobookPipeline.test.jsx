@@ -184,16 +184,16 @@ describe("AudiobookPipeline", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Regenerate AI TTS Only",
+        name: "Regenerate audio only",
       }),
     );
     expect(
       screen.getByText(
-        /roster, speaker assignments, and imported human audiobooks will be preserved/,
+        /Character voices, speaker assignments, and imported audiobooks will be kept/,
       ),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Yes, regenerate AI TTS" }),
+      screen.getByRole("button", { name: "Yes, regenerate audio" }),
     );
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -202,6 +202,9 @@ describe("AudiobookPipeline", () => {
       );
     });
 
+    fireEvent.change(screen.getByLabelText("AI production view"), {
+      target: { value: "progress" },
+    });
     fireEvent.click(
       await screen.findByRole("button", { name: "Rebuild AI Audiobook" }),
     );
@@ -361,7 +364,7 @@ describe("AudiobookPipeline", () => {
 
     expect(
       await screen.findByRole("link", {
-        name: "Open guided audiobook import",
+        name: "Import audio files",
       }),
     ).toHaveAttribute("href", "/import?type=audiobook&book_id=11");
   });
@@ -439,7 +442,9 @@ describe("AudiobookPipeline", () => {
     expect(await screen.findByText("ollama / qwen3.5:27b")).toBeInTheDocument();
     expect(screen.getByText("Speaker analysis")).toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Analysis" }));
+    fireEvent.change(await screen.findByLabelText("AI production view"), {
+      target: { value: "analysis" },
+    });
     expect(screen.getAllByText("A test story summary.")).toHaveLength(2);
     expect(screen.getByText("The story begins.")).toBeInTheDocument();
     expect(
@@ -537,9 +542,9 @@ describe("AudiobookPipeline", () => {
       <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Chapter Assembly" }),
-    );
+    fireEvent.change(await screen.findByLabelText("AI production view"), {
+      target: { value: "chapter-assembly" },
+    });
     expect(screen.getByText("Opening Night")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rebuild Preview" }));
     await waitFor(() => {
@@ -642,9 +647,9 @@ describe("AudiobookPipeline", () => {
 
     renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Script Editor" }),
-    );
+    fireEvent.change(await screen.findByLabelText("AI production view"), {
+      target: { value: "script-editor" },
+    });
     expect(await screen.findByText("Ready for audio")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Generate audio" }));
 
@@ -699,7 +704,9 @@ describe("AudiobookPipeline", () => {
       <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Characters" }));
+    fireEvent.change(await screen.findByLabelText("AI production view"), {
+      target: { value: "characters" },
+    });
     fireEvent.change(screen.getByLabelText("Series TTS engine"), {
       target: { value: "omnivoice" },
     });

@@ -204,19 +204,17 @@ function CleaningConfigs({ onBack }) {
           <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
         )}
         <h2>Cleaning Rules</h2>
+        <button onClick={() => setCreating(true)} disabled={creating}>
+          + New Config
+        </button>
       </div>
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">{error.message}</p>}
 
       <section className="settings-section">
-        <div className="cleaning-config-actions-header">
-          <h3>Clean All Books</h3>
-          <button onClick={() => setCreating(true)} disabled={creating}>
-            + New Config
-          </button>
-        </div>
+        <h3>Clean All Books</h3>
         <p className="hint">
-          Re-applies cleaning configs and selectors to every book in the library.
+          Applies the current cleaning rules to every book in your library.
         </p>
         <div className="settings-actions">
           <button

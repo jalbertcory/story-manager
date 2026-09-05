@@ -771,3 +771,50 @@ async def test_resync_skips_rejected_candidate_and_supersedes_stale_pending_matc
     assert replacement.proposed_genre_tags == ["Mystery"]
     assert refreshed_stale.status == "superseded"
     assert proposal.match_id == replacement.id
+
+
+@pytest.mark.asyncio
+async def test_review_queue_and_counts_exclude_dismiss_only_entries(db, app_client):
+    from datetime import datetime, timezone
+
+    pending_ids = []
+    pending_matches = []
+    for index, status in enumerate(
+        ["pending", "auto_approved", "approved", "no_match", "rejected", "pending", None, "pending"]
+    ):
+        book = models.Book(title=f"Review {index}", author="Writer", source_type=models.SourceType.epub)
+        if index == 7:
+            book.deleted_at = datetime.now(timezone.utc)
+        db.add(book)
+        await db.flush()
+        match = models.BookMetadataMatch(book_id=book.id, status=status) if status else None
+        if match:
+            db.add(match)
+            await db.flush()
+        db.add(
+            models.MetadataProposal(
+                book_id=book.id,
+                match_id=match.id if match else None,
+                status="open",
+                possible_missing_series_books=["Informational only"],
+            )
+        )
+        if status == "pending" and index != 7:
+            pending_ids.append(book.id)
+            pending_matches.append(match)
+    await db.commit()
+
+    # Filtering must happen before limit/offset, and the dashboard must agree.
+    pages = [app_client.get(f"/api/metadata/inbox?limit=1&offset={offset}") for offset in range(3)]
+    assert all(response.status_code == 200 for response in pages)
+    assert [row["book_id"] for page in pages for row in page.json()] == pending_ids[::-1]
+    assert pages[-1].json() == []
+    dashboard = app_client.get("/api/dashboard/attention?limit=1").json()["metadata_proposals"]
+    assert dashboard["count"] == 2
+    assert dashboard["items"][0]["book_id"] == pending_ids[-1]
+
+    # Approval can leave the informational proposal open, but it is no longer work.
+    pending_matches[-1].status = "approved"
+    await db.commit()
+    assert len(app_client.get("/api/metadata/inbox").json()) == 1
+    assert app_client.get("/api/dashboard/attention").json()["metadata_proposals"]["count"] == 1

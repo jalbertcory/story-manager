@@ -113,6 +113,9 @@ async def test_attention_dashboard_aggregates_actionable_categories(
                 error="Source unavailable",
             )
         )
+        pending_match = models.BookMetadataMatch(book_id=refresh_book.id, status="pending")
+        db.add(pending_match)
+        await db.flush()
         db.add(
             models.MetadataProposal(
                 book_id=refresh_book.id,
@@ -120,6 +123,7 @@ async def test_attention_dashboard_aggregates_actionable_categories(
                 proposed_genre_tags=["Fantasy"],
                 possible_missing_series_books=[],
                 note="Review the proposed genre.",
+                match_id=pending_match.id,
             )
         )
         await db.commit()

@@ -109,6 +109,9 @@ async def build_book_catalog_page(
     db: AsyncSession,
     *,
     q: str | None = None,
+    series: str | None = None,
+    universe: int | None = None,
+    source: str | None = None,
     view: str = "series",
     review: str | None = None,
     audiobook: str | None = None,
@@ -121,6 +124,9 @@ async def build_book_catalog_page(
     cursor_params = {
         "q": (q or "").strip().casefold(),
         "view": view,
+        "series": series,
+        "universe": universe,
+        "source": source,
         "review": review or "",
         "audiobook": audiobook or "",
         "genre": (genre or "").strip().casefold(),
@@ -137,6 +143,9 @@ async def build_book_catalog_page(
 
     facet_conditions = crud.build_catalog_filter_conditions(
         q=q,
+        series=series,
+        universe=universe,
+        source=source,
         review=review,
         audiobook=audiobook,
         genre=genre,
@@ -144,12 +153,18 @@ async def build_book_catalog_page(
     )
     genre_facet_conditions = crud.build_catalog_filter_conditions(
         q=q,
+        series=series,
+        universe=universe,
+        source=source,
         review=review,
         audiobook=audiobook,
         snapshot_max_id=snapshot_max_id,
     )
     conditions = crud.build_catalog_filter_conditions(
         q=q,
+        series=series,
+        universe=universe,
+        source=source,
         view=view,
         review=review,
         audiobook=audiobook,
@@ -201,6 +216,11 @@ async def build_book_catalog_page(
         )
         for book in books
     ]
+
+    from .library import library_book_info
+
+    info = await library_book_info(db, [book.id for book in books])
+    items = [item.model_copy(update={key: value for key, value in info[item.id].items() if key != "id"}) for item in items]
 
     next_cursor = None
     if has_more and books:

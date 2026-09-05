@@ -116,10 +116,9 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
     <div className="attention-page">
       <header className="attention-page-header">
         <div>
-          <span className="attention-eyebrow">LIBRARY OVERVIEW</span>
           <h2>Needs attention</h2>
           <p>
-            Problems and pending decisions that may keep books, updates, or audiobooks from being ready.
+            Review failed tasks, missing files, and book suggestions.
           </p>
         </div>
         <button className="btn-text" onClick={onRefresh} disabled={isRefreshing}>
@@ -130,14 +129,14 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
       {healthy && (
         <section className="attention-healthy" role="status">
           <strong>Your library looks healthy.</strong>
-          <span>No failed work, stale audio, pending metadata, or missing files were found.</span>
+          <span>Nothing needs your attention.</span>
         </section>
       )}
 
       <div className="attention-grid">
         <AttentionCard
           title="Failed processing"
-          description="Durable jobs that stopped before completing. Retry them after reviewing the error."
+          description="Review the error, then retry the task."
           category={data.failed_jobs}
           actionHref="/activity/processing?status=error"
           actionLabel="Review jobs"
@@ -147,17 +146,17 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
 
         <AttentionCard
           title="Failed refreshes"
-          description="Web books whose latest source refresh did not complete."
+          description="Web novels that could not be checked for updates."
           category={data.failed_refreshes}
-          actionHref="/#web"
-          actionLabel="View web books"
+          actionHref="/updates"
+          actionLabel="Review web updates"
         >
           {data.failed_refreshes.items.map((item) => <BookItem key={item.book_id} item={item} />)}
         </AttentionCard>
 
         <AttentionCard
-          title="Stale audiobooks"
-          description="Audio that no longer matches the current cleaned book text."
+          title="Audiobooks need updating"
+          description="The book text has changed since this audio was created."
           category={data.stale_audiobooks}
           actionHref="/activity/processing"
           actionLabel="View processing"
@@ -169,9 +168,9 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
 
         <AttentionCard
           title="Metadata decisions"
-          description="Matches or proposed metadata waiting for approval or dismissal."
+          description="Book matches waiting for your approval."
           category={data.metadata_proposals}
-          actionHref="/settings/library-tools?section=metadata"
+          actionHref="/review"
           actionLabel="Review metadata"
         >
           {data.metadata_proposals.items.map((item) => (
@@ -181,7 +180,7 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
 
         <AttentionCard
           title="Broken library files"
-          description="Book records whose original or current EPUB file cannot be found."
+          description="Original or cleaned EPUB files that could not be found."
           category={data.broken_files}
           actionHref="/settings/library-tools?section=audit"
           actionLabel="Run audit"
@@ -193,9 +192,9 @@ function AttentionDashboard({ data, isLoading, error, onRefresh, isRefreshing })
 
         <AttentionCard
           title="Missing covers"
-          description="Completed books with no usable local cover image."
+          description="Books with missing or unreadable cover images."
           category={data.missing_covers}
-          actionHref="/settings/library-tools?section=audit"
+          actionHref="/"
           actionLabel="Review library"
         >
           {data.missing_covers.items.map((item) => (

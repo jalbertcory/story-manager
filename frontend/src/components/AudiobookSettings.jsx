@@ -657,10 +657,8 @@ function AudiobookSettings() {
     <div className="settings-page">
       <h2>Audio &amp; AI Configuration</h2>
       <p className="settings-hint endpoint-routing-hint">
-        Requests use the highest-priority available endpoint. Connection or
-        model failures put that endpoint on a 60-second cooldown, then the next
-        request tries it again. No background polling runs when there is no
-        work.
+        Services are tried in priority order. If one fails, it is skipped
+        for 60 seconds before being tried again.
       </p>
       <form onSubmit={handleSave}>
         <section className="settings-section">

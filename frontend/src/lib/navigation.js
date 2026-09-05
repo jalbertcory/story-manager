@@ -1,8 +1,20 @@
 export const PRIMARY_NAV = [
   { key: "library", label: "Library", path: "/", defaultTab: "library" },
   {
+    key: "updates",
+    label: "Web updates",
+    path: "/updates",
+    defaultTab: "updates",
+  },
+  {
+    key: "review",
+    label: "Review suggestions",
+    path: "/review",
+    defaultTab: "review",
+  },
+  {
     key: "activity",
-    label: "Activity",
+    label: "Background activity",
     path: "/activity",
     defaultTab: "attention",
   },
@@ -10,7 +22,7 @@ export const PRIMARY_NAV = [
     key: "settings",
     label: "Settings",
     path: "/settings",
-    defaultTab: "configs",
+    defaultTab: "settings",
   },
 ];
 
@@ -29,7 +41,7 @@ export const SECTION_NAV = {
     },
   ],
   settings: [
-    { key: "configs", label: "Cleaning rules", path: "/settings" },
+    { key: "configs", label: "Cleaning rules", path: "/settings/cleaning" },
     {
       key: "audio-settings",
       label: "Audio & AI",
@@ -47,6 +59,9 @@ export const SECTION_NAV = {
 const ROUTES = [
   { key: "library", path: "/", section: "library" },
   { key: "import", path: "/import", section: "library" },
+  { key: "updates", path: "/updates", section: "updates" },
+  { key: "review", path: "/review", section: "review" },
+  { key: "settings", path: "/settings", section: "settings" },
   ...SECTION_NAV.activity.map((route) => ({
     ...route,
     section: "activity",
@@ -69,7 +84,7 @@ const LEGACY_ROUTES = {
 
 export const LIBRARY_VIEWS = ["series", "standalone", "web"];
 
-export const BOOK_SECTIONS = ["details", "audiobooks"];
+export const BOOK_SECTIONS = ["overview", "details", "audiobooks"];
 
 export const AUDIOBOOK_TABS = [
   { key: "sources", label: "Sources" },
@@ -96,13 +111,11 @@ export function getPrimarySection(tabKey) {
 export function parseLocation(pathname, hash, search = "") {
   const normalizedPath = normalizePath(pathname);
   const match = normalizedPath.match(
-    /^\/books\/(\d+)(?:\/(details|audiobooks))?$/,
+    /^\/books\/(\d+)(?:\/(overview|details|audiobooks))?$/,
   );
   if (match) {
     const requestedTab = new URLSearchParams(search).get("tab");
-    const audiobookTab = AUDIOBOOK_TABS.some(
-      (tab) => tab.key === requestedTab,
-    )
+    const audiobookTab = AUDIOBOOK_TABS.some((tab) => tab.key === requestedTab)
       ? requestedTab
       : "sources";
     return {
@@ -141,12 +154,10 @@ export function buildBookPath(
       : "sources";
     return `/books/${bookId}/audiobooks?tab=${encodeURIComponent(tab)}`;
   }
-  return `/books/${bookId}/details`;
+  return `/books/${bookId}/${section}`;
 }
 
 export function buildTabPath(tabKey, libraryView = "series") {
   const route = getRoute(tabKey);
-  return route.key === "library"
-    ? `${route.path}#${libraryView}`
-    : route.path;
+  return route.key === "library" ? `${route.path}#${libraryView}` : route.path;
 }

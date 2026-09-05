@@ -89,7 +89,7 @@ function AudiobookSources({
     onSuccess: () => {
       setConfirmAiTtsRebuild(false);
       setJobNotice(
-        "AI TTS-only regeneration queued; speaker analysis preserved.",
+        "Audio regeneration queued. Character voices and speaker assignments will be kept.",
       );
       invalidate();
     },
@@ -99,35 +99,32 @@ function AudiobookSources({
     <div className="audiobook-sources">
       <section className="audiobook-source-upload">
         <div>
-          <span className="metric-label">Human narration</span>
           <h3>Import an audiobook</h3>
           <p>
-            Select a Libation book folder unchanged, upload its ZIP, or choose
-            M4B, MP3, M4A, and CUE files together. Story Manager prefers the
-            chapter-capable M4B when Libation also created a duplicate MP3.
+            Choose a Libation folder, ZIP, or audio files. Include any CUE file
+            to keep chapter markers.
           </p>
         </div>
         <a
           className="btn btn-primary"
           href={`/import?type=audiobook&book_id=${bookId}`}
         >
-          Open guided audiobook import
+          Import audio files
         </a>
       </section>
 
       <section className="audiobook-ai-source">
         <div>
-          <span className="metric-label">Synthetic narration</span>
           <h3>AI-generated audiobook</h3>
           <p>
             {aiEnabled
-              ? "Enabled. Its generated chapters appear as another edition in Listen & Read."
-              : "Optional. Enable the existing LLM + text-to-speech pipeline if you also want a generated edition."}
+              ? "Generated chapters appear in Listen & Read when ready."
+              : "Generate narration using your configured AI voices."}
           </p>
         </div>
         {!aiEnabled && (
           <button type="button" onClick={onEnableAi}>
-            Enable AI Audiobook Pipeline
+            Enable AI narration
           </button>
         )}
         {aiEnabled && !confirmAiTtsRebuild && (
@@ -137,19 +134,19 @@ function AudiobookSources({
             disabled={aiPipelineActive || aiTtsMutation.isPending}
             onClick={() => setConfirmAiTtsRebuild(true)}
           >
-            Regenerate AI TTS Only
+            Regenerate audio only
           </button>
         )}
         {aiEnabled && aiPipelineActive && (
           <p className="hint">
-            Pause the active AI pipeline before regenerating TTS.
+            Pause audio generation before starting again.
           </p>
         )}
         {aiEnabled && confirmAiTtsRebuild && (
           <div className="alignment-note">
             <p>
-              Replace AI TTS clips and assembly only? The roster, speaker
-              assignments, and imported human audiobooks will be preserved.
+              Replace the generated audio? Character voices, speaker assignments,
+              and imported audiobooks will be kept.
             </p>
             <div className="confirm-inline">
               <button
@@ -160,7 +157,7 @@ function AudiobookSources({
               >
                 {aiTtsMutation.isPending
                   ? "Queueing…"
-                  : "Yes, regenerate AI TTS"}
+                  : "Yes, regenerate audio"}
               </button>
               <button
                 type="button"

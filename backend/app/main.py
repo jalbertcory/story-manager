@@ -31,6 +31,7 @@ from .routers import (
     covers,
     dashboard,
     lifecycles,
+    library,
     metadata,
     processing,
     observability,
@@ -119,6 +120,7 @@ app.include_router(backups.router)
 app.include_router(processing.router)
 app.include_router(observability.router)
 app.include_router(books.router)
+app.include_router(library.router)
 app.include_router(upload.router)
 app.include_router(web_novels.router)
 app.include_router(cleaning.router)

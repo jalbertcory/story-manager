@@ -94,6 +94,10 @@ class BookRevision(BaseModel):
 class BookCatalogEntry(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    universe_id: Optional[int] = None
+    universe_name: Optional[str] = None
+    audio_playable: bool = False
+    has_epub: bool = False
     id: int
     title: str
     author: str

@@ -277,7 +277,7 @@ function CharacterRoster({
   if (!characters || characters.length === 0) {
     return (
       <p className="empty-state">
-        No characters yet. Start the pipeline to generate the roster.
+        No characters yet. Start AI narration to identify speakers.
       </p>
     );
   }

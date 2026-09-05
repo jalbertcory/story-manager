@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithClient } from "../../test-utils";
@@ -8,6 +8,68 @@ describe("AudiobookReader", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each(["imported", "generated"])(
+    "keeps the %s chapter picker and navigation in sync",
+    async (kind) => {
+      globalThis.fetch = vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(kind === "imported" ? [] : { items: [], total: 0 }),
+        }),
+      );
+      const chapters = [1, 2].map((id) => ({
+        id,
+        chapter_number: id,
+        title: `Chapter ${id}`,
+        audio_file_path: `${id}.mp3`,
+        needs_reassembly: false,
+      }));
+      const imports = [
+        {
+          id: 7,
+          name: "Narration",
+          status: "ready",
+          tracks: [1, 2].map((id) => ({
+            id,
+            title: `Chapter ${id}`,
+            cue_count: 200,
+            audio_url: `${id}.mp3`,
+            source_start_ms: 0,
+            source_end_ms: 1000,
+          })),
+        },
+      ];
+      renderWithClient(
+        <AudiobookReader
+          bookId={11}
+          aiEnabled={kind === "generated"}
+          chapters={kind === "generated" ? chapters : []}
+          imports={kind === "imported" ? imports : []}
+        />,
+      );
+      const picker = screen.getByLabelText("Chapter", { exact: true });
+      expect(picker).toHaveValue("1");
+      fireEvent.change(picker, { target: { value: "2" } });
+      expect(
+        screen.getByRole("heading", { name: "Chapter 2", exact: true }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Next", exact: true }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Chapter 2", exact: true }),
+      ).toHaveAttribute("aria-current", "true");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Previous", exact: true }),
+      );
+      expect(picker).toHaveValue("1");
+      expect(
+        screen.queryByText(/synchronized passages/),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("groups synchronized sentences into their original book paragraphs", async () => {
     globalThis.fetch = vi.fn(() =>

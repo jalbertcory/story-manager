@@ -104,10 +104,8 @@ jobs:
       run: npm ci
     - name: Lint with eslint
       run: npm run lint -- --max-warnings=0
-    - name: Audit production dependencies
-      run: |
-        npm audit --omit=dev --audit-level=moderate
-        npm audit --audit-level=high
+    - name: Audit frontend dependencies
+      run: make -C .. audit-ui
 
   ui-tests:
     runs-on: ubuntu-latest

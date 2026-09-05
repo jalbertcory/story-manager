@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveMetadataMatch,
-  dismissMetadataProposal,
   getLatestMetadataJob,
   getMetadataInbox,
   queueMetadataSync,
@@ -15,39 +14,49 @@ import {
   permanentlyDeleteRecycledBook,
   restoreRecycledBook,
 } from "../api/books";
-import { createBackup, deleteBackup, getBackups, verifyBackup } from "../api/backups";
+import {
+  createBackup,
+  deleteBackup,
+  getBackups,
+  verifyBackup,
+} from "../api/backups";
 import { getProcessingJobs } from "../api/processing";
 import {
   previewHumanAudiobookRebuilds,
   rebuildAllHumanAudiobooks,
 } from "../api/audiobook";
 
-const utilityTabs = [
-  { key: "audit", label: "Audit" },
-  { key: "series", label: "Series Detection" },
-  { key: "metadata", label: "Metadata" },
+const utilityPages = [
+  { key: "audit", label: "Library Audit" },
+  { key: "series", label: "Detect Series" },
+  { key: "metadata", label: "Sync Online Metadata" },
   { key: "audiobooks", label: "Audiobooks" },
   { key: "recycle-bin", label: "Recycle Bin" },
-  { key: "storage", label: "Storage" },
+  { key: "storage", label: "Storage Cleanup" },
   { key: "backups", label: "Backup & Restore" },
-  { key: "reader-access", label: "Reader Access" },
+  { key: "reader-access", label: "Reader API Keys" },
 ];
 
 function getRequestedUtilityTab() {
   const requested = new URLSearchParams(window.location.search).get("section");
-  return utilityTabs.some((tab) => tab.key === requested) ? requested : "audit";
+  return utilityPages.some((tab) => tab.key === requested)
+    ? requested
+    : "audit";
 }
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 async function runCleanup(dryRun) {
-  const res = await fetch(`/api/storage/cleanup?dry_run=${dryRun}`, { method: "POST" });
+  const res = await fetch(`/api/storage/cleanup?dry_run=${dryRun}`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error("Cleanup request failed");
   return res.json();
 }
@@ -108,16 +117,25 @@ function renderMetadataJobSummary(job) {
 function formatMetadataMatchOption(match) {
   const title = match.remote_title || "Unknown title";
   const author = match.remote_author ? ` by ${match.remote_author}` : "";
-  const confidence = match.match_confidence != null ? ` (${Math.round(match.match_confidence * 100)}%)` : "";
+  const confidence =
+    match.match_confidence != null
+      ? ` (${Math.round(match.match_confidence * 100)}%)`
+      : "";
   const provider = match.source
-    ? ` · ${match.source.split("+").map((source) => source.replaceAll("_", " ")).join(" + ")}`
+    ? ` · ${match.source
+        .split("+")
+        .map((source) => source.replaceAll("_", " "))
+        .join(" + ")}`
     : "";
   return `${title}${author}${confidence}${provider}`;
 }
 
-function Utilities({ onBack }) {
+function Utilities({ onBack, section, reviewOnly = false }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState(getRequestedUtilityTab);
+  const [activeTab, setActiveTab] = useState(
+    () => section || getRequestedUtilityTab(),
+  );
+  const [metadataPage, setMetadataPage] = useState(0);
   const [preview, setPreview] = useState(null);
   const [detectState, setDetectState] = useState(null); // null | "pending" | { updated, series_detected, error? }
   const [selectedMatchIds, setSelectedMatchIds] = useState({});
@@ -128,26 +146,10 @@ function Utilities({ onBack }) {
   const [audiobookRebuildNotice, setAudiobookRebuildNotice] = useState("");
 
   useEffect(() => {
-    const onPopState = () => setActiveTab(getRequestedUtilityTab());
+    const onPopState = () => setActiveTab(section || getRequestedUtilityTab());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
-
-  const selectUtilityTab = (tabKey) => {
-    const params = new URLSearchParams(window.location.search);
-    if (tabKey === "audit") {
-      params.delete("section");
-    } else {
-      params.set("section", tabKey);
-    }
-    const query = params.toString();
-    window.history.pushState(
-      window.history.state,
-      "",
-      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
-    );
-    setActiveTab(tabKey);
-  };
+  }, [section]);
 
   const previewMutation = useMutation({
     mutationFn: () => runCleanup(true),
@@ -171,15 +173,26 @@ function Utilities({ onBack }) {
     queryFn: getLatestMetadataJob,
     staleTime: 5000,
     refetchOnWindowFocus: false,
-    refetchInterval: ({ state }) => (state.data?.status === "running" || state.data?.status === "queued" ? 5000 : false),
+    refetchInterval: ({ state }) =>
+      state.data?.status === "running" || state.data?.status === "queued"
+        ? 5000
+        : false,
   });
 
-  const { data: metadataInbox = [] } = useQuery({
-    queryKey: ["metadata-inbox"],
-    queryFn: getMetadataInbox,
+  const {
+    data: metadataInbox = [],
+    isLoading: inboxLoading,
+    error: inboxError,
+  } = useQuery({
+    queryKey: ["metadata-inbox", metadataPage],
+    queryFn: () => getMetadataInbox({ offset: metadataPage * 20, limit: 21 }),
     staleTime: 15000,
     refetchOnWindowFocus: false,
-    refetchInterval: latestMetadataJob?.status === "running" || latestMetadataJob?.status === "queued" ? 15000 : false,
+    refetchInterval:
+      latestMetadataJob?.status === "running" ||
+      latestMetadataJob?.status === "queued"
+        ? 15000
+        : false,
   });
 
   const queueMetadataMutation = useMutation({
@@ -194,6 +207,7 @@ function Utilities({ onBack }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
     },
   });
@@ -202,13 +216,7 @@ function Utilities({ onBack }) {
     mutationFn: (matchId) => rejectMetadataMatch(matchId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
-    },
-  });
-
-  const dismissProposalMutation = useMutation({
-    mutationFn: (proposalId) => dismissMetadataProposal(proposalId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
     },
   });
 
@@ -241,11 +249,20 @@ function Utilities({ onBack }) {
     queryKey: ["backup-jobs"],
     queryFn: () => getProcessingJobs({ limit: 100 }),
     enabled: activeTab === "backups",
-    select: (jobs) => jobs.filter((job) => ["create_backup", "verify_backup"].includes(job.job_type)),
+    select: (jobs) =>
+      jobs.filter((job) =>
+        ["create_backup", "verify_backup"].includes(job.job_type),
+      ),
     refetchInterval: ({ state }) =>
-      (state.data || []).some((job) => ["queued", "running"].includes(job.status)) ? 3000 : false,
+      (state.data || []).some((job) =>
+        ["queued", "running"].includes(job.status),
+      )
+        ? 3000
+        : false,
   });
-  const activeBackupJob = backupJobs.find((job) => ["queued", "running"].includes(job.status));
+  const activeBackupJob = backupJobs.find((job) =>
+    ["queued", "running"].includes(job.status),
+  );
   const latestBackupJob = backupJobs[0];
 
   const { data: backupInventory, isLoading: backupsLoading } = useQuery({
@@ -257,17 +274,20 @@ function Utilities({ onBack }) {
   const backups = backupInventory?.backups || [];
 
   useEffect(() => {
-    if (latestBackupJob?.completed_at) queryClient.invalidateQueries({ queryKey: ["backups"] });
+    if (latestBackupJob?.completed_at)
+      queryClient.invalidateQueries({ queryKey: ["backups"] });
   }, [latestBackupJob?.completed_at, queryClient]);
 
   const createBackupMutation = useMutation({
     mutationFn: createBackup,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
   });
 
   const verifyBackupMutation = useMutation({
     mutationFn: verifyBackup,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
   });
 
   const deleteBackupMutation = useMutation({
@@ -289,14 +309,17 @@ function Utilities({ onBack }) {
   });
 
   const audiobookRebuildMutation = useMutation({
-    mutationFn: () => rebuildAllHumanAudiobooks({ force: audiobookRebuildForce }),
+    mutationFn: () =>
+      rebuildAllHumanAudiobooks({ force: audiobookRebuildForce }),
     onSuccess: (data) => {
       setAudiobookRebuildOpen(false);
       setAudiobookRebuildForce(false);
       setAudiobookRebuildNotice(
         `${data.queued_count} human audiobook rebuild${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
       );
-      queryClient.invalidateQueries({ queryKey: ["human-audiobook-rebuild-preview"] });
+      queryClient.invalidateQueries({
+        queryKey: ["human-audiobook-rebuild-preview"],
+      });
       queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
       queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
     },
@@ -324,301 +347,471 @@ function Utilities({ onBack }) {
     <div className={`${onBack ? "book-settings " : ""}utilities-page`}>
       <div className="settings-header">
         {onBack && (
-          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>
+          <button
+            className="btn-text"
+            onClick={onBack}
+            style={{ flexShrink: 0 }}
+          >
             ← Back
           </button>
         )}
-        <h2>Library Tools</h2>
+        <h2>
+          {reviewOnly
+            ? "Review suggestions"
+            : utilityPages.find((page) => page.key === activeTab)?.label}
+        </h2>
       </div>
-
-      <nav className="sub-tabs utilities-tabs" aria-label="Utility sections" role="tablist">
-        {utilityTabs.map((tab) => (
-          <button
-            key={tab.key}
-            className={`sub-tab${activeTab === tab.key ? " sub-tab--active" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            onClick={() => selectUtilityTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
 
       <div className="sub-tab-content utilities-tab-content">
         {activeTab === "audit" && (
           <section className="settings-section">
-        <h3>Library Audit</h3>
-        <p className="hint">
-          Checks every book record for missing or broken file paths (EPUB files, covers).
-        </p>
-        <div className="settings-actions">
-          <button
-            onClick={() => validateMutation.mutate()}
-            disabled={validateMutation.isPending}
-          >
-            {validateMutation.isPending ? "Auditing..." : "Run Library Audit"}
-          </button>
-          {validationResult && (
-            <button
-              className="btn-text"
-              onClick={() => validateMutation.reset()}
-            >
-              Reset
-            </button>
-          )}
-        </div>
-        {validateMutation.isError && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>
-            {validateMutation.error?.message}
-          </p>
-        )}
-        {validationResult && (
-          <div style={{ marginTop: "1rem" }}>
-            <h4>
-              {validationResult.issues_count === 0 ? "No Issues Found" : "Issues Found"}
-              <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
-                {validationResult.total_books} book{validationResult.total_books !== 1 ? "s" : ""} checked,{" "}
-                {validationResult.issues_count} issue{validationResult.issues_count !== 1 ? "s" : ""}
-              </span>
-            </h4>
-            {validationResult.issues_count === 0 ? (
-              <p className="hint">All books have valid file paths. Library is healthy.</p>
-            ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                {validationResult.issues.map((issue, i) => (
-                  <li
-                    key={i}
+            <p className="hint">Find missing EPUB files and covers.</p>
+            <div className="settings-actions">
+              <button
+                onClick={() => validateMutation.mutate()}
+                disabled={validateMutation.isPending}
+              >
+                {validateMutation.isPending
+                  ? "Auditing..."
+                  : "Run Library Audit"}
+              </button>
+              {validationResult && (
+                <button
+                  className="btn-text"
+                  onClick={() => validateMutation.reset()}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            {validateMutation.isError && (
+              <p className="error" style={{ marginTop: "0.5rem" }}>
+                {validateMutation.error?.message}
+              </p>
+            )}
+            {validationResult && (
+              <div style={{ marginTop: "1rem" }}>
+                <h4>
+                  {validationResult.issues_count === 0
+                    ? "No Issues Found"
+                    : "Issues Found"}
+                  <span
+                    className="hint"
+                    style={{ fontWeight: "normal", marginLeft: "0.5rem" }}
+                  >
+                    {validationResult.total_books} book
+                    {validationResult.total_books !== 1
+                      ? "s"
+                      : ""} checked, {validationResult.issues_count} issue
+                    {validationResult.issues_count !== 1 ? "s" : ""}
+                  </span>
+                </h4>
+                {validationResult.issues_count === 0 ? (
+                  <p className="hint">
+                    All books have valid file paths. Library is healthy.
+                  </p>
+                ) : (
+                  <ul
                     style={{
+                      listStyle: "none",
+                      padding: 0,
+                      margin: 0,
                       display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "baseline",
-                      fontSize: "0.85rem",
-                      padding: "0.4rem 0.6rem",
-                      borderRadius: "4px",
-                      background: "var(--surface, #1a1a2e)",
-                      gap: "1rem",
+                      flexDirection: "column",
+                      gap: "0.35rem",
                     }}
                   >
-                    <span style={{ wordBreak: "break-word" }}>
-                      <strong>{issue.title}</strong>
-                      {issue.author && <span className="hint"> by {issue.author}</span>}
-                    </span>
-                    <span style={{ flexShrink: 0, color: "#f87171", fontFamily: "monospace", fontSize: "0.8rem" }}>
-                      {formatAuditIssue(issue)}
-                      {issue.path && <span className="hint" style={{ marginLeft: "0.5rem" }}>{issue.path}</span>}
-                      {!issue.path && issue.source_url && (
-                        <span className="hint" style={{ marginLeft: "0.5rem" }}>{issue.source_url}</span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                    {validationResult.issues.map((issue, i) => (
+                      <li
+                        key={i}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "baseline",
+                          fontSize: "0.85rem",
+                          padding: "0.4rem 0.6rem",
+                          borderRadius: "4px",
+                          background: "var(--surface, #1a1a2e)",
+                          gap: "1rem",
+                        }}
+                      >
+                        <span style={{ wordBreak: "break-word" }}>
+                          <strong>{issue.title}</strong>
+                          {issue.author && (
+                            <span className="hint"> by {issue.author}</span>
+                          )}
+                        </span>
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            color: "#f87171",
+                            fontFamily: "monospace",
+                            fontSize: "0.8rem",
+                          }}
+                        >
+                          {formatAuditIssue(issue)}
+                          {issue.path && (
+                            <span
+                              className="hint"
+                              style={{ marginLeft: "0.5rem" }}
+                            >
+                              {issue.path}
+                            </span>
+                          )}
+                          {!issue.path && issue.source_url && (
+                            <span
+                              className="hint"
+                              style={{ marginLeft: "0.5rem" }}
+                            >
+                              {issue.source_url}
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
-          </div>
-        )}
           </section>
         )}
 
         {activeTab === "series" && (
           <section className="settings-section">
-        <h3>Detect Series</h3>
-        <p className="hint">
-          Scans all books without a series and attempts to detect one from the title.
-        </p>
-        <div className="settings-actions">
-          <button
-            onClick={handleDetectSeries}
-            disabled={detectState === "pending"}
-          >
-            {detectState === "pending" ? "Detecting…" : "Detect Series in Library"}
-          </button>
-        </div>
-        {detectState && detectState !== "pending" && (
-          <p className={detectState.error ? "error" : "hint"} style={{ marginTop: "0.5rem" }}>
-            {detectState.error
-              ? "Error running detection."
-              : detectState.updated === 0
-              ? "No new series found."
-              : `Updated ${detectState.updated} book${detectState.updated > 1 ? "s" : ""}: ${detectState.series_detected.join(", ")}`}
-          </p>
-        )}
+            <p className="hint">
+              Assigns series names found in book titles to books without a
+              series.
+            </p>
+            <div className="settings-actions">
+              <button
+                onClick={handleDetectSeries}
+                disabled={detectState === "pending"}
+              >
+                {detectState === "pending"
+                  ? "Detecting…"
+                  : "Detect Series in Library"}
+              </button>
+            </div>
+            {detectState && detectState !== "pending" && (
+              <p
+                className={detectState.error ? "error" : "hint"}
+                style={{ marginTop: "0.5rem" }}
+              >
+                {detectState.error
+                  ? "Error running detection."
+                  : detectState.updated === 0
+                    ? "No new series found."
+                    : `Updated ${detectState.updated} book${detectState.updated > 1 ? "s" : ""}: ${detectState.series_detected.join(", ")}`}
+              </p>
+            )}
           </section>
         )}
 
         {activeTab === "metadata" && (
           <section className="settings-section">
-        <h3>Sync Online Metadata</h3>
-        <p className="hint">
-          Runs in the background for new books and stale books, then puts uncertain matches into an inbox for approval.
-        </p>
-        <div className="settings-actions">
-          <button
-            onClick={() => queueMetadataMutation.mutate()}
-            disabled={queueMetadataMutation.isPending}
-          >
-            {queueMetadataMutation.isPending ? "Queueing…" : "Queue Library Metadata Sync"}
-          </button>
-        </div>
-        {(queueMetadataMutation.isError || approveMatchMutation.isError || rejectMatchMutation.isError || dismissProposalMutation.isError) && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>
-            {(queueMetadataMutation.error || approveMatchMutation.error || rejectMatchMutation.error || dismissProposalMutation.error)?.message}
-          </p>
-        )}
-        <div style={{ marginTop: "1rem" }}>
-          <p className="hint">
-            Latest job: {latestMetadataJob ? `${latestMetadataJob.status} (${latestMetadataJob.trigger})` : "none"}
-          </p>
-          <p className="hint">{renderMetadataJobSummary(latestMetadataJob)}</p>
-        </div>
-        <div style={{ marginTop: "1rem" }}>
-          <h4>
-            Metadata Inbox
-            <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
-              {metadataInbox.length} item{metadataInbox.length !== 1 ? "s" : ""}
-            </span>
-          </h4>
-        </div>
-        {metadataInbox.length > 0 ? (
-          <div style={{ marginTop: "1rem" }}>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.75rem" }}>
-              {metadataInbox.slice(0, 20).map((entry) => (
-                <li
-                  key={entry.id}
+            <p className="hint">
+              Looks up book details online. Uncertain matches appear below for
+              review.
+            </p>
+            <div className="settings-actions">
+              <button
+                onClick={() => queueMetadataMutation.mutate()}
+                disabled={queueMetadataMutation.isPending}
+              >
+                {queueMetadataMutation.isPending
+                  ? "Queueing…"
+                  : "Queue Library Metadata Sync"}
+              </button>
+            </div>
+            {(queueMetadataMutation.isError ||
+              approveMatchMutation.isError ||
+              rejectMatchMutation.isError) && (
+              <p className="error" style={{ marginTop: "0.5rem" }}>
+                {
+                  (
+                    queueMetadataMutation.error ||
+                    approveMatchMutation.error ||
+                    rejectMatchMutation.error
+                  )?.message
+                }
+              </p>
+            )}
+            <div style={{ marginTop: "1rem" }}>
+              <p className="hint">
+                Last book details check:{" "}
+                {latestMetadataJob
+                  ? latestMetadataJob.status
+                  : "Not checked yet"}
+              </p>
+              <p className="hint">
+                {renderMetadataJobSummary(latestMetadataJob)}
+              </p>
+            </div>
+            <div style={{ marginTop: "1rem" }}>
+              <h4>
+                Metadata Inbox
+                <span
+                  className="hint"
+                  style={{ fontWeight: "normal", marginLeft: "0.5rem" }}
+                >
+                  Page {metadataPage + 1} · {Math.min(metadataInbox.length, 20)}{" "}
+                  suggestions
+                </span>
+              </h4>
+            </div>
+            {inboxLoading && <p role="status">Loading suggestions…</p>}
+            {inboxError && (
+              <p role="alert" className="error">
+                {inboxError.message}
+              </p>
+            )}
+            {metadataInbox.length > 0 ? (
+              <div style={{ marginTop: "1rem" }}>
+                <ul
                   style={{
-                    border: "1px solid rgba(148, 163, 184, 0.2)",
-                    borderRadius: "8px",
-                    padding: "0.75rem",
-                    background: "rgba(15, 23, 42, 0.35)",
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "0.75rem",
                   }}
                 >
-                  {(() => {
-                    const candidateMatches = entry.candidate_matches?.length ? entry.candidate_matches : entry.match ? [entry.match] : [];
-                    const selectedMatchId = selectedMatchIds[entry.id] ?? entry.match?.id ?? candidateMatches[0]?.id;
-                    const selectedMatch = candidateMatches.find((match) => match.id === Number(selectedMatchId)) || entry.match;
-                    const proposedGenres = selectedMatch?.proposed_genre_tags ?? entry.proposed_genre_tags;
-                    const possibleMissingSeries = selectedMatch?.possible_missing_series_books ?? entry.possible_missing_series_books;
-                    const matchIssues = selectedMatch?.match_issues ?? [];
-                    const candidateSeries = selectedMatch?.remote_metadata?.series;
-                    const candidateSeriesIndex = selectedMatch?.remote_metadata?.series_index;
-                    const evidenceNote = selectedMatch?.note ?? entry.note;
-
-                    return (
-                      <>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start" }}>
-                    <div>
-                      <strong>{entry.book_title}</strong>
-                      <span className="hint" style={{ marginLeft: "0.5rem" }}>
-                        {selectedMatch?.status || entry.status}
-                      </span>
-                    </div>
-                    <div className="settings-actions" style={{ marginTop: 0, flexShrink: 0 }}>
-                      {selectedMatch?.status === "pending" && selectedMatch?.id ? (
-                        <>
-                          <button
-                            onClick={() => approveMatchMutation.mutate(selectedMatch.id)}
-                            disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
-                          >
-                            {approveMatchMutation.isPending ? "Approving…" : "Approve Match"}
-                          </button>
-                          <button
-                            className="btn-danger"
-                            onClick={() => rejectMatchMutation.mutate(selectedMatch.id)}
-                            disabled={approveMatchMutation.isPending || rejectMatchMutation.isPending}
-                          >
-                            {rejectMatchMutation.isPending ? "Rejecting…" : "Reject Match"}
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          className="btn-text"
-                          onClick={() => dismissProposalMutation.mutate(entry.id)}
-                          disabled={dismissProposalMutation.isPending}
-                        >
-                          {dismissProposalMutation.isPending ? "Dismissing…" : "Dismiss"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <p className="hint" style={{ marginTop: "0.35rem" }}>{entry.book_author}</p>
-                  {candidateMatches.length > 1 ? (
-                    <label className="hint" style={{ display: "grid", gap: "0.35rem", marginTop: "0.5rem" }}>
-                      Suggested match
-                      <select
-                        value={selectedMatchId || ""}
-                        onChange={(event) =>
-                          setSelectedMatchIds((current) => ({
-                            ...current,
-                            [entry.id]: Number(event.target.value),
-                          }))
-                        }
-                      >
-                        {candidateMatches.map((match) => (
-                          <option key={match.id} value={match.id}>
-                            {formatMetadataMatchOption(match)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : selectedMatch && (
-                    <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Suggested match: {formatMetadataMatchOption(selectedMatch)}
-                    </p>
-                  )}
-                  {(entry.book_series || candidateSeries) && (
-                    <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Local series: {entry.book_series || "Unknown"}
-                      {entry.book_series_index != null ? ` #${entry.book_series_index}` : ""}
-                      {" · "}
-                      Candidate series: {candidateSeries || "Unknown"}
-                      {candidateSeriesIndex != null ? ` #${candidateSeriesIndex}` : ""}
-                    </p>
-                  )}
-                  {proposedGenres.length > 0 && (
-                    <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Proposed genres: {proposedGenres.join(", ")}
-                    </p>
-                  )}
-                  {matchIssues.length > 0 && (
-                    <div
-                      role="alert"
+                  {metadataInbox.slice(0, 20).map((entry) => (
+                    <li
+                      key={entry.id}
                       style={{
-                        marginTop: "0.6rem",
-                        padding: "0.6rem 0.7rem",
-                        borderRadius: "6px",
-                        border: "1px solid rgba(251, 191, 36, 0.45)",
-                        background: "rgba(120, 53, 15, 0.22)",
+                        border: "1px solid rgba(148, 163, 184, 0.2)",
+                        borderRadius: "8px",
+                        padding: "0.75rem",
+                        background: "rgba(15, 23, 42, 0.35)",
                       }}
                     >
-                      <strong>Verify this match</strong>
-                      <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.2rem" }}>
-                        {matchIssues.map((issue) => <li key={issue}>{issue}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  {possibleMissingSeries.length > 0 && (
-                    <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      Possible missing in series: {possibleMissingSeries.join(", ")}
-                    </p>
-                  )}
-                  {evidenceNote && (
-                    <p className="hint" style={{ marginTop: "0.5rem" }}>
-                      {evidenceNote}
-                    </p>
-                  )}
-                      </>
-                    );
-                  })()}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <p className="hint" style={{ marginTop: "0.75rem" }}>
-            No metadata approvals are waiting right now.
-          </p>
-        )}
+                      {(() => {
+                        const candidateMatches = (
+                          entry.candidate_matches?.length
+                            ? entry.candidate_matches
+                            : entry.match
+                              ? [entry.match]
+                              : []
+                        ).filter((match) => match.status === "pending");
+                        const selectedMatchId =
+                          selectedMatchIds[entry.id] ??
+                          entry.match?.id ??
+                          candidateMatches[0]?.id;
+                        const selectedMatch =
+                          candidateMatches.find(
+                            (match) => match.id === Number(selectedMatchId),
+                          ) || entry.match;
+                        const proposedGenres =
+                          selectedMatch?.proposed_genre_tags ??
+                          entry.proposed_genre_tags;
+                        const possibleMissingSeries =
+                          selectedMatch?.possible_missing_series_books ??
+                          entry.possible_missing_series_books;
+                        const matchIssues = selectedMatch?.match_issues ?? [];
+                        const candidateSeries =
+                          selectedMatch?.remote_metadata?.series;
+                        const candidateSeriesIndex =
+                          selectedMatch?.remote_metadata?.series_index;
+                        const evidenceNote = selectedMatch?.note ?? entry.note;
+
+                        return (
+                          <>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: "1rem",
+                                alignItems: "flex-start",
+                              }}
+                            >
+                              <div>
+                                <strong>{entry.book_title}</strong>
+                                <span
+                                  className="hint"
+                                  style={{ marginLeft: "0.5rem" }}
+                                >
+                                  {selectedMatch?.status || entry.status}
+                                </span>
+                              </div>
+                              <div
+                                className="settings-actions"
+                                style={{ marginTop: 0, flexShrink: 0 }}
+                              >
+                                {selectedMatch?.status === "pending" &&
+                                selectedMatch?.id ? (
+                                  <>
+                                    <button
+                                      onClick={() =>
+                                        approveMatchMutation.mutate(
+                                          selectedMatch.id,
+                                        )
+                                      }
+                                      disabled={
+                                        approveMatchMutation.isPending ||
+                                        rejectMatchMutation.isPending
+                                      }
+                                    >
+                                      {approveMatchMutation.isPending
+                                        ? "Approving…"
+                                        : "Approve Match"}
+                                    </button>
+                                    <button
+                                      className="btn-danger"
+                                      onClick={() =>
+                                        rejectMatchMutation.mutate(
+                                          selectedMatch.id,
+                                        )
+                                      }
+                                      disabled={
+                                        approveMatchMutation.isPending ||
+                                        rejectMatchMutation.isPending
+                                      }
+                                    >
+                                      {rejectMatchMutation.isPending
+                                        ? "Rejecting…"
+                                        : "Reject Match"}
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </div>
+                            <p
+                              className="hint"
+                              style={{ marginTop: "0.35rem" }}
+                            >
+                              {entry.book_author}
+                            </p>
+                            {candidateMatches.length > 1 ? (
+                              <label
+                                className="hint"
+                                style={{
+                                  display: "grid",
+                                  gap: "0.35rem",
+                                  marginTop: "0.5rem",
+                                }}
+                              >
+                                Suggested match
+                                <select
+                                  value={selectedMatchId || ""}
+                                  onChange={(event) =>
+                                    setSelectedMatchIds((current) => ({
+                                      ...current,
+                                      [entry.id]: Number(event.target.value),
+                                    }))
+                                  }
+                                >
+                                  {candidateMatches.map((match) => (
+                                    <option key={match.id} value={match.id}>
+                                      {formatMetadataMatchOption(match)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : (
+                              selectedMatch && (
+                                <p
+                                  className="hint"
+                                  style={{ marginTop: "0.5rem" }}
+                                >
+                                  Suggested match:{" "}
+                                  {formatMetadataMatchOption(selectedMatch)}
+                                </p>
+                              )
+                            )}
+                            {(entry.book_series || candidateSeries) && (
+                              <p
+                                className="hint"
+                                style={{ marginTop: "0.5rem" }}
+                              >
+                                Local series: {entry.book_series || "Unknown"}
+                                {entry.book_series_index != null
+                                  ? ` #${entry.book_series_index}`
+                                  : ""}
+                                {" · "}
+                                Candidate series: {candidateSeries || "Unknown"}
+                                {candidateSeriesIndex != null
+                                  ? ` #${candidateSeriesIndex}`
+                                  : ""}
+                              </p>
+                            )}
+                            {proposedGenres.length > 0 && (
+                              <p
+                                className="hint"
+                                style={{ marginTop: "0.5rem" }}
+                              >
+                                Proposed genres: {proposedGenres.join(", ")}
+                              </p>
+                            )}
+                            {matchIssues.length > 0 && (
+                              <div
+                                role="alert"
+                                style={{
+                                  marginTop: "0.6rem",
+                                  padding: "0.6rem 0.7rem",
+                                  borderRadius: "6px",
+                                  border: "1px solid rgba(251, 191, 36, 0.45)",
+                                  background: "rgba(120, 53, 15, 0.22)",
+                                }}
+                              >
+                                <strong>Verify this match</strong>
+                                <ul
+                                  style={{
+                                    margin: "0.35rem 0 0",
+                                    paddingLeft: "1.2rem",
+                                  }}
+                                >
+                                  {matchIssues.map((issue) => (
+                                    <li key={issue}>{issue}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {possibleMissingSeries.length > 0 && (
+                              <p
+                                className="hint"
+                                style={{ marginTop: "0.5rem" }}
+                              >
+                                Possible missing in series:{" "}
+                                {possibleMissingSeries.join(", ")}
+                              </p>
+                            )}
+                            {evidenceNote && (
+                              <details className="workspace-disclosure">
+                                <summary>Match explanation</summary>
+                                <p className="hint">{evidenceNote}</p>
+                              </details>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="hint" style={{ marginTop: "0.75rem" }}>
+                {inboxLoading
+                  ? ""
+                  : metadataPage > 0
+                    ? "No more suggestions on this page. Go back to the previous page."
+                    : "No metadata approvals are waiting right now."}
+              </p>
+            )}
+            <div className="workspace-actions review-pagination">
+              <button
+                disabled={metadataPage === 0 || inboxLoading}
+                onClick={() => setMetadataPage((page) => page - 1)}
+              >
+                Previous suggestions
+              </button>
+              <button
+                disabled={metadataInbox.length <= 20 || inboxLoading}
+                onClick={() => setMetadataPage((page) => page + 1)}
+              >
+                Next suggestions
+              </button>
+            </div>
           </section>
         )}
 
@@ -627,9 +820,9 @@ function Utilities({ onBack }) {
             <section className="settings-section">
               <h3>Rebuild Human Audiobooks</h3>
               <p className="hint">
-                Bring imported human audiobooks forward using the latest source processing,
-                chapter matching, text cue, and timestamp-alignment pipeline. Existing audio,
-                valid chapter corrections, and compatible Whisper transcripts are reused.
+                Update chapter matches and synchronized text for imported
+                audiobooks. Original audio and valid manual chapter corrections
+                are kept.
               </p>
               {audiobookRebuildPreviewLoading ? (
                 <p className="hint">Inspecting imported audiobooks…</p>
@@ -637,11 +830,12 @@ function Utilities({ onBack }) {
                 <p className="error">{audiobookRebuildPreviewError.message}</p>
               ) : audiobookRebuildPreview ? (
                 <p className="hint">
-                  {audiobookRebuildPreview.rebuild_count} of {audiobookRebuildPreview.total_count} edition
-                  {audiobookRebuildPreview.total_count === 1 ? "" : "s"} need pipeline v
-                  {audiobookRebuildPreview.current_pipeline_version}
+                  {audiobookRebuildPreview.rebuild_count} of{" "}
+                  {audiobookRebuildPreview.total_count} edition
+                  {audiobookRebuildPreview.total_count === 1 ? "" : "s"} need
+                  updating
                   {audiobookRebuildPreview.realign_count > 0
-                    ? ` · ${audiobookRebuildPreview.realign_count} will be timestamp-aligned again`
+                    ? ` · ${audiobookRebuildPreview.realign_count} need text timing updated`
                     : ""}
                   {audiobookRebuildPreview.unavailable_count > 0
                     ? ` · ${audiobookRebuildPreview.unavailable_count} currently unavailable`
@@ -682,19 +876,22 @@ function Utilities({ onBack }) {
                   Force rebuild all ready editions
                 </button>
               </div>
-              {audiobookRebuildNotice && <p className="success">{audiobookRebuildNotice}</p>}
+              {audiobookRebuildNotice && (
+                <p className="success">{audiobookRebuildNotice}</p>
+              )}
               {audiobookRebuildMutation.isError && (
-                <p className="error">{audiobookRebuildMutation.error.message}</p>
+                <p className="error">
+                  {audiobookRebuildMutation.error.message}
+                </p>
               )}
             </section>
             <section className="settings-section">
               <h3>Libation Backup Import</h3>
               <p className="hint">
-                Preview book matches, resolve ambiguous titles, and queue the
-                selected backup through the guided import workflow.
+                Choose a backup and review which books its audiobooks belong to.
               </p>
               <a className="btn btn-primary" href="/import?type=libation">
-                Open guided Libation import
+                Import Libation backup
               </a>
             </section>
           </>
@@ -702,10 +899,11 @@ function Utilities({ onBack }) {
 
         {activeTab === "recycle-bin" && (
           <section className="settings-section">
-            <h3>Recycle Bin</h3>
             <p className="hint">
-              Deleted books and all files they own stay recoverable for {recycleBin?.retention_days || 30} days by default.
-              Restore a book to return it to the library, or permanently delete it to remove its files now.
+              Deleted books and all files they own stay recoverable for{" "}
+              {recycleBin?.retention_days || 30} days by default. Restore a book
+              to return it to the library, or permanently delete it to remove
+              its files now.
             </p>
             {recycleBinLoading ? (
               <p className="hint">Loading deleted books…</p>
@@ -717,19 +915,25 @@ function Utilities({ onBack }) {
                   <li className="recycle-bin-item" key={book.id}>
                     <div>
                       <strong>{book.title}</strong>
-                      <p className="hint">by {book.author || "Unknown author"}</p>
+                      <p className="hint">
+                        by {book.author || "Unknown author"}
+                      </p>
                       <p className="hint">
                         {book.purge_after
                           ? `Recovery window ends ${new Date(book.purge_after).toLocaleString()}`
                           : "No automatic purge date is set"}
-                        {!book.recovery_files_available && " · EPUB recovery file is missing"}
+                        {!book.recovery_files_available &&
+                          " · EPUB recovery file is missing"}
                       </p>
                     </div>
                     <div className="recycle-bin-actions">
                       <button
                         type="button"
                         onClick={() => restoreBookMutation.mutate(book.id)}
-                        disabled={restoreBookMutation.isPending || permanentDeleteMutation.isPending}
+                        disabled={
+                          restoreBookMutation.isPending ||
+                          permanentDeleteMutation.isPending
+                        }
                       >
                         Restore
                       </button>
@@ -737,7 +941,10 @@ function Utilities({ onBack }) {
                         type="button"
                         className="btn-danger"
                         onClick={() => setPermanentDeleteTarget(book)}
-                        disabled={restoreBookMutation.isPending || permanentDeleteMutation.isPending}
+                        disabled={
+                          restoreBookMutation.isPending ||
+                          permanentDeleteMutation.isPending
+                        }
                       >
                         Permanently delete
                       </button>
@@ -746,9 +953,13 @@ function Utilities({ onBack }) {
                 ))}
               </ul>
             )}
-            {(restoreBookMutation.isError || permanentDeleteMutation.isError) && (
+            {(restoreBookMutation.isError ||
+              permanentDeleteMutation.isError) && (
               <p className="error">
-                {(restoreBookMutation.error || permanentDeleteMutation.error)?.message}
+                {
+                  (restoreBookMutation.error || permanentDeleteMutation.error)
+                    ?.message
+                }
               </p>
             )}
           </section>
@@ -756,156 +967,226 @@ function Utilities({ onBack }) {
 
         {activeTab === "storage" && (
           <section className="settings-section">
-        <h3>Storage Cleanup</h3>
-        <p className="hint">
-          Scans the library directory for orphaned EPUB and cover files, and
-          failed web imports that never produced EPUB files. Files owned by books in the recycle bin are protected.
-        </p>
+            <p className="hint">
+              Scans the library directory for orphaned EPUB and cover files, and
+              failed web imports that never produced EPUB files. Files owned by
+              books in the recycle bin are protected.
+            </p>
 
-        <div className="settings-actions">
-          {!preview && (
-            <button
-              onClick={() => previewMutation.mutate()}
-              disabled={isPending}
-            >
-              {previewMutation.isPending ? "Scanning..." : "Scan for Orphaned Files"}
-            </button>
-          )}
+            <div className="settings-actions">
+              {!preview && (
+                <button
+                  onClick={() => previewMutation.mutate()}
+                  disabled={isPending}
+                >
+                  {previewMutation.isPending
+                    ? "Scanning..."
+                    : "Scan for Orphaned Files"}
+                </button>
+              )}
 
-          {preview && preview.dry_run && getCleanupTargetCount(preview) > 0 && (
-            <button
-              className="btn-danger"
-              onClick={() => deleteMutation.mutate()}
-              disabled={isPending}
-            >
-              {deleteMutation.isPending
-                ? "Deleting..."
-                : `Delete ${getCleanupTargetCount(preview)} item${getCleanupTargetCount(preview) !== 1 ? "s" : ""}${preview.total_bytes > 0 ? ` (${formatBytes(preview.total_bytes)})` : ""}`}
-            </button>
-          )}
-
-          {preview && (
-            <button
-              className="btn-text"
-              onClick={() => {
-                setPreview(null);
-                previewMutation.reset();
-                deleteMutation.reset();
-              }}
-              disabled={isPending}
-            >
-              Reset
-            </button>
-          )}
-        </div>
-
-        {(previewMutation.isError || deleteMutation.isError) && (
-          <p className="error">
-            {(previewMutation.error || deleteMutation.error)?.message}
-          </p>
-        )}
-
-        {preview?.skipped_reason && (
-          <p className="hint" style={{ marginTop: "0.5rem", color: "#fbbf24" }}>
-            {preview.skipped_reason}
-          </p>
-        )}
-
-        {preview && !preview.skipped_reason && (
-          <div style={{ marginTop: "1rem" }}>
-            <h4>
-              {deleted ? "Deleted Items" : "Cleanup Candidates Found"}
-              <span className="hint" style={{ fontWeight: "normal", marginLeft: "0.5rem" }}>
-                {getCleanupTargetCount(preview) === 0
-                  ? "Nothing to remove"
-                  : `${formatCleanupSummary(preview)}${preview.total_bytes > 0 ? ` — ${formatBytes(preview.total_bytes)}` : ""}`}
-              </span>
-            </h4>
-
-            {getCleanupTargetCount(preview) === 0 ? (
-              <p className="hint">No orphaned files or failed web imports found. Library is clean.</p>
-            ) : (
-              <>
-                {getCleanupFiles(preview).length > 0 && (
-                  <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                    {getCleanupFiles(preview).map((f) => (
-                      <li
-                        key={f.path}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          fontFamily: "monospace",
-                          fontSize: "0.8rem",
-                          padding: "0.3rem 0.5rem",
-                          borderRadius: "4px",
-                          background: "var(--surface, #1a1a2e)",
-                        }}
-                      >
-                        <span style={{ wordBreak: "break-all", color: deleted ? "#6b7280" : "#e2e8f0" }}>
-                          {f.path}
-                        </span>
-                        <span className="hint" style={{ flexShrink: 0, marginLeft: "1rem" }}>
-                          {formatBytes(f.size_bytes)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+              {preview &&
+                preview.dry_run &&
+                getCleanupTargetCount(preview) > 0 && (
+                  <button
+                    className="btn-danger"
+                    onClick={() => deleteMutation.mutate()}
+                    disabled={isPending}
+                  >
+                    {deleteMutation.isPending
+                      ? "Deleting..."
+                      : `Delete ${getCleanupTargetCount(preview)} item${getCleanupTargetCount(preview) !== 1 ? "s" : ""}${preview.total_bytes > 0 ? ` (${formatBytes(preview.total_bytes)})` : ""}`}
+                  </button>
                 )}
 
-                {getCleanupBooks(preview).length > 0 && (
-                  <ul style={{ listStyle: "none", padding: 0, margin: getCleanupFiles(preview).length > 0 ? "0.75rem 0 0 0" : 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                    {getCleanupBooks(preview).map((book) => (
-                      <li
-                        key={book.book_id}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "baseline",
-                          fontSize: "0.85rem",
-                          padding: "0.4rem 0.6rem",
-                          borderRadius: "4px",
-                          background: "var(--surface, #1a1a2e)",
-                          gap: "1rem",
-                        }}
-                      >
-                        <span style={{ wordBreak: "break-word" }}>
-                          <strong>{book.title}</strong>
-                          {book.author && <span className="hint"> by {book.author}</span>}
-                        </span>
-                        <span style={{ flexShrink: 0, color: "#f87171", fontFamily: "monospace", fontSize: "0.8rem" }}>
-                          failed web import
-                          {book.source_url && <span className="hint" style={{ marginLeft: "0.5rem" }}>{book.source_url}</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
+              {preview && (
+                <button
+                  className="btn-text"
+                  onClick={() => {
+                    setPreview(null);
+                    previewMutation.reset();
+                    deleteMutation.reset();
+                  }}
+                  disabled={isPending}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
 
-            {deleted && getCleanupTargetCount(preview) > 0 && (
-              <p style={{ marginTop: "0.75rem", color: "#4ade80", fontSize: "0.875rem" }}>
-                Deleted {getCleanupTargetCount(preview)} item{getCleanupTargetCount(preview) !== 1 ? "s" : ""}{preview.total_bytes > 0 ? `, freed ${formatBytes(preview.total_bytes)}` : ""}.
+            {(previewMutation.isError || deleteMutation.isError) && (
+              <p className="error">
+                {(previewMutation.error || deleteMutation.error)?.message}
               </p>
             )}
-          </div>
-        )}
+
+            {preview?.skipped_reason && (
+              <p
+                className="hint"
+                style={{ marginTop: "0.5rem", color: "#fbbf24" }}
+              >
+                {preview.skipped_reason}
+              </p>
+            )}
+
+            {preview && !preview.skipped_reason && (
+              <div style={{ marginTop: "1rem" }}>
+                <h4>
+                  {deleted ? "Deleted Items" : "Cleanup Candidates Found"}
+                  <span
+                    className="hint"
+                    style={{ fontWeight: "normal", marginLeft: "0.5rem" }}
+                  >
+                    {getCleanupTargetCount(preview) === 0
+                      ? "Nothing to remove"
+                      : `${formatCleanupSummary(preview)}${preview.total_bytes > 0 ? ` — ${formatBytes(preview.total_bytes)}` : ""}`}
+                  </span>
+                </h4>
+
+                {getCleanupTargetCount(preview) === 0 ? (
+                  <p className="hint">
+                    No orphaned files or failed web imports found. Library is
+                    clean.
+                  </p>
+                ) : (
+                  <>
+                    {getCleanupFiles(preview).length > 0 && (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          padding: 0,
+                          margin: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.25rem",
+                        }}
+                      >
+                        {getCleanupFiles(preview).map((f) => (
+                          <li
+                            key={f.path}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              fontFamily: "monospace",
+                              fontSize: "0.8rem",
+                              padding: "0.3rem 0.5rem",
+                              borderRadius: "4px",
+                              background: "var(--surface, #1a1a2e)",
+                            }}
+                          >
+                            <span
+                              style={{
+                                wordBreak: "break-all",
+                                color: deleted ? "#6b7280" : "#e2e8f0",
+                              }}
+                            >
+                              {f.path}
+                            </span>
+                            <span
+                              className="hint"
+                              style={{ flexShrink: 0, marginLeft: "1rem" }}
+                            >
+                              {formatBytes(f.size_bytes)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {getCleanupBooks(preview).length > 0 && (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          padding: 0,
+                          margin:
+                            getCleanupFiles(preview).length > 0
+                              ? "0.75rem 0 0 0"
+                              : 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.35rem",
+                        }}
+                      >
+                        {getCleanupBooks(preview).map((book) => (
+                          <li
+                            key={book.book_id}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "baseline",
+                              fontSize: "0.85rem",
+                              padding: "0.4rem 0.6rem",
+                              borderRadius: "4px",
+                              background: "var(--surface, #1a1a2e)",
+                              gap: "1rem",
+                            }}
+                          >
+                            <span style={{ wordBreak: "break-word" }}>
+                              <strong>{book.title}</strong>
+                              {book.author && (
+                                <span className="hint"> by {book.author}</span>
+                              )}
+                            </span>
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                color: "#f87171",
+                                fontFamily: "monospace",
+                                fontSize: "0.8rem",
+                              }}
+                            >
+                              failed web import
+                              {book.source_url && (
+                                <span
+                                  className="hint"
+                                  style={{ marginLeft: "0.5rem" }}
+                                >
+                                  {book.source_url}
+                                </span>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+
+                {deleted && getCleanupTargetCount(preview) > 0 && (
+                  <p
+                    style={{
+                      marginTop: "0.75rem",
+                      color: "#4ade80",
+                      fontSize: "0.875rem",
+                    }}
+                  >
+                    Deleted {getCleanupTargetCount(preview)} item
+                    {getCleanupTargetCount(preview) !== 1 ? "s" : ""}
+                    {preview.total_bytes > 0
+                      ? `, freed ${formatBytes(preview.total_bytes)}`
+                      : ""}
+                    .
+                  </p>
+                )}
+              </div>
+            )}
           </section>
         )}
 
         {activeTab === "backups" && (
           <section className="settings-section">
-            <h3>Backup & Restore</h3>
             <p className="hint">
-              Create a portable snapshot of the PostgreSQL catalog and every library file. Story Manager briefly
-              pauses changes, verifies every file checksum, and only then publishes the backup for download.
+              Back up your book details and library files. Changes are briefly
+              paused while the backup is created and checked.
             </p>
             <div className="settings-actions">
               <button
                 type="button"
                 onClick={() => createBackupMutation.mutate()}
-                disabled={Boolean(activeBackupJob) || createBackupMutation.isPending}
+                disabled={
+                  Boolean(activeBackupJob) || createBackupMutation.isPending
+                }
               >
                 {activeBackupJob?.job_type === "create_backup"
                   ? activeBackupJob.progress_detail || "Creating backup…"
@@ -914,32 +1195,50 @@ function Utilities({ onBack }) {
             </div>
 
             {latestBackupJob?.status === "error" && (
-              <p className="error">{latestBackupJob.error || latestBackupJob.progress_detail}</p>
+              <p className="error">
+                {latestBackupJob.error || latestBackupJob.progress_detail}
+              </p>
             )}
             {activeBackupJob && (
-              <p className="hint" aria-live="polite">{activeBackupJob.progress_detail || "Backup work is running…"}</p>
+              <p className="hint" aria-live="polite">
+                {activeBackupJob.progress_detail || "Backup work is running…"}
+              </p>
             )}
-            {(createBackupMutation.isError || verifyBackupMutation.isError || deleteBackupMutation.isError) && (
+            {(createBackupMutation.isError ||
+              verifyBackupMutation.isError ||
+              deleteBackupMutation.isError) && (
               <p className="error">
-                {(createBackupMutation.error || verifyBackupMutation.error || deleteBackupMutation.error)?.message}
+                {
+                  (
+                    createBackupMutation.error ||
+                    verifyBackupMutation.error ||
+                    deleteBackupMutation.error
+                  )?.message
+                }
               </p>
             )}
 
             <div className="backup-restore-warning">
-              <strong>Restore is intentionally offline.</strong>
+              <strong>Stop Story Manager before restoring a backup.</strong>
               <span>
-                Stop Story Manager and use the documented restore command. This prevents a running worker or browser
-                request from changing data during recovery.
+                Use the command below to replace your current library with a
+                backup.
               </span>
             </div>
             <details className="backup-restore-details">
               <summary>Show restore command</summary>
-              <p className="hint">Run this from the directory containing your Docker Compose file:</p>
+              <p className="hint">
+                Run this from the directory containing your Docker Compose file:
+              </p>
               <code>docker compose stop story-manager</code>
               <code>
-                docker compose run --rm story-manager ./run-container.sh restore /app/backups/&lt;filename&gt; --confirm-replace
+                docker compose run --rm story-manager ./run-container.sh restore
+                /app/backups/&lt;filename&gt; --confirm-replace
               </code>
-              <p className="hint">Start Story Manager again only after the restore command succeeds.</p>
+              <p className="hint">
+                Start Story Manager again only after the restore command
+                succeeds.
+              </p>
             </details>
 
             <h4>Available backups</h4>
@@ -959,25 +1258,42 @@ function Utilities({ onBack }) {
                 {backups.map((backup) => (
                   <li className="backup-list-item" key={backup.filename}>
                     <div>
-                      <strong>{new Date(backup.created_at).toLocaleString()}</strong>
+                      <strong>
+                        {new Date(backup.created_at).toLocaleString()}
+                      </strong>
                       <p className="hint">
-                        {formatBytes(backup.size_bytes)} · {backup.library_file_count} library file
-                        {backup.library_file_count === 1 ? "" : "s"} · {formatBytes(backup.library_size_bytes)} of library data
+                        {formatBytes(backup.size_bytes)} ·{" "}
+                        {backup.library_file_count} library file
+                        {backup.library_file_count === 1 ? "" : "s"} ·{" "}
+                        {formatBytes(backup.library_size_bytes)} of library data
                       </p>
-                      <p className={backup.valid_manifest ? "backup-status-ok" : "error"}>
+                      <p
+                        className={
+                          backup.valid_manifest ? "backup-status-ok" : "error"
+                        }
+                      >
                         {backup.valid_manifest && backup.verified_at_creation
                           ? "✓ Checksums verified when created"
                           : backup.error || "Manifest could not be validated"}
                       </p>
                     </div>
                     <div className="backup-actions">
-                      <a className="btn btn-secondary" href={backup.download_url} download>
+                      <a
+                        className="btn btn-secondary"
+                        href={backup.download_url}
+                        download
+                      >
                         Download
                       </a>
                       <button
                         type="button"
-                        onClick={() => verifyBackupMutation.mutate(backup.filename)}
-                        disabled={Boolean(activeBackupJob) || verifyBackupMutation.isPending}
+                        onClick={() =>
+                          verifyBackupMutation.mutate(backup.filename)
+                        }
+                        disabled={
+                          Boolean(activeBackupJob) ||
+                          verifyBackupMutation.isPending
+                        }
                       >
                         Verify now
                       </button>
@@ -985,7 +1301,10 @@ function Utilities({ onBack }) {
                         type="button"
                         className="btn-danger"
                         onClick={() => setBackupDeleteTarget(backup)}
-                        disabled={Boolean(activeBackupJob) || deleteBackupMutation.isPending}
+                        disabled={
+                          Boolean(activeBackupJob) ||
+                          deleteBackupMutation.isPending
+                        }
                       >
                         Delete
                       </button>
@@ -997,12 +1316,16 @@ function Utilities({ onBack }) {
           </section>
         )}
 
-        {activeTab === "reader-access" && <ReaderKeys />}
+        {activeTab === "reader-access" && <ReaderKeys showHeading={false} />}
       </div>
 
       <ConfirmActionDialog
         open={audiobookRebuildOpen}
-        title={audiobookRebuildForce ? "Force rebuild all ready human audiobooks?" : "Rebuild outdated human audiobooks?"}
+        title={
+          audiobookRebuildForce
+            ? "Force rebuild all ready human audiobooks?"
+            : "Rebuild outdated human audiobooks?"
+        }
         confirmLabel="Queue rebuilds"
         busyLabel="Queueing…"
         isPending={audiobookRebuildMutation.isPending}
@@ -1014,15 +1337,19 @@ function Utilities({ onBack }) {
       >
         <p>
           This will queue {audiobookRebuildTargetCount} imported edition
-          {audiobookRebuildTargetCount === 1 ? "" : "s"} for the latest pipeline.
+          {audiobookRebuildTargetCount === 1 ? "" : "s"} for updated chapter
+          matching and text timing.
         </p>
         {audiobookRebuildForce && (
-          <p><strong>This also rebuilds editions already marked current.</strong></p>
+          <p>
+            <strong>This also rebuilds editions already marked current.</strong>
+          </p>
         )}
         <p>
-          Original audio and manual chapter corrections are preserved. Compatible cached transcripts
-          are reused; if a required transcript is missing or incompatible, the configured transcription
-          service will be called again.
+          Original audio and manual chapter corrections are preserved.
+          Compatible cached transcripts are reused; if a required transcript is
+          missing or incompatible, the configured transcription service will be
+          called again.
         </p>
       </ConfirmActionDialog>
       <ConfirmActionDialog
@@ -1033,10 +1360,17 @@ function Utilities({ onBack }) {
         danger
         isPending={permanentDeleteMutation.isPending}
         onCancel={() => setPermanentDeleteTarget(null)}
-        onConfirm={() => permanentDeleteMutation.mutate(permanentDeleteTarget.id)}
+        onConfirm={() =>
+          permanentDeleteMutation.mutate(permanentDeleteTarget.id)
+        }
       >
-        <p>This removes the database record, EPUBs, cover, audiobook files, and saved revision history.</p>
-        <p><strong>This cannot be undone.</strong></p>
+        <p>
+          This removes the database record, EPUBs, cover, audiobook files, and
+          saved revision history.
+        </p>
+        <p>
+          <strong>This cannot be undone.</strong>
+        </p>
       </ConfirmActionDialog>
       <ConfirmActionDialog
         open={Boolean(backupDeleteTarget)}
@@ -1046,10 +1380,17 @@ function Utilities({ onBack }) {
         danger
         isPending={deleteBackupMutation.isPending}
         onCancel={() => setBackupDeleteTarget(null)}
-        onConfirm={() => deleteBackupMutation.mutate(backupDeleteTarget.filename)}
+        onConfirm={() =>
+          deleteBackupMutation.mutate(backupDeleteTarget.filename)
+        }
       >
         <p>{backupDeleteTarget?.filename}</p>
-        <p><strong>This removes the only copy of this backup from Story Manager and cannot be undone.</strong></p>
+        <p>
+          <strong>
+            This removes the only copy of this backup from Story Manager and
+            cannot be undone.
+          </strong>
+        </p>
       </ConfirmActionDialog>
     </div>
   );
