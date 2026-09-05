@@ -525,6 +525,8 @@ const AddBook = forwardRef(function AddBook(
       }
       setResults(completed);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      queryClient.invalidateQueries({ queryKey: ["series-books"] });
       queryClient.invalidateQueries({ queryKey: ["import-book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
       queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });

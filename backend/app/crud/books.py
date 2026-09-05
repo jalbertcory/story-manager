@@ -179,6 +179,8 @@ def build_catalog_filter_conditions(
         conditions.append(universe_expression() == universe if universe else universe_expression().is_(None))
     if source:
         conditions.append(models.Book.source_type == models.SourceType(source))
+        if source == "audiobook":
+            conditions.append(models.Book.current_path.is_(None))
 
     has_audiobook = catalog_has_audiobook_expression()
     if audiobook == "available":

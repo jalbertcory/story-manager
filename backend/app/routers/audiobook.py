@@ -46,6 +46,7 @@ from ..services.audiobook_import import (
     stream_upload_to_path,
 )
 from ..services.audiobook_metadata import filename_metadata
+from ..services.book_matching import title_match_keys as _libation_title_keys
 from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
 from ..services.audiobook_tts import (
     VOICE_ROSTER_MAX_SIMILARITY,
@@ -673,44 +674,6 @@ def _single_book_match(candidates: list[Book]) -> tuple[Book | None, bool]:
     if len(unique) == 1:
         return next(iter(unique.values())), False
     return None, len(unique) > 1
-
-
-_TRAILING_TITLE_QUALIFIER_RE = re.compile(r"\s*[\[(].*[\])]\s*$")
-_TRAILING_EDITION_RE = re.compile(
-    r"(?:\s*,?\s+)(?:movie\s+tie[ -]in|revised|unabridged|abridged|dramatized)" r"(?:\s+(?:edition|adaptation))$",
-    re.IGNORECASE,
-)
-
-
-def _libation_title_keys(value: str) -> set[str]:
-    """Return conservative aliases for store and EPUB title decorations."""
-    pending = [(value or "").strip()]
-    aliases: set[str] = set()
-    while pending:
-        candidate = pending.pop()
-        normalized = normalize_text(candidate)
-        if not normalized or normalized in aliases:
-            continue
-        aliases.add(normalized)
-
-        without_qualifier = _TRAILING_TITLE_QUALIFIER_RE.sub("", candidate).strip()
-        if without_qualifier and without_qualifier != candidate:
-            pending.append(without_qualifier)
-
-        without_edition = _TRAILING_EDITION_RE.sub("", candidate).strip()
-        if without_edition and without_edition != candidate:
-            pending.append(without_edition)
-
-        # EPUB metadata commonly appends a series, volume, or edition label
-        # after a colon while Libation uses only the work title.
-        if ":" in candidate:
-            pending.append(candidate.split(":", 1)[0].strip())
-
-    for alias in tuple(aliases):
-        words = alias.split()
-        if len(words) > 2 and words[0] in {"a", "an", "the"}:
-            aliases.add(" ".join(words[1:]))
-    return aliases
 
 
 def _existing_audio_options(editions: list[ImportedAudiobook]) -> list[LibationExistingAudioResponse]:

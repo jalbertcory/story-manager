@@ -103,7 +103,7 @@ async def get_book_catalog(
     q: Optional[str] = None,
     series: Optional[str] = None,
     universe: Optional[int] = Query(default=None, ge=0),
-    source: Optional[Literal["web", "epub"]] = None,
+    source: Optional[Literal["web", "epub", "audiobook"]] = None,
     view: Literal["all", "series", "standalone", "web"] = "series",
     review: Optional[Literal["missing-series", "refreshing", "refresh-error"]] = None,
     audiobook: Optional[Literal["available", "none"]] = None,
