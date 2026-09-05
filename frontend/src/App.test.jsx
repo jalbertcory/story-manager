@@ -3,7 +3,76 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import App from "./App";
 import { renderWithClient } from "./test-utils";
 
-describe("App", () => {
+const book = {
+  id: 44,
+  title: "Routed Audio",
+  author: "Author",
+  source_type: "epub",
+  immutable_path: "source.epub",
+  current_path: "current.epub",
+  removed_chapters: [],
+  content_selectors: [],
+  content_version: 1,
+  audiobook_enabled: true,
+};
+const saga = [
+  {
+    ...book,
+    id: 1,
+    title: "Saga Book 2",
+    series: "Saga",
+    series_index: 2,
+    cover_path: "1.jpg",
+    effective_series_genre_tags: ["Adventure", "Fantasy"],
+    effective_genre_tags: ["Fantasy"],
+  },
+  {
+    ...book,
+    id: 2,
+    title: "Saga Book 1",
+    series: "Saga",
+    series_index: 1,
+    cover_path: "2.jpg",
+    effective_series_genre_tags: ["Adventure", "Fantasy"],
+    effective_genre_tags: ["Fantasy"],
+  },
+];
+const group = {
+  name: "Saga",
+  author: "Author",
+  author_count: 1,
+  book_count: 2,
+  audio_count: 0,
+  cover_ids: [2, 1],
+};
+function mockApi(resolve = () => undefined) {
+  globalThis.fetch = vi.fn((url, options) => {
+    let data = resolve(url, options);
+    if (data === undefined) {
+      if (url.startsWith("/api/library/groups?")) data = [group];
+      else if (url.startsWith("/api/books/catalog?")) data = saga;
+      else if (url === "/api/series") data = ["Saga"];
+      else if (url === "/api/books/44") data = book;
+      else if (url.startsWith("/api/library/books/"))
+        data = { audio_playable: false, universe_id: null };
+      else if (url === "/api/dashboard/attention?limit=5") {
+        const category = { count: 0, items: [] };
+        data = {
+          total_count: 0,
+          failed_jobs: category,
+          failed_refreshes: category,
+          stale_audiobooks: category,
+          metadata_proposals: category,
+          broken_files: category,
+          missing_covers: category,
+        };
+      } else data = [];
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+  });
+}
+
+describe("App workspaces", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     window.history.replaceState(null, "", "/");
@@ -14,713 +83,250 @@ describe("App", () => {
     };
   });
 
-  it("fetches and displays books on mount", async () => {
-    const mockBooks = [
-      {
-        id: 1,
-        title: "Book A",
-        author: "Author A",
-        series: null,
-        current_word_count: 100,
-        source_type: "epub",
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url) => {
-      if (
-        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
+  it("starts with cover groups and loads complete series only when opened", async () => {
+    mockApi();
     renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?sort_by=title&sort_order=asc",
-      );
-    });
-
-    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Book A")[0]).toBeInTheDocument();
-      expect(screen.getAllByText("Author A")[0]).toBeInTheDocument();
-    });
-  });
-
-  it("groups every page under Library, Activity, and Settings", async () => {
-    window.innerWidth = 390;
-    const emptyCategory = { count: 0, items: [] };
-    const attention = {
-      total_count: 2,
-      failed_jobs: emptyCategory,
-      failed_refreshes: emptyCategory,
-      stale_audiobooks: emptyCategory,
-      metadata_proposals: emptyCategory,
-      broken_files: emptyCategory,
-      missing_covers: emptyCategory,
-    };
-
-    globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/dashboard/attention?limit=5") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(attention),
-        });
-      }
-      if (url.startsWith("/api/processing/jobs?")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve([
-              {
-                id: 91,
-                job_type: "refresh_all",
-                status: "running",
-                progress_current: 1,
-                progress_total: 2,
-                payload: {},
-              },
-            ]),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
-    renderWithClient(<App />);
-
-    const primary = await screen.findByRole("navigation", {
-      name: "Primary navigation",
-    });
-    const primaryLinks = within(primary).getAllByRole("link");
-    expect(primaryLinks.map((link) => link.firstChild.textContent)).toEqual([
-      "Library",
-      "Activity",
-      "Settings",
-    ]);
-    expect(primaryLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/",
-      "/activity",
-      "/settings",
-    ]);
-    expect(
-      await screen.findByLabelText("2 items need attention"),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByLabelText("1 active processing job"),
-    ).toBeInTheDocument();
-
-    primaryLinks[1].focus();
-    expect(primaryLinks[1]).toHaveFocus();
-    fireEvent.click(primaryLinks[1]);
-
-    expect(window.location.pathname).toBe("/activity");
-    expect(
-      await screen.findByRole("heading", { name: "Needs attention" }),
-    ).toBeInTheDocument();
-    expect(
-      within(
-        screen.getByRole("navigation", { name: "Activity sections" }),
-      ).getAllByRole("link").map((link) => link.textContent),
-    ).toEqual(["Overview", "Processing jobs", "Scheduled runs"]);
-
-    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-    expect(window.location.pathname).toBe("/settings");
-    expect(
-      within(
-        screen.getByRole("navigation", { name: "Settings sections" }),
-      ).getAllByRole("link").map((link) => link.textContent),
-    ).toEqual(["Cleaning rules", "Audio & AI", "Library tools", "Logs"]);
-  });
-
-  it(
-    "canonicalizes legacy deep links and responds to history navigation",
-    async () => {
-      window.history.replaceState(null, "", "/processing?status=error");
-      globalThis.fetch = vi.fn(() =>
-        Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
-      );
-
-      renderWithClient(<App />);
-
-      expect(
-        await screen.findByRole("heading", { name: "Processing control" }),
-      ).toBeInTheDocument();
-      expect(window.location.pathname).toBe("/activity/processing");
-      expect(window.location.search).toBe("?status=error");
-
-      window.history.replaceState(null, "", "/settings/logs");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-
-      expect(
-        await screen.findByRole("heading", { name: "Application Logs" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("link", { name: "Settings" }),
-      ).toHaveAttribute("aria-current", "page");
-    },
-  );
-
-  it("searches by unified query", async () => {
-    const mockBooks = [
-      {
-        id: 2,
-        title: "Book B",
-        author: "Author B",
-        source_type: "epub",
-        series: null,
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url) => {
-      if (
-        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-        });
-      }
-      if (
-        url === "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
-    renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?sort_by=title&sort_order=asc",
-      );
-    });
-
-    fireEvent.change(
-      screen.getByPlaceholderText("Search by title, author, series, or tag"),
-      { target: { value: "Author B" } },
-    );
-    await new Promise((resolve) => window.setTimeout(resolve, 350));
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?q=Author%20B&sort_by=title&sort_order=asc",
-      );
-    });
-
-    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Book B")[0]).toBeInTheDocument();
-    });
-  });
-
-  it("renders series covers directly from the catalog without detail hydration", async () => {
-    const catalogBooks = [
-      {
-        id: 1,
-        title: "Saga Book 2",
-        author: "Author A",
-        series: "Saga",
-        effective_genre_tags: ["Adventure", "Fantasy"],
-        effective_series_genre_tags: ["Adventure", "Fantasy"],
-        source_type: "epub",
-        current_word_count: 1200,
-        cover_path: "library/covers/1.jpg",
-      },
-      {
-        id: 2,
-        title: "Saga Book 1",
-        author: "Author A",
-        series: "Saga",
-        effective_genre_tags: ["Fantasy"],
-        effective_series_genre_tags: ["Adventure", "Fantasy"],
-        source_type: "epub",
-        current_word_count: 1000,
-        cover_path: "library/covers/2.jpg",
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url) => {
-      if (
-        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(catalogBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(["Saga"]),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
-    renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Saga")).toBeInTheDocument();
-      expect(screen.getByText("2")).toBeInTheDocument();
-      expect(screen.getByText("Fantasy")).toBeInTheDocument();
-    });
-
-    expect(globalThis.fetch).not.toHaveBeenCalledWith(
-      "/api/books/details?ids=1&ids=2",
-    );
-    expect(screen.getByAltText("Saga cover")).toHaveAttribute(
+    expect(await screen.findByAltText("Saga cover")).toHaveAttribute(
       "src",
       "/api/covers/2",
     );
-
     expect(screen.queryByText("Saga Book 1")).not.toBeInTheDocument();
-
+    expect(
+      fetch.mock.calls.some(([url]) => url.startsWith("/api/books/catalog")),
+    ).toBe(false);
     fireEvent.click(screen.getByText("Saga"));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Saga Book 1")[0]).toBeInTheDocument();
-      expect(screen.getAllByText("Saga Book 2")[0]).toBeInTheDocument();
-      expect(screen.getAllByText("Adventure")[0]).toBeInTheDocument();
-    });
+    expect(await screen.findByText("Saga Book 1")).toBeInTheDocument();
+    const titles = screen
+      .getAllByRole("heading", { level: 3 })
+      .map((node) => node.textContent);
+    expect(titles).toEqual(["Saga Book 1", "Saga Book 2"]);
+    expect(screen.getAllByText("Fantasy").length).toBeGreaterThan(0);
+    expect(window.location.search).toContain("series=Saga");
+    expect(fetch).not.toHaveBeenCalledWith("/api/books/details?ids=1&ids=2");
   });
 
-  it("lets you edit series-level genres from the library view", async () => {
-    const mockBooks = [
-      {
-        id: 11,
-        title: "Saga Book 1",
-        author: "Author A",
-        series: "Saga",
-        effective_genre_tags: ["Fantasy"],
-        effective_series_genre_tags: ["Fantasy"],
-        series_user_genre_tags: ["Fantasy"],
-        current_word_count: 1000,
-        source_type: "epub",
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url, options) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(["Saga"]),
-        });
-      }
-      if (url === "/api/series/Saga/genres" && options?.method === "PUT") {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              series_name: "Saga",
-              user_genre_tags: ["Epic Fantasy", "Fantasy"],
-            }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
+  it("provides daily workflows and a settings directory without nested tab bars", async () => {
+    mockApi();
     renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Saga")).toBeInTheDocument();
+    const primary = await screen.findByRole("navigation", {
+      name: "Primary navigation",
     });
+    expect(
+      within(primary)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual([
+      "Library",
+      "Web updates",
+      "Review suggestions",
+      "Background activity",
+      "Settings",
+    ]);
+    fireEvent.click(
+      within(primary).getByRole("link", { name: "Background activity" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Needs attention" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Activity view")).toHaveValue("attention");
+    fireEvent.click(within(primary).getByRole("link", { name: "Settings" }));
+    expect(
+      await screen.findByRole("heading", { name: "Settings", exact: true }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Cleaning rules/ }),
+    ).toHaveAttribute("href", "/settings/cleaning");
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByText("Saga"));
-    fireEvent.click(screen.getByRole("button", { name: /genres/i }));
+  it("keeps legacy deep links and browser history working", async () => {
+    window.history.replaceState(null, "", "/processing?status=error");
+    mockApi();
+    renderWithClient(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Processing jobs" }),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/activity/processing");
+    expect(window.location.search).toBe("?status=error");
+    window.history.replaceState(null, "", "/settings/logs");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(
+      await screen.findByRole("heading", { name: "Application Logs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Settings", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+  });
 
-    await waitFor(() => {
+  it("opens each maintenance tool from Settings without a second navigation menu", async () => {
+    window.history.replaceState(null, "", "/settings");
+    mockApi();
+    renderWithClient(<App />);
+    for (const [linkName, heading, section] of [
+      [/Library audit/, "Library Audit", ""],
+      [/Series detection/, "Detect Series", "series"],
+      [/Audiobook maintenance/, "Audiobooks", "audiobooks"],
+      [/Backups/, "Backup & Restore", "backups"],
+      [/Recycle bin/, "Recycle Bin", "recycle-bin"],
+      [/Storage cleanup/, "Storage Cleanup", "storage"],
+      [/Reader access/, "Reader API Keys", "reader-access"],
+    ]) {
+      fireEvent.click(await screen.findByRole("link", { name: linkName }));
       expect(
-        screen.getByPlaceholderText(
-          "Fantasy, Science Fiction, Progression Fantasy",
-        ),
+        await screen.findByRole("heading", { name: heading, level: 2 }),
       ).toBeInTheDocument();
-    });
+      expect(screen.getAllByRole("heading", { name: heading })).toHaveLength(1);
+      expect(window.location.search).toBe(section ? `?section=${section}` : "");
+      expect(screen.queryByLabelText("Library tool")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("link", { name: "← Settings" }));
+    }
+  });
 
+  it("searches groups on the server and combines source filtering", async () => {
+    mockApi();
+    renderWithClient(<App />);
+    fireEvent.change(await screen.findByLabelText("Search library"), {
+      target: { value: "Author B" },
+    });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/library/groups?group_by=series&q=Author+B",
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("Library source"), {
+      target: { value: "web" },
+    });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/library/groups?group_by=series&q=Author+B&source=web",
+      ),
+    );
+  });
+
+  it("navigates universe to series without changing reading order", async () => {
+    mockApi((url) =>
+      url.startsWith("/api/library/groups?group_by=universe")
+        ? [{ ...group, name: "Cosmere", universe_id: 7 }]
+        : undefined,
+    );
+    renderWithClient(<App />);
+    fireEvent.change(await screen.findByLabelText("Group library by"), {
+      target: { value: "universe" },
+    });
+    fireEvent.click(await screen.findByText("Cosmere"));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/library/groups?group_by=series&q=&universe=7",
+      ),
+    );
+    fireEvent.click(await screen.findByText("Saga"));
+    expect(await screen.findByText("Saga Book 1")).toBeInTheDocument();
+    expect(window.location.search).toContain("universe=7");
+    expect(
+      screen.getByRole("navigation", { name: "Library location" }),
+    ).toHaveTextContent("Cosmere");
+  });
+
+  it("keeps series genre editing available", async () => {
+    window.history.replaceState(null, "", "/?series=Saga");
+    mockApi();
+    renderWithClient(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Genres" }));
     fireEvent.change(
       screen.getByPlaceholderText(
         "Fantasy, Science Fiction, Progression Fantasy",
       ),
-      {
-        target: { value: "Fantasy, Epic Fantasy" },
-      },
+      { target: { value: "Fantasy, Epic Fantasy" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/series/Saga/genres", {
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/series/Saga/genres", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_genre_tags: ["Fantasy", "Epic Fantasy"] }),
-      });
-    });
+      }),
+    );
   });
 
-  it("shows series genres from backend effective_series_genre_tags", async () => {
-    const catalogBooks = [
-      {
-        id: 21,
-        title: "Mixed Book 1",
-        author: "Author A",
-        series: "Mixed Saga",
-        effective_genre_tags: ["Fantasy"],
-        effective_series_genre_tags: [
-          "Adventure",
-          "Fantasy",
-          "Progression Fantasy",
-        ],
-        current_word_count: 1000,
-        source_type: "epub",
-      },
-      {
-        id: 22,
-        title: "Mixed Book 2",
-        author: "Author A",
-        series: "Mixed Saga",
-        effective_genre_tags: ["Adventure"],
-        effective_series_genre_tags: [
-          "Adventure",
-          "Fantasy",
-          "Progression Fantasy",
-        ],
-        current_word_count: 1000,
-        source_type: "epub",
-      },
-      {
-        id: 23,
-        title: "Mixed Book 3",
-        author: "Author A",
-        series: "Mixed Saga",
-        effective_genre_tags: ["Progression Fantasy"],
-        effective_series_genre_tags: [
-          "Adventure",
-          "Fantasy",
-          "Progression Fantasy",
-        ],
-        current_word_count: 1000,
-        source_type: "epub",
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/catalog?sort_by=title&sort_order=asc") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(catalogBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(["Mixed Saga"]),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
+  it("lets standalone books be assigned to a series", async () => {
+    window.history.replaceState(null, "", "/?group=none&series=");
+    mockApi((url) =>
+      url.startsWith("/api/books/catalog?")
+        ? [{ ...book, id: 4, title: "Loner", series: null }]
+        : undefined,
+    );
     renderWithClient(<App />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Mixed Saga")).toBeInTheDocument();
-      expect(screen.getByText("Fantasy")).toBeInTheDocument();
-      expect(screen.getByText("Adventure")).toBeInTheDocument();
-      expect(screen.getByText("Progression Fantasy")).toBeInTheDocument();
-    });
-  });
-
-  it("lets you tag a standalone book with a series from the library view", async () => {
-    const mockBooks = [
-      {
-        id: 4,
-        title: "Loner",
-        author: "Author Solo",
-        current_word_count: 1200,
-        source_type: "epub",
-        series: null,
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url, options) => {
-      if (
-        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockBooks),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(["Saga", "Chronicles"]),
-        });
-      }
-      if (url === "/api/books/4" && options?.method === "PUT") {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              ...mockBooks[0],
-              series: "Saga",
-            }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
-    });
-
-    renderWithClient(<App />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Loner")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /assign series/i }));
-
-    await waitFor(() => {
-      expect(
-        screen.getByPlaceholderText("Add to a series"),
-      ).toBeInTheDocument();
-    });
-
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Assign series" }),
+    );
     fireEvent.change(screen.getByPlaceholderText("Add to a series"), {
       target: { value: "Saga" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/books/4", {
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/books/4", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ series: "Saga" }),
-      });
-    });
+      }),
+    );
   });
 
-  it("shows AI-generated and human audiobook badges", async () => {
-    const mockBooks = [
-      {
-        id: 31,
-        title: "Audio Ready",
-        author: "Narrator A",
-        current_word_count: 1200,
-        source_type: "epub",
-        series: null,
-        audiobook_enabled: true,
-        audiobook_pipeline_status: "paused",
-      },
-      {
-        id: 32,
-        title: "Human Audio",
-        author: "Narrator B",
-        current_word_count: 1000,
-        source_type: "epub",
-        series: null,
-        audiobook_enabled: false,
-        audiobook_types: ["human_narrated"],
-      },
-      {
-        id: 33,
-        title: "Text Only",
-        author: "Author B",
-        current_word_count: 900,
-        source_type: "epub",
-        series: null,
-        audiobook_enabled: false,
-      },
-    ];
-
-    globalThis.fetch = vi.fn((url) => {
-      if (
-        url === "/api/books/catalog?sort_by=title&sort_order=asc" ||
-        url ===
-          "/api/books/catalog?sort_by=title&sort_order=asc&view=standalone" ||
-        url ===
-          "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve(
-              mockBooks,
-            ),
-        });
-      }
-      if (url === "/api/series") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([]),
-        });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
-    });
-
+  it("distinguishes playable audio from an enabled pipeline and returns to the filtered library", async () => {
+    window.history.replaceState(null, "", "/?group=none&q=Audio");
+    mockApi((url) =>
+      url.startsWith("/api/books/catalog?")
+        ? [
+            book,
+            { ...book, id: 45, title: "Playable", audio_playable: true },
+            {
+              ...book,
+              id: 46,
+              title: "Imported",
+              audiobook_types: ["human_narrated"],
+            },
+          ]
+        : undefined,
+    );
     renderWithClient(<App />);
-    fireEvent.click(await screen.findByRole("tab", { name: /standalone/i }));
-
-    expect(await screen.findByTitle("Audiobook: paused")).toBeInTheDocument();
+    expect(await screen.findByText("Routed Audio")).toBeInTheDocument();
+    expect(screen.getAllByText("Audiobook")).toHaveLength(1);
+    expect(screen.getByText("Audio imported")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Routed Audio"));
     expect(
-      screen.getByTitle("Human-narrated audiobook"),
+      await screen.findByRole("button", { name: "Edit details" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Text Only")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Sort library by"), {
-      target: { value: "audiobook_enabled" },
-    });
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/books/catalog?sort_by=audiobook_enabled&sort_order=desc&view=standalone",
-      );
-    });
+    expect(window.location.pathname).toBe("/books/44/overview");
+    expect(
+      screen.queryByRole("button", { name: "Listen", exact: true }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Back to library/ }));
+    expect(window.location.search).toBe("?group=none&q=Audio");
   });
 
-  it("keeps the book section and audiobook tab in the URL", async () => {
+  it("keeps audiobook production views in the URL", async () => {
     window.history.replaceState(
       null,
       "",
       "/books/44/audiobooks?tab=characters",
     );
-    const book = {
-      id: 44,
-      title: "Routed Audio",
-      author: "Author",
-      source_type: "epub",
-      immutable_path: "library/source.epub",
-      current_path: "library/current.epub",
-      removed_chapters: [],
-      content_selectors: [],
-      content_version: 1,
-      audiobook_enabled: true,
-    };
-    globalThis.fetch = vi.fn((url) => {
-      if (url === "/api/books/44") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(book) });
-      }
-      if (url === "/api/dashboard/attention?limit=5") {
-        const emptyCategory = { count: 0, items: [] };
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              total_count: 1,
-              failed_jobs: emptyCategory,
-              failed_refreshes: emptyCategory,
-              stale_audiobooks: emptyCategory,
-              metadata_proposals: emptyCategory,
-              broken_files: emptyCategory,
-              missing_covers: emptyCategory,
-            }),
-        });
-      }
-      if (url.startsWith("/api/processing/jobs?")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve([
-              {
-                id: 92,
-                job_type: "refresh_all",
-                status: "running",
-                progress_current: 1,
-                progress_total: 2,
-                payload: {},
-              },
-            ]),
-        });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
-    });
-
+    mockApi();
     renderWithClient(<App />);
-
-    const characters = await screen.findByRole("button", {
-      name: "Characters",
+    expect(await screen.findByLabelText("AI production view")).toHaveValue(
+      "characters",
+    );
+    fireEvent.change(screen.getByLabelText("AI production view"), {
+      target: { value: "analysis" },
     });
-    expect(characters).toHaveClass("sub-tab--active");
-    expect(window.location.pathname).toBe("/books/44/audiobooks");
-    expect(window.location.search).toBe("?tab=characters");
-    expect(
-      await screen.findByLabelText("1 item needs attention"),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByLabelText("1 active processing job"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Analysis" }));
     expect(window.location.search).toBe("?tab=analysis");
-
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Details", exact: true }),
+    );
     expect(window.location.pathname).toBe("/books/44/details");
-    expect(window.location.search).toBe("");
-
-    fireEvent.click(screen.getByRole("button", { name: "Audiobook Pipeline" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Audiobooks", exact: true }),
+    );
     expect(window.location.pathname).toBe("/books/44/audiobooks");
-    expect(window.location.search).toBe("?tab=analysis");
-
-    fireEvent.click(screen.getByRole("button", { name: /back/i }));
-    expect(window.location.pathname).toBe("/");
-    expect(window.location.hash).toBe("#series");
-    expect(await screen.findByText("No series found.")).toBeInTheDocument();
+    expect(screen.getByLabelText("AI production view")).toHaveValue("analysis");
   });
 });

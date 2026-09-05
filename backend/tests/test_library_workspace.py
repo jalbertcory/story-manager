@@ -1,0 +1,140 @@
+import pytest
+
+from backend.app import models
+from backend.app.crud.series import merge_series, rename_series
+from backend.app.services.catalog import build_book_catalog_page
+from backend.app.services.library import library_groups
+
+
+@pytest.mark.asyncio
+async def test_universe_membership_groups_filters_and_rename(db, app_client):
+    books = [
+        models.Book(title="First", author="Writer", series="One", series_index=2, source_type=models.SourceType.epub),
+        models.Book(title="Second", author="Writer", series="Two", source_type=models.SourceType.epub),
+        models.Book(title="Standalone", author="Writer", source_type=models.SourceType.web),
+        models.Book(title="Unassigned", author="Other", source_type=models.SourceType.epub),
+    ]
+    db.add_all(books)
+    await db.commit()
+    response = app_client.put("/api/library/universe-membership", json={"series": "One", "name": "Cosmere"})
+    assert response.status_code == 200, response.text
+    uid = response.json()["universe_id"]
+    assert (
+        app_client.put("/api/library/universe-membership", json={"series": "Two", "name": " cosmere "}).json()["universe_id"]
+        == uid
+    )
+    assert (
+        app_client.put("/api/library/universe-membership", json={"book_id": books[2].id, "name": "Cosmere"}).status_code == 200
+    )
+    assert (
+        app_client.put("/api/library/universe-membership", json={"book_id": books[0].id, "name": "Other"}).status_code == 409
+    )
+    assert app_client.put("/api/library/universe-membership", json={"series": "Missing", "name": "Phantom"}).status_code == 404
+    assert len(app_client.get("/api/library/universes").json()) == 1
+
+    grouped = await library_groups(db, group_by="universe", q="", universe=None, source=None)
+    assert [(g["name"], g["book_count"]) for g in grouped] == [("Cosmere", 3), (None, 1)]
+    page = await build_book_catalog_page(db, view="all", universe=uid, limit=1)
+    assert page.total_count == 3 and page.next_cursor
+    ids = {page.items[0].id}
+    while page.next_cursor:
+        page = await build_book_catalog_page(db, view="all", universe=uid, limit=1, cursor=page.next_cursor)
+        ids.update(item.id for item in page.items)
+    assert ids == {b.id for b in books[:3]}
+    assert (await build_book_catalog_page(db, view="all", q="cosmere")).total_count == 3
+    children = await library_groups(db, group_by="series", q="", universe=uid, source=None)
+    assert [(g["name"], g["book_count"]) for g in children] == [("One", 1), ("Two", 1), (None, 1)]
+    assert (await build_book_catalog_page(db, view="all", universe=uid, source="web")).items[0].id == books[2].id
+    assert (await build_book_catalog_page(db, view="all", series="")).total_count == 2
+    await rename_series(db, "One", "Renamed")
+    assert (await build_book_catalog_page(db, view="all", series="Renamed")).items[0].universe_name == "Cosmere"
+    await merge_series(db, "Renamed", "Two")
+    assert (await build_book_catalog_page(db, view="all", universe=uid)).total_count == 3
+    assert books[0].series_index == 2
+
+
+@pytest.mark.asyncio
+async def test_audio_availability_requires_playable_media(db):
+    enabled = models.Book(title="Enabled only", author="A", source_type=models.SourceType.epub, audiobook_enabled=True)
+    playable = models.Book(title="Playable", author="A", source_type=models.SourceType.epub, audiobook_enabled=True)
+    db.add_all([enabled, playable])
+    await db.flush()
+    db.add(
+        models.AudiobookChapter(
+            book_id=playable.id,
+            chapter_number=1,
+            content_file_name="chapter.xhtml",
+            audio_file_path="chapter.mp3",
+            needs_reassembly=False,
+        )
+    )
+    await db.commit()
+    page = await build_book_catalog_page(db, view="all")
+    assert {b.title: b.audio_playable for b in page.items} == {"Enabled only": False, "Playable": True}
+
+
+@pytest.mark.asyncio
+async def test_different_universes_cannot_be_silently_merged(db, app_client):
+    db.add_all([models.Book(title=n, author="A", series=n, source_type=models.SourceType.epub) for n in ["A", "B"]])
+    await db.commit()
+    for name in ["A", "B"]:
+        assert app_client.put("/api/library/universe-membership", json={"series": name, "name": name}).status_code == 200
+    response = app_client.post("/api/series/merge", json={"source": "A", "target": "B"})
+    assert response.status_code == 409
+    assert len(app_client.get("/api/series").json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_latest_web_check_does_not_use_metadata_timestamp(db, app_client):
+    book = models.Book(title="Web", author="A", source_type=models.SourceType.web)
+    db.add(book)
+    await db.flush()
+    db.add_all([models.BookLog(book_id=book.id, entry_type="error"), models.BookLog(book_id=book.id, entry_type="checked")])
+    await db.commit()
+    checks = app_client.get("/api/library/web-checks").json()
+    assert len(checks) == 1
+    assert checks[0]["entry_type"] == "checked"
+
+
+@pytest.mark.asyncio
+async def test_series_case_variants_stay_together_and_membership_can_be_removed(db, app_client):
+    books = [
+        models.Book(title=n, author="A", series=n, source_type=models.SourceType.epub, cover_path=f"{n}.jpg")
+        for n in ["Saga", "saga"]
+    ]
+    db.add_all(books)
+    await db.commit()
+    assert app_client.put("/api/library/universe-membership", json={"series": "Saga", "name": "Shared"}).status_code == 200
+    groups = await library_groups(db, group_by="series", q="", universe=None, source=None)
+    assert len(groups) == 1 and groups[0]["book_count"] == 2
+    assert set(groups[0]["cover_ids"]) == {b.id for b in books}
+    assert (await build_book_catalog_page(db, view="all", series="SAGA")).total_count == 2
+    assert app_client.put("/api/library/universe-membership", json={"series": "saga", "name": None}).status_code == 200
+    assert (await build_book_catalog_page(db, view="all", universe=0)).total_count == 2
+
+
+@pytest.mark.asyncio
+async def test_imported_audio_needs_a_playable_edition_with_tracks(db):
+    book = models.Book(title="Narrated", author="A", source_type=models.SourceType.epub, audiobook_enabled=False)
+    db.add(book)
+    await db.flush()
+    edition = models.ImportedAudiobook(book_id=book.id, name="Narration", status="ready")
+    db.add(edition)
+    await db.commit()
+    assert not (await build_book_catalog_page(db, view="all")).items[0].audio_playable
+    db.add(
+        models.ImportedAudiobookTrack(
+            imported_audiobook_id=edition.id,
+            sequence_order=1,
+            title="Opening",
+            audio_file_path="chapter.mp3",
+            media_type="audio/mpeg",
+            source_end_ms=1000,
+            duration_ms=1000,
+        )
+    )
+    await db.commit()
+    assert (await build_book_catalog_page(db, view="all")).items[0].audio_playable
+    edition.status = "error"
+    await db.commit()
+    assert not (await build_book_catalog_page(db, view="all")).items[0].audio_playable

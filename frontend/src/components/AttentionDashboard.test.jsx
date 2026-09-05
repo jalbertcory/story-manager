@@ -78,10 +78,9 @@ describe("AttentionDashboard", () => {
       "href",
       "/books/3/audiobooks?tab=sources",
     );
-    expect(screen.getByRole("link", { name: "Review metadata" })).toHaveAttribute(
-      "href",
-      "/settings/library-tools?section=metadata",
-    );
+    expect(
+      screen.getByRole("link", { name: "Review metadata" }),
+    ).toHaveAttribute("href", "/review");
   });
 
   it("lets the user retry a failed dashboard request", () => {

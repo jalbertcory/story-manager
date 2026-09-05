@@ -160,7 +160,7 @@ describe("AddBook", () => {
 
     expect(await screen.findByText("Queued")).toBeInTheDocument();
     expect(screen.getByText("Skipped")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View Activity" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "View progress" })).toHaveAttribute(
       "href",
       "/activity/processing",
     );

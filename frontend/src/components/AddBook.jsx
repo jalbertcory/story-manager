@@ -25,7 +25,7 @@ const IMPORT_TYPES = [
   {
     key: "web",
     label: "Web novels",
-    description: "One or more source URLs",
+    description: "Links to the novels you want to follow",
   },
   {
     key: "audiobook",
@@ -35,7 +35,7 @@ const IMPORT_TYPES = [
   {
     key: "libation",
     label: "Libation backup",
-    description: "Match and queue an entire backup",
+    description: "Import audiobooks from a Libation backup",
   },
 ];
 
@@ -468,7 +468,7 @@ const AddBook = forwardRef(function AddBook(
             completed.push({
               name: book.title || item.source_url,
               status: "queued",
-              detail: "The durable web import will continue in Activity.",
+              detail: "Download started. Follow its progress in Background activity.",
             });
           } catch (error) {
             completed.push({
@@ -809,7 +809,7 @@ const AddBook = forwardRef(function AddBook(
               Import more
             </button>
             <a className="btn" href="/activity/processing">
-              View Activity
+              View progress
             </a>
           </div>
         </section>
@@ -821,9 +821,7 @@ const AddBook = forwardRef(function AddBook(
 function ImportHeader({ stage }) {
   return (
     <header className="import-workflow-header">
-      <span className="attention-eyebrow">GUIDED WORKFLOW</span>
       <h2>Add to library</h2>
-      <p>Inspect inputs, resolve conflicts, and then start durable import work.</p>
       <ol className="import-steps" aria-label="Import progress">
         {["Select", "Review", "Results"].map((label, index) => (
           <li

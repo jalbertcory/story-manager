@@ -11,15 +11,32 @@ function useLibraryCatalog({
   sortBy,
   sortOrder,
   enabled = true,
+  series,
+  universe,
+  source,
 }) {
   return useInfiniteQuery({
     queryKey: [
       "book-catalog",
-      { q, view, review, audiobook, genre, sortBy, sortOrder },
+      {
+        q,
+        view,
+        review,
+        audiobook,
+        genre,
+        sortBy,
+        sortOrder,
+        series,
+        universe,
+        source,
+      },
     ],
     queryFn: ({ pageParam }) =>
       getBookCatalog({
         q,
+        series,
+        universe,
+        source,
         view,
         review,
         audiobook,

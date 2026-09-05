@@ -130,7 +130,7 @@ function ProgressDashboard({ status, chapters = [] }) {
           </span>
         </div>
         <p className="progress-live-detail">
-          {status?.progress_detail || "Waiting for the next pipeline action."}
+          {status?.progress_detail || "Waiting for the next step."}
         </p>
         <div className="progress-live-meta">
           <span>{status?.llm_requests ?? 0} model requests this run</span>
@@ -143,7 +143,7 @@ function ProgressDashboard({ status, chapters = [] }) {
             {formatEta(totalSentences - generatedAudio, rates.audio)}
           </span>
           {concurrentAnalysisStatuses.has(pipelineStatus) && (
-            <span>Analysis and speech lanes are running concurrently</span>
+            <span>Analyzing text and generating audio at the same time</span>
           )}
           {startedAt && <span>Started {startedAt.toLocaleString()}</span>}
           {updatedAt && <span>Updated {updatedAt.toLocaleTimeString()}</span>}
@@ -186,7 +186,7 @@ function ProgressDashboard({ status, chapters = [] }) {
 
       {status?.last_error && (
         <details className="progress-error-detail">
-          <summary>Most recent recoverable pipeline error</summary>
+          <summary>Last generation error</summary>
           <pre>{status.last_error}</pre>
         </details>
       )}
@@ -194,7 +194,6 @@ function ProgressDashboard({ status, chapters = [] }) {
       <section className="progress-chapters">
         <div className="analysis-section-heading">
           <div>
-            <span className="metric-label">Per-chapter work</span>
             <h3>Analysis and audio progress</h3>
           </div>
         </div>

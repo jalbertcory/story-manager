@@ -163,7 +163,7 @@ function SentenceRow({
             }
             title={
               pipelineActive
-                ? "Pause the full-book pipeline first"
+                ? "Pause book-wide audio generation first"
                 : editing
                   ? "Save sentence edits before generating audio"
                   : characterId === ""
@@ -344,7 +344,7 @@ function ScriptEditor({
 
       {items.length === 0 ? (
         <p className="empty-state">
-          No sentences found. Start the pipeline first.
+          No sentences yet. Start AI narration to prepare the text.
         </p>
       ) : (
         <div className="script-table-wrap">

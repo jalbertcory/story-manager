@@ -154,6 +154,19 @@ function ImportedEditionReader({ edition }) {
   }
   return (
     <div className="audiobook-reader">
+      <label className="audiobook-chapter-picker">
+        Chapter
+        <select
+          value={trackId ?? ""}
+          onChange={(event) => setTrackId(Number(event.target.value))}
+        >
+          {playable.map((track) => (
+            <option key={track.id} value={track.id}>
+              {track.title}
+            </option>
+          ))}
+        </select>
+      </label>
       <aside
         className="audiobook-reader-chapters"
         aria-label="Imported audiobook chapters"
@@ -163,10 +176,10 @@ function ImportedEditionReader({ edition }) {
             type="button"
             key={track.id}
             className={track.id === trackId ? "active" : ""}
+            aria-current={track.id === trackId ? "true" : undefined}
             onClick={() => setTrackId(track.id)}
           >
             {track.title}
-            <small>{track.cue_count} synchronized passages</small>
           </button>
         ))}
       </aside>
@@ -299,6 +312,19 @@ function GeneratedEditionReader({ chapters, characters, bookId }) {
 
   return (
     <div className="audiobook-reader">
+      <label className="audiobook-chapter-picker">
+        Chapter
+        <select
+          value={chapterId ?? ""}
+          onChange={(event) => setChapterId(Number(event.target.value))}
+        >
+          {playable.map((chapter) => (
+            <option key={chapter.id} value={chapter.id}>
+              {chapterLabel(chapter)}
+            </option>
+          ))}
+        </select>
+      </label>
       <aside
         className="audiobook-reader-chapters"
         aria-label="Generated audiobook chapters"
@@ -308,10 +334,10 @@ function GeneratedEditionReader({ chapters, characters, bookId }) {
             type="button"
             key={chapter.id}
             className={chapter.id === chapterId ? "active" : ""}
+            aria-current={chapter.id === chapterId ? "true" : undefined}
             onClick={() => setChapterId(chapter.id)}
           >
             {chapterLabel(chapter)}
-            <small>{chapter.sentence_count} sentences</small>
           </button>
         ))}
       </aside>

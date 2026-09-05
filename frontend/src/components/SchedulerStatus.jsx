@@ -79,7 +79,9 @@ function formatRunState(job) {
   if (!job) return "Unknown";
   if (job.run_in_progress) return "Running";
   if (job.last_run_status) {
-    return job.last_run_status.charAt(0).toUpperCase() + job.last_run_status.slice(1);
+    return (
+      job.last_run_status.charAt(0).toUpperCase() + job.last_run_status.slice(1)
+    );
   }
   return "Idle";
 }
@@ -91,7 +93,8 @@ function TaskLogsList({ taskId }) {
   });
 
   if (isLoading) return <p className="hint">Loading entries...</p>;
-  if (!logs || logs.length === 0) return <p className="hint">No log entries for this run.</p>;
+  if (!logs || logs.length === 0)
+    return <p className="hint">No log entries for this run.</p>;
 
   const updatedLogs = logs.filter((l) => l.entry_type === "updated");
   const checkedLogs = logs.filter((l) => l.entry_type === "checked");
@@ -100,16 +103,48 @@ function TaskLogsList({ taskId }) {
 
   return (
     <div className="task-logs">
+      <p>
+        {updatedLogs.length} updated · {checkedLogs.length} unchanged ·{" "}
+        {errorLogs.length} failed
+      </p>
+      {errorLogs.length > 0 && (
+        <div>
+          <p className="task-logs-group-label">Errors ({errorLogs.length})</p>
+          <ul className="task-logs-list">
+            {errorLogs.map((log) => (
+              <li key={log.id} className="task-log-entry">
+                <a
+                  className="task-log-title"
+                  href={`/books/${log.book_id}/overview`}
+                >
+                  {log.book_title}
+                </a>
+                <a className="task-log-detail" href="/updates">
+                  Review failed check
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {updatedLogs.length > 0 && (
         <div>
-          <p className="task-logs-group-label">Updated ({updatedLogs.length})</p>
+          <p className="task-logs-group-label">
+            Updated ({updatedLogs.length})
+          </p>
           <ul className="task-logs-list">
             {updatedLogs.map((log) => (
               <li key={log.id} className="task-log-entry task-log-updated">
-                <span className="task-log-title">{log.book_title}</span>
+                <a
+                  className="task-log-title"
+                  href={`/books/${log.book_id}/overview`}
+                >
+                  {log.book_title}
+                </a>
                 <span className="task-log-detail">
                   {log.previous_chapter_count} → {log.new_chapter_count} ch
-                  {log.words_added > 0 && ` (+${log.words_added.toLocaleString()} words)`}
+                  {log.words_added > 0 &&
+                    ` (+${log.words_added.toLocaleString()} words)`}
                 </span>
               </li>
             ))}
@@ -122,8 +157,15 @@ function TaskLogsList({ taskId }) {
           <ul className="task-logs-list">
             {addedLogs.map((log) => (
               <li key={log.id} className="task-log-entry task-log-added">
-                <span className="task-log-title">{log.book_title}</span>
-                <span className="task-log-detail">{log.new_chapter_count} ch</span>
+                <a
+                  className="task-log-title"
+                  href={`/books/${log.book_id}/overview`}
+                >
+                  {log.book_title}
+                </a>
+                <span className="task-log-detail">
+                  {log.new_chapter_count} ch
+                </span>
               </li>
             ))}
           </ul>
@@ -131,24 +173,18 @@ function TaskLogsList({ taskId }) {
       )}
       {checkedLogs.length > 0 && (
         <div>
-          <p className="task-logs-group-label">Checked, no changes ({checkedLogs.length})</p>
+          <p className="task-logs-group-label">
+            Checked, no changes ({checkedLogs.length})
+          </p>
           <ul className="task-logs-list task-logs-checked">
             {checkedLogs.map((log) => (
               <li key={log.id} className="task-log-entry task-log-checked">
-                <span className="task-log-title">{log.book_title}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {errorLogs.length > 0 && (
-        <div>
-          <p className="task-logs-group-label">Errors ({errorLogs.length})</p>
-          <ul className="task-logs-list">
-            {errorLogs.map((log) => (
-              <li key={log.id} className="task-log-entry">
-                <span className="task-log-title">{log.book_title}</span>
-                <span className="task-log-detail">Update failed</span>
+                <a
+                  className="task-log-title"
+                  href={`/books/${log.book_id}/overview`}
+                >
+                  {log.book_title}
+                </a>
               </li>
             ))}
           </ul>
@@ -172,7 +208,9 @@ function TaskHistoryRow({ task }) {
           {task.status}
         </span>
         <span className="task-history-date">{formatDate(task.started_at)}</span>
-        <span className="hint">{task.completed_books} / {task.total_books} books</span>
+        <span className="hint">
+          {task.completed_books} / {task.total_books} books
+        </span>
         <span className="task-expand-icon">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && <TaskLogsList taskId={task.id} />}
@@ -184,7 +222,9 @@ function SchedulerStatus({ onBack }) {
   const queryClient = useQueryClient();
   const [now, setNow] = useState(Date.now());
   const [scheduleTime, setScheduleTime] = useState("06:00");
-  const [scheduleTimezone, setScheduleTimezone] = useState(() => getBrowserTimezone());
+  const [scheduleTimezone, setScheduleTimezone] = useState(() =>
+    getBrowserTimezone(),
+  );
   const [scheduleDirty, setScheduleDirty] = useState(false);
 
   useEffect(() => {
@@ -215,13 +255,18 @@ function SchedulerStatus({ onBack }) {
 
   useEffect(() => {
     if (!job || scheduleDirty) return;
-    setScheduleTime(job.schedule_time_local || toTimeInputValue(job.next_run_at));
+    setScheduleTime(
+      job.schedule_time_local || toTimeInputValue(job.next_run_at),
+    );
     setScheduleTimezone(job.schedule_timezone || getBrowserTimezone());
   }, [job, scheduleDirty]);
 
   const triggerMutation = useMutation({
     mutationFn: () =>
-      fetch("/api/scheduler/trigger", { method: "POST" }).then((r) => r.json()),
+      fetch("/api/scheduler/trigger", { method: "POST" }).then((r) => {
+        if (!r.ok) throw new Error("Could not queue the check");
+        return r.json();
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
       queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
@@ -267,7 +312,13 @@ function SchedulerStatus({ onBack }) {
     <div className={onBack ? "book-settings" : undefined}>
       {onBack && (
         <div className="settings-header">
-          <button className="btn-text" onClick={onBack} style={{ flexShrink: 0 }}>← Back</button>
+          <button
+            className="btn-text"
+            onClick={onBack}
+            style={{ flexShrink: 0 }}
+          >
+            ← Back
+          </button>
           <h2>Scheduler</h2>
         </div>
       )}
@@ -285,7 +336,9 @@ function SchedulerStatus({ onBack }) {
               <div className="scheduler-stat">
                 <span className="hint">Next Run</span>
                 <strong className="scheduler-value">
-                  {job.next_run_at ? formatDate(job.next_run_at) : "Not scheduled"}
+                  {job.next_run_at
+                    ? formatDate(job.next_run_at)
+                    : "Not scheduled"}
                 </strong>
               </div>
               <div className="scheduler-stat">
@@ -304,7 +357,10 @@ function SchedulerStatus({ onBack }) {
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                scheduleMutation.mutate({ timeLocal: scheduleTime, timezone: scheduleTimezone });
+                scheduleMutation.mutate({
+                  timeLocal: scheduleTime,
+                  timezone: scheduleTimezone,
+                });
               }}
             >
               <label>
@@ -328,7 +384,9 @@ function SchedulerStatus({ onBack }) {
                   {scheduleMutation.isPending ? "Saving..." : "Save Schedule"}
                 </button>
                 {scheduleMutation.isError && (
-                  <p className="error">Failed: {scheduleMutation.error.message}</p>
+                  <p className="error">
+                    Failed: {scheduleMutation.error.message}
+                  </p>
                 )}
                 {scheduleMutation.isSuccess && !scheduleMutation.isPending && (
                   <p className="hint">Daily schedule updated.</p>
@@ -392,9 +450,7 @@ function SchedulerStatus({ onBack }) {
         {!historyLoading && (!history || history.length === 0) && (
           <p className="hint">No history yet.</p>
         )}
-        {history && history.map((t) => (
-          <TaskHistoryRow key={t.id} task={t} />
-        ))}
+        {history && history.map((t) => <TaskHistoryRow key={t.id} task={t} />)}
       </section>
     </div>
   );

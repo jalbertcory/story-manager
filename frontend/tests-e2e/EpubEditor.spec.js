@@ -38,7 +38,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.request.delete("/api/books/by-title/Test Book?permanent=true");
 
   // Open the guided import workflow.
-  await page.getByRole("button", { name: "Add to library" }).click();
+  await page.getByRole("link", { name: "Add books", exact: true }).click();
 
   // Upload a book
   const filePath = path.resolve("test.epub");
@@ -74,20 +74,22 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByRole("link", { name: "Library", exact: true }).click();
 
   // Narrow the library down so "Test Book" is in the first page (list renders 30 items at a time).
-  await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");
+  await page.getByLabel("Search library").fill("Test Book");
 
-  // Standalone books now live behind their own tab in the library.
-  await page.getByRole("tab", { name: /standalone/i }).click();
-  await expect(page.getByText("Test Book").first()).toBeVisible({ timeout: 10000 });
+  // Show individual books instead of series groups.
+  await page.getByLabel("Group library by").selectOption("none");
+  await expect(page.getByText("Test Book").first()).toBeVisible({
+    timeout: 10000,
+  });
 
-  // Click the standalone library row to edit it
+  // Open the book overview, then its details editor
   await page
     .locator(".book-row")
     .filter({ hasText: /Test Book/i })
     .click();
 
-  // The book settings panel should now be visible
   await expect(page.getByRole("heading", { name: "Test Book" })).toBeVisible();
+  await page.getByRole("button", { name: "Edit details", exact: true }).click();
 
   // Expand the chapter list
   await page.getByRole("button", { name: /expand/i }).click();
@@ -150,8 +152,8 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByRole("button", { name: /back/i }).click();
   await page.reload();
   await expect(page.getByText("Story Manager")).toBeVisible();
-  await page.getByPlaceholder("Search by title, author, series, or tag").fill("Test Book");
-  await page.getByRole("tab", { name: /standalone/i }).click();
+  await page.getByLabel("Search library").fill("Test Book");
+  await page.getByLabel("Group library by").selectOption("none");
 
   // Verify the word count has changed
   const bookRow = page.locator(".book-row").filter({ hasText: /Test Book/i });

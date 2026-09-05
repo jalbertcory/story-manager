@@ -1,6 +1,6 @@
 """Metadata sync endpoints for background jobs, match approval, and proposals."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -36,10 +36,11 @@ async def get_latest_metadata_job(
 
 @router.get("/api/metadata/inbox", response_model=list[schemas.MetadataProposalSummary])
 async def get_metadata_inbox(
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> list[schemas.MetadataProposalSummary]:
-    rows = await crud.get_metadata_inbox_entries(db, limit=limit)
+    rows = await crud.get_metadata_inbox_entries(db, limit=limit, offset=offset)
     return [
         build_metadata_proposal_summary(proposal, book, match, candidate_matches=candidates)
         for proposal, book, match, candidates in rows

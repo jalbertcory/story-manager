@@ -193,34 +193,16 @@ function ProcessingJobs() {
     <div className="processing-page">
       <header className="processing-console-header">
         <div>
-          <span>PRODUCTION CONSOLE</span>
-          <h2>Processing control</h2>
+          <h2>Processing jobs</h2>
         </div>
-        <p>Durable work queue · automatic recovery enabled</p>
       </header>
-      <div
-        className="processing-health-strip"
-        aria-label="Processing system status"
-      >
-        <div>
-          <span className="processing-health-dot" />
-          <strong>Queue online</strong>
-          <small>Workers available</small>
-        </div>
-        <div>
-          <strong>{runningCount} running</strong>
-          <small>{queuedCount} waiting</small>
-        </div>
-      </div>
+      {!isLoading && !error && (
+        <p className="hint">{runningCount} running · {queuedCount} waiting in this view</p>
+      )}
       <details className="settings-section processing-queue-panel">
         <summary className="processing-queue-summary">
           <span className="processing-queue-summary-heading">
-            <span className="processing-section-code">01 / DISPATCH</span>
             <span className="processing-queue-title">Queue work</span>
-          </span>
-          <span className="hint">
-            Queue cleaning, source refreshes, or audiobook regeneration for one
-            or more books.
           </span>
         </summary>
         <div className="processing-quick-actions">
@@ -335,12 +317,7 @@ function ProcessingJobs() {
       <section className="settings-section">
         <div className="processing-list-header">
           <div>
-            <span className="processing-section-code">02 / JOB LEDGER</span>
-            <h2>Processing jobs</h2>
-            <p className="hint">
-              Durable work survives application restarts and can be retried
-              here.
-            </p>
+            <h3>Jobs in this view</h3>
           </div>
           <label>
             Status
@@ -391,7 +368,7 @@ function ProcessingJobs() {
                   {job.request_id && ` · Request ${job.request_id}`}
                 </small>
               </div>
-              <p>{job.progress_detail || "Waiting"}</p>
+              {job.progress_detail && <p>{job.progress_detail}</p>}
               <JobProgress job={job} runningState={runningState} />
               {job.error && (
                 <pre className="processing-job-error">{job.error}</pre>

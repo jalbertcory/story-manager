@@ -91,8 +91,12 @@ describe("BookSettings", () => {
       await screen.findByText("https://example.com/story"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Convert to EPUB-only" }));
-    expect(screen.getByRole("dialog", { name: /Remove the web source/ })).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Convert to EPUB-only" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: /Remove the web source/ }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
@@ -264,7 +268,9 @@ describe("BookSettings", () => {
     expect(screen.getByText("Dragon Press")).toBeInTheDocument();
     expect(screen.getByText("2024-05-01")).toBeInTheDocument();
     expect(screen.getByText("412")).toBeInTheDocument();
-    expect(screen.getByText("A richly detailed online description.")).toBeInTheDocument();
+    expect(
+      screen.getByText("A richly detailed online description."),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Synced from open_library on/)).toBeInTheDocument();
   });
 
@@ -522,7 +528,7 @@ describe("BookSettings", () => {
     });
   });
 
-  it("keeps the audiobook pipeline hidden until the book is enabled", async () => {
+  it("keeps the Audiobooks label stable when AI generation is enabled", async () => {
     const fetchMock = vi.fn((url, options) => {
       if (
         url === "/api/books/11/chapters" ||
@@ -601,11 +607,11 @@ describe("BookSettings", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Audiobook Pipeline" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "Audiobooks" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Enable Audiobook Pipeline" }),
+      await screen.findByRole("button", { name: "Enable AI narration" }),
     );
 
     await waitFor(() => {
@@ -620,7 +626,7 @@ describe("BookSettings", () => {
     });
 
     expect(
-      await screen.findByRole("button", { name: "Audiobook Pipeline" }),
+      await screen.findByRole("button", { name: "Audiobooks" }),
     ).toBeInTheDocument();
   });
 });

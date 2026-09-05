@@ -135,6 +135,9 @@ async def set_series_user_genre_tags(
 
 async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
     """Rename a series, updating all books that belong to it. Returns count of updated books."""
+    from ..services.library import move_series_universe
+
+    await move_series_universe(db, old_name, new_name)
     result = await db.execute(
         select(models.Book).filter(
             func.lower(models.Book.series) == old_name.lower(),
@@ -164,6 +167,9 @@ async def rename_series(db: AsyncSession, old_name: str, new_name: str) -> int:
 
 async def merge_series(db: AsyncSession, source: str, target: str) -> int:
     """Move all books from source series into target series. Returns count of moved books."""
+    from ..services.library import move_series_universe
+
+    await move_series_universe(db, source, target)
     result = await db.execute(
         select(models.Book).filter(
             func.lower(models.Book.series) == source.lower(),

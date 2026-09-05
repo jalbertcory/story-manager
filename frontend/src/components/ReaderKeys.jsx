@@ -17,7 +17,7 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
-function ReaderKeys() {
+function ReaderKeys({ showHeading = true }) {
   const [keys, setKeys] = useState([]);
   const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(true);
@@ -81,14 +81,20 @@ function ReaderKeys() {
 
   return (
     <section className="settings-section">
-      <h3>Reader API Keys</h3>
+      {showHeading && <h3>Reader API Keys</h3>}
       <p className="hint">
-        Create a separate read-only key for each e-reader or app. The full token is shown only once.
+        Create a separate read-only key for each e-reader or app. The full token
+        is shown only once.
       </p>
 
       <form
         onSubmit={handleCreate}
-        style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}
+        style={{
+          display: "flex",
+          gap: "0.75rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
       >
         <input
           type="text"
@@ -128,9 +134,13 @@ function ReaderKeys() {
       )}
 
       {loading ? (
-        <p className="hint" style={{ marginTop: "1rem" }}>Loading reader keys...</p>
+        <p className="hint" style={{ marginTop: "1rem" }}>
+          Loading reader keys...
+        </p>
       ) : keys.length === 0 ? (
-        <p className="hint" style={{ marginTop: "1rem" }}>No reader keys yet.</p>
+        <p className="hint" style={{ marginTop: "1rem" }}>
+          No reader keys yet.
+        </p>
       ) : (
         <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
           {keys.map((key) => (
@@ -151,12 +161,23 @@ function ReaderKeys() {
               <div>
                 <strong>{key.label}</strong>
                 <div className="hint">{key.token_prefix}</div>
-                <div className="hint">Created: {formatDate(key.created_at)}</div>
-                <div className="hint">Last used: {formatDate(key.last_used_at)}</div>
-                {key.revoked_at && <div className="hint">Revoked: {formatDate(key.revoked_at)}</div>}
+                <div className="hint">
+                  Created: {formatDate(key.created_at)}
+                </div>
+                <div className="hint">
+                  Last used: {formatDate(key.last_used_at)}
+                </div>
+                {key.revoked_at && (
+                  <div className="hint">
+                    Revoked: {formatDate(key.revoked_at)}
+                  </div>
+                )}
               </div>
               {!key.revoked_at && (
-                <button className="btn-danger" onClick={() => handleRevoke(key.id)}>
+                <button
+                  className="btn-danger"
+                  onClick={() => handleRevoke(key.id)}
+                >
                   Revoke
                 </button>
               )}

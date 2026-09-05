@@ -101,6 +101,9 @@ async def get_all_books(
 @router.get("/api/books/catalog", response_model=schemas.BookCatalogPage)
 async def get_book_catalog(
     q: Optional[str] = None,
+    series: Optional[str] = None,
+    universe: Optional[int] = Query(default=None, ge=0),
+    source: Optional[Literal["web", "epub"]] = None,
     view: Literal["all", "series", "standalone", "web"] = "series",
     review: Optional[Literal["missing-series", "refreshing", "refresh-error"]] = None,
     audiobook: Optional[Literal["available", "none"]] = None,
@@ -114,6 +117,9 @@ async def get_book_catalog(
     return await build_book_catalog_page(
         db,
         q=q,
+        series=series,
+        universe=universe,
+        source=source,
         view=view,
         review=review,
         audiobook=audiobook,

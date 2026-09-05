@@ -265,10 +265,8 @@ function LibationBackupImport() {
     <section className="settings-section libation-backup-import">
       <h3>Import a Libation Backup</h3>
       <p className="hint">
-        Choose the directory that contains all of your Libation book folders.
-        Story Manager compares identifiers and title variants before any audio
-        is transferred. Review or change every match, skip anything you do not
-        want, and then queue the selected books together.
+        Choose the folder containing your Libation books, then review the
+        matches and select which audiobooks to import.
       </p>
       <label className="libation-directory-picker">
         Libation backup directory

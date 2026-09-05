@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
-import { updateBook } from "../api/books";
+import StandaloneTagAction from "./book-list/StandaloneTagAction";
 import { getSeries } from "../api/series";
 import { buildCatalogGroups } from "../lib/catalogGrouping";
 import { BookRow } from "./book-list/BookCards";
@@ -56,61 +56,6 @@ function getWebNovelStatus(book) {
   };
 }
 
-function StandaloneTagAction({ book, seriesOptions }) {
-  const queryClient = useQueryClient();
-  const [value, setValue] = useState(book.series || "");
-
-  useEffect(() => {
-    setValue(book.series || "");
-  }, [book.id, book.series]);
-
-  const saveMutation = useMutation({
-    mutationFn: (nextSeries) =>
-      updateBook(book.id, { series: nextSeries.trim() || null }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-    },
-  });
-
-  const unchanged = (book.series || "") === value.trim();
-
-  return (
-    <form
-      className="standalone-tag-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!unchanged) {
-          saveMutation.mutate(value);
-        }
-      }}
-    >
-      <label className="standalone-tag-label" htmlFor={`series-tag-${book.id}`}>
-        Series
-      </label>
-      <input
-        id={`series-tag-${book.id}`}
-        list={`series-options-${book.id}`}
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="Add to a series"
-      />
-      <datalist id={`series-options-${book.id}`}>
-        {seriesOptions.map((series) => (
-          <option key={series} value={series} />
-        ))}
-      </datalist>
-      <button
-        type="submit"
-        className="btn"
-        disabled={unchanged || saveMutation.isPending}
-      >
-        {saveMutation.isPending ? "Saving..." : "Save"}
-      </button>
-    </form>
-  );
-}
-
 function BookList({
   books = [],
   totalCount = 0,
@@ -132,11 +77,10 @@ function BookList({
     staleTime: 60_000,
   });
 
-  const { seriesMap, sortedSeries, standaloneBooks, webBooks } =
-    useMemo(
-      () => buildCatalogGroups(books, sortBy, sortOrder),
-      [books, sortBy, sortOrder],
-    );
+  const { seriesMap, sortedSeries, standaloneBooks, webBooks } = useMemo(
+    () => buildCatalogGroups(books, sortBy, sortOrder),
+    [books, sortBy, sortOrder],
+  );
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasNextPage || isFetchingNextPage) return;
@@ -229,7 +173,9 @@ function BookList({
           <p>No web novels found.</p>
         ))}
       <div ref={sentinelRef} style={{ height: 1 }} />
-      {isFetchingNextPage && <p className="catalog-loading-more">Loading more…</p>}
+      {isFetchingNextPage && (
+        <p className="catalog-loading-more">Loading more…</p>
+      )}
     </div>
   );
 }

@@ -62,7 +62,7 @@ function JobInspector({ statusData, totalSentences, doneCount }) {
           <strong>{statusData?.llm_requests ?? 0}</strong>
         </div>
         <div>
-          <span className="metric-label">Sentence state</span>
+          <span className="metric-label">Sentences with audio</span>
           <strong>
             {doneCount} audio / {totalSentences} total
           </strong>
@@ -89,7 +89,7 @@ function JobInspector({ statusData, totalSentences, doneCount }) {
       )}
       {statusData?.summary && (
         <details className="pipeline-summary" open>
-          <summary>Model analysis summary · review required</summary>
+          <summary>Analysis summary</summary>
           <p>{statusData.summary}</p>
         </details>
       )}
@@ -290,7 +290,7 @@ function AudiobookPipeline({
 
   return (
     <div className="audiobook-pipeline">
-      {aiEnabled && (
+      {aiEnabled && AI_SUB_TAB_KEYS.has(subTab) && (
         <div className="pipeline-header">
           <PipelineProgress status={progressStatus} steps={pipelineSteps} />
 
@@ -301,7 +301,7 @@ function AudiobookPipeline({
               </span>
             )}
             {failedPipelineStatuses.has(pipelineStatus) && (
-              <span className="badge badge--error">Pipeline error</span>
+              <span className="badge badge--error">Audio generation failed</span>
             )}
             {pausedPipelineStatuses.has(pipelineStatus) && (
               <span className="badge badge--warning">
@@ -313,17 +313,20 @@ function AudiobookPipeline({
             )}
             {statusData?.last_error && (
               <details className="pipeline-error-summary">
-                <summary>Last pipeline error</summary>
+                <summary>Last generation error</summary>
                 <pre>{statusData.last_error}</pre>
               </details>
             )}
           </div>
 
-          <JobInspector
-            statusData={statusData}
-            totalSentences={totalSentences}
-            doneCount={doneCount}
-          />
+          <details className="workspace-disclosure">
+            <summary>Production details</summary>
+            <JobInspector
+              statusData={statusData}
+              totalSentences={totalSentences}
+              doneCount={doneCount}
+            />
+          </details>
 
           <div className="pipeline-controls">
             {readyPipelineStatuses.has(pipelineStatus) && (
@@ -442,17 +445,41 @@ function AudiobookPipeline({
         </div>
       )}
 
-      <nav className="sub-tabs">
-        {subTabs.map((tab) => (
-          <button
-            key={tab.key}
-            className={`sub-tab${subTab === tab.key ? " sub-tab--active" : ""}`}
-            onClick={() => selectSubTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+      <div className="audio-workspace-navigation">
+        <button
+          className={subTab === "sources" ? "btn-primary" : ""}
+          onClick={() => selectSubTab("sources")}
+        >
+          Editions
+        </button>
+        <button
+          className={subTab === "listen-read" ? "btn-primary" : ""}
+          onClick={() => selectSubTab("listen-read")}
+        >
+          Listen &amp; Read
+        </button>
+        {aiEnabled && (
+          <label>
+            AI production
+            <select
+              aria-label="AI production view"
+              value={AI_SUB_TAB_KEYS.has(subTab) ? subTab : ""}
+              onChange={(e) => selectSubTab(e.target.value)}
+            >
+              <option value="" disabled>
+                Open production tools
+              </option>
+              {subTabs
+                .filter((tab) => AI_SUB_TAB_KEYS.has(tab.key))
+                .map((tab) => (
+                  <option key={tab.key} value={tab.key}>
+                    {tab.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+      </div>
 
       <div className="sub-tab-content">
         {subTab === "sources" && (
