@@ -1,5 +1,30 @@
 # Audiobooks
 
+## Audio-only imports and adding EPUBs
+
+Audio-only books can be imported from **Import → Audiobook**; books without a library match automatically become audio-only books.
+Select audio files, a ZIP, or a Libation folder. The title and author are suggested from
+filenames and CUE metadata; you can edit them or leave them to automatic detection.
+After upload, embedded tags fill missing author/series information and attached cover
+art is extracted. The Audible identifier is retained and a normal metadata lookup is
+queued; uncertain matches follow the existing review workflow.
+In **Libation backup**, unmatched entries are automatically selected for audio-only import.
+Audiobooks upload directly from the selection page without a separate review step.
+Embedded chapter markers and CUE files split the source into chapter tracks; files without
+markers remain individual tracks. The original audio is retained for later rebuilds.
+Audio-only books appear in the reader catalog once import finishes. Story Reader for
+Android opens a track list with playback, chapter selection, offline downloads, and
+resume positions. Text alignment and AI narration require an EPUB.
+
+To find audiobooks still missing text, choose **Library → Source → Audio only (missing EPUB)**.
+You can group this list by series or universe, or choose **Group by → None** for a flat list.
+Upload purchased EPUBs normally, individually or in a bulk ZIP/folder. A unique identifier
+or matching title and author attaches the EPUB to the existing audiobook entry, preserving
+its ID, audio, notes, cover, and metadata. Chapter matching runs automatically, and the book
+leaves the missing-EPUB list. The import preview shows which audiobook will receive the EPUB;
+ambiguous matches are flagged for correction. Re-uploading the same Libation backup skips
+editions already imported, including books that have since gained an EPUB.
+
 ## Imported Human Narration
 
 The **Audiobooks** tab on every book accepts existing human-narrated audio as
