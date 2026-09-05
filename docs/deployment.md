@@ -170,6 +170,6 @@ The production container serves static frontend assets through FastAPI and does 
 ## Unraid
 
 Use the prebuilt `ghcr.io/jalbertcory/story-manager:latest` image from Unraid's **Add Container** screen. The
-[Unraid guide in the README](../README.md#unraid) lists the required port and persistent path mappings, optional
+[Unraid setup guide](unraid.md) lists the required port and persistent path mappings, optional
 authentication variables, and the supported Ollama, OmniVoice, Kokoro, OpenAI, and ElevenLabs configuration for
 audiobook generation.
