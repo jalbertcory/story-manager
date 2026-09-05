@@ -136,4 +136,34 @@ describe("AudiobookReader", () => {
     );
     expect(paragraphs[1]).toHaveTextContent("A new paragraph.");
   });
+  it("plays audio-only tracks without requesting synchronized text", () => {
+    globalThis.fetch = vi.fn();
+    const { container } = renderWithClient(
+      <AudiobookReader
+        audioOnly
+        imports={[
+          {
+            id: 1,
+            name: "Audio only",
+            status: "ready",
+            tracks: [1, 2].map((id) => ({
+              id,
+              title: `Track ${id}`,
+              cue_count: 0,
+              audio_url: `/audio/${id}`,
+              source_start_ms: 0,
+              source_end_ms: 1000,
+            })),
+          },
+        ]}
+      />,
+    );
+    expect(container.querySelector("audio")).toHaveAttribute("src", "/audio/1");
+    fireEvent.change(screen.getByRole("combobox", { name: /Chapter/ }), {
+      target: { value: "2" },
+    });
+    expect(container.querySelector("audio")).toHaveAttribute("src", "/audio/2");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Click any sentence/)).not.toBeInTheDocument();
+  });
 });

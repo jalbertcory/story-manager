@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from ..models import Book
+from ..models import Book, SourceType
 
 
 def is_failed_web_import_placeholder(book: Book) -> bool:
@@ -25,16 +25,16 @@ def inspect_library_files(books: Iterable[Book], *, library_path: Path) -> list[
                 issues.append({**book_info, "issue": "failed_web_import", "source_url": str(book.source_url)})
                 continue
 
-        if not book.immutable_path:
+        if not book.immutable_path and book.source_type != SourceType.audiobook:
             issues.append({**book_info, "issue": "missing_immutable_path"})
-        else:
+        elif book.immutable_path:
             full_path = library_path.parent / book.immutable_path
             if not full_path.exists():
                 issues.append({**book_info, "issue": "immutable_file_not_found", "path": book.immutable_path})
 
-        if not book.current_path:
+        if not book.current_path and book.source_type != SourceType.audiobook:
             issues.append({**book_info, "issue": "missing_current_path"})
-        else:
+        elif book.current_path:
             full_path = library_path.parent / book.current_path
             if not full_path.exists():
                 issues.append({**book_info, "issue": "current_file_not_found", "path": book.current_path})

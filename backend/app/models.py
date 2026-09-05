@@ -52,6 +52,7 @@ def _state_check(column_name: str, machine: StateMachine, name: str) -> CheckCon
 class SourceType(enum.Enum):
     web = "web"
     epub = "epub"
+    audiobook = "audiobook"
 
 
 class Book(Base):

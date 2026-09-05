@@ -100,8 +100,10 @@ function HighlightedText({
   );
 }
 
-function ImportedEditionReader({ edition }) {
-  const playable = edition.tracks.filter((track) => track.cue_count > 0);
+function ImportedEditionReader({ edition, audioOnly = false }) {
+  const playable = edition.tracks.filter(
+    (track) => audioOnly || track.cue_count > 0,
+  );
   const [trackId, setTrackId] = useState(playable[0]?.id ?? null);
   const [activeSentenceId, setActiveSentenceId] = useState(null);
   const audioRef = useRef(null);
@@ -121,7 +123,7 @@ function ImportedEditionReader({ edition }) {
       selected?.alignment_score ?? "estimated",
     ],
     queryFn: () => getImportedTrackCues(edition.id, trackId),
-    enabled: trackId != null,
+    enabled: trackId != null && !audioOnly,
   });
 
   const seek = (timeMs) => {
@@ -230,20 +232,24 @@ function ImportedEditionReader({ edition }) {
           onTimeUpdate={updateHighlight}
           onSeeked={updateHighlight}
         />
-        <p className="audiobook-reader-summary">
-          Click any sentence to seek.{" "}
-          {selected?.alignment_score == null
-            ? "Estimated highlighting can drift within a chapter; CUE chapter boundaries remain exact."
-            : `Whisper-aligned timing · ${Math.round(selected.alignment_score * 100)}% text match confidence.`}
-        </p>
-        {isLoading ? (
-          <p>Loading synchronized text…</p>
-        ) : (
-          <HighlightedText
-            cues={cues}
-            activeSentenceId={activeSentenceId}
-            onSeek={seek}
-          />
+        {!audioOnly && (
+          <>
+            <p className="audiobook-reader-summary">
+              Click any sentence to seek.{" "}
+              {selected?.alignment_score == null
+                ? "Estimated highlighting can drift within a chapter; CUE chapter boundaries remain exact."
+                : `Whisper-aligned timing · ${Math.round(selected.alignment_score * 100)}% text match confidence.`}
+            </p>
+            {isLoading ? (
+              <p>Loading synchronized text…</p>
+            ) : (
+              <HighlightedText
+                cues={cues}
+                activeSentenceId={activeSentenceId}
+                onSeek={seek}
+              />
+            )}
+          </>
         )}
       </main>
     </div>
@@ -407,6 +413,7 @@ function AudiobookReader({
   bookId,
   imports = [],
   aiEnabled = false,
+  audioOnly = false,
 }) {
   const generatedPlayable = chapters.some(
     (chapter) => chapter.audio_file_path && !chapter.needs_reassembly,
@@ -467,7 +474,7 @@ function AudiobookReader({
         </select>
       </label>
       {imported ? (
-        <ImportedEditionReader edition={imported} />
+        <ImportedEditionReader edition={imported} audioOnly={audioOnly} />
       ) : (
         <GeneratedEditionReader
           chapters={chapters}

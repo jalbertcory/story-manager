@@ -4,15 +4,27 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import asc, case, desc, func
+from sqlalchemy import asc, case, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models
 
 
+def _has_reader_content():
+    return or_(
+        models.Book.current_path.is_not(None),
+        select(models.ImportedAudiobook.id)
+        .where(
+            models.ImportedAudiobook.book_id == models.Book.id,
+            models.ImportedAudiobook.status == "ready",
+        )
+        .exists(),
+    )
+
+
 def _reader_books_query():
     return select(models.Book).where(
-        models.Book.current_path.is_not(None),
+        _has_reader_content(),
         models.Book.download_status.is_(None),
         models.Book.deleted_at.is_(None),
     )
@@ -64,7 +76,7 @@ async def get_reader_series(db: AsyncSession) -> List[dict]:
             func.min(case((models.Book.cover_path.is_not(None), models.Book.id))).label("cover_book_id"),
         )
         .where(
-            models.Book.current_path.is_not(None),
+            _has_reader_content(),
             models.Book.download_status.is_(None),
             models.Book.series.is_not(None),
             models.Book.deleted_at.is_(None),

@@ -70,10 +70,11 @@ def _build_book_entry(book: models.Book, base_url: str) -> ET.Element:
     ET.SubElement(author_el, f"{{{_ATOM_NS}}}name").text = book.author
     ET.SubElement(entry, f"{{{_ATOM_NS}}}updated").text = _book_updated(book)
 
-    acq_link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
-    acq_link.set("rel", "http://opds-spec.org/acquisition")
-    acq_link.set("href", f"{base_url}/reader/books/{book.id}/download")
-    acq_link.set("type", "application/epub+zip")
+    if book.current_path:
+        acq_link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
+        acq_link.set("rel", "http://opds-spec.org/acquisition")
+        acq_link.set("href", f"{base_url}/reader/books/{book.id}/download")
+        acq_link.set("type", "application/epub+zip")
 
     if book.source_type == models.SourceType.web and book.source_url:
         source_link = ET.SubElement(entry, f"{{{_ATOM_NS}}}link")
@@ -137,7 +138,8 @@ def _reader_book_payload(
         "content_version": book.content_version,
         "current_word_count": book.current_word_count,
         "effective_genre_tags": _effective_genre_tags(book, series_user_genre_tags),
-        "download_url": f"{base_url}/reader/books/{book.id}/download",
+        "download_url": f"{base_url}/reader/books/{book.id}/download" if book.current_path else None,
+        "has_text": bool(book.current_path),
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
         "audiobook": audiobook,
         "audiobook_types": [
@@ -448,7 +450,9 @@ async def get_reader_human_audiobooks(
                                 "/reader/human-audiobooks/",
                                 1,
                             ),
-                            "smil_url": (f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil"),
+                            "smil_url": (
+                                f"/reader/human-audiobooks/{edition.id}/tracks/{track.id}/smil" if track.smil_url else None
+                            ),
                         }
                     )
                     for track in edition.tracks
@@ -738,6 +742,8 @@ async def reader_audiobook_chapter_smil(
 @router.get("/reader/books/{book_id}/download")
 async def reader_download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     book = await crud.get_reader_book(db, book_id)
+    if not book.current_path:
+        raise HTTPException(status_code=404, detail="This book is audio only")
     current_path = LIBRARY_PATH.parent / book.current_path
     if not current_path.is_file():
         raise HTTPException(status_code=404, detail="EPUB file not found")
