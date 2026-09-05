@@ -25,6 +25,9 @@ export function GenreTagList({ tags, className = "" }) {
 }
 
 export function AudiobookBadge({ book }) {
+  if (book.source_type === "audiobook" && !book.has_epub) {
+    return <span className="badge-audiobook">Audio only</span>;
+  }
   if (book.audio_playable) {
     return <span className="badge-audiobook">Audiobook</span>;
   }
