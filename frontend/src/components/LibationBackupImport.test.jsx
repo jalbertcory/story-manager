@@ -18,7 +18,7 @@ describe("LibationBackupImport", () => {
     vi.restoreAllMocks();
   });
 
-  it("previews the whole backup and uploads only matched preferred audio", async () => {
+  it("imports matched and audio-only books together using preferred audio", async () => {
     const matchedM4b = backupFile(
       "Matched.m4b",
       "Backup/Matched Book [B012345678]/Matched.m4b",
@@ -85,6 +85,12 @@ describe("LibationBackupImport", () => {
           json: () => Promise.resolve({ id: 19 }),
         });
       }
+      if (url === "/api/audiobooks/upload") {
+        expect(options.body.getAll("files")).toEqual([unmatchedM4b]);
+        expect(options.body.get("title")).toBe("Unknown Book");
+        expect(options.body.get("auto_align")).toBe("false");
+        return Promise.resolve({ ok: true, json: async () => ({ id: 20 }) });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -93,21 +99,19 @@ describe("LibationBackupImport", () => {
       target: { files: [matchedM4b, duplicateMp3, unmatchedM4b] },
     });
 
-    expect(await screen.findByText("1 selected to import")).toBeInTheDocument();
-    expect(screen.getByText("No library match")).toBeInTheDocument();
+    expect(await screen.findByText("2 selected to import")).toBeInTheDocument();
+    expect(screen.getByText("Audio only")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Import 1 Selected Book" }),
+      screen.getByRole("button", { name: "Import 2 Selected Books" }),
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText("Queued 1 of 1 matched books."),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Queued 2 of 2 books.")).toBeInTheDocument();
     });
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
-  it("lets the user review a suggestion before including an unmatched book", async () => {
+  it("lets the user attach an automatically selected audio-only book to a suggested match", async () => {
     const audiobook = backupFile(
       "Rhythm.m4b",
       "Backup/Rhythm of War [1250759781]/Rhythm.m4b",
@@ -164,7 +168,7 @@ describe("LibationBackupImport", () => {
       target: { files: [audiobook] },
     });
 
-    expect(await screen.findByText("0 selected to import")).toBeInTheDocument();
+    expect(await screen.findByText("1 selected to import")).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
         name: "Rhythm of War (The Stormlight Archive) by Brandon Sanderson",
@@ -176,9 +180,7 @@ describe("LibationBackupImport", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText("Queued 1 of 1 matched books."),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Queued 1 of 1 books.")).toBeInTheDocument();
     });
   });
 
@@ -257,5 +259,47 @@ describe("LibationBackupImport", () => {
       }),
     );
     expect(screen.getByText("1 selected to import")).toBeInTheDocument();
+  });
+  it("can import an unmatched Libation book as audio only", async () => {
+    const file = backupFile(
+      "New Book.m4b",
+      "Backup/New Book [B012345678]/New Book.m4b",
+    );
+    globalThis.fetch = vi.fn(async (url, options) => {
+      if (url.endsWith("/preview"))
+        return {
+          ok: true,
+          json: async () => ({
+            groups: [
+              {
+                source_key: "Backup/New Book [B012345678]",
+                source_title: "New Book",
+                product_id: "B012345678",
+                status: "unmatched",
+                candidates: [],
+                existing_audiobooks: [],
+              },
+            ],
+            library_books: [],
+          }),
+        };
+      expect(url).toBe("/api/audiobooks/upload");
+      expect(options.body.get("title")).toBe("New Book");
+      expect(options.body.get("auto_align")).toBe("false");
+      expect(options.body.getAll("files")).toEqual([file]);
+      return { ok: true, json: async () => ({ id: 5, book_id: 8 }) };
+    });
+    renderWithClient(<LibationBackupImport />);
+    fireEvent.change(screen.getByLabelText("Libation backup directory"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("1 selected to import");
+    expect(
+      screen.queryByLabelText("Import as a new audio-only book"),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Import 1 Selected Book" }),
+    );
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
   });
 });

@@ -4387,6 +4387,13 @@ body {
   gap: 0.9rem;
 }
 
+.import-audiobook-inputs {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
 .import-url-list label,
 .import-audiobook-inputs label {
   display: grid;

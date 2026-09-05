@@ -363,7 +363,8 @@ class ReaderBook(BaseModel):
     content_version: int
     current_word_count: Optional[int] = None
     effective_genre_tags: List[str] = Field(default_factory=list)
-    download_url: str
+    download_url: Optional[str] = None
+    has_text: bool = True
     cover_url: Optional[str] = None
     audiobook: Optional[ReaderAudiobookCapability] = None
     audiobook_types: List[AudiobookType] = Field(default_factory=list)

@@ -12,6 +12,7 @@ import shutil
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from ..models import (
     ImportedAudiobookTrack,
 )
 from .audiobook_ingestion import ingest_epub
+from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
 logger = logging.getLogger(__name__)
 
@@ -898,6 +900,8 @@ async def rebuild_estimated_cues(track: ImportedAudiobookTrack, db: AsyncSession
 
 
 async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[AudiobookChapter]:
+    if not book.current_path:
+        return []
     chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
     content_version = book.content_version or 1
     chapters_are_current = (
@@ -944,6 +948,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             raise ValueError("The selected library book no longer exists.")
         edition_dir = imported_audiobook_dir(book.id, edition.id)
         audio_paths, cue_paths = _prepare_sources(edition_dir)
+        await enrich_audio_only_book(book, edition, audio_paths, cue_paths, db)
         specs, duration_ms = await _track_specs(audio_paths, cue_paths)
         manifest_path, manifest_sha, source_size = await build_source_manifest(edition, edition_dir)
         edition.source_manifest_file_path = relative_library_path(manifest_path)
@@ -966,7 +971,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         edition.source_type = "libation" if cue_paths or edition.asin else "upload"
         edition.progress_total = len(specs)
         edition.progress_current = 0
-        edition.progress_detail = "Preparing synchronized book text"
+        edition.progress_detail = "Preparing synchronized book text" if book.current_path else "Preparing audio tracks"
         await db.commit()
 
         chapters = await ensure_span_anchored_text(book, db)
@@ -1017,11 +1022,18 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
-        edition.progress_detail = f"Ready: {matched_count} of {len(specs)} tracks matched"
+        edition.progress_detail = (
+            f"Ready: {matched_count} of {len(specs)} tracks matched"
+            if book.current_path
+            else f"Ready: {len(specs)} audio-only tracks"
+        )
         edition.error = None
+        if not book.current_path:
+            book.content_updated_at = datetime.now(timezone.utc)
         await db.commit()
         cleanup_old_derived_revisions(edition_dir, revision)
         shutil.rmtree(edition_dir / "incoming", ignore_errors=True)
+        await queue_audio_metadata_lookup(book, db)
     except Exception as exc:
         logger.exception("Audiobook import %s failed.", edition_id)
         await db.rollback()

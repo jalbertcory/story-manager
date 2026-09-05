@@ -463,6 +463,8 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.current_path:
+        raise HTTPException(status_code=404, detail="This book has no EPUB")
     current_path = LIBRARY_PATH.parent / db_book.current_path
     if not current_path.is_file():
         raise HTTPException(status_code=404, detail="EPUB file not found")

@@ -1,6 +1,20 @@
 # Story Manager
 
-Story Manager is a self-hosted library manager for EPUBs and web novels. It gives you a web UI for uploading, organizing, editing, and updating books, plus a read-only reader API for e-readers and OPDS clients.
+Story Manager is a self-hosted library manager for EPUBs, web novels, and audiobooks. It gives you a web UI for uploading, organizing, editing, and updating books, plus a read-only reader API for e-readers and OPDS clients.
+
+Audio-only books can be imported from **Import → Audiobook**; books without a library match automatically become audio-only books.
+Select audio files, a ZIP, or a Libation folder. The title and author are suggested from
+filenames and CUE metadata; you can edit them or leave them to automatic detection.
+After upload, embedded tags fill missing author/series information and attached cover
+art is extracted. The Audible identifier is retained and a normal metadata lookup is
+queued; uncertain matches follow the existing review workflow.
+In **Libation backup**, unmatched entries are automatically selected for audio-only import.
+Audiobooks upload directly from the selection page without a separate review step.
+Embedded chapter markers and CUE files split the source into chapter tracks; files without
+markers remain individual tracks. The original audio is retained for later rebuilds.
+Audio-only books appear in the reader catalog once import finishes. Story Reader for
+Android opens a track list with playback, chapter selection, offline downloads, and
+resume positions. Text alignment and AI narration require an EPUB.
 
 ## Features
 

@@ -958,15 +958,17 @@ function BookSettings({
           >
             {saveMutation.isPending ? "Saving..." : "Save Metadata"}
           </button>
-          <button
-            onClick={handleProcess}
-            disabled={isBusy}
-            title="Save changes and rebuild the EPUB file with current cleaning rules"
-          >
-            {processMutation.isPending
-              ? "Queueing..."
-              : "Queue EPUB rebuild from saved edits"}
-          </button>
+          {book.current_path && (
+            <button
+              onClick={handleProcess}
+              disabled={isBusy}
+              title="Save changes and rebuild the EPUB file with current cleaning rules"
+            >
+              {processMutation.isPending
+                ? "Queueing..."
+                : "Queue EPUB rebuild from saved edits"}
+            </button>
+          )}
           {book.source_type === "web" && (
             <button onClick={() => refreshMutation.mutate()} disabled={isBusy}>
               {refreshMutation.isPending
@@ -992,13 +994,15 @@ function BookSettings({
           for new chapters.
         </p>
         <div className="actions-secondary">
-          <a
-            href={`/api/books/${book.id}/download`}
-            download
-            className="btn btn-secondary btn-sm"
-          >
-            Download EPUB
-          </a>
+          {book.current_path && (
+            <a
+              href={`/api/books/${book.id}/download`}
+              download
+              className="btn btn-secondary btn-sm"
+            >
+              Download EPUB
+            </a>
+          )}
           <button
             className="btn-danger btn-sm"
             onClick={handleDelete}

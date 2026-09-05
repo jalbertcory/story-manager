@@ -35,6 +35,7 @@ function AudiobookSources({
   chapters = [],
   imports = [],
   aiEnabled = false,
+  audioOnly = false,
   aiPipelineActive = false,
   onEnableAi,
 }) {
@@ -113,68 +114,69 @@ function AudiobookSources({
         </a>
       </section>
 
-      <section className="audiobook-ai-source">
-        <div>
-          <h3>AI-generated audiobook</h3>
-          <p>
-            {aiEnabled
-              ? "Generated chapters appear in Listen & Read when ready."
-              : "Generate narration using your configured AI voices."}
-          </p>
-        </div>
-        {!aiEnabled && (
-          <button type="button" onClick={onEnableAi}>
-            Enable AI narration
-          </button>
-        )}
-        {aiEnabled && !confirmAiTtsRebuild && (
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={aiPipelineActive || aiTtsMutation.isPending}
-            onClick={() => setConfirmAiTtsRebuild(true)}
-          >
-            Regenerate audio only
-          </button>
-        )}
-        {aiEnabled && aiPipelineActive && (
-          <p className="hint">
-            Pause audio generation before starting again.
-          </p>
-        )}
-        {aiEnabled && confirmAiTtsRebuild && (
-          <div className="alignment-note">
+      {!audioOnly && (
+        <section className="audiobook-ai-source">
+          <div>
+            <h3>AI-generated audiobook</h3>
             <p>
-              Replace the generated audio? Character voices, speaker assignments,
-              and imported audiobooks will be kept.
+              {aiEnabled
+                ? "Generated chapters appear in Listen & Read when ready."
+                : "Generate narration using your configured AI voices."}
             </p>
-            <div className="confirm-inline">
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={aiTtsMutation.isPending}
-                onClick={() => aiTtsMutation.mutate()}
-              >
-                {aiTtsMutation.isPending
-                  ? "Queueing…"
-                  : "Yes, regenerate audio"}
-              </button>
-              <button
-                type="button"
-                className="btn-text"
-                disabled={aiTtsMutation.isPending}
-                onClick={() => setConfirmAiTtsRebuild(false)}
-              >
-                Cancel
-              </button>
-            </div>
           </div>
-        )}
-        {aiTtsMutation.isError && (
-          <p className="error">{aiTtsMutation.error.message}</p>
-        )}
-      </section>
-
+          {!aiEnabled && (
+            <button type="button" onClick={onEnableAi}>
+              Enable AI narration
+            </button>
+          )}
+          {aiEnabled && !confirmAiTtsRebuild && (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={aiPipelineActive || aiTtsMutation.isPending}
+              onClick={() => setConfirmAiTtsRebuild(true)}
+            >
+              Regenerate audio only
+            </button>
+          )}
+          {aiEnabled && aiPipelineActive && (
+            <p className="hint">
+              Pause audio generation before starting again.
+            </p>
+          )}
+          {aiEnabled && confirmAiTtsRebuild && (
+            <div className="alignment-note">
+              <p>
+                Replace the generated audio? Character voices, speaker
+                assignments, and imported audiobooks will be kept.
+              </p>
+              <div className="confirm-inline">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={aiTtsMutation.isPending}
+                  onClick={() => aiTtsMutation.mutate()}
+                >
+                  {aiTtsMutation.isPending
+                    ? "Queueing…"
+                    : "Yes, regenerate audio"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-text"
+                  disabled={aiTtsMutation.isPending}
+                  onClick={() => setConfirmAiTtsRebuild(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {aiTtsMutation.isError && (
+            <p className="error">{aiTtsMutation.error.message}</p>
+          )}
+        </section>
+      )}
       {!imports.length ? (
         <p className="empty-state">No human-narrated editions imported yet.</p>
       ) : (
@@ -243,7 +245,7 @@ function AudiobookSources({
               )}
               {edition.status === "ready" && (
                 <>
-                  {edition.tracks.length > 0 && matched === 0 && (
+                  {!audioOnly && edition.tracks.length > 0 && matched === 0 && (
                     <div className="alignment-note">
                       <p>
                         The imported audio is intact, but its chapter matches
@@ -262,25 +264,29 @@ function AudiobookSources({
                       </button>
                     </div>
                   )}
-                  <p className="alignment-note">
-                    {edition.alignment_method === "transcribed"
-                      ? "Sentence timestamps are aligned to WhisperX word timestamps."
-                      : edition.alignment_method === "hybrid"
-                        ? "Transcribed timestamps are active; uncertain passages retain estimated timing."
-                        : "Sentence highlighting currently uses spoken-text length estimates and may drift within a chapter."}
-                  </p>
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={alignMutation.isPending}
-                    onClick={() => alignMutation.mutate(edition.id)}
-                  >
-                    {alignMutation.isPending
-                      ? "Queueing…"
-                      : edition.alignment_method === "estimated"
-                        ? "Improve Timestamps with Whisper"
-                        : "Re-align Timestamps"}
-                  </button>
+                  {!audioOnly && (
+                    <>
+                      <p className="alignment-note">
+                        {edition.alignment_method === "transcribed"
+                          ? "Sentence timestamps are aligned to WhisperX word timestamps."
+                          : edition.alignment_method === "hybrid"
+                            ? "Transcribed timestamps are active; uncertain passages retain estimated timing."
+                            : "Sentence highlighting currently uses spoken-text length estimates and may drift within a chapter."}
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={alignMutation.isPending}
+                        onClick={() => alignMutation.mutate(edition.id)}
+                      >
+                        {alignMutation.isPending
+                          ? "Queueing…"
+                          : edition.alignment_method === "estimated"
+                            ? "Improve Timestamps with Whisper"
+                            : "Re-align Timestamps"}
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     disabled={upgradeMutation.isPending}
@@ -309,31 +315,33 @@ function AudiobookSources({
                             {track.title}
                             <small>
                               {durationLabel(track.duration_ms)} ·{" "}
-                              {track.cue_count} text cues
+                              {audioOnly ? "Audio only" : `${track.cue_count} text cues`}
                               {track.alignment_score != null
                                 ? ` · ${Math.round(track.alignment_score * 100)}% aligned`
                                 : ""}
                             </small>
                           </span>
-                          <select
-                            value={track.matched_chapter_id ?? ""}
-                            onChange={(event) =>
-                              matchMutation.mutate({
-                                editionId: edition.id,
-                                trackId: track.id,
-                                chapterId: event.target.value
-                                  ? Number(event.target.value)
-                                  : null,
-                              })
-                            }
-                          >
-                            <option value="">Not matched</option>
-                            {chapters.map((chapter) => (
-                              <option key={chapter.id} value={chapter.id}>
-                                {chapterLabel(chapter)}
-                              </option>
-                            ))}
-                          </select>
+                          {!audioOnly && (
+                            <select
+                              value={track.matched_chapter_id ?? ""}
+                              onChange={(event) =>
+                                matchMutation.mutate({
+                                  editionId: edition.id,
+                                  trackId: track.id,
+                                  chapterId: event.target.value
+                                    ? Number(event.target.value)
+                                    : null,
+                                })
+                              }
+                            >
+                              <option value="">Not matched</option>
+                              {chapters.map((chapter) => (
+                                <option key={chapter.id} value={chapter.id}>
+                                  {chapterLabel(chapter)}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                         </label>
                       ))}
                     </div>

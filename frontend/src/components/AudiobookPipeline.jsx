@@ -142,7 +142,8 @@ function AudiobookPipeline({
   const playableSentenceStatuses =
     sentenceLifecycle?.groups?.audio_playable ?? [];
   const bookId = book.id;
-  const aiEnabled = book.audiobook_enabled !== false;
+  const audioOnly = book.source_type === "audiobook";
+  const aiEnabled = !audioOnly && book.audiobook_enabled !== false;
   const queryClient = useQueryClient();
   const [internalSubTab, setInternalSubTab] = useState(
     book.audiobook_enabled === undefined ? "progress" : "sources",
@@ -301,7 +302,9 @@ function AudiobookPipeline({
               </span>
             )}
             {failedPipelineStatuses.has(pipelineStatus) && (
-              <span className="badge badge--error">Audio generation failed</span>
+              <span className="badge badge--error">
+                Audio generation failed
+              </span>
             )}
             {pausedPipelineStatuses.has(pipelineStatus) && (
               <span className="badge badge--warning">
@@ -456,7 +459,7 @@ function AudiobookPipeline({
           className={subTab === "listen-read" ? "btn-primary" : ""}
           onClick={() => selectSubTab("listen-read")}
         >
-          Listen &amp; Read
+          {audioOnly ? "Listen" : "Listen & Read"}
         </button>
         {aiEnabled && (
           <label>
@@ -487,6 +490,7 @@ function AudiobookPipeline({
             bookId={bookId}
             chapters={chapters}
             imports={importedAudiobooks}
+            audioOnly={audioOnly}
             aiEnabled={aiEnabled}
             aiPipelineActive={isActive(pipelineStatus)}
             onEnableAi={onEnableAi}
@@ -530,6 +534,7 @@ function AudiobookPipeline({
             characters={characters}
             bookId={bookId}
             imports={importedAudiobooks}
+            audioOnly={audioOnly}
             aiEnabled={aiEnabled}
           />
         )}

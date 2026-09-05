@@ -9,11 +9,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getAllBookCatalog } from "../api/books";
 import { uploadImportedAudiobook } from "../api/audiobook";
-import {
-  addWebNovel,
-  previewBookImports,
-  uploadEpubs,
-} from "../api/imports";
+import { addWebNovel, previewBookImports, uploadEpubs } from "../api/imports";
+import { suggestAudiobookMetadata } from "../lib/audiobookMetadata";
 import LibationBackupImport from "./LibationBackupImport.jsx";
 
 const IMPORT_TYPES = [
@@ -30,7 +27,7 @@ const IMPORT_TYPES = [
   {
     key: "audiobook",
     label: "Audiobook",
-    description: "Human narration for a library book",
+    description: "Audiobooks with or without an EPUB",
   },
   {
     key: "libation",
@@ -267,6 +264,13 @@ const AddBook = forwardRef(function AddBook(
   const [files, setFiles] = useState([]);
   const [urls, setUrls] = useState([""]);
   const [audioFiles, setAudioFiles] = useState([]);
+  const manualBookSelection = useRef(Boolean(requestedBookId()));
+  const [readingAudioMetadata, setReadingAudioMetadata] = useState(false);
+  const [audioTitle, setAudioTitle] = useState("");
+  const audioTitleEdited = useRef(false);
+  const audioAuthorEdited = useRef(false);
+  const audioSelectionVersion = useRef(0);
+  const [audioAuthor, setAudioAuthor] = useState("");
   const [selectedBookId, setSelectedBookId] = useState(requestedBookId);
   const [audioMatchNotice, setAudioMatchNotice] = useState("");
   const [editionName, setEditionName] = useState("");
@@ -279,13 +283,22 @@ const AddBook = forwardRef(function AddBook(
   const [importing, setImporting] = useState(false);
   const [results, setResults] = useState(null);
 
-  const { data: catalog = [] } = useQuery({
+  const {
+    data: catalog = [],
+    isPending: catalogLoading,
+    isError: catalogFailed,
+    refetch: reloadCatalog,
+  } = useQuery({
     queryKey: ["import-book-catalog"],
     queryFn: () =>
       getAllBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
     enabled: importType === "audiobook",
     staleTime: 30_000,
   });
+
+  const createsBook = !selectedBookId;
+  const selectedBook = catalog.find((book) => book.id === selectedBookId);
+  const audioOnly = createsBook || selectedBook?.source_type === "audiobook";
 
   const addEntryFiles = async (entries) => {
     const newFiles = await extractEpubsFromEntries(entries);
@@ -311,6 +324,7 @@ const AddBook = forwardRef(function AddBook(
     const onPopState = () => {
       setImportType(requestedImportType());
       setSelectedBookId(requestedBookId());
+      manualBookSelection.current = Boolean(requestedBookId());
       setAudioMatchNotice("");
       setPreview(null);
       setResults(null);
@@ -337,7 +351,7 @@ const AddBook = forwardRef(function AddBook(
     if (matchedBook) {
       setSelectedBookId(matchedBook.id);
       setAudioMatchNotice(
-        `Matched from the filename: ${bookLabel(matchedBook)}. Please confirm before importing.`,
+        `Matched from the filename: ${bookLabel(matchedBook)}.`,
       );
     }
   }, [audioFiles, catalog, selectedBookId]);
@@ -349,11 +363,20 @@ const AddBook = forwardRef(function AddBook(
     setResults(null);
   };
 
-  const chooseAudioFiles = (selectedFiles) => {
+  const chooseAudioFiles = async (selectedFiles) => {
     lastAutoMatchSignatureRef.current = "";
+    if (!manualBookSelection.current) setSelectedBookId(null);
     setAudioMatchNotice("");
-    setAudioFiles(selectAudiobookFiles(selectedFiles));
+    const selected = selectAudiobookFiles(selectedFiles);
+    setAudioFiles(selected);
+    const version = ++audioSelectionVersion.current;
     resetInspection();
+    setReadingAudioMetadata(true);
+    const suggested = await suggestAudiobookMetadata(selected);
+    if (version !== audioSelectionVersion.current) return;
+    setReadingAudioMetadata(false);
+    if (!audioTitleEdited.current) setAudioTitle(suggested.title || "");
+    if (!audioAuthorEdited.current) setAudioAuthor(suggested.author || "");
   };
 
   const chooseType = (type) => {
@@ -380,9 +403,10 @@ const AddBook = forwardRef(function AddBook(
       await addEntryFiles(entries);
       return;
     }
-    const selected = Array.from(event.dataTransfer.files).filter((file) =>
-      file.name.toLowerCase().endsWith(".epub") ||
-      file.name.toLowerCase().endsWith(".zip"),
+    const selected = Array.from(event.dataTransfer.files).filter(
+      (file) =>
+        file.name.toLowerCase().endsWith(".epub") ||
+        file.name.toLowerCase().endsWith(".zip"),
     );
     setFiles((current) => [...current, ...selected]);
     resetInspection();
@@ -403,28 +427,6 @@ const AddBook = forwardRef(function AddBook(
             urls.map((url) => url.trim()).filter(Boolean),
           ),
         );
-      } else if (importType === "audiobook") {
-        const book = catalog.find((item) => item.id === selectedBookId);
-        if (!book || !audioFiles.length) {
-          throw new Error("Choose a library book and at least one supported audio file.");
-        }
-        setPreview({
-          ready_count: 1,
-          duplicate_count: 0,
-          unsupported_count: 0,
-          error_count: 0,
-          items: [
-            {
-              key: "audiobook:0",
-              input_type: "audiobook",
-              name: editionName.trim() || audioFiles[0].name,
-              status: "ready",
-              title: book.title,
-              author: book.author,
-              detail: `${audioFiles.length} supported ${audioFiles.length === 1 ? "file" : "files"} will be attached to this book.`,
-            },
-          ],
-        });
       }
     } catch (error) {
       setPreviewError(error.message);
@@ -462,13 +464,16 @@ const AddBook = forwardRef(function AddBook(
           );
         }
       } else if (importType === "web") {
-        for (const item of preview.items.filter((entry) => entry.status === "ready")) {
+        for (const item of preview.items.filter(
+          (entry) => entry.status === "ready",
+        )) {
           try {
             const book = await addWebNovel(item.source_url);
             completed.push({
               name: book.title || item.source_url,
               status: "queued",
-              detail: "Download started. Follow its progress in Background activity.",
+              detail:
+                "Download started. Follow its progress in Background activity.",
             });
           } catch (error) {
             completed.push({
@@ -484,7 +489,14 @@ const AddBook = forwardRef(function AddBook(
             selectedBookId,
             audioFiles,
             editionName,
-            autoAlign,
+            audioOnly ? false : autoAlign,
+            createsBook
+              ? {
+                  title: audioTitle.trim(),
+                  author: audioAuthorEdited.current ? audioAuthor.trim() : "",
+                  inferTitle: !audioTitleEdited.current,
+                }
+              : null,
           );
           completed.push({
             name: edition.name || editionName || audioFiles[0].name,
@@ -513,6 +525,7 @@ const AddBook = forwardRef(function AddBook(
       }
       setResults(completed);
       queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      queryClient.invalidateQueries({ queryKey: ["import-book-catalog"] });
       queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
       queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
     } finally {
@@ -524,22 +537,31 @@ const AddBook = forwardRef(function AddBook(
   const canInspect =
     (importType === "books" && files.length > 0) ||
     (importType === "web" && activeUrls.length > 0) ||
-    (importType === "audiobook" && selectedBookId && audioFiles.length > 0);
-  const stage = results ? 3 : preview ? 2 : 1;
+    (importType === "audiobook" &&
+      !catalogLoading &&
+      !catalogFailed &&
+      !readingAudioMetadata &&
+      audioFiles.length > 0);
+  const directImport = importType === "audiobook";
+  const stage = results ? (directImport ? 2 : 3) : preview ? 2 : 1;
   const canImport =
     (preview?.ready_count > 0 || preview?.duplicate_count > 0) &&
     (preview.duplicate_count === 0 || duplicatesReviewed);
   const selectionHeading = {
     books: "Select book files",
     web: "Enter source URLs",
-    audiobook: "Match narration to a library book",
+    audiobook: "Import an audiobook",
   }[importType];
 
   if (importType === "libation") {
     return (
       <div className="import-workflow">
         <ImportHeader stage={1} />
-        <ImportTypePicker selected={importType} onSelect={chooseType} />
+        <ImportTypePicker
+          selected={importType}
+          onSelect={chooseType}
+          disabled={importing}
+        />
         <LibationBackupImport />
       </div>
     );
@@ -547,11 +569,18 @@ const AddBook = forwardRef(function AddBook(
 
   return (
     <div className="import-workflow">
-      <ImportHeader stage={stage} />
-      <ImportTypePicker selected={importType} onSelect={chooseType} />
+      <ImportHeader stage={stage} directImport={directImport} />
+      <ImportTypePicker
+        selected={importType}
+        onSelect={chooseType}
+        disabled={importing}
+      />
 
       {!preview && !results && (
-        <section className="import-panel" aria-labelledby="import-input-heading">
+        <section
+          className="import-panel"
+          aria-labelledby="import-input-heading"
+        >
           <span className="import-step-code">01 / SELECT</span>
           <h3 id="import-input-heading">{selectionHeading}</h3>
 
@@ -587,10 +616,15 @@ const AddBook = forwardRef(function AddBook(
                   }}
                 />
               </div>
-              <SelectedFiles files={files} onRemove={(index) => {
-                setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
-                resetInspection();
-              }} />
+              <SelectedFiles
+                files={files}
+                onRemove={(index) => {
+                  setFiles((current) =>
+                    current.filter((_, itemIndex) => itemIndex !== index),
+                  );
+                  resetInspection();
+                }}
+              />
             </>
           )}
 
@@ -643,32 +677,7 @@ const AddBook = forwardRef(function AddBook(
           )}
 
           {importType === "audiobook" && (
-            <div className="import-audiobook-inputs">
-              <BookCombobox
-                books={catalog}
-                selectedBookId={selectedBookId}
-                onSelect={(bookId) => {
-                  lastAutoMatchSignatureRef.current = audioFiles
-                    .map((file) => file.webkitRelativePath || file.name)
-                    .join("|");
-                  setSelectedBookId(bookId);
-                  setAudioMatchNotice("");
-                  resetInspection();
-                }}
-              />
-              {audioMatchNotice && (
-                <p className="import-match-notice" role="status">
-                  {audioMatchNotice}
-                </p>
-              )}
-              <label>
-                Edition name (optional)
-                <input
-                  value={editionName}
-                  onChange={(event) => setEditionName(event.target.value)}
-                  placeholder="For example, Audible / Jeff Hays"
-                />
-              </label>
+            <fieldset className="import-audiobook-inputs" disabled={importing}>
               <div className="import-audio-pickers">
                 <label>
                   Audiobook files or ZIP
@@ -693,25 +702,120 @@ const AddBook = forwardRef(function AddBook(
                 </label>
               </div>
               <SelectedFiles files={audioFiles} />
+              {audioFiles.length > 0 &&
+                createsBook &&
+                !catalogLoading &&
+                !catalogFailed && (
+                  <p className="import-match-notice" role="status">
+                    No library match selected. This will be imported as an
+                    audio-only book.
+                  </p>
+                )}
+              {catalogLoading && (
+                <p className="hint">Checking for a library match…</p>
+              )}
+              {catalogFailed && (
+                <p className="error">
+                  Could not check your library.{" "}
+                  <button type="button" onClick={() => reloadCatalog()}>
+                    Retry
+                  </button>
+                </p>
+              )}
+              {createsBook && (
+                <>
+                  <p className="hint">
+                    Book details are suggested from filenames and CUE files.
+                    After upload, embedded tags and cover art are extracted and
+                    metadata lookup runs automatically. You can override the
+                    title and author below.
+                  </p>
+                  <label>
+                    Book title
+                    <input
+                      value={audioTitle}
+                      onChange={(event) => {
+                        audioTitleEdited.current = Boolean(
+                          event.target.value.trim(),
+                        );
+                        setAudioTitle(event.target.value);
+                        resetInspection();
+                      }}
+                      placeholder="Detected from the audiobook"
+                    />
+                  </label>
+                  <label>
+                    Author (optional)
+                    <input
+                      value={audioAuthor}
+                      onChange={(event) => {
+                        audioAuthorEdited.current = Boolean(
+                          event.target.value.trim(),
+                        );
+                        setAudioAuthor(event.target.value);
+                        resetInspection();
+                      }}
+                    />
+                  </label>
+                </>
+              )}
+              <BookCombobox
+                key={audioFiles
+                  .map((file) => file.webkitRelativePath || file.name)
+                  .join("|")}
+                books={catalog}
+                selectedBookId={selectedBookId}
+                onSelect={(bookId) => {
+                  lastAutoMatchSignatureRef.current = audioFiles
+                    .map((file) => file.webkitRelativePath || file.name)
+                    .join("|");
+                  manualBookSelection.current = Boolean(bookId);
+                  setSelectedBookId(bookId);
+                  setAudioMatchNotice("");
+                  resetInspection();
+                }}
+              />
+
+              {audioMatchNotice && (
+                <p className="import-match-notice" role="status">
+                  {audioMatchNotice}
+                </p>
+              )}
+              <label>
+                Edition name (optional)
+                <input
+                  value={editionName}
+                  onChange={(event) => setEditionName(event.target.value)}
+                  placeholder="For example, Audible / Jeff Hays"
+                />
+              </label>
               <label className="import-checkbox">
                 <input
                   type="checkbox"
-                  checked={autoAlign}
+                  disabled={audioOnly}
+                  checked={!audioOnly && autoAlign}
                   onChange={(event) => setAutoAlign(event.target.checked)}
                 />
-                Improve sentence timestamps with configured speech-to-text alignment
+                Improve sentence timestamps with configured speech-to-text
+                alignment
               </label>
-            </div>
+            </fieldset>
           )}
 
           <div className="import-actions">
             <button
               type="button"
               className="btn-primary"
-              disabled={!canInspect || previewing}
-              onClick={inspect}
+              disabled={!canInspect || previewing || importing}
+              onClick={directImport ? execute : inspect}
             >
-              {previewing ? "Inspecting…" : "Inspect selection"}
+              {directImport
+                ? importing
+                  ? "Importing…"
+                  : "Import audiobook"
+                : previewing
+                  ? "Inspecting…"
+                  : "Inspect selection"}
             </button>
           </div>
           {previewError && <p className="error">{previewError}</p>}
@@ -719,7 +823,10 @@ const AddBook = forwardRef(function AddBook(
       )}
 
       {preview && !results && (
-        <section className="import-panel" aria-labelledby="import-preview-heading">
+        <section
+          className="import-panel"
+          aria-labelledby="import-preview-heading"
+        >
           <span className="import-step-code">02 / REVIEW</span>
           <h3 id="import-preview-heading">Review before importing</h3>
           <p className="import-preview-summary" role="status">
@@ -737,9 +844,7 @@ const AddBook = forwardRef(function AddBook(
                   {item.author && <span>{item.author}</span>}
                   {item.series && <small>Series: {item.series}</small>}
                   {item.cleaning_configs?.length > 0 && (
-                    <small>
-                      Cleaning: {item.cleaning_configs.join(", ")}
-                    </small>
+                    <small>Cleaning: {item.cleaning_configs.join(", ")}</small>
                   )}
                   {item.detail && <small>{item.detail}</small>}
                 </div>
@@ -754,7 +859,9 @@ const AddBook = forwardRef(function AddBook(
               <input
                 type="checkbox"
                 checked={duplicatesReviewed}
-                onChange={(event) => setDuplicatesReviewed(event.target.checked)}
+                onChange={(event) =>
+                  setDuplicatesReviewed(event.target.checked)
+                }
               />
               I reviewed the duplicates and want to skip them.
             </label>
@@ -774,7 +881,11 @@ const AddBook = forwardRef(function AddBook(
                     ? `Finish with ${preview.duplicate_count} skipped`
                     : "Nothing ready to import"}
             </button>
-            <button type="button" className="btn-text" onClick={resetInspection}>
+            <button
+              type="button"
+              className="btn-text"
+              onClick={resetInspection}
+            >
               Change selection
             </button>
           </div>
@@ -782,12 +893,20 @@ const AddBook = forwardRef(function AddBook(
       )}
 
       {results && (
-        <section className="import-panel" aria-labelledby="import-results-heading">
-          <span className="import-step-code">03 / RESULTS</span>
+        <section
+          className="import-panel"
+          aria-labelledby="import-results-heading"
+        >
+          <span className="import-step-code">
+            {directImport ? "02" : "03"} / RESULTS
+          </span>
           <h3 id="import-results-heading">Import results</h3>
           <div className="import-result-list" role="status">
             {results.map((item, index) => (
-              <div className={`import-result import-result--${item.status}`} key={`${item.name}-${index}`}>
+              <div
+                className={`import-result import-result--${item.status}`}
+                key={`${item.name}-${index}`}
+              >
                 <strong>{item.name}</strong>
                 <span>{resultLabel(item.status)}</span>
                 {item.detail && <small>{item.detail}</small>}
@@ -801,6 +920,14 @@ const AddBook = forwardRef(function AddBook(
               onClick={() => {
                 setFiles([]);
                 setAudioFiles([]);
+                setSelectedBookId(null);
+                manualBookSelection.current = false;
+                audioTitleEdited.current = false;
+                audioAuthorEdited.current = false;
+                setAudioTitle("");
+                setAudioAuthor("");
+                setEditionName("");
+                setAudioMatchNotice("");
                 setUrls([""]);
                 setPreview(null);
                 setResults(null);
@@ -818,12 +945,15 @@ const AddBook = forwardRef(function AddBook(
   );
 });
 
-function ImportHeader({ stage }) {
+function ImportHeader({ stage, directImport = false }) {
+  const steps = directImport
+    ? ["Select", "Results"]
+    : ["Select", "Review", "Results"];
   return (
     <header className="import-workflow-header">
       <h2>Add to library</h2>
       <ol className="import-steps" aria-label="Import progress">
-        {["Select", "Review", "Results"].map((label, index) => (
+        {steps.map((label, index) => (
           <li
             key={label}
             className={stage >= index + 1 ? "import-steps--active" : ""}
@@ -838,14 +968,19 @@ function ImportHeader({ stage }) {
   );
 }
 
-function ImportTypePicker({ selected, onSelect }) {
+function ImportTypePicker({ selected, onSelect, disabled = false }) {
   return (
-    <div className="import-type-picker" role="group" aria-label="Import source type">
+    <div
+      className="import-type-picker"
+      role="group"
+      aria-label="Import source type"
+    >
       {IMPORT_TYPES.map((item) => (
         <button
           key={item.key}
           type="button"
           className={selected === item.key ? "import-type--active" : ""}
+          disabled={disabled}
           aria-pressed={selected === item.key}
           onClick={() => onSelect(item.key)}
         >
@@ -964,7 +1099,9 @@ function BookCombobox({ books, selectedBookId, onSelect }) {
               key={book.id}
               role="option"
               aria-selected={book.id === selectedBookId}
-              className={index === activeIndex ? "import-book-option--active" : ""}
+              className={
+                index === activeIndex ? "import-book-option--active" : ""
+              }
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => chooseBook(book)}
             >
@@ -972,7 +1109,9 @@ function BookCombobox({ books, selectedBookId, onSelect }) {
               <span>{book.author || "Unknown author"}</span>
             </li>
           ))}
-          {!options.length && <li className="import-book-options-empty">No matching books</li>}
+          {!options.length && (
+            <li className="import-book-options-empty">No matching books</li>
+          )}
         </ul>
       )}
     </div>

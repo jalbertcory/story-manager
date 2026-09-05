@@ -183,6 +183,7 @@ export function uploadImportedAudiobook(
   files,
   name = "",
   autoAlign = true,
+  newBook = null,
 ) {
   const body = new FormData();
   files.forEach((file) => {
@@ -191,9 +192,20 @@ export function uploadImportedAudiobook(
   });
   if (name.trim()) body.append("name", name.trim());
   body.append("auto_align", String(autoAlign));
-  return sendForm(`/api/books/${bookId}/audiobook/imports`, body, {
-    fallbackMessage: "Failed to upload audiobook",
-  });
+  if (newBook) {
+    body.append("title", newBook.title || "");
+    body.append("infer_title", String(Boolean(newBook.inferTitle)));
+    body.append("author", newBook.author || "Unknown author");
+  }
+  return sendForm(
+    newBook
+      ? "/api/audiobooks/upload"
+      : `/api/books/${bookId}/audiobook/imports`,
+    body,
+    {
+      fallbackMessage: "Failed to upload audiobook",
+    },
+  );
 }
 
 export function retryImportedAudiobook(editionId) {
@@ -225,13 +237,10 @@ export function previewHumanAudiobookRebuilds() {
 }
 
 export function rebuildAllHumanAudiobooks({ force = false } = {}) {
-  return sendWithoutBody(
-    `/api/audiobook/imports/rebuild-all?force=${force}`,
-    {
-      method: "POST",
-      fallbackMessage: "Failed to queue human audiobook rebuilds",
-    },
-  );
+  return sendWithoutBody(`/api/audiobook/imports/rebuild-all?force=${force}`, {
+    method: "POST",
+    fallbackMessage: "Failed to queue human audiobook rebuilds",
+  });
 }
 
 export function alignImportedAudiobook(editionId) {

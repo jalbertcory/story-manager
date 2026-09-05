@@ -124,7 +124,7 @@ function LibationBackupImport() {
             {
               bookId: group.book_id || null,
               included:
-                group.status === "matched" &&
+                group.status !== "already_imported" &&
                 !group.existing_audiobooks?.length,
               input: group.book_id ? bookOptionLabel(group) : "",
             },
@@ -143,7 +143,7 @@ function LibationBackupImport() {
     const matches = (preview?.groups || [])
       .filter((group) => {
         const selection = review[group.source_key];
-        return selection?.included && selection.bookId;
+        return selection?.included;
       })
       .map((group) => ({
         ...group,
@@ -164,7 +164,10 @@ function LibationBackupImport() {
           group.book_id,
           groupFiles,
           `Libation · ${group.product_id}`,
-          autoAlign,
+          group.book_id ? autoAlign : false,
+          !group.book_id
+            ? { title: group.source_title, inferTitle: true }
+            : null,
         );
         results.push({ ...group, result: "queued" });
       } catch (error) {
@@ -199,7 +202,7 @@ function LibationBackupImport() {
       ...current,
       [group.source_key]: {
         bookId: option?.book_id || null,
-        included: Boolean(option) && !option.existing_audiobooks?.length,
+        included: !option?.existing_audiobooks?.length,
         input,
       },
     }));
@@ -235,18 +238,15 @@ function LibationBackupImport() {
   }).length;
   const selectedCount = (preview?.groups || []).filter((group) => {
     const selection = review[group.source_key];
-    return selection?.included && selection.bookId;
+    return selection?.included;
   }).length;
   const needsReviewCount = (preview?.groups || []).filter((group) => {
     const selection = review[group.source_key];
-    return (
-      group.status !== "already_imported" &&
-      !(selection?.included && selection.bookId)
-    );
+    return group.status !== "already_imported" && !selection?.included;
   }).length;
   const visibleGroups = (preview?.groups || []).filter((group) => {
     const selection = review[group.source_key];
-    const isSelected = Boolean(selection?.included && selection.bookId);
+    const isSelected = Boolean(selection?.included);
     if (matchFilter === "ready") return isSelected;
     if (matchFilter === "review") {
       return group.status !== "already_imported" && !isSelected;
@@ -265,8 +265,9 @@ function LibationBackupImport() {
     <section className="settings-section libation-backup-import">
       <h3>Import a Libation Backup</h3>
       <p className="hint">
-        Choose the folder containing your Libation books, then review the
-        matches and select which audiobooks to import.
+        Choose your Libation backup folder. Library matches are attached
+        automatically; unmatched books are imported as audio only. You can
+        adjust the selection below.
       </p>
       <label className="libation-directory-picker">
         Libation backup directory
@@ -412,7 +413,7 @@ function LibationBackupImport() {
                         ))}
                       </div>
                     )}
-                    {selectedBook && (
+                    {canImport && (
                       <label className="libation-include-match">
                         <input
                           type="checkbox"
@@ -435,11 +436,13 @@ function LibationBackupImport() {
                     )}
                   </div>
                   <span className="libation-match-status">
-                    {selection.bookId &&
-                    group.status !== "matched" &&
-                    group.status !== "already_imported"
-                      ? "Match reviewed"
-                      : statusLabel(group, existingAudiobooks.length)}
+                    {!selection.bookId && canImport
+                      ? "Audio only"
+                      : selection.bookId &&
+                          group.status !== "matched" &&
+                          group.status !== "already_imported"
+                        ? "Match reviewed"
+                        : statusLabel(group, existingAudiobooks.length)}
                   </span>
                 </div>
               );
@@ -483,7 +486,7 @@ function LibationBackupImport() {
         <div className="libation-import-progress" role="status">
           <p>
             {importState.done
-              ? `Queued ${queuedCount} of ${importState.total} matched books${failedCount ? `; ${failedCount} failed to upload` : ""}.`
+              ? `Queued ${queuedCount} of ${importState.total} books${failedCount ? `; ${failedCount} failed to upload` : ""}.`
               : `Uploading book ${Math.min(importState.current + 1, importState.total)} of ${importState.total}. Keep this page open until all uploads are queued.`}
           </p>
           <progress value={importState.current} max={importState.total} />
@@ -497,9 +500,8 @@ function LibationBackupImport() {
         </div>
       )}
       <p className="hint">
-        Books left unchecked or without a library match are not uploaded. Add
-        missing EPUBs and select this backup again later; already imported books
-        are skipped.
+        Unmatched books are selected as audio only automatically. Uncheck any
+        books you want to skip. Already imported editions are skipped.
       </p>
     </section>
   );

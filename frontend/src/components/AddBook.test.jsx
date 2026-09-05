@@ -122,7 +122,8 @@ describe("AddBook", () => {
               key: "url:0",
               status: "ready",
               source_url: "https://example.com/new",
-              detail: "Metadata will be collected when the durable web import runs.",
+              detail:
+                "Metadata will be collected when the durable web import runs.",
             },
             {
               key: "url:1",
@@ -169,7 +170,7 @@ describe("AddBook", () => {
     });
   });
 
-  it("requires an explicit library-book match for audiobook imports", async () => {
+  it("imports directly into a selected library book", async () => {
     globalThis.fetch
       .mockResolvedValueOnce(
         jsonResponse([
@@ -182,7 +183,7 @@ describe("AddBook", () => {
     fireEvent.click(screen.getByRole("button", { name: /Audiobook/ }));
     expect(
       screen.getByRole("heading", {
-        name: "Match narration to a library book",
+        name: "Import an audiobook",
       }),
     ).toBeInTheDocument();
     const bookSearch = await screen.findByRole("combobox", {
@@ -193,18 +194,21 @@ describe("AddBook", () => {
     fireEvent.click(
       await screen.findByRole("option", { name: /Matched Book/ }),
     );
-    fireEvent.change(
-      container.querySelector('input[accept^=".zip"]'),
-      {
-        target: {
-          files: [new File(["audio"], "narration.m4b", { type: "audio/mp4" })],
-        },
+    fireEvent.change(container.querySelector('input[accept^=".zip"]'), {
+      target: {
+        files: [new File(["audio"], "narration.m4b", { type: "audio/mp4" })],
       },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Import audiobook" }),
+      ).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Inspect selection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import audiobook" }));
 
-    expect(await screen.findByText("Matched Book")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Import 1 ready" }));
+    expect(
+      screen.queryByText("Review before importing"),
+    ).not.toBeInTheDocument();
 
     expect(await screen.findByText("Queued")).toBeInTheDocument();
     await waitFor(() => {
@@ -248,17 +252,17 @@ describe("AddBook", () => {
     fireEvent.change(container.querySelector('input[accept^=".zip"]'), {
       target: {
         files: [
-          new File(
-            ["audio"],
-            "Dungeon Crawler Carl [B08V8B2CGV].m4b",
-            { type: "audio/mp4" },
-          ),
+          new File(["audio"], "Dungeon Crawler Carl [B08V8B2CGV].m4b", {
+            type: "audio/mp4",
+          }),
         ],
       },
     });
 
     await waitFor(() => {
-      expect(bookSearch).toHaveValue(
+      expect(
+        screen.getByRole("combobox", { name: "Attach narration to" }),
+      ).toHaveValue(
         "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure — Matt Dinniman",
       );
     });
@@ -266,11 +270,36 @@ describe("AddBook", () => {
       "Matched from the filename",
     );
     expect(
-      screen.getByRole("button", { name: "Inspect selection" }),
+      screen.getByRole("button", { name: "Import audiobook" }),
     ).toBeEnabled();
   });
 
-  it("leaves ambiguous filename matches for the user to decide", async () => {
+  it("rechecks the library match when different audio files are chosen", async () => {
+    globalThis.fetch.mockResolvedValue(
+      jsonResponse([{ id: 42, title: "First Book", author: "Author" }]),
+    );
+    window.history.replaceState({}, "", "/import?type=audiobook");
+    renderWithClient(<AddBook />);
+    const picker = screen.getByLabelText("Audiobook files or ZIP");
+    fireEvent.change(picker, {
+      target: { files: [new File(["audio"], "First Book.m4b")] },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("combobox")).toHaveValue("First Book — Author"),
+    );
+    fireEvent.change(picker, {
+      target: { files: [new File(["audio"], "Another Story.m4b")] },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Book title")).toHaveValue("Another Story"),
+    );
+    expect(screen.getByRole("combobox")).toHaveValue("");
+    expect(
+      screen.getByText(/This will be imported as an audio-only book/),
+    ).toBeInTheDocument();
+  });
+
+  it("defaults ambiguous filename matches to audio only without choosing a library book", async () => {
     globalThis.fetch.mockResolvedValueOnce(
       jsonResponse([
         { id: 42, title: "Shared Title", author: "First Author" },
@@ -293,9 +322,59 @@ describe("AddBook", () => {
       expect(screen.getByText("Shared Title.m4b")).toBeInTheDocument();
     });
     expect(bookSearch).toHaveValue("");
-    expect(screen.queryByText(/Matched from the filename/)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Inspect selection" }),
-    ).toBeDisabled();
+      screen.queryByText(/Matched from the filename/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Import audiobook" }),
+    ).toBeEnabled();
+  });
+  it("imports an audiobook without choosing an EPUB", async () => {
+    window.history.replaceState({}, "", "/import?type=audiobook");
+    globalThis.fetch = vi.fn(async (url, options) => {
+      if (url === "/api/audiobooks/upload") {
+        expect(options.body.get("title")).toBe("Audio Title");
+        expect(options.body.get("author")).toBe("Narrator");
+        expect(options.body.get("auto_align")).toBe("false");
+        return jsonResponse({
+          id: 3,
+          book_id: 9,
+          name: "Audio Title",
+          status: "queued",
+        });
+      }
+      return jsonResponse([]);
+    });
+    renderWithClient(<AddBook />);
+    expect(
+      screen.queryByLabelText("Create a new audio-only book"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Book title"), {
+      target: { value: "Audio Title" },
+    });
+    fireEvent.change(screen.getByLabelText("Author (optional)"), {
+      target: { value: "Narrator" },
+    });
+    fireEvent.change(screen.getByLabelText("Audiobook files or ZIP"), {
+      target: {
+        files: [new File(["audio"], "book.m4b", { type: "audio/mp4" })],
+      },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Import audiobook" }),
+      ).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Import audiobook" }));
+    expect(
+      screen.queryByText("Review before importing"),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        globalThis.fetch.mock.calls.some(
+          ([url]) => url === "/api/audiobooks/upload",
+        ),
+      ).toBe(true),
+    );
   });
 });

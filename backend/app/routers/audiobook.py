@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import DataError
 
 from .. import crud
 from ..config import LIBRARY_PATH
@@ -26,6 +27,7 @@ from ..models import (
     AudiobookCharacter,
     AudiobookSentence,
     Book,
+    SourceType,
     ImportedAudiobook,
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
@@ -43,6 +45,7 @@ from ..services.audiobook_import import (
     safe_import_filename,
     stream_upload_to_path,
 )
+from ..services.audiobook_metadata import filename_metadata
 from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
 from ..services.audiobook_tts import (
     VOICE_ROSTER_MAX_SIMILARITY,
@@ -384,7 +387,7 @@ class ImportedTrackResponse(BaseModel):
     alignment_score: Optional[float]
     audio_url: str
     cues_url: str
-    smil_url: str
+    smil_url: Optional[str] = None
 
 
 class ImportedAudiobookResponse(BaseModel):
@@ -491,6 +494,8 @@ async def _get_book_or_404(book_id: int, db: AsyncSession) -> Book:
 
 async def _get_audiobook_book_or_404(book_id: int, db: AsyncSession) -> Book:
     book = await _get_book_or_404(book_id, db)
+    if not book.current_path:
+        raise HTTPException(status_code=400, detail="AI narration requires book text")
     if not book.audiobook_enabled:
         raise HTTPException(status_code=403, detail="Audiobook pipeline is not enabled for this book")
     return book
@@ -606,7 +611,11 @@ async def _imported_audiobook_response(
                     f"{canonical_audio_track_ids[track.audio_file_path]}/audio"
                 ),
                 cues_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/cues",
-                smil_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/smil",
+                smil_url=(
+                    f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/smil"
+                    if track.matched_chapter_id is not None
+                    else None
+                ),
             )
             for track in tracks
         ],
@@ -1009,6 +1018,45 @@ async def upload_imported_audiobook(
         await db.commit()
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     return await _imported_audiobook_response(edition, db)
+
+
+@router.post("/api/audiobooks/upload", response_model=ImportedAudiobookResponse)
+async def upload_audio_only_book(
+    files: list[UploadFile] = File(...),
+    title: str = Form(default=""),
+    author: str = Form(default="Unknown author"),
+    name: Optional[str] = Form(None),
+    source_paths: list[str] = Form(default=[]),
+    infer_title: bool = Form(default=False),
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    if not files or any(Path(file.filename or "").suffix.lower() not in IMPORT_EXTENSIONS for file in files):
+        raise HTTPException(status_code=400, detail="Choose supported audiobook audio, CUE, or ZIP files")
+    inferred = filename_metadata(source_paths or [file.filename or "" for file in files])
+    book_title = title.strip() or inferred["title"]
+    book = Book(
+        title=book_title,
+        author=author.strip() or "Unknown author",
+        source_type=SourceType.audiobook,
+        metadata_details={"audiobook_import": {"inferred_title": book_title if infer_title or not title.strip() else None}},
+        metadata_remote_ids={"asin": inferred["asin"]} if inferred.get("asin") else None,
+    )
+    db.add(book)
+    try:
+        await db.commit()
+    except DataError as exc:
+        await db.rollback()
+        if getattr(exc.orig, "sqlstate", None) == "22P02" and "enum sourcetype" in str(exc.orig):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Audio-only imports require a database update. "
+                    "Run make migrate on the Story Manager server, then retry the import."
+                ),
+            ) from exc
+        raise
+    await db.refresh(book)
+    return await upload_imported_audiobook(book.id, files, name, source_paths, False, db)
 
 
 @router.post(
