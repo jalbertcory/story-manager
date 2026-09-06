@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -234,6 +235,23 @@ def test_series_enrichment_fills_positions_without_overwriting_existing_values()
 
     assert [float(book.series_index) for book in books] == [1.0, 10.0, 4.0]
     assert changed == books[:2]
+
+
+def test_series_enrichment_limits_writes_and_keeps_decimal_positions():
+    books = [
+        models.Book(id=1, title="Saga Book 1.5", author="Author", series="Saga"),
+        models.Book(id=2, title="Saga Book 2", author="Author", series="Saga"),
+        models.Book(id=3, title=None, author=None),
+    ]
+
+    changed = enrich_series_metadata(books, target_ids={1, 3})
+
+    assert changed == [books[0]]
+    assert isinstance(books[0].series_index, Decimal)
+    assert books[0].series_index == Decimal("1.5")
+    assert books[1].series_index is None
+    assert books[2].series is None
+    assert books[2].series_index is None
 
 
 @pytest.mark.asyncio

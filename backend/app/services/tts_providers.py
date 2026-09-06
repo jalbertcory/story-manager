@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import math
 from dataclasses import dataclass
 import re
 import shutil
 
 import httpx
 
+from .tts_responses import BatchSpeechResponse, DesignedVoiceResponse
 from .endpoint_pool import ProviderSettings
 from .endpoint_pool import RoutedResult, primary_provider, route_request
 
@@ -333,7 +335,8 @@ async def _synthesize_speech_result_endpoint(
 def _optional_int_header(response: httpx.Response, name: str) -> int | None:
     value = response.headers.get(name)
     try:
-        return int(value) if value is not None else None
+        parsed = int(value) if value is not None else None
+        return parsed if parsed is not None and parsed > 0 else None
     except ValueError:
         return None
 
@@ -341,7 +344,8 @@ def _optional_int_header(response: httpx.Response, name: str) -> int | None:
 def _optional_float_header(response: httpx.Response, name: str) -> float | None:
     value = response.headers.get(name)
     try:
-        return float(value) if value is not None else None
+        parsed = float(value) if value is not None else None
+        return parsed if parsed is not None and math.isfinite(parsed) and -1 <= parsed <= 1 else None
     except ValueError:
         return None
 
@@ -405,21 +409,17 @@ async def _design_local_voice_endpoint(
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
-        voice_payload = response.json()
     try:
-        return DesignedVoice(
-            id=str(voice_payload["id"]),
-            sample_text=str(voice_payload["sample_text"]),
-            sample_url=str(voice_payload["sample_url"]),
-            max_cross_voice_similarity=(
-                float(voice_payload["max_cross_voice_similarity"])
-                if voice_payload.get("max_cross_voice_similarity") is not None
-                else None
-            ),
-            attempts=int(voice_payload.get("attempts", 1)),
-        )
-    except (KeyError, TypeError, ValueError) as exc:
+        voice = DesignedVoiceResponse.model_validate(response.json())
+    except ValueError as exc:
         raise RuntimeError(f"{provider} returned an invalid designed voice.") from exc
+    return DesignedVoice(
+        id=voice.id,
+        sample_text=voice.sample_text,
+        sample_url=voice.sample_url,
+        max_cross_voice_similarity=voice.max_cross_voice_similarity,
+        attempts=voice.attempts,
+    )
 
 
 async def design_omnivoice_voice(
@@ -473,21 +473,17 @@ async def materialize_qwen_preset_voice(
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
-        response_payload = response.json()
     try:
-        return DesignedVoice(
-            id=str(response_payload["id"]),
-            sample_text=str(response_payload["sample_text"]),
-            sample_url=str(response_payload["sample_url"]),
-            max_cross_voice_similarity=(
-                float(response_payload["max_cross_voice_similarity"])
-                if response_payload.get("max_cross_voice_similarity") is not None
-                else None
-            ),
-            attempts=int(response_payload.get("attempts", 1)),
-        )
-    except (KeyError, TypeError, ValueError) as exc:
+        voice = DesignedVoiceResponse.model_validate(response.json())
+    except ValueError as exc:
         raise RuntimeError("Qwen3 returned an invalid materialized preset voice.") from exc
+    return DesignedVoice(
+        id=voice.id,
+        sample_text=voice.sample_text,
+        sample_url=voice.sample_url,
+        max_cross_voice_similarity=voice.max_cross_voice_similarity,
+        attempts=voice.attempts,
+    )
 
 
 async def _get_local_voice_sample_endpoint(
@@ -571,32 +567,28 @@ async def _synthesize_speech_batch_endpoint(
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
-        payload = response.json()
 
-    items = payload.get("items")
-    if not isinstance(items, list) or len(items) != len(requests):
-        raise RuntimeError(
-            f"{provider} returned {len(items) if isinstance(items, list) else 0} "
-            f"batch results for {len(requests)} requests."
-        )
+    try:
+        batch = BatchSpeechResponse.model_validate(response.json())
+    except ValueError as exc:
+        raise RuntimeError(f"{provider} returned an invalid batch result.") from exc
+    if len(batch.items) != len(requests):
+        raise RuntimeError(f"{provider} returned {len(batch.items)} batch results for {len(requests)} requests.")
 
     results: list[TTSResult] = []
-    for item in items:
+    for item in batch.items:
         try:
-            audio_bytes = base64.b64decode(item["audio_base64"], validate=True)
-            duration_ms = int(item["duration_ms"])
-            similarity = float(item["voice_similarity"]) if item.get("voice_similarity") is not None else None
-            attempts = int(item["attempts"]) if item.get("attempts") is not None else None
-        except (KeyError, TypeError, ValueError, binascii.Error) as exc:
+            audio_bytes = base64.b64decode(item.audio_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
             raise RuntimeError(f"{provider} returned an invalid batch result.") from exc
-        if not audio_bytes or duration_ms <= 0:
-            raise RuntimeError("OmniVoice returned an empty batch result.")
+        if not audio_bytes:
+            raise RuntimeError(f"{provider} returned an empty batch result.")
         results.append(
             TTSResult(
                 audio_bytes=audio_bytes,
-                duration_ms=duration_ms,
-                voice_similarity=similarity,
-                attempts=attempts,
+                duration_ms=item.duration_ms,
+                voice_similarity=item.voice_similarity,
+                attempts=item.attempts,
             )
         )
     return results

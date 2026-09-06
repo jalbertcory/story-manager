@@ -123,7 +123,7 @@ gpu-services-status:
 	fi
 
 test-gpu-scheduler:
-	PYTHONPATH=. uv run --project services/gpu_scheduler pytest services/gpu_scheduler/tests
+	PYTHONPATH=. uv run --frozen --project services/gpu_scheduler pytest services/gpu_scheduler/tests
 
 run-ui:
 	cd frontend && npm run dev
@@ -161,16 +161,16 @@ migrate:
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
 
 fmt:
-	.venv/bin/python3 -m black backend
-	.venv/bin/python3 -m flake8 backend
+	.venv/bin/python3 -m black backend services
+	.venv/bin/python3 -m flake8 --extend-exclude=.venv backend services
 	cd frontend && npx prettier --write .
 
 lint: lint-backend lint-ui
 
 lint-backend:
-	.venv/bin/python3 -m black --check backend
-	.venv/bin/python3 -m autoflake --check --remove-all-unused-imports --recursive backend
-	.venv/bin/python3 -m flake8 backend --count --statistics
+	.venv/bin/python3 -m black --check backend services
+	.venv/bin/python3 -m autoflake --check --remove-all-unused-imports --recursive --exclude .venv backend services
+	.venv/bin/python3 -m flake8 --extend-exclude=.venv backend services --count --statistics
 
 lint-ui:
 	cd frontend && npm run lint -- --max-warnings=0

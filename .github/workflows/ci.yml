@@ -50,6 +50,21 @@ jobs:
         source .venv/bin/activate
         pytest -m "not integration" backend/tests/
 
+  gpu-scheduler-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13.5'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+    - name: Test GPU scheduler with its locked dependencies
+      run: make test-gpu-scheduler
+
   migrations:
     runs-on: ubuntu-latest
     permissions:

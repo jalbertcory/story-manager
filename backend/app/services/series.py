@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Iterable, TypeVar, TypedDict
+from decimal import Decimal
+from typing import Iterable, Protocol, TypeVar, TypedDict
 
 from .metadata.scoring import infer_series_metadata
 
@@ -119,7 +120,21 @@ class _SeriesCluster(TypedDict):
     books: set[tuple[str, str]]
 
 
-_Book = TypeVar("_Book")
+class SeriesMetadataBook(Protocol):
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def title(self) -> str | None: ...
+
+    @property
+    def author(self) -> str | None: ...
+
+    series: str | None
+    series_index: Decimal | None
+
+
+_Book = TypeVar("_Book", bound=SeriesMetadataBook)
 
 
 def detect_series_from_books(books: list[SeriesBook]) -> dict[tuple[str, str], str]:
@@ -197,30 +212,24 @@ def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
 def enrich_series_metadata(books: list[_Book], *, target_ids: set[int] | None = None) -> list[_Book]:
     """Fill only missing series names and positions from deterministic title evidence."""
 
-    without_series = [
-        SeriesBook(title=str(getattr(book, "title", "")), author=str(getattr(book, "author", "")))
-        for book in books
-        if not getattr(book, "series", None)
-    ]
+    without_series = [SeriesBook(title=str(book.title), author=str(book.author)) for book in books if not book.series]
     detected = detect_series_from_books(without_series) if len(without_series) >= 2 else {}
     changed: list[_Book] = []
     for book in books:
-        if target_ids is not None and getattr(book, "id", None) not in target_ids:
+        if target_ids is not None and book.id not in target_ids:
             continue
-        series_name = getattr(book, "series", None) or detected.get(
-            (str(getattr(book, "author", "")), str(getattr(book, "title", "")))
-        )
+        series_name = book.series or detected.get((str(book.author), str(book.title)))
         book_changed = False
-        if not getattr(book, "series", None) and series_name:
-            setattr(book, "series", series_name)
+        if not book.series and series_name:
+            book.series = series_name
             book_changed = True
-        if getattr(book, "series_index", None) is None and series_name:
+        if book.series_index is None and series_name:
             _inferred_series, inferred_index = infer_series_metadata(
-                str(getattr(book, "title", "")),
+                str(book.title),
                 str(series_name),
             )
             if inferred_index is not None:
-                setattr(book, "series_index", inferred_index)
+                book.series_index = Decimal(str(inferred_index))
                 book_changed = True
         if book_changed:
             changed.append(book)
