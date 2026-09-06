@@ -1,5 +1,6 @@
 """Scheduler status, manual trigger, history, and per-task log endpoints."""
 
+from .. import api_schemas as contracts
 import logging
 from typing import List, Optional
 
@@ -68,7 +69,7 @@ async def update_scheduler_config(
     return _build_scheduler_job_status(latest_task, schedule_settings, job)
 
 
-@router.post("/api/scheduler/trigger", status_code=202, response_model=None)
+@router.post("/api/scheduler/trigger", status_code=202, response_model=contracts.SchedulerTriggered)
 async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     job = await queue_processing_job(
         db=db,

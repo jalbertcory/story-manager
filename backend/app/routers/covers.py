@@ -1,5 +1,6 @@
 """Cover image endpoints: serve, upload, and set from URL."""
 
+from .. import api_schemas as contracts
 import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
@@ -23,7 +24,9 @@ class CoverUrlRequest(BaseModel):
     url: str
 
 
-@router.get("/api/covers/{book_id}", response_model=None)
+@router.get(
+    "/api/covers/{book_id}", response_model=None, response_class=Response, responses=contracts.media_responses("image/*")
+)
 async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     """Serves the cover image for a given book ID."""
     db_book = await crud.get_book(db, book_id=book_id)

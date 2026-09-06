@@ -1,5 +1,7 @@
 """FastAPI application entry point: app creation, lifespan, and router registration."""
 
+from . import api_schemas as contracts
+
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -137,7 +139,7 @@ app.include_router(reader.router)
 app.include_router(metadata.router)
 
 
-@app.get("/health", response_model=None)
+@app.get("/health", response_model=contracts.DatabaseHealth)
 async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str] | JSONResponse:
     """Health check endpoint for container orchestration."""
     try:
@@ -151,13 +153,13 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str] | J
         )
 
 
-@app.get("/health/live", response_model=None)
+@app.get("/health/live", response_model=contracts.StatusResponse)
 async def liveness_check() -> dict[str, str]:
     """Process-only health check that never depends on external services."""
     return {"status": "alive"}
 
 
-@app.get("/health/ready")
+@app.get("/health/ready", response_model=contracts.HealthReport)
 async def readiness_check(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     """Required-dependency readiness check for container orchestration."""
     from .services.observability import health_report
@@ -191,6 +193,6 @@ if _FRONTEND_DIST.is_dir():
 
 else:
 
-    @app.get("/", response_model=dict)
+    @app.get("/", response_model=contracts.MessageResponse)
     def read_root() -> dict[str, str]:
         return {"message": "Welcome to the Story Manager API"}

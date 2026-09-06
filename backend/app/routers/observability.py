@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from .. import api_schemas as contracts
 import io
 import json
 import zipfile
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import Response, APIRouter, Depends, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,18 +25,18 @@ from ..services.processing_queue import get_processing_queue
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 
-@router.get("/health", response_model=None)
+@router.get("/health", response_model=contracts.HealthReport)
 async def get_health(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     return await health_report(db, get_processing_queue())
 
 
-@router.get("/ready", response_model=None)
+@router.get("/ready", response_model=contracts.HealthReport)
 async def get_readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     report = await health_report(db, get_processing_queue())
     return JSONResponse(status_code=200 if report["status"] == "healthy" else 503, content=report)
 
 
-@router.get("/job-metrics", response_model=None)
+@router.get("/job-metrics", response_model=contracts.JobMetrics)
 async def get_job_metrics(
     window_hours: int = Query(default=24, ge=1, le=24 * 90),
     db: AsyncSession = Depends(get_db),
@@ -43,7 +44,9 @@ async def get_job_metrics(
     return await processing_job_metrics(db, window_hours=window_hours)
 
 
-@router.get("/diagnostics", response_model=None)
+@router.get(
+    "/diagnostics", response_model=None, response_class=Response, responses=contracts.media_responses("application/zip")
+)
 async def download_diagnostics(db: AsyncSession = Depends(get_db)) -> StreamingResponse:
     """Download a redacted bundle with no library files, audio, or secret configuration."""
     queue = get_processing_queue()

@@ -1,5 +1,6 @@
 """Universe organization and compact library group summaries."""
 
+from .. import api_schemas as contracts
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,7 +23,7 @@ class UniverseMembership(BaseModel):
     series: str | None = None
 
 
-@router.get("/groups", response_model=None)
+@router.get("/groups", response_model=list[LibraryGroup] | LibraryGroupsPage)
 async def groups(
     group_by: Literal["series", "universe"] = "series",
     q: str = "",
@@ -53,20 +54,20 @@ async def groups(
     )
 
 
-@router.get("/universes", response_model=None)
+@router.get("/universes", response_model=list[contracts.UniverseSummary])
 async def universes(db: AsyncSession = Depends(get_db)) -> list[dict[str, int | str]]:
     rows = (await db.execute(select(models.Universe).order_by(models.Universe.name_key))).scalars()
     return [{"id": row.id, "name": row.name} for row in rows]
 
 
-@router.get("/books/{book_id}/info", response_model=None)
+@router.get("/books/{book_id}/info", response_model=LibraryBookInfo)
 async def book_info(book_id: int, db: AsyncSession = Depends(get_db)) -> LibraryBookInfo:
     if not await crud.get_book(db, book_id):
         raise HTTPException(404, "Book not found")
     return (await library_book_info(db, [book_id]))[book_id]
 
 
-@router.put("/universe-membership", response_model=None)
+@router.put("/universe-membership", response_model=contracts.UniverseMembershipResult)
 async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(get_db)) -> dict[str, int | str | None]:
     series = (body.series or "").strip()
     if bool(series) == (body.book_id is not None):
@@ -115,7 +116,7 @@ async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(ge
     return {"universe_id": universe.id if universe else None, "universe_name": universe.name if universe else None}
 
 
-@router.get("/web-checks", response_model=None)
+@router.get("/web-checks", response_model=list[contracts.WebCheck])
 async def web_checks(db: AsyncSession = Depends(get_db)) -> list[dict[str, object]]:
     from sqlalchemy import func
 

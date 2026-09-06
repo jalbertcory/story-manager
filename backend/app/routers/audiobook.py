@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..api_model import APIModel as BaseModel
+
+from .. import api_schemas as contracts
 import logging
 import re
 import shutil
@@ -14,7 +17,7 @@ from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import DataError
@@ -1100,7 +1103,7 @@ async def upgrade_imported_audiobook(
     return await _imported_audiobook_response(edition, db)
 
 
-@router.post("/api/audiobook/imports/upgrade-all")
+@router.post("/api/audiobook/imports/upgrade-all", response_model=contracts.QueuedImports)
 async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
     """Queue every ready human audiobook that has rebuildable legacy assets."""
     result = await db.execute(select(ImportedAudiobook).order_by(ImportedAudiobook.id))
@@ -1182,7 +1185,7 @@ async def preview_human_audiobook_rebuilds(
     )
 
 
-@router.post("/api/audiobook/imports/rebuild-all")
+@router.post("/api/audiobook/imports/rebuild-all", response_model=contracts.RebuiltImports)
 async def rebuild_all_human_audiobooks(
     force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
@@ -1401,7 +1404,11 @@ async def match_imported_track(
     return next(item for item in refreshed.tracks if item.id == track.id)
 
 
-@router.get("/api/imported-audiobooks/{edition_id}/tracks/{track_id}/audio")
+@router.get(
+    "/api/imported-audiobooks/{edition_id}/tracks/{track_id}/audio",
+    response_class=Response,
+    responses=contracts.media_responses("audio/*"),
+)
 async def get_imported_track_audio(
     edition_id: int,
     track_id: int,
@@ -1414,7 +1421,11 @@ async def get_imported_track_audio(
     return FileResponse(str(full_path), media_type=track.media_type)
 
 
-@router.get("/api/imported-audiobooks/{edition_id}/tracks/{track_id}/smil")
+@router.get(
+    "/api/imported-audiobooks/{edition_id}/tracks/{track_id}/smil",
+    response_class=Response,
+    responses=contracts.media_responses("application/smil+xml", binary=False),
+)
 async def get_imported_track_smil(
     edition_id: int,
     track_id: int,
@@ -1477,7 +1488,7 @@ def _reset_phase_endpoint_cooldowns(phase: str) -> None:
         reset_cooldowns(capability)
 
 
-@router.post("/api/books/{book_id}/audiobook/start")
+@router.post("/api/books/{book_id}/audiobook/start", response_model=contracts.PipelineQueued)
 async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     book = await _get_audiobook_book_or_404(book_id, db)
     status = book.audiobook_pipeline_status
@@ -1513,7 +1524,7 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
     return {"status": current_status, "queued": True}
 
 
-@router.post("/api/books/{book_id}/audiobook/step")
+@router.post("/api/books/{book_id}/audiobook/step", response_model=contracts.PipelineQueued)
 async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Run exactly the next recoverable phase, then stop for review."""
     book = await _get_audiobook_book_or_404(book_id, db)
@@ -1545,7 +1556,7 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dic
     return {"status": next_phase, "queued": True, "stop_after_phase": next_phase}
 
 
-@router.post("/api/books/{book_id}/audiobook/run-batch")
+@router.post("/api/books/{book_id}/audiobook/run-batch", response_model=contracts.PipelineQueued)
 async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Run one durable LLM/TTS/assembly work unit, then pause for review."""
     book = await _get_audiobook_book_or_404(book_id, db)
@@ -1577,7 +1588,7 @@ async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -
     return {"status": next_phase, "queued": True, "batch_limit": 1}
 
 
-@router.post("/api/books/{book_id}/audiobook/pause")
+@router.post("/api/books/{book_id}/audiobook/pause", response_model=contracts.PipelinePaused)
 async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     book = await _get_audiobook_book_or_404(book_id, db)
     active = book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling")
@@ -1588,7 +1599,7 @@ async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
     return {"status": "paused", "pause_requested": False}
 
 
-@router.post("/api/books/{book_id}/audiobook/rebuild")
+@router.post("/api/books/{book_id}/audiobook/rebuild", response_model=contracts.PipelineQueued)
 async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     book = await _get_audiobook_book_or_404(book_id, db)
     legacy_queue = get_audiobook_queue()
@@ -1614,7 +1625,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
     return {"status": book.audiobook_pipeline_status, "queued": True}
 
 
-@router.post("/api/books/{book_id}/audiobook/audio/rebuild")
+@router.post("/api/books/{book_id}/audiobook/audio/rebuild", response_model=contracts.PipelineQueued)
 async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Regenerate AI TTS and assembly without changing speaker analysis."""
     book = await _get_audiobook_book_or_404(book_id, db)
@@ -1650,7 +1661,7 @@ async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -
     return {"status": "audio_gen", "queued": True}
 
 
-@router.post("/api/books/{book_id}/audiobook/roster/rebuild")
+@router.post("/api/books/{book_id}/audiobook/roster/rebuild", response_model=contracts.PipelineQueued)
 async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Re-run roster and diarization analysis without parsing the EPUB again."""
     book = await _get_audiobook_book_or_404(book_id, db)
@@ -1732,7 +1743,7 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
     )
 
 
-@router.put("/api/books/{book_id}/audiobook/tts-provider")
+@router.put("/api/books/{book_id}/audiobook/tts-provider", response_model=contracts.TTSProviderChanged)
 async def update_book_tts_provider(
     book_id: int,
     body: BookTTSProviderUpdate,
@@ -1899,7 +1910,9 @@ async def design_character_voice(
     return CharacterResponse.model_validate(character)
 
 
-@router.get("/api/audiobook/characters/{char_id}/voice-sample")
+@router.get(
+    "/api/audiobook/characters/{char_id}/voice-sample", response_class=Response, responses=contracts.media_responses("audio/*")
+)
 async def get_character_voice_sample(
     char_id: int,
     db: AsyncSession = Depends(get_db),
@@ -1926,7 +1939,7 @@ async def get_character_voice_sample(
     )
 
 
-@router.post("/api/books/{book_id}/audiobook/roster/share-series")
+@router.post("/api/books/{book_id}/audiobook/roster/share-series", response_model=contracts.RosterShared)
 async def share_character_roster_with_series(
     book_id: int,
     db: AsyncSession = Depends(get_db),
@@ -2021,7 +2034,7 @@ async def update_sentence(sentence_id: int, body: SentenceUpdate, db: AsyncSessi
     return SentenceResponse.model_validate(sentence)
 
 
-@router.post("/api/books/{book_id}/audiobook/sentences/{sentence_id}/generate-audio")
+@router.post("/api/books/{book_id}/audiobook/sentences/{sentence_id}/generate-audio", response_model=contracts.SentenceQueued)
 async def generate_sentence_audio(
     book_id: int,
     sentence_id: int,
@@ -2062,7 +2075,9 @@ async def generate_sentence_audio(
     }
 
 
-@router.get("/api/audiobook/sentences/{sentence_id}/audio")
+@router.get(
+    "/api/audiobook/sentences/{sentence_id}/audio", response_class=Response, responses=contracts.media_responses("audio/mpeg")
+)
 async def get_sentence_audio(sentence_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     sentence = await db.get(AudiobookSentence, sentence_id)
     if sentence is None or not sentence.audio_file_path:
@@ -2116,7 +2131,9 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> lis
     return response
 
 
-@router.post("/api/books/{book_id}/audiobook/chapters/{chapter_id}/preview-audio")
+@router.post(
+    "/api/books/{book_id}/audiobook/chapters/{chapter_id}/preview-audio", response_model=contracts.ChapterPreviewQueued
+)
 async def generate_chapter_preview(
     book_id: int,
     chapter_id: int,
@@ -2156,7 +2173,11 @@ async def generate_chapter_preview(
     return {"status": "queued", "queued": True, "chapter_id": chapter_id}
 
 
-@router.get("/api/books/{book_id}/audiobook/chapters/{chapter_id}/audio")
+@router.get(
+    "/api/books/{book_id}/audiobook/chapters/{chapter_id}/audio",
+    response_class=Response,
+    responses=contracts.media_responses("audio/mpeg"),
+)
 async def get_chapter_audio(book_id: int, chapter_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     chapter = await db.get(AudiobookChapter, chapter_id)
     if chapter is None or chapter.book_id != book_id or not chapter.audio_file_path:
@@ -2168,7 +2189,11 @@ async def get_chapter_audio(book_id: int, chapter_id: int, db: AsyncSession = De
     return FileResponse(str(full_path), media_type="audio/mpeg")
 
 
-@router.get("/api/books/{book_id}/audiobook/download")
+@router.get(
+    "/api/books/{book_id}/audiobook/download",
+    response_class=Response,
+    responses=contracts.media_responses("application/epub+zip"),
+)
 async def download_audiobook(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status != "complete":
@@ -2428,7 +2453,7 @@ def _pool_test_status(results: list[dict[str, Any]]) -> str:
     return "partial" if ready_count else "failed"
 
 
-@router.post("/api/audiobook/settings/test-llm")
+@router.post("/api/audiobook/settings/test-llm", response_model=contracts.LLMTest)
 async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
@@ -2465,7 +2490,7 @@ async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     }
 
 
-@router.post("/api/audiobook/settings/test-tts")
+@router.post("/api/audiobook/settings/test-tts", response_model=contracts.TTSTest)
 async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
@@ -2493,7 +2518,7 @@ async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     }
 
 
-@router.post("/api/audiobook/settings/test-transcription")
+@router.post("/api/audiobook/settings/test-transcription", response_model=contracts.TranscriptionTest)
 async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:

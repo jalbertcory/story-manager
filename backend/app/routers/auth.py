@@ -1,7 +1,8 @@
 """Admin authentication endpoints."""
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from pydantic import BaseModel
+
+from ..api_model import APIModel as BaseModel
 
 from ..auth import (
     ADMIN_AUTH_COOKIE,

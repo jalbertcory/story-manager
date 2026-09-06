@@ -124,8 +124,9 @@ Run the checks required before publishing a PR:
 make pr-check
 ```
 
-This runs Python formatting/linting, Python type checking, frontend linting,
-and frontend dependency audits. CI also audits Python dependencies.
+This validates the frontend lockfile with a dry-run clean install, then runs Python
+formatting/linting, Python and frontend type checking, frontend linting, generated
+API contract drift checks, and frontend dependency audits. CI also audits Python dependencies.
 
 Run Python type checking on its own:
 
@@ -151,6 +152,28 @@ or add broad error suppressions. Use precise schemas, `TypedDict`, protocols, an
 explicit handling of nullable values when fixing errors. Dynamic JSON and untyped
 external libraries still require narrow validation or documented casts at their
 boundaries; strict mode does not mean every external value is statically known.
+
+The frontend uses strict TypeScript across all production modules. FastAPI OpenAPI
+is the source for request bodies, path/query parameters, and response types. API
+wrappers use `openapi-fetch`; UI components import wrappers and let React Query
+carry their types through to consumers. External metadata values remain `unknown`
+and must be narrowed before display or use.
+
+After changing a backend endpoint schema:
+
+```bash
+make api-generate
+make typecheck-ui
+make api-check
+```
+
+Commit `frontend/src/api/schema.d.ts` with the backend changes. Generation imports
+FastAPI without running its lifespan, connecting to the database, or starting
+services. It excludes conditional SPA/static routes so local build artifacts do
+not affect the contract. Request defaults stay optional, while response schemas
+include serialized defaults and preserve nullability. CI rejects stale generated
+contracts. Compile-time contract tests also prove wrong requests and response
+fields are rejected; existing JavaScript UI tests continue to run in Vitest.
 
 Run backend and frontend unit tests:
 

@@ -5,6 +5,7 @@ import LibraryWorkspace from "./LibraryWorkspace";
 
 const response = (value) =>
   Promise.resolve({ ok: true, json: async () => value });
+const page = (items) => ({items, next_cursor: null, total_count: items.length, facets: {series: 1, standalone: 0, web: 0, genres: []}});
 const missing = {
   id: 948,
   title: "Artemis Fowl",
@@ -29,7 +30,7 @@ describe("Audio-only library", () => {
             cover_ids: [],
           },
         ]);
-      if (url.startsWith("/api/books/catalog")) return response([missing]);
+      if (url.startsWith("/api/books/catalog")) return response(page([missing]));
       return response([]);
     });
     vi.stubGlobal("fetch", fetch);
@@ -86,7 +87,7 @@ describe("Audio-only library", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url) =>
-        response(url.startsWith("/api/books/catalog") ? [missing] : []),
+        response(url.startsWith("/api/books/catalog") ? page([missing]) : []),
       ),
     );
     const onNavigate = vi.fn();

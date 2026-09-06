@@ -15,12 +15,20 @@ Before creating a pull request or pushing an update to an existing pull request,
 make pr-check
 ```
 
-Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint/type checks, frontend lint, and frontend dependency audits enforced by CI. CI also runs a Python dependency audit.
+Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint/type checks, frontend lint/type checks, API contract drift, and frontend dependency audits enforced by CI. CI also runs a Python dependency audit.
 
 `make typecheck` runs mypy in strict mode across `backend/app` and production Python in `services`.
 Keep application modules included; fix types and nullable-value handling rather
 than suppressing whole files. Import exceptions belong only to the explicitly
 listed external libraries in `pyproject.toml`.
+
+`make typecheck-ui` checks every production frontend module in strict TypeScript.
+Use the generated OpenAPI client in `frontend/src/api`; do not introduce untyped
+fetch calls or hand-written copies of API payloads. After changing API schemas,
+run `make api-generate` and commit `frontend/src/api/schema.d.ts`. `make api-check`
+exports the schema without starting services and rejects generated contract drift.
+Request models may have optional defaults; response schemas must describe all
+fields actually serialized, including explicit null values.
 
 ### Database Credentials
 

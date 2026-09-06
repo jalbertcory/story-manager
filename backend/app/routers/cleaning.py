@@ -1,5 +1,6 @@
 """Cleaning configuration, preview, and durable processing endpoints."""
 
+from .. import api_schemas as contracts
 import logging
 from typing import List
 
@@ -32,14 +33,14 @@ async def _queue_clean_all(db: AsyncSession, detail: str) -> models.ProcessingJo
     )
 
 
-@router.post("/api/books/reprocess-all", response_model=None)
+@router.post("/api/books/reprocess-all", response_model=contracts.StatusResponse)
 async def reprocess_all_books(response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     job = await _queue_clean_all(db, "Queued from Clean All Books")
     response.headers["X-Processing-Job-Id"] = str(job.id)
     return {"status": "started"}
 
 
-@router.get("/api/books/reprocess-all/status", response_model=None)
+@router.get("/api/books/reprocess-all/status", response_model=contracts.ReprocessStatus)
 async def reprocess_all_status(db: AsyncSession = Depends(get_db)) -> dict[str, bool | int | str | None]:
     rows = await crud.get_processing_jobs(db, job_type="clean_all", limit=1)
     if not rows:
@@ -92,7 +93,7 @@ async def process_book_endpoint(
     return db_book
 
 
-@router.post("/api/books/{book_id}/preview-cleaning", response_model=None)
+@router.post("/api/books/{book_id}/preview-cleaning", response_model=epub_editor.EpubPreview)
 async def preview_cleaning(
     book_id: int, req: PreviewCleaningRequest, db: AsyncSession = Depends(get_db)
 ) -> epub_editor.EpubPreview:

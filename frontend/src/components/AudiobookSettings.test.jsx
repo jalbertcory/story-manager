@@ -12,7 +12,7 @@ describe("AudiobookSettings", () => {
   it("does not carry a typed API key to a newly selected TTS provider", async () => {
     const updates = [];
     const fetchMock = vi.fn((url, options) => {
-      if (url === "/api/audiobook/settings" && !options) {
+      if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -74,7 +74,7 @@ describe("AudiobookSettings", () => {
 
   it("shows the result of every endpoint tested in a fallback pool", async () => {
     globalThis.fetch = vi.fn((url, options) => {
-      if (url === "/api/audiobook/settings" && !options) {
+      if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -155,7 +155,7 @@ describe("AudiobookSettings", () => {
   it("reorders endpoint priority before saving", async () => {
     const updates = [];
     globalThis.fetch = vi.fn((url, options) => {
-      if (url === "/api/audiobook/settings" && !options) {
+      if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
           json: () =>

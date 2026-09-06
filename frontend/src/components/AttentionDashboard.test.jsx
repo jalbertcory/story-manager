@@ -225,8 +225,11 @@ it("retries a failed processing job through its existing endpoint", async () => 
   );
   fireEvent.click(screen.getByRole("button", { name: "Retry task for Story" }));
   await waitFor(() =>
-    expect(fetch).toHaveBeenCalledWith("/api/processing/jobs/8/retry", {
-      method: "POST",
-    }),
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/processing/jobs/8/retry",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    ),
   );
 });
