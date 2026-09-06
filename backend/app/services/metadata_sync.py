@@ -14,6 +14,18 @@ from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
+from .metadata.responses import (
+    OpenLibraryDoc,
+    OpenLibraryWork,
+    GoogleVolume,
+    VolumeInfo,
+    SeriesInfo,
+    OPEN_LIBRARY_DOC,
+    OPEN_LIBRARY_WORK,
+    GOOGLE_VOLUME,
+    valid_record,
+    valid_records,
+)
 from .metadata.arbitration import arbitrate_candidate_suggestions, refine_unmatched_search_identity
 from .metadata.amazon import AmazonCandidate, enrich_amazon_candidate, search_amazon
 from .metadata.clients import amazon_metadata_enabled as _amazon_metadata_enabled
@@ -146,7 +158,7 @@ def _title_search_variants(book: models.Book) -> list[str]:
     return [variant for variant in variants if variant]
 
 
-def _score_search_doc(book: models.Book, doc: dict[str, Any]) -> float:
+def _score_search_doc(book: models.Book, doc: OpenLibraryDoc) -> float:
     author_names = doc.get("author_name") or []
     if isinstance(author_names, str):
         author_names = [author_names]
@@ -173,7 +185,7 @@ def _score_search_doc(book: models.Book, doc: dict[str, Any]) -> float:
     )
 
 
-def _extract_subjects(doc: dict[str, Any], work_data: dict[str, Any]) -> list[str]:
+def _extract_subjects(doc: OpenLibraryDoc, work_data: OpenLibraryWork) -> list[str]:
     subjects: list[str] = []
     for raw_subject in work_data.get("subjects") or doc.get("subject") or []:
         if isinstance(raw_subject, str):
@@ -418,10 +430,10 @@ def _infer_possible_missing_books(
 
 def _select_best_doc(
     book: models.Book,
-    docs: list[dict[str, Any]],
+    docs: list[OpenLibraryDoc],
     *,
     preferred_author_keys: Optional[set[str]] = None,
-) -> tuple[Optional[dict[str, Any]], float]:
+) -> tuple[Optional[OpenLibraryDoc], float]:
     best_doc = None
     best_score = 0.0
     best_ranking_score = 0.0
@@ -440,14 +452,14 @@ def _select_best_doc(
     return best_doc, best_score
 
 
-def _build_remote_url(doc: dict[str, Any]) -> Optional[str]:
+def _build_remote_url(doc: OpenLibraryDoc) -> Optional[str]:
     key = doc.get("key")
     if not key:
         return None
     return f"{OPEN_LIBRARY_BASE_URL}{key}"
 
 
-def _extract_remote_ids(doc: dict[str, Any], author_key: Optional[str]) -> dict[str, str]:
+def _extract_remote_ids(doc: OpenLibraryDoc, author_key: Optional[str]) -> dict[str, str]:
     remote_ids: dict[str, str] = {}
     raw_isbns = doc.get("isbn") or []
     if isinstance(raw_isbns, str):
@@ -469,12 +481,12 @@ def _extract_remote_ids(doc: dict[str, Any], author_key: Optional[str]) -> dict[
     return remote_ids
 
 
-def _extract_google_volume_info(volume: dict[str, Any]) -> dict[str, Any]:
+def _extract_google_volume_info(volume: GoogleVolume) -> VolumeInfo:
     volume_info = volume.get("volumeInfo")
     return volume_info if isinstance(volume_info, dict) else {}
 
 
-def _extract_google_remote_ids(volume: dict[str, Any]) -> dict[str, str]:
+def _extract_google_remote_ids(volume: GoogleVolume) -> dict[str, str]:
     remote_ids: dict[str, str] = {}
     volume_id = volume.get("id")
     if isinstance(volume_id, str) and volume_id.strip():
@@ -497,7 +509,7 @@ def _extract_google_remote_ids(volume: dict[str, Any]) -> dict[str, str]:
     return remote_ids
 
 
-def _google_books_categories(volume: dict[str, Any]) -> list[str]:
+def _google_books_categories(volume: GoogleVolume) -> list[str]:
     volume_info = _extract_google_volume_info(volume)
     raw_categories = volume_info.get("categories") or []
     if isinstance(raw_categories, str):
@@ -522,7 +534,7 @@ def _google_books_categories(volume: dict[str, Any]) -> list[str]:
     return deduped
 
 
-def _google_books_metadata_details(volume: dict[str, Any]) -> dict[str, Any]:
+def _google_books_metadata_details(volume: GoogleVolume) -> dict[str, Any]:
     volume_info = _extract_google_volume_info(volume)
     image_links = volume_info.get("imageLinks")
     if not isinstance(image_links, dict):
@@ -536,9 +548,7 @@ def _google_books_metadata_details(volume: dict[str, Any]) -> dict[str, Any]:
         None,
     )
     page_count = volume_info.get("printedPageCount") or volume_info.get("pageCount")
-    series_info = volume_info.get("seriesInfo")
-    if not isinstance(series_info, dict):
-        series_info = {}
+    series_info: SeriesInfo = volume_info.get("seriesInfo") or {}
     volume_series = series_info.get("volumeSeries") or []
     if not isinstance(volume_series, list):
         volume_series = []
@@ -565,7 +575,7 @@ def _google_books_metadata_details(volume: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _google_books_doc(volume: dict[str, Any]) -> dict[str, Any]:
+def _google_books_doc(volume: GoogleVolume) -> OpenLibraryDoc:
     volume_info = _extract_google_volume_info(volume)
     return {
         "title": volume_info.get("title", ""),
@@ -573,7 +583,7 @@ def _google_books_doc(volume: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _score_google_books_volume(book: models.Book, volume: dict[str, Any]) -> float:
+def _score_google_books_volume(book: models.Book, volume: GoogleVolume) -> float:
     volume_doc = _google_books_doc(volume)
     authors = volume_doc.get("author_name") or []
     if isinstance(authors, str):
@@ -600,27 +610,25 @@ def _get_manual_remote_ids(book: models.Book) -> dict[str, str]:
     return {key: str(value).strip() for key, value in raw_ids.items() if value is not None and str(value).strip()}
 
 
-def _fetch_search_docs(params: dict[str, Any]) -> list[dict[str, Any]]:
+def _fetch_search_docs(params: dict[str, str | int | None]) -> list[OpenLibraryDoc]:
     payload = _request_json("/search.json", params=params)
-    docs = payload.get("docs") or []
-    return [doc for doc in docs if isinstance(doc, dict)]
+    return valid_records(payload, "docs", OPEN_LIBRARY_DOC)
 
 
-def _fetch_google_books_volumes(query: str) -> list[dict[str, Any]]:
+def _fetch_google_books_volumes(query: str) -> list[GoogleVolume]:
     if not _google_books_enabled():
         return []
 
     payload = _request_google_books_json("/volumes", params={"q": query, "maxResults": 10})
-    items = payload.get("items") or []
-    return [item for item in items if isinstance(item, dict)]
+    return valid_records(payload, "items", GOOGLE_VOLUME)
 
 
-def _fetch_google_books_volume_by_id(volume_id: str) -> Optional[dict[str, Any]]:
+def _fetch_google_books_volume_by_id(volume_id: str) -> Optional[GoogleVolume]:
     if not _google_books_enabled() or not volume_id.strip():
         return None
 
     payload = _request_google_books_json(f"/volumes/{volume_id.strip()}")
-    return payload if payload else None
+    return valid_record(payload, GOOGLE_VOLUME) if payload else None
 
 
 def _series_peer_author_keys(
@@ -648,18 +656,18 @@ def _fetch_series_context_doc(
     book: models.Book,
     *,
     preferred_author_keys: set[str],
-    author_work_cache: dict[str, list[dict[str, Any]]],
-) -> tuple[Optional[dict[str, Any]], float]:
+    author_work_cache: dict[str, list[OpenLibraryWork]],
+) -> tuple[Optional[OpenLibraryDoc], float]:
     if not preferred_author_keys:
         return None, 0.0
 
-    candidate_entries: list[dict[str, Any]] = []
+    candidate_entries: list[OpenLibraryDoc] = []
     for author_key in preferred_author_keys:
         entries = _fetch_author_work_entries(author_key, author_work_cache)
         if not entries:
             continue
 
-        author_work_titles = [entry["title"] for entry in entries if entry.get("title")]
+        author_work_titles = [title for entry in entries if (title := entry.get("title"))]
         inferred_series = detect_series_from_titles(author_work_titles)
         for entry in entries:
             title = entry.get("title")
@@ -676,7 +684,7 @@ def _fetch_series_context_doc(
                 {
                     "key": entry.get("key"),
                     "title": title,
-                    "author_name": [book.author],
+                    "author_name": [book.author] if book.author else [],
                     "author_key": [author_key],
                 }
             )
@@ -701,16 +709,16 @@ def _collect_search_doc_candidates(
     book: models.Book,
     *,
     local_books_by_author: dict[str, list[models.Book]],
-    author_work_cache: dict[str, list[dict[str, Any]]],
+    author_work_cache: dict[str, list[OpenLibraryWork]],
     limit: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
-) -> list[tuple[dict[str, Any], float]]:
+) -> list[tuple[OpenLibraryDoc, float]]:
     manual_remote_ids = _get_manual_remote_ids(book)
     preferred_author_keys = _series_peer_author_keys(book, local_books_by_author)
     manual_author_key = manual_remote_ids.get("open_library_author_key")
     if manual_author_key:
         preferred_author_keys.add(manual_author_key)
 
-    search_variants: list[dict[str, Any]] = []
+    search_variants: list[dict[str, str | int | None]] = []
     if manual_remote_ids.get("isbn_13"):
         search_variants.append({"isbn": manual_remote_ids["isbn_13"], "limit": 5})
     if manual_remote_ids.get("isbn_10"):
@@ -719,8 +727,8 @@ def _collect_search_doc_candidates(
         search_variants.append({"title": title_variant, "author": book.author, "limit": 5})
         search_variants.append({"title": title_variant, "limit": 10})
 
-    ranked: list[tuple[dict[str, Any], float, float]] = []
-    seen_searches: set[tuple[tuple[str, Any], ...]] = set()
+    ranked: list[tuple[OpenLibraryDoc, float, float]] = []
+    seen_searches: set[tuple[tuple[str, str | int | None], ...]] = set()
     seen_docs: set[str] = set()
 
     for params in search_variants:
@@ -750,19 +758,20 @@ def _collect_search_doc_candidates(
     manual_work_key = manual_remote_ids.get("open_library_work_key")
     if manual_work_key and manual_work_key not in seen_docs:
         try:
-            work_data = _request_json(f"{manual_work_key}.json")
+            manual_work = valid_record(_request_json(f"{manual_work_key}.json"), OPEN_LIBRARY_WORK)
         except requests.RequestException:
             logger.warning("Failed to fetch manually configured Open Library work %s.", manual_work_key)
         else:
-            manual_doc = {
-                "key": manual_work_key,
-                "title": work_data.get("title") or book.title,
-                "author_name": [book.author],
-                "author_key": [manual_author_key] if manual_author_key else [],
-            }
-            manual_score = _score_search_doc(book, manual_doc)
-            ranked.append((manual_doc, manual_score, manual_score + 0.1))
-            seen_docs.add(manual_work_key)
+            if manual_work is not None:
+                manual_doc: OpenLibraryDoc = {
+                    "key": manual_work_key,
+                    "title": manual_work.get("title") or book.title,
+                    "author_name": [book.author] if book.author else [],
+                    "author_key": [manual_author_key] if manual_author_key else [],
+                }
+                manual_score = _score_search_doc(book, manual_doc)
+                ranked.append((manual_doc, manual_score, manual_score + 0.1))
+                seen_docs.add(manual_work_key)
 
     series_doc, series_score = _fetch_series_context_doc(
         book,
@@ -787,7 +796,7 @@ def _collect_google_books_matches(
         return []
 
     manual_remote_ids = _get_manual_remote_ids(book)
-    candidates: list[dict[str, Any]] = []
+    candidates: list[GoogleVolume] = []
     seen_ids: set[str] = set()
 
     manual_volume_id = manual_remote_ids.get("google_books_volume_id")
@@ -797,8 +806,8 @@ def _collect_google_books_matches(
         except requests.RequestException:
             logger.warning("Failed to fetch Google Books volume metadata for %s.", manual_volume_id)
             volume = None
-        if volume and isinstance(volume.get("id"), str):
-            seen_ids.add(volume["id"])
+        if volume and (volume_id := volume.get("id")):
+            seen_ids.add(volume_id)
             candidates.append(volume)
 
     for isbn_key in ("isbn_13", "isbn_10"):
@@ -924,12 +933,12 @@ def _collect_amazon_matches(
     return ranked[:limit]
 
 
-def _fetch_work_data(doc: dict[str, Any]) -> dict[str, Any]:
+def _fetch_work_data(doc: OpenLibraryDoc) -> OpenLibraryWork:
     key = doc.get("key")
     if not key:
         return {}
     try:
-        return _request_json(f"{key}.json")
+        return valid_record(_request_json(f"{key}.json"), OPEN_LIBRARY_WORK) or {}
     except requests.RequestException:
         logger.warning("Failed to fetch Open Library work metadata for %s.", key, exc_info=True)
         return {}
@@ -941,7 +950,7 @@ def _first_list_value(value: Any) -> Any:
     return value
 
 
-def _open_library_metadata_details(doc: dict[str, Any], work_data: dict[str, Any]) -> dict[str, Any]:
+def _open_library_metadata_details(doc: OpenLibraryDoc, work_data: OpenLibraryWork) -> dict[str, Any]:
     cover_id = doc.get("cover_i") or _first_list_value(work_data.get("covers"))
     title = str(doc.get("title") or work_data.get("title") or "")
     series_details = _series_metadata_details(
@@ -962,8 +971,8 @@ def _open_library_metadata_details(doc: dict[str, Any], work_data: dict[str, Any
 
 def _fetch_author_work_entries(
     author_key: Optional[str],
-    author_work_cache: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
+    author_work_cache: dict[str, list[OpenLibraryWork]],
+) -> list[OpenLibraryWork]:
     if not author_key:
         return []
     if author_key in author_work_cache:
@@ -976,14 +985,11 @@ def _fetch_author_work_entries(
         author_work_cache[author_key] = []
         return []
 
-    entries = payload.get("entries") or []
-    normalized_entries = [
-        {
-            "key": entry.get("key"),
-            "title": entry.get("title", "").strip(),
-        }
+    entries = valid_records(payload, "entries", OPEN_LIBRARY_WORK)
+    normalized_entries: list[OpenLibraryWork] = [
+        {"key": entry.get("key"), "title": title.strip()}
         for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("title"), str) and entry["title"].strip()
+        if (title := entry.get("title")) and title.strip()
     ]
     author_work_cache[author_key] = normalized_entries
     return normalized_entries
@@ -991,10 +997,10 @@ def _fetch_author_work_entries(
 
 def _build_open_library_suggestion(
     book: models.Book,
-    doc: dict[str, Any],
+    doc: OpenLibraryDoc,
     score: float,
     local_books_by_author: dict[str, list[models.Book]],
-    author_work_cache: dict[str, list[dict[str, Any]]],
+    author_work_cache: dict[str, list[OpenLibraryWork]],
 ) -> MetadataSuggestion:
     work_data = _fetch_work_data(doc)
     subjects = _extract_subjects(doc, work_data)
@@ -1011,7 +1017,7 @@ def _build_open_library_suggestion(
     author_key = author_keys[0] if author_keys else None
 
     author_work_entries = _fetch_author_work_entries(author_key, author_work_cache)
-    author_work_titles = [entry["title"] for entry in author_work_entries if entry.get("title")]
+    author_work_titles = [title for entry in author_work_entries if (title := entry.get("title"))]
     possible_missing = _infer_possible_missing_books(book, local_books_by_author, author_work_titles)
 
     remote_ids = _extract_remote_ids(doc, author_key)
@@ -1172,7 +1178,7 @@ def _consolidate_suggestions(suggestions: list[MetadataSuggestion]) -> list[Meta
 def _build_suggestions_for_book(
     book: models.Book,
     local_books_by_author: dict[str, list[models.Book]],
-    author_work_cache: dict[str, list[dict[str, Any]]],
+    author_work_cache: dict[str, list[OpenLibraryWork]],
     *,
     max_candidates: int = DEFAULT_MATCH_CANDIDATE_LIMIT,
     search_identity: Optional[SearchIdentity] = None,
@@ -1258,7 +1264,7 @@ async def _generate_suggestions(
     for book in all_books:
         local_books_by_author.setdefault(_normalize_text(book.author or ""), []).append(book)
 
-    author_work_cache: dict[str, list[dict[str, Any]]] = {}
+    author_work_cache: dict[str, list[OpenLibraryWork]] = {}
     identities = [await resolve_search_identity(book, settings) for book in target_books]
 
     suggestions = await asyncio.to_thread(
@@ -1280,12 +1286,12 @@ async def _generate_suggestions(
         if refined is None:
             continue
         refined_identity = SearchIdentity(
-            title=refined["title"],
-            author=refined["author"],
+            title=refined.title,
+            author=refined.author,
             series=identity.series,
             series_index=identity.series_index,
             remote_ids=identity.remote_ids,
-            evidence_note=f"LLM retry query: {refined['reason']}" if refined["reason"] else "LLM retry query",
+            evidence_note=f"LLM retry query: {refined.reason}" if refined.reason else "LLM retry query",
             used_llm=True,
             opening_excerpt=identity.opening_excerpt,
         )
@@ -1319,7 +1325,7 @@ async def _generate_candidate_suggestions(
     for book in all_books:
         local_books_by_author.setdefault(_normalize_text(book.author or ""), []).append(book)
 
-    author_work_cache: dict[str, list[dict[str, Any]]] = {}
+    author_work_cache: dict[str, list[OpenLibraryWork]] = {}
     identities = [await resolve_search_identity(book, settings) for book in target_books]
 
     candidate_groups = await asyncio.to_thread(
@@ -1341,12 +1347,12 @@ async def _generate_candidate_suggestions(
         if refined is None:
             continue
         refined_identity = SearchIdentity(
-            title=refined["title"],
-            author=refined["author"],
+            title=refined.title,
+            author=refined.author,
             series=identity.series,
             series_index=identity.series_index,
             remote_ids=identity.remote_ids,
-            evidence_note=f"LLM retry query: {refined['reason']}" if refined["reason"] else "LLM retry query",
+            evidence_note=f"LLM retry query: {refined.reason}" if refined.reason else "LLM retry query",
             used_llm=True,
             opening_excerpt=identity.opening_excerpt,
         )

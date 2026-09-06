@@ -324,7 +324,8 @@ async def test_llm_creates_one_high_confidence_retry_query_for_unmatched_epub(mo
 
     refined = await refine_unmatched_search_identity(identity, settings)
 
-    assert refined == {
+    assert refined is not None
+    assert refined.model_dump(exclude={"confidence"}) == {
         "title": "The Colour of Magic",
         "author": "Terry Pratchett",
         "reason": "Explicit title and author on the title page.",

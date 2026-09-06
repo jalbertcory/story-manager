@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..metadata_sync import MetadataSuggestion
     from .evidence import SearchIdentity
 
 from ...models import AudiobookSettings, Book
-from ..audiobook_llm import _call_llm
+from ..audiobook_llm import _call_llm, _extract_json
+from ..llm_responses import ArbitrationResponse, SearchRefinementResponse
 from ..endpoint_pool import configured_endpoints
 
 logger = logging.getLogger(__name__)
@@ -65,18 +66,9 @@ def _needs_arbitration(candidates: list[MetadataSuggestion]) -> bool:
     return matched[1].match_confidence >= top.match_confidence - 0.06
 
 
-def _parse_json(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    parsed = json.loads(text)
-    return parsed if isinstance(parsed, dict) else {}
-
-
 async def refine_unmatched_search_identity(
     identity: SearchIdentity, settings: AudiobookSettings | None
-) -> dict[str, Any] | None:
+) -> SearchRefinementResponse | None:
     """Derive one conservative retry query when all provider searches failed."""
 
     if settings is None or not _llm_available(settings) or identity.used_llm or not identity.opening_excerpt:
@@ -103,18 +95,18 @@ Opening-page evidence:
             ],
             response_schema=SEARCH_REFINEMENT_SCHEMA,
         )
-        refined = _parse_json(raw)
+        refined = SearchRefinementResponse.model_validate(_extract_json(raw))
     except Exception:
         logger.warning("LLM unmatched-book query refinement failed.", exc_info=True)
         return None
-    title = str(refined.get("title") or "").strip()
-    author = str(refined.get("author") or "").strip()
-    confidence = float(refined.get("confidence") or 0)
+    title = refined.title.strip()
+    author = refined.author.strip()
+    confidence = refined.confidence
     if confidence < 0.9 or not title or not author:
         return None
     if title.casefold() == identity.title.casefold() and author.casefold() == identity.author.casefold():
         return None
-    return {"title": title, "author": author, "reason": str(refined.get("reason") or "").strip()}
+    return SearchRefinementResponse(title=title, author=author, reason=refined.reason.strip(), confidence=confidence)
 
 
 async def arbitrate_candidate_suggestions(
@@ -175,15 +167,19 @@ Candidates:
             ],
             response_schema=ARBITRATION_SCHEMA,
         )
-        decision = _parse_json(raw)
+        decision = ArbitrationResponse.model_validate(_extract_json(raw))
+        if decision.selected_index >= len(candidates) or (
+            decision.selected_index >= 0 and not candidates[decision.selected_index].matched
+        ):
+            raise ValueError("LLM selected an index outside the candidate set")
     except Exception:
         logger.warning("LLM metadata arbitration failed for book %s; keeping deterministic ranking.", book.id, exc_info=True)
         return candidates
 
-    selected_index = int(decision.get("selected_index", -1))
-    confidence = float(decision.get("confidence") or 0)
-    exact_match = bool(decision.get("exact_match"))
-    reason = str(decision.get("reason") or "").strip()
+    selected_index = decision.selected_index
+    confidence = decision.confidence
+    exact_match = decision.exact_match
+    reason = decision.reason.strip()
     selected_payload = next((candidate for candidate in candidate_payload if candidate["index"] == selected_index), None)
     if selected_payload is None:
         if confidence >= 0.9 and candidates:

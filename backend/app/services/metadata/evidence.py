@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-import json
 import logging
 from pathlib import Path
 import re
@@ -16,7 +15,8 @@ from ebooklib import epub
 
 from ...config import LIBRARY_PATH
 from ...models import AudiobookSettings, Book
-from ..audiobook_llm import _call_llm
+from ..audiobook_llm import _call_llm, _extract_json
+from ..llm_responses import IdentityResponse
 from ..endpoint_pool import configured_endpoints
 from .scoring import author_similarity, clean_isbn, normalize_text, title_similarity
 
@@ -267,7 +267,7 @@ async def infer_identity_with_llm(
     book: Book,
     evidence: EpubEvidence,
     settings: AudiobookSettings,
-) -> dict[str, Any]:
+) -> IdentityResponse:
     prompt = f"""Determine this ebook's bibliographic identity from package metadata and the opening pages. The opening may
 contain fiction prose, advertisements, navigation, or another book's title, so do not guess. Prefer explicit title-page,
 copyright, ISBN, and author evidence. Return empty strings and series_index 0 when unknown.
@@ -295,12 +295,7 @@ Opening EPUB content (bounded sample):
         ],
         response_schema=IDENTITY_SCHEMA,
     )
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    parsed = json.loads(text)
-    return parsed if isinstance(parsed, dict) else {}
+    return IdentityResponse.model_validate(_extract_json(raw))
 
 
 async def resolve_search_identity(
@@ -331,18 +326,18 @@ async def resolve_search_identity(
     if settings is not None and _needs_llm(book, evidence) and _llm_configured(settings):
         try:
             inferred = await infer_identity_with_llm(book, evidence, settings)
-            confidence = float(inferred.get("confidence") or 0)
+            confidence = inferred.confidence
             if confidence >= 0.7:
-                title = str(inferred.get("title") or title).strip()
-                author = str(inferred.get("author") or author).strip()
-                series = str(inferred.get("series") or series or "").strip() or None
-                inferred_index = _safe_float(inferred.get("series_index"))
+                title = str(inferred.title or title).strip()
+                author = str(inferred.author or author).strip()
+                series = str(inferred.series or series or "").strip() or None
+                inferred_index = _safe_float(inferred.series_index)
                 series_index = inferred_index if inferred_index and inferred_index > 0 else series_index
-                for key in ("isbn_10", "isbn_13"):
-                    isbn = clean_isbn(inferred.get(key))
+                for key, value in (("isbn_10", inferred.isbn_10), ("isbn_13", inferred.isbn_13)):
+                    isbn = clean_isbn(value)
                     if isbn:
                         evidence.remote_ids[key] = isbn
-                reason = str(inferred.get("reason") or "").strip()
+                reason = str(inferred.reason or "").strip()
                 reasons.append(f"LLM-confirmed EPUB identity{f': {reason}' if reason else ''}")
                 used_llm = True
         except Exception:
