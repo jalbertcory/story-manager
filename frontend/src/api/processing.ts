@@ -32,18 +32,13 @@ export function getProcessingJobs({
     "Failed to fetch processing jobs",
   );
 }
-export function queueProcessingJobs(
-  jobType: JobRequest["job_type"],
-  bookIds: number[] = [],
-  payload: JobRequest["payload"] = {},
-) {
+export function queueProcessingJobs(body: JobRequest) {
   return unwrap(
-    api.POST("/api/processing/jobs", {
-      body: { job_type: jobType, book_ids: bookIds, payload },
-    }),
+    api.POST("/api/processing/jobs", { body }),
     "Failed to queue processing",
   );
 }
+
 export function retryProcessingJob(jobId: number) {
   return unwrap(
     api.POST("/api/processing/jobs/{job_id}/retry", {

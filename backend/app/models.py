@@ -1,3 +1,4 @@
+from pydantic import JsonValue
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -224,7 +225,7 @@ class ProcessingJob(Base):
         Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True
     )
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, default=lambda: uuid4().hex[:12], index=True)
-    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    payload: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
     dedupe_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     progress_current: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

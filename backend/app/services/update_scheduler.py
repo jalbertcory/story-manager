@@ -1,3 +1,5 @@
+from ..job_payloads import RefreshAllPayload
+
 """Scheduler orchestration for recurring web novel update runs."""
 
 import asyncio
@@ -175,7 +177,7 @@ async def queue_scheduled_web_novel_update() -> None:
 
     await queue_processing_job(
         job_type="refresh_all",
-        payload={"trigger": "scheduled"},
+        payload=RefreshAllPayload(trigger="scheduled"),
         dedupe_key="refresh_all",
         progress_detail="Queued by the web novel schedule",
     )

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..database import get_db
+from ..job_payloads import AudiobookPipelinePayload, ProcessingJobRequest, VerifyBackupPayload
 from ..services.processing_queue import queue_processing_job
 
 router = APIRouter()
@@ -53,17 +54,21 @@ async def get_processing_job(job_id: int, db: AsyncSession = Depends(get_db)) ->
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_processing_jobs(
-    body: schemas.ProcessingJobRequest,
+    body: ProcessingJobRequest,
     db: AsyncSession = Depends(get_db),
 ) -> schemas.ProcessingJobsCreated:
     jobs = []
-    if body.job_type in {"clean_all", "refresh_all"}:
+    if body.job_type in {"clean_all", "refresh_all", "create_backup", "verify_backup"}:
         jobs.append(
             await queue_processing_job(
                 db=db,
                 job_type=body.job_type,
                 payload=body.payload,
-                dedupe_key=body.job_type,
+                dedupe_key=(
+                    f"verify_backup:{body.payload.filename}"
+                    if isinstance(body.payload, VerifyBackupPayload)
+                    else body.job_type
+                ),
             )
         )
     elif body.job_type in {"clean_book", "refresh_book", "audiobook_pipeline", "retry_cover"}:
@@ -75,8 +80,8 @@ async def create_processing_jobs(
         if missing_ids:
             raise HTTPException(status_code=404, detail=f"Books not found: {missing_ids}")
         for book in books:
-            payload = body.payload or {}
-            mode = payload.get("mode", "reconcile")
+            payload = body.payload
+            mode = payload.mode if isinstance(payload, AudiobookPipelinePayload) else "reconcile"
             if body.job_type == "refresh_book" and (book.source_type != models.SourceType.web or not book.source_url):
                 raise HTTPException(status_code=422, detail=f"Book {book.id} is not a refreshable web book")
             if body.job_type == "audiobook_pipeline" and not book.audiobook_enabled:
@@ -118,7 +123,10 @@ async def create_processing_jobs(
 
 @router.post("/api/processing/jobs/{job_id}/retry", response_model=schemas.ProcessingJob)
 async def retry_processing_job(job_id: int, db: AsyncSession = Depends(get_db)) -> schemas.ProcessingJob:
-    job = await crud.retry_processing_job(db, job_id)
+    try:
+        job = await crud.retry_processing_job(db, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Stored job payload is invalid; create a new job instead.") from exc
     if job is None:
         raise HTTPException(status_code=409, detail="Only failed or canceled jobs can be retried")
     return _response(job)

@@ -1,3 +1,5 @@
+from ..job_payloads import RefreshAllPayload
+
 """Scheduler status, manual trigger, history, and per-task log endpoints."""
 
 from .. import api_schemas as contracts
@@ -74,7 +76,7 @@ async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> dict[str, str
     job = await queue_processing_job(
         db=db,
         job_type="refresh_all",
-        payload={"trigger": "manual"},
+        payload=RefreshAllPayload(trigger="manual"),
         dedupe_key="refresh_all",
         progress_detail="Queued from Run Now",
     )

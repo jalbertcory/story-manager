@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..job_payloads import MetadataSyncPayload
+
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -64,7 +66,7 @@ async def queue_metadata_sync_job(
         job_type="metadata_sync",
         target_type="metadata_sync_job",
         target_id=job.id,
-        payload={"metadata_job_id": job.id, "trigger": trigger},
+        payload=MetadataSyncPayload(metadata_job_id=job.id, trigger=trigger),
         dedupe_key=f"metadata_sync:metadata_sync_job:{job.id}",
         progress_detail=f"Queued metadata sync ({trigger})",
     )

@@ -86,7 +86,7 @@ function ProcessingJobs() {
     return requested || "active";
   });
   const [operation, setOperation] =
-    useState<Parameters<typeof queueProcessingJobs>[0]>("clean_book");
+    useState<(typeof QUEUE_OPERATIONS)[number]["value"]>("clean_book");
   const [bookSearch, setBookSearch] = useState("");
   const debouncedBookSearch = useDebouncedValue(bookSearch.trim(), 250);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -139,18 +139,12 @@ function ProcessingJobs() {
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-    void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["active-processing-jobs"],
+    });
   };
   const queueMutation = useMutation({
-    mutationFn: ({
-      jobType,
-      bookIds,
-      payload,
-    }: {
-      jobType: Parameters<typeof queueProcessingJobs>[0];
-      bookIds: number[];
-      payload: Parameters<typeof queueProcessingJobs>[2];
-    }) => queueProcessingJobs(jobType, bookIds, payload),
+    mutationFn: queueProcessingJobs,
     onSuccess: (data) => {
       const count = data.jobs?.length || 0;
       setQueueNotice(
@@ -177,9 +171,15 @@ function ProcessingJobs() {
     );
   };
   const queueSelected = () => {
-    const payload =
-      operation === "audiobook_pipeline" ? { mode: "reconcile" } : {};
-    queueMutation.mutate({ jobType: operation, bookIds: selectedIds, payload });
+    queueMutation.mutate(
+      operation === "audiobook_pipeline"
+        ? {
+            job_type: operation,
+            book_ids: selectedIds,
+            payload: { mode: "reconcile" },
+          }
+        : { job_type: operation, book_ids: selectedIds, payload: {} },
+    );
   };
 
   const runningState = processingLifecycle?.groups?.running?.[0];
@@ -209,8 +209,8 @@ function ProcessingJobs() {
           <button
             onClick={() =>
               queueMutation.mutate({
-                jobType: "clean_all",
-                bookIds: [],
+                job_type: "clean_all",
+                book_ids: [],
                 payload: {},
               })
             }
@@ -221,8 +221,8 @@ function ProcessingJobs() {
           <button
             onClick={() =>
               queueMutation.mutate({
-                jobType: "refresh_all",
-                bookIds: [],
+                job_type: "refresh_all",
+                book_ids: [],
                 payload: { trigger: "manual" },
               })
             }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import cast, Iterable, Any
+from typing import cast, Iterable, Mapping
 from uuid import uuid4
 
 from sqlalchemy import and_, case, desc, or_, select, update
@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.engine import CursorResult
 
+from ..job_payloads import JobPayload, validate_job_payload
 from ..lifecycle import PROCESSING_JOB, ProcessingJobStatus, transition_state
 from ..models import Book, ProcessingJob
 from ..observability_context import request_id_var
@@ -27,13 +28,14 @@ async def create_processing_job(
     target_id: int | None = None,
     target_content_version: int | None = None,
     parent_job_id: int | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: JobPayload | Mapping[str, object] | None = None,
     dedupe_key: str | None = None,
     resource_lane: str = "maintenance",
     max_attempts: int = 3,
     progress_detail: str | None = "Queued",
 ) -> tuple[ProcessingJob, bool]:
     """Create a queued job, returning an active duplicate when one exists."""
+    validated_payload = validate_job_payload(job_type, payload)
     if dedupe_key:
         result = await db.execute(
             select(ProcessingJob)
@@ -56,7 +58,7 @@ async def create_processing_job(
         target_content_version=target_content_version,
         parent_job_id=parent_job_id,
         request_id=request_id_var.get() or uuid4().hex[:12],
-        payload=payload or {},
+        payload=validated_payload.model_dump(mode="json", exclude_unset=True),
         dedupe_key=dedupe_key,
         resource_lane=resource_lane,
         max_attempts=max_attempts,
@@ -370,6 +372,7 @@ async def retry_processing_job(db: AsyncSession, job_id: int) -> ProcessingJob |
     job = await db.get(ProcessingJob, job_id)
     if job is None or job.status not in (ProcessingJobStatus.ERROR.value, ProcessingJobStatus.CANCELED.value):
         return None
+    validate_job_payload(job.job_type, job.payload)
     if job.dedupe_key:
         active = (
             await db.execute(

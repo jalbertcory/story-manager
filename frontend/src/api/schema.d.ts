@@ -2732,6 +2732,21 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** AlignImportedAudiobookPayload */
+        AlignImportedAudiobookPayload: Record<string, never>;
+        /** AlignImportedAudiobookRequest */
+        AlignImportedAudiobookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "align_imported_audiobook";
+            payload?: components["schemas"]["AlignImportedAudiobookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** AllEndpointStatsResponse */
         AllEndpointStatsResponse: {
             /** Llm */
@@ -2893,6 +2908,28 @@ export interface components {
             proposal_id: number;
             /** Title */
             title: string;
+        };
+        /** AudiobookPipelinePayload */
+        AudiobookPipelinePayload: {
+            /**
+             * Mode
+             * @default resume
+             * @enum {string}
+             */
+            mode: "resume" | "reconcile" | "rebuild" | "audio" | "roster" | "step" | "batch";
+        };
+        /** AudiobookPipelineRequest */
+        AudiobookPipelineRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "audiobook_pipeline";
+            payload?: components["schemas"]["AudiobookPipelinePayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** AudiobookStatusResponse */
         AudiobookStatusResponse: {
@@ -3548,6 +3585,39 @@ export interface components {
             /** Voice Prompt */
             voice_prompt?: string | null;
         };
+        /** CleanAllPayload */
+        CleanAllPayload: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** CleanAllRequest */
+        CleanAllRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "clean_all";
+            payload?: components["schemas"]["CleanAllPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
+        /** CleanBookPayload */
+        CleanBookPayload: Record<string, never>;
+        /** CleanBookRequest */
+        CleanBookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "clean_book";
+            payload?: components["schemas"]["CleanBookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** CleaningConfig */
         CleaningConfig: {
             /** Chapter Selectors */
@@ -3599,6 +3669,21 @@ export interface components {
         CoverUrlRequest: {
             /** Url */
             url: string;
+        };
+        /** CreateBackupPayload */
+        CreateBackupPayload: Record<string, never>;
+        /** CreateBackupRequest */
+        CreateBackupRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "create_backup";
+            payload?: components["schemas"]["CreateBackupPayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** DatabaseHealth */
         DatabaseHealth: {
@@ -3767,6 +3852,36 @@ export interface components {
             /** Size Bytes */
             size_bytes: number;
         };
+        /** GenerateChapterPreviewPayload */
+        GenerateChapterPreviewPayload: Record<string, never>;
+        /** GenerateChapterPreviewRequest */
+        GenerateChapterPreviewRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "generate_chapter_preview";
+            payload?: components["schemas"]["GenerateChapterPreviewPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
+        /** GenerateSentenceAudioPayload */
+        GenerateSentenceAudioPayload: Record<string, never>;
+        /** GenerateSentenceAudioRequest */
+        GenerateSentenceAudioRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "generate_sentence_audio";
+            payload?: components["schemas"]["GenerateSentenceAudioPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** GenreFacet */
         GenreFacet: {
             /** Count */
@@ -3806,6 +3921,27 @@ export interface components {
             unavailable_count: number;
             /** Up To Date Count */
             up_to_date_count: number;
+        };
+        /** ImportAudiobookPayload */
+        ImportAudiobookPayload: {
+            /**
+             * Auto Align
+             * @default true
+             */
+            auto_align: boolean;
+        };
+        /** ImportAudiobookRequest */
+        ImportAudiobookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "import_audiobook";
+            payload?: components["schemas"]["ImportAudiobookPayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** ImportedAudiobookResponse */
         ImportedAudiobookResponse: {
@@ -3996,6 +4132,7 @@ export interface components {
             /** Total */
             total: number;
         };
+        JsonValue: unknown;
         /** LibationBackupMatchResponse */
         LibationBackupMatchResponse: {
             /** Book Author */
@@ -4386,6 +4523,16 @@ export interface components {
             /** Trigger */
             trigger: string;
         };
+        /** MetadataSyncPayload */
+        MetadataSyncPayload: {
+            /** Metadata Job Id */
+            metadata_job_id?: number | null;
+            /**
+             * Trigger
+             * @default manual
+             */
+            trigger: string;
+        };
         /** MetadataSyncPreviewRequest */
         MetadataSyncPreviewRequest: {
             /** Book Ids */
@@ -4403,6 +4550,19 @@ export interface components {
             results: components["schemas"]["MetadataSyncBookResult"][];
             /** Scanned Books */
             scanned_books: number;
+        };
+        /** MetadataSyncRequest */
+        MetadataSyncRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "metadata_sync";
+            payload?: components["schemas"]["MetadataSyncPayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** OkResponse */
         OkResponse: {
@@ -4478,7 +4638,7 @@ export interface components {
             parent_job_id: number | null;
             /** Payload */
             payload: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             };
             /** Progress Current */
             progress_current: number;
@@ -4500,22 +4660,6 @@ export interface components {
             target_id: number | null;
             /** Target Type */
             target_type: string | null;
-        };
-        /** ProcessingJobRequest */
-        ProcessingJobRequest: {
-            /** Book Ids */
-            book_ids?: number[];
-            /**
-             * Job Type
-             * @enum {string}
-             */
-            job_type: "clean_book" | "clean_all" | "refresh_book" | "refresh_all" | "audiobook_pipeline" | "import_audiobook" | "upgrade_imported_audiobook" | "rebuild_imported_audiobook" | "rematch_imported_audiobook" | "align_imported_audiobook" | "metadata_sync" | "generate_sentence_audio" | "generate_chapter_preview" | "retry_cover" | "create_backup" | "verify_backup";
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            };
-            /** Target Id */
-            target_id?: number | null;
         };
         /** ProcessingJobsCreated */
         ProcessingJobsCreated: {
@@ -4670,6 +4814,29 @@ export interface components {
             /** Total Words */
             total_words: number;
         };
+        /** RebuildImportedAudiobookPayload */
+        RebuildImportedAudiobookPayload: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /** Pipeline Version */
+            pipeline_version?: number | null;
+        };
+        /** RebuildImportedAudiobookRequest */
+        RebuildImportedAudiobookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "rebuild_imported_audiobook";
+            payload?: components["schemas"]["RebuildImportedAudiobookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** RebuiltImports */
         RebuiltImports: {
             /** Pipeline Version */
@@ -4769,6 +4936,63 @@ export interface components {
             /** User Genre Tags */
             user_genre_tags: string[] | null;
         };
+        /** RefreshAllPayload */
+        RefreshAllPayload: {
+            /**
+             * Trigger
+             * @default manual
+             */
+            trigger: string;
+        };
+        /** RefreshAllRequest */
+        RefreshAllRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "refresh_all";
+            payload?: components["schemas"]["RefreshAllPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
+        /** RefreshBookPayload */
+        RefreshBookPayload: Record<string, never>;
+        /** RefreshBookRequest */
+        RefreshBookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "refresh_book";
+            payload?: components["schemas"]["RefreshBookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
+        /** RematchImportedAudiobookPayload */
+        RematchImportedAudiobookPayload: {
+            /**
+             * Realign
+             * @default false
+             */
+            realign: boolean;
+        };
+        /** RematchImportedAudiobookRequest */
+        RematchImportedAudiobookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "rematch_imported_audiobook";
+            payload?: components["schemas"]["RematchImportedAudiobookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** RemoveAllBooks */
         RemoveAllBooks: {
             /** Book Count */
@@ -4804,6 +5028,21 @@ export interface components {
             status?: string;
             /** Total */
             total?: number;
+        };
+        /** RetryCoverPayload */
+        RetryCoverPayload: Record<string, never>;
+        /** RetryCoverRequest */
+        RetryCoverRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "retry_cover";
+            payload?: components["schemas"]["RetryCoverPayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** RosterShared */
         RosterShared: {
@@ -5208,6 +5447,24 @@ export interface components {
             /** Total Books */
             total_books: number;
         };
+        /** UpgradeImportedAudiobookPayload */
+        UpgradeImportedAudiobookPayload: {
+            /** Format Version */
+            format_version?: number | null;
+        };
+        /** UpgradeImportedAudiobookRequest */
+        UpgradeImportedAudiobookRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "upgrade_imported_audiobook";
+            payload?: components["schemas"]["UpgradeImportedAudiobookPayload"];
+            /** Target Id */
+            target_id?: number | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -5220,6 +5477,24 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VerifyBackupPayload */
+        VerifyBackupPayload: {
+            /** Filename */
+            filename: string;
+        };
+        /** VerifyBackupRequest */
+        VerifyBackupRequest: {
+            /** Book Ids */
+            book_ids?: number[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            job_type: "verify_backup";
+            payload: components["schemas"]["VerifyBackupPayload"];
+            /** Target Id */
+            target_id?: number | null;
         };
         /** WebCheck */
         WebCheck: {
@@ -8733,7 +9008,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ProcessingJobRequest"];
+                "application/json": components["schemas"]["CleanBookRequest"] | components["schemas"]["CleanAllRequest"] | components["schemas"]["RefreshBookRequest"] | components["schemas"]["RefreshAllRequest"] | components["schemas"]["AudiobookPipelineRequest"] | components["schemas"]["ImportAudiobookRequest"] | components["schemas"]["UpgradeImportedAudiobookRequest"] | components["schemas"]["RebuildImportedAudiobookRequest"] | components["schemas"]["RematchImportedAudiobookRequest"] | components["schemas"]["AlignImportedAudiobookRequest"] | components["schemas"]["MetadataSyncRequest"] | components["schemas"]["GenerateSentenceAudioRequest"] | components["schemas"]["GenerateChapterPreviewRequest"] | components["schemas"]["RetryCoverRequest"] | components["schemas"]["CreateBackupRequest"] | components["schemas"]["VerifyBackupRequest"];
             };
         };
         responses: {

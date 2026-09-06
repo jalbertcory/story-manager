@@ -111,12 +111,14 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
         "id" in item
           ? await retryProcessingJob(item.id)
           : (
-              await queueProcessingJobs(
-                kind === "cover" ? "retry_cover" : "refresh_book",
-                [item.book_id],
-              )
+              await queueProcessingJobs({
+                job_type: kind === "cover" ? "retry_cover" : "refresh_book",
+                book_ids: [item.book_id],
+                payload: {},
+              })
             ).jobs[0];
-      if (!job) throw new Error("The server did not queue a job. Please retry.");
+      if (!job)
+        throw new Error("The server did not queue a job. Please retry.");
       client.setQueryData(["attention-action-job", job.id], job);
       setRequests((previous) => ({ ...previous, [key]: { title, job } }));
       invalidate();

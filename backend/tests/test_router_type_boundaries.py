@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-from backend.app import models, schemas
+from backend.app.job_payloads import RefreshBookRequest
+from backend.app import models
 from backend.app.routers import audiobook, cleaning, dashboard, processing, reader, scheduler
 
 
@@ -39,7 +40,7 @@ async def test_refresh_job_requires_web_source_enum(db, source_type):
     db.add(book)
     await db.commit()
     await db.refresh(book)
-    request = schemas.ProcessingJobRequest(job_type="refresh_book", book_ids=[book.id])
+    request = RefreshBookRequest(job_type="refresh_book", book_ids=[book.id])
 
     if source_type == models.SourceType.web:
         result = await processing.create_processing_jobs(request, db)

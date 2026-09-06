@@ -1,3 +1,5 @@
+from ..job_payloads import ImportWebBookPayload
+
 """Web novel endpoints: add from URL, queue imports, and refresh from source."""
 
 import logging
@@ -53,7 +55,7 @@ async def add_web_novel(
                 book_id=retried_book.id,
                 target_type="book",
                 target_id=retried_book.id,
-                payload={"source_url": source_url_str},
+                payload=ImportWebBookPayload(source_url=source_url_str),
                 dedupe_key=f"import_web_book:book:{retried_book.id}",
                 progress_detail="Queued web book import retry",
             )
@@ -77,7 +79,7 @@ async def add_web_novel(
         book_id=db_book.id,
         target_type="book",
         target_id=db_book.id,
-        payload={"source_url": source_url_str},
+        payload=ImportWebBookPayload(source_url=source_url_str),
         dedupe_key=f"import_web_book:book:{db_book.id}",
         progress_detail="Queued web book import",
     )
