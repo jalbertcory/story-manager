@@ -9,8 +9,9 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import cast, Any, Callable, Dict, List, Mapping, Optional, Sequence
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from ebooklib import epub
 from fastapi import HTTPException, status
 from lxml import etree
@@ -328,7 +329,7 @@ def _run_fff_lossless_update(
     )
 
 
-async def _enqueue_audiobook_refresh(book: models.Book, db) -> None:
+async def _enqueue_audiobook_refresh(book: models.Book, db: AsyncSession) -> None:
     """Queue every audio derivative affected by refreshed or cleaned content."""
     await db.refresh(book)
     if book.audiobook_enabled:
@@ -366,7 +367,7 @@ def _run_fff_main(args: List[str]) -> int:
         fff_main(args)
         return 0
     except SystemExit as e:
-        return e.code if e.code is not None else 0
+        return e.code if isinstance(e.code, int) else (1 if e.code is not None else 0)
     except Exception as e:
         logger.error(f"An unexpected error occurred in FanFicFare: {e}")
         return 1
@@ -397,10 +398,14 @@ def _read_epub_metadata(epub_path: Path) -> Dict[str, Any]:
 def _get_rootfile_path(epub_path: Path) -> str:
     with zipfile.ZipFile(epub_path) as archive:
         container = etree.fromstring(archive.read("META-INF/container.xml"))
-    return container.xpath(
+    rootfile_path = _xpath_elements(
+        container,
         "/u:container/u:rootfiles/u:rootfile",
         namespaces={"u": "urn:oasis:names:tc:opendocument:xmlns:container"},
     )[0].get("full-path")
+    if not rootfile_path:
+        raise ValueError("EPUB rootfile path is missing.")
+    return rootfile_path
 
 
 def _get_epub_source_url(epub_path: Path) -> Optional[str]:
@@ -408,7 +413,8 @@ def _get_epub_source_url(epub_path: Path) -> Optional[str]:
         rootfile_path = _get_rootfile_path(epub_path)
         with zipfile.ZipFile(epub_path) as archive:
             package = etree.fromstring(archive.read(rootfile_path))
-        matches = package.xpath(
+        matches = _xpath_elements(
+            package,
             "/opf:package/opf:metadata/dc:source",
             namespaces={
                 "opf": "http://www.idpf.org/2007/opf",
@@ -434,7 +440,8 @@ def _sync_epub_source_url(epub_path: Path, source_url: str) -> None:
 
     with zipfile.ZipFile(epub_path) as src, zipfile.ZipFile(temp_path, "w") as dst:
         package = etree.fromstring(src.read(rootfile_path))
-        metadata_nodes = package.xpath(
+        metadata_nodes = _xpath_elements(
+            package,
             "/opf:package/opf:metadata",
             namespaces={"opf": "http://www.idpf.org/2007/opf"},
         )
@@ -445,7 +452,8 @@ def _sync_epub_source_url(epub_path: Path, source_url: str) -> None:
             )
 
         metadata_node = metadata_nodes[0]
-        source_nodes = package.xpath(
+        source_nodes = _xpath_elements(
+            package,
             "/opf:package/opf:metadata/dc:source",
             namespaces={
                 "opf": "http://www.idpf.org/2007/opf",
@@ -796,12 +804,17 @@ async def update_web_novels() -> None:
         for book in books:
             old_chapter_count: Optional[int] = None
             try:
-                if not book.immutable_path or not book.current_path:
-                    logger.warning("Skipping %s (id=%s): missing epub paths.", book.title, book.id)
+                if not book.immutable_path or not book.current_path or not book.source_url:
+                    logger.warning("Skipping %s (id=%s): missing EPUB paths or source URL.", book.title, book.id)
                     continue
 
                 latest_log = await crud.get_latest_book_log(db, book.id)
-                if latest_log and latest_log.timestamp >= task.started_at:
+                if (
+                    latest_log
+                    and latest_log.timestamp is not None
+                    and task.started_at is not None
+                    and latest_log.timestamp >= task.started_at
+                ):
                     logger.info(f"Skipping {book.title}, already processed in this task.")
                     continue
 
@@ -883,3 +896,9 @@ async def update_web_novels() -> None:
             else:
                 await crud.complete_update_task(db, task)
         await db.close()
+
+
+def _xpath_elements(element: etree._Element, path: str, *, namespaces: dict[str, str]) -> list[etree._Element]:
+    """Read element-only XPath expressions used for EPUB metadata."""
+    # Every caller supplies a node selection, not a scalar XPath function.
+    return cast(list[etree._Element], element.xpath(path, namespaces=namespaces))

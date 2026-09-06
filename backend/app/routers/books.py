@@ -137,8 +137,10 @@ async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
     return await crud.get_all_series(db)
 
 
-@router.put("/api/series/{series_name}")
-async def rename_series(series_name: str, body: schemas.SeriesRename, db: AsyncSession = Depends(get_db)):
+@router.put("/api/series/{series_name}", response_model=None)
+async def rename_series(
+    series_name: str, body: schemas.SeriesRename, db: AsyncSession = Depends(get_db)
+) -> dict[str, int | str]:
     """Rename a series, updating all books that belong to it."""
     new_name = body.new_name.strip()
     if not new_name:
@@ -157,8 +159,8 @@ async def rename_series(series_name: str, body: schemas.SeriesRename, db: AsyncS
     return {"updated": count, "old_name": series_name, "new_name": new_name}
 
 
-@router.post("/api/series/merge")
-async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)):
+@router.post("/api/series/merge", response_model=None)
+async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)) -> dict[str, int | str]:
     """Merge source series into target series."""
     source = body.source.strip()
     target = body.target.strip()
@@ -180,8 +182,10 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
     return {"merged": count, "source": source, "target": target}
 
 
-@router.post("/api/series/{series_name}/reorder")
-async def reorder_series(series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)):
+@router.post("/api/series/{series_name}/reorder", response_model=None)
+async def reorder_series(
+    series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)
+) -> dict[str, int | str]:
     """Persist the order of every book in a series."""
     books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=100000)
     for book in books:
@@ -201,7 +205,7 @@ async def reorder_series(series_name: str, body: schemas.SeriesReorder, db: Asyn
 async def get_series_genres(
     series_name: str,
     db: AsyncSession = Depends(get_db),
-):
+) -> schemas.SeriesMetadataSummary:
     books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=1)
     if not books:
         raise HTTPException(status_code=404, detail="No books found with that series name")
@@ -219,7 +223,7 @@ async def update_series_genres(
     series_name: str,
     body: schemas.SeriesGenresUpdate,
     db: AsyncSession = Depends(get_db),
-):
+) -> schemas.SeriesMetadataSummary:
     books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=1)
     if not books:
         raise HTTPException(status_code=404, detail="No books found with that series name")
@@ -244,7 +248,7 @@ async def search_books_unified(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-) -> List[schemas.Book]:
+) -> List[models.Book]:
     return await crud.search_books(db, q=q, skip=skip, limit=limit)
 
 
@@ -262,8 +266,8 @@ async def search_books_by_series(
     return await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
 
 
-@router.get("/api/books/count")
-async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+@router.get("/api/books/count", response_model=None)
+async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
     total = await crud.count_books(db, q=q)
     return {"total": total}
 
@@ -357,7 +361,7 @@ async def update_book_details(
 
 
 @router.get("/api/books/{book_id}/revisions", response_model=List[schemas.BookRevision])
-async def list_book_revisions(book_id: int, db: AsyncSession = Depends(get_db)):
+async def list_book_revisions(book_id: int, db: AsyncSession = Depends(get_db)) -> list[models.BookRevision]:
     book = await crud.get_book(db, book_id=book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -370,7 +374,7 @@ async def restore_book_revision(
     revision_id: int,
     response: Response,
     db: AsyncSession = Depends(get_db),
-):
+) -> models.Book:
     book = await crud.get_book(db, book_id=book_id)
     revision = await get_book_revision(db, book_id, revision_id)
     if book is None or revision is None:
@@ -399,7 +403,7 @@ async def restore_book_revision(
 
 
 @router.post("/api/books/{book_id}/restore-original", response_model=schemas.Book)
-async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)):
+async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
     book = await crud.get_book(db, book_id=book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -429,7 +433,7 @@ async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
-async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[epub_editor.EpubChapter]:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -444,7 +448,7 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/api/books/{book_id}/cleaned-chapters", response_model=List[Dict[str, Any]])
-async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
+async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[epub_editor.EpubChapter]:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -458,8 +462,8 @@ async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get
     return epub_editor.get_chapters(str(epub_path))
 
 
-@router.get("/api/books/{book_id}/download")
-async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
+@router.get("/api/books/{book_id}/download", response_model=None)
+async def download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -476,8 +480,8 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/api/books/remove-all")
-async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)):
+@router.post("/api/books/remove-all", response_model=None)
+async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     books = await crud.get_books(db, limit=100000)
 
     preview_books = []
@@ -518,7 +522,7 @@ async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_
 
 
 @router.get("/api/recycle-bin", response_model=schemas.RecycleBin)
-async def get_recycle_bin(db: AsyncSession = Depends(get_db)):
+async def get_recycle_bin(db: AsyncSession = Depends(get_db)) -> schemas.RecycleBin:
     books = await crud.get_recycled_books(db)
     return schemas.RecycleBin(
         retention_days=RECYCLE_BIN_RETENTION_DAYS,
@@ -532,7 +536,7 @@ async def get_recycle_bin(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/api/recycle-bin/{book_id}/restore", response_model=schemas.Book)
-async def restore_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)):
+async def restore_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)) -> models.Book:
     book = await crud.get_book(db, book_id=book_id, include_deleted=True)
     if book is None or book.deleted_at is None:
         raise HTTPException(status_code=404, detail="Book not found in recycle bin")
@@ -540,8 +544,8 @@ async def restore_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)
     return restored
 
 
-@router.delete("/api/recycle-bin/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)):
+@router.delete("/api/recycle-bin/{book_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depends(get_db)) -> None:
     book = await crud.get_book(db, book_id=book_id, include_deleted=True)
     if book is None or book.deleted_at is None:
         raise HTTPException(status_code=404, detail="Book not found in recycle bin")
@@ -551,8 +555,8 @@ async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depe
     return None
 
 
-@router.post("/api/recycle-bin/purge-expired")
-async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)):
+@router.post("/api/recycle-bin/purge-expired", response_model=None)
+async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]
     for book in expired:
@@ -563,12 +567,12 @@ async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)):
     return {"purged": len(expired)}
 
 
-@router.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/api/books/by-title/{title}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_book_by_title(
     title: str,
     permanent: bool = False,
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     book = await crud.get_book_by_title(db, title=title, include_deleted=permanent)
     if book is None:
         return None
@@ -582,12 +586,12 @@ async def delete_book_by_title(
     return None
 
 
-@router.delete("/api/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/api/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_book_by_id(
     book_id: int,
     permanent: bool = False,
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     book = await crud.get_book(db, book_id=book_id)
     if book is None:
         return None

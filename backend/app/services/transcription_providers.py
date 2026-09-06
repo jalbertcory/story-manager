@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 
-from ..models import AudiobookSettings
-from .endpoint_pool import primary_provider, route_request
+from .endpoint_pool import ProviderSettings, primary_provider, route_request
 
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"none", "whisperx"}
 
@@ -28,7 +28,7 @@ class TranscriptResult:
     words: list[TranscriptWord]
 
 
-def transcription_provider_name(settings: AudiobookSettings | None) -> str:
+def transcription_provider_name(settings: ProviderSettings | None) -> str:
     provider = primary_provider(settings, "transcription", "none")
     if provider not in SUPPORTED_TRANSCRIPTION_PROVIDERS:
         choices = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS))
@@ -36,7 +36,7 @@ def transcription_provider_name(settings: AudiobookSettings | None) -> str:
     return provider
 
 
-def _service_root(settings: AudiobookSettings) -> str:
+def _service_root(settings: ProviderSettings) -> str:
     if not settings.transcription_base_url:
         raise RuntimeError("Transcription service base URL is required in Audio Settings.")
     root = settings.transcription_base_url.rstrip("/")
@@ -45,7 +45,7 @@ def _service_root(settings: AudiobookSettings) -> str:
     return root
 
 
-def _headers(settings: AudiobookSettings) -> dict[str, str]:
+def _headers(settings: ProviderSettings) -> dict[str, str]:
     headers = {"Accept": "application/json"}
     if settings.transcription_api_key:
         headers["Authorization"] = f"Bearer {settings.transcription_api_key}"
@@ -67,7 +67,7 @@ def _raise_for_status(response: httpx.Response, action: str) -> None:
         raise
 
 
-async def _transcription_service_health_endpoint(settings: AudiobookSettings) -> dict:
+async def _transcription_service_health_endpoint(settings: ProviderSettings) -> dict[str, Any]:
     if transcription_provider_name(settings) == "none":
         raise RuntimeError("Configure a transcription provider first.")
     timeout = httpx.Timeout(30.0, connect=10.0)
@@ -75,6 +75,8 @@ async def _transcription_service_health_endpoint(settings: AudiobookSettings) ->
         response = await client.get(f"{_service_root(settings)}/health", headers=_headers(settings))
         _raise_for_status(response, "health check")
         payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Transcription health response is not an object")
     if payload.get("status") != "ready":
         raise RuntimeError(f"Transcription service is not ready: {payload.get('status', 'unknown')}.")
     configured_model = settings.transcription_model
@@ -87,7 +89,7 @@ async def _transcription_service_health_endpoint(settings: AudiobookSettings) ->
     return payload
 
 
-async def transcription_service_health(settings: AudiobookSettings) -> dict:
+async def transcription_service_health(settings: ProviderSettings) -> dict[str, Any]:
     routed = await route_request(settings, "transcription", _transcription_service_health_endpoint)
     payload = dict(routed.value)
     payload["endpoint"] = {
@@ -99,7 +101,7 @@ async def transcription_service_health(settings: AudiobookSettings) -> dict:
     return payload
 
 
-async def _transcribe_file_endpoint(settings: AudiobookSettings, audio_path: Path) -> TranscriptResult:
+async def _transcribe_file_endpoint(settings: ProviderSettings, audio_path: Path) -> TranscriptResult:
     """Send one chapter clip to the configured timestamped ASR service."""
     provider = transcription_provider_name(settings)
     if provider == "none":
@@ -154,7 +156,7 @@ async def _transcribe_file_endpoint(settings: AudiobookSettings, audio_path: Pat
     )
 
 
-async def transcribe_file(settings: AudiobookSettings, audio_path: Path) -> TranscriptResult:
+async def transcribe_file(settings: ProviderSettings, audio_path: Path) -> TranscriptResult:
     """Transcribe through the first available endpoint."""
     routed = await route_request(
         settings,

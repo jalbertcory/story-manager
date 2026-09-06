@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 class WebNovelRequest(BaseModel):
-    url: schemas.HttpUrl
+    url: HttpUrl
 
 
 @router.post(

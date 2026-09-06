@@ -1,7 +1,7 @@
 """Storage cleanup and persistent log endpoints."""
 
 import logging
-from typing import Optional
+from typing import Optional, TypedDict
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -19,14 +19,19 @@ _ui_logger = logging.getLogger("frontend")
 router = APIRouter()
 
 
+class OrphanedFile(TypedDict):
+    path: str
+    size_bytes: int
+
+
 class ClientLogEntry(BaseModel):
     level: str = "ERROR"
     message: str
     source: Optional[str] = None
 
 
-@router.post("/api/logs/client")
-async def post_client_log(entry: ClientLogEntry):
+@router.post("/api/logs/client", response_model=None)
+async def post_client_log(entry: ClientLogEntry) -> dict[str, bool]:
     """Receive log entries from the frontend UI."""
     msg = entry.message
     if entry.source:
@@ -36,14 +41,14 @@ async def post_client_log(entry: ClientLogEntry):
     return {"ok": True}
 
 
-@router.get("/api/logs")
+@router.get("/api/logs", response_model=None)
 async def get_logs(
     limit: int = Query(default=200, ge=1, le=1000),
     level: Optional[str] = None,
     request_id: Optional[str] = None,
     job_id: Optional[int] = None,
     include_polling: bool = False,
-):
+) -> list[dict[str, object]]:
     entries = read_persisted_logs(limit=1000, level=level)
     if not include_polling:
         entries = [entry for entry in entries if not is_quiet_successful_access_entry(entry)]
@@ -54,8 +59,8 @@ async def get_logs(
     return entries[-limit:]
 
 
-@router.get("/api/library/validate")
-async def validate_library(db: AsyncSession = Depends(get_db)):
+@router.get("/api/library/validate", response_model=None)
+async def validate_library(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """
     Check every book record for missing or broken file paths.
     Returns a list of issues found (empty list means everything is healthy).
@@ -68,8 +73,8 @@ async def validate_library(db: AsyncSession = Depends(get_db)):
     return {"total_books": len(books), "issues_count": len(issues), "issues": issues}
 
 
-@router.post("/api/storage/cleanup")
-async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)):
+@router.post("/api/storage/cleanup", response_model=None)
+async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """
     Scans the library directory for files not referenced by any book record and
     failed web-import placeholder books that never produced EPUB files.
@@ -119,7 +124,7 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             tracked.add(str((LIBRARY_PATH.parent / book.cover_path).resolve()).casefold())
         tracked_directories.add(str((LIBRARY_PATH / "audiobooks" / str(book.id)).resolve()).casefold())
 
-    orphans = []
+    orphans: list[OrphanedFile] = []
     for file in LIBRARY_PATH.rglob("*"):
         if not file.is_file():
             continue

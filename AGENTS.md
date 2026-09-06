@@ -15,7 +15,12 @@ Before creating a pull request or pushing an update to an existing pull request,
 make pr-check
 ```
 
-Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint, and frontend lint checks enforced by CI so local validation cannot report a false green.
+Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint/type checks, frontend lint, and frontend dependency audits enforced by CI. CI also runs a Python dependency audit.
+
+`make typecheck` runs mypy in strict mode across `backend/app` and production Python in `services`.
+Keep application modules included; fix types and nullable-value handling rather
+than suppressing whole files. Import exceptions belong only to the explicitly
+listed external libraries in `pyproject.toml`.
 
 ### Database Credentials
 

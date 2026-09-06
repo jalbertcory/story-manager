@@ -24,27 +24,27 @@ from ..services.processing_queue import get_processing_queue
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 
-@router.get("/health")
-async def get_health(db: AsyncSession = Depends(get_db)):
+@router.get("/health", response_model=None)
+async def get_health(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     return await health_report(db, get_processing_queue())
 
 
-@router.get("/ready")
-async def get_readiness(db: AsyncSession = Depends(get_db)):
+@router.get("/ready", response_model=None)
+async def get_readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     report = await health_report(db, get_processing_queue())
     return JSONResponse(status_code=200 if report["status"] == "healthy" else 503, content=report)
 
 
-@router.get("/job-metrics")
+@router.get("/job-metrics", response_model=None)
 async def get_job_metrics(
     window_hours: int = Query(default=24, ge=1, le=24 * 90),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, object]:
     return await processing_job_metrics(db, window_hours=window_hours)
 
 
-@router.get("/diagnostics")
-async def download_diagnostics(db: AsyncSession = Depends(get_db)):
+@router.get("/diagnostics", response_model=None)
+async def download_diagnostics(db: AsyncSession = Depends(get_db)) -> StreamingResponse:
     """Download a redacted bundle with no library files, audio, or secret configuration."""
     queue = get_processing_queue()
     files = {

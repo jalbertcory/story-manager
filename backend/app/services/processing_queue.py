@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import socket
-from typing import Awaitable, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar, TypedDict
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -28,6 +28,7 @@ from ..logging_config import redact_text
 from ..observability_context import correlation_context
 from .audiobook_alignment import process_alignment
 from .audiobook_import import (
+    HumanAudiobookRebuildResult,
     process_import,
     rebuild_imported_audiobook,
     rematch_imported_audiobook,
@@ -45,6 +46,16 @@ from .transcription_providers import transcription_provider_name
 from .update_scheduler import run_web_novel_update
 from .web_novel import run_book_refresh
 from .web_novel import finish_web_novel_download
+
+
+class WorkerHealth(TypedDict):
+    status: str
+    running: bool
+    configured_workers: int
+    active_workers: int
+    failed_workers: int
+    lanes: dict[str, int]
+
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +148,7 @@ class ProcessingQueue:
                 exc_info=(type(error), error, error.__traceback__),
             )
 
-    def health_snapshot(self) -> dict:
+    def health_snapshot(self) -> WorkerHealth:
         """Return a public, credential-free view of worker availability."""
         configured = {lane: _positive_int_env(f"PROCESSING_{lane.upper()}_CONCURRENCY", 1) for lane in RESOURCE_LANES}
         alive = [task for task in self._worker_tasks if not task.done()]
@@ -408,7 +419,7 @@ class ProcessingQueue:
         if job.job_type == "rebuild_imported_audiobook":
             target_id = _required_target(job)
 
-            async def rebuild_audio():
+            async def rebuild_audio() -> HumanAudiobookRebuildResult:
                 async with SessionLocal() as db:
                     return await rebuild_imported_audiobook(target_id, db)
 
@@ -497,20 +508,22 @@ class ProcessingQueue:
             return "Metadata sync completed"
         if job.job_type == "generate_sentence_audio":
             sentence_id = _required_target(job)
+            book_id = _required_book(job)
             async with SessionLocal() as db:
                 await crud.update_processing_job_progress(db, job.id, current=0, total=1, detail="Generating sentence audio")
                 await crud.audiobook.set_sentence_status(db, sentence_id, "audio_generating")
-                await generate_audio_for_sentence(job.book_id, sentence_id, db)
+                await generate_audio_for_sentence(book_id, sentence_id, db)
                 await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Sentence audio generated")
             return "Sentence audio generated"
         if job.job_type == "generate_chapter_preview":
             chapter_id = _required_target(job)
+            book_id = _required_book(job)
             async with SessionLocal() as db:
                 await crud.update_processing_job_progress(db, job.id, current=0, total=2, detail="Generating preview audio")
                 await crud.audiobook.set_chapter_preview_status(db, chapter_id, "generating")
-                await generate_audio_for_chapter_preview(job.book_id, chapter_id, db)
+                await generate_audio_for_chapter_preview(book_id, chapter_id, db)
                 await crud.update_processing_job_progress(db, job.id, current=1, total=2, detail="Assembling chapter preview")
-                await assemble_chapter_preview(job.book_id, chapter_id, db)
+                await assemble_chapter_preview(book_id, chapter_id, db)
                 await crud.audiobook.set_chapter_preview_status(db, chapter_id, "ready")
                 await crud.update_processing_job_progress(db, job.id, current=2, total=2, detail="Chapter preview ready")
             return "Chapter preview generated"
@@ -575,6 +588,7 @@ class ProcessingQueue:
         return f"Cleaned {total} books; {updated} changed"
 
     async def _run_audiobook_pipeline(self, job: ProcessingJob) -> str:
+        book_id = _required_book(job)
         mode = (job.payload or {}).get("mode", "resume")
         async with SessionLocal() as db:
             book = await db.get(Book, job.book_id)
@@ -645,7 +659,7 @@ class ProcessingQueue:
                 batch_limit=batch_limit,
             )
         pipeline_task = asyncio.create_task(
-            get_audiobook_queue().process_book(job.book_id),
+            get_audiobook_queue().process_book(book_id),
             name=f"audiobook-processing-job-{job.id}",
         )
         try:
@@ -664,7 +678,7 @@ class ProcessingQueue:
                                 detail=book.audiobook_progress_detail or f"Audiobook phase: {book.audiobook_pipeline_status}",
                             )
                         if await crud.is_processing_job_cancel_requested(db, job.id):
-                            await crud.audiobook.request_book_pipeline_pause(db, job.book_id)
+                            await crud.audiobook.request_book_pipeline_pause(db, book_id)
             await pipeline_task
         except asyncio.CancelledError:
             pipeline_task.cancel()
@@ -682,7 +696,10 @@ class ProcessingQueue:
         operation: Callable[[], Awaitable[_Result]],
         snapshot: Callable[[], Awaitable[tuple[int, int, str | None]]],
     ) -> _Result:
-        task = asyncio.create_task(operation(), name=f"processing-operation-{job_id}")
+        async def run_operation() -> _Result:
+            return await operation()
+
+        task = asyncio.create_task(run_operation(), name=f"processing-operation-{job_id}")
         try:
             while not task.done():
                 try:
@@ -753,6 +770,12 @@ class ProcessingQueue:
             )
 
 
+def _required_book(job: ProcessingJob) -> int:
+    if job.book_id is None:
+        raise ValueError("Processing job has no book.")
+    return job.book_id
+
+
 def _required_target(job: ProcessingJob) -> int:
     if job.target_id is None:
         raise ValueError(f"{job.job_type} job has no target.")
@@ -775,7 +798,7 @@ async def queue_processing_job(
     target_id: int | None = None,
     target_content_version: int | None = None,
     parent_job_id: int | None = None,
-    payload: dict | None = None,
+    payload: dict[str, Any] | None = None,
     dedupe_key: str | None = None,
     progress_detail: str | None = "Queued",
 ) -> ProcessingJob:

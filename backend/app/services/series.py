@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, TypeVar, TypedDict
 
 from .metadata.scoring import infer_series_metadata
 
@@ -113,6 +113,15 @@ def _title_matches_series(title: str, label: str) -> bool:
     return any(raw_title.startswith(prefix) for prefix in prefixes)
 
 
+class _SeriesCluster(TypedDict):
+    labels: list[str]
+    normalized: list[str]
+    books: set[tuple[str, str]]
+
+
+_Book = TypeVar("_Book")
+
+
 def detect_series_from_books(books: list[SeriesBook]) -> dict[tuple[str, str], str]:
     """
     Detect series assignments from title patterns, grouped by normalized author.
@@ -131,7 +140,7 @@ def detect_series_from_books(books: list[SeriesBook]) -> dict[tuple[str, str], s
         books_by_author[_normalize_author_name(book.author)].append(book)
 
     for author_books in books_by_author.values():
-        clusters: list[dict[str, list[str] | set[tuple[str, str]]]] = []
+        clusters: list[_SeriesCluster] = []
 
         for book in author_books:
             for hint in _extract_series_hints(book.title):
@@ -185,7 +194,7 @@ def detect_series_from_titles(titles: list[str]) -> dict[str, str]:
     return {title: assignments[("", title)] for title in titles if ("", title) in assignments}
 
 
-def enrich_series_metadata(books: list[object], *, target_ids: set[int] | None = None) -> list[object]:
+def enrich_series_metadata(books: list[_Book], *, target_ids: set[int] | None = None) -> list[_Book]:
     """Fill only missing series names and positions from deterministic title evidence."""
 
     without_series = [
@@ -194,7 +203,7 @@ def enrich_series_metadata(books: list[object], *, target_ids: set[int] | None =
         if not getattr(book, "series", None)
     ]
     detected = detect_series_from_books(without_series) if len(without_series) >= 2 else {}
-    changed: list[object] = []
+    changed: list[_Book] = []
     for book in books:
         if target_ids is not None and getattr(book, "id", None) not in target_ids:
             continue

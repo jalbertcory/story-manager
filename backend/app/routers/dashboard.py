@@ -12,7 +12,7 @@ from .. import crud, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..crud.metadata import actionable_metadata_proposal_conditions
-from ..services.library_health import find_missing_covers, inspect_library_files
+from ..services.library_health import LibraryFileIssue, find_missing_covers, inspect_library_files
 
 router = APIRouter()
 
@@ -20,11 +20,22 @@ router = APIRouter()
 def _book_item(book: models.Book, issue: str, detail: str | None = None) -> schemas.AttentionBookItem:
     return schemas.AttentionBookItem(
         book_id=book.id,
-        title=book.title,
-        author=book.author,
+        title=book.title or "",
+        author=book.author or "",
         issue=issue,
         detail=detail,
         can_retry_refresh=book.source_type == models.SourceType.web and bool(book.source_url),
+    )
+
+
+def _file_item(issue: LibraryFileIssue, *, can_retry_cover: bool = False) -> schemas.AttentionFileItem:
+    return schemas.AttentionFileItem(
+        book_id=issue["book_id"],
+        title=issue["title"] or "",
+        author=issue["author"] or "",
+        issue=issue["issue"],
+        path=issue.get("path"),
+        can_retry_cover=can_retry_cover,
     )
 
 
@@ -176,17 +187,14 @@ async def get_attention_dashboard(
     metadata_proposals = await _metadata_proposals(db, limit)
     broken_category = schemas.AttentionFileCategory(
         count=len(broken_files),
-        items=[schemas.AttentionFileItem(**issue) for issue in broken_files[:limit]],
+        items=[_file_item(issue) for issue in broken_files[:limit]],
     )
     cover_book_ids = {
         book.id for book in books if book.immutable_path and (LIBRARY_PATH.parent / book.immutable_path).is_file()
     }
     cover_category = schemas.AttentionFileCategory(
         count=len(missing_covers),
-        items=[
-            schemas.AttentionFileItem(**issue, can_retry_cover=issue["book_id"] in cover_book_ids)
-            for issue in missing_covers[:limit]
-        ],
+        items=[_file_item(issue, can_retry_cover=issue["book_id"] in cover_book_ids) for issue in missing_covers[:limit]],
     )
     total_count = sum(
         category.count

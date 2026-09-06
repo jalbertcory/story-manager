@@ -50,6 +50,19 @@ def test_create_and_verify_backup_archive(monkeypatch, tmp_path):
     assert archive.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize("manifest_json", ["null", "[]", '"text"', "42"])
+def test_verification_and_listing_reject_non_object_manifest(tmp_path, manifest_json):
+    archive = tmp_path / "invalid.story-manager.zip"
+    with zipfile.ZipFile(archive, "w") as destination:
+        destination.writestr(backups.MANIFEST_NAME, manifest_json)
+
+    with pytest.raises(backups.BackupError, match="manifest is invalid"):
+        backups.verify_backup_archive(archive)
+    summary = backups.backup_summary(archive)
+    assert summary["valid_manifest"] is False
+    assert summary["error"] == "Backup manifest is invalid."
+
+
 def test_verification_rejects_changed_file(monkeypatch, tmp_path):
     archive, _library = _create_archive(monkeypatch, tmp_path)
     changed = tmp_path / "changed.story-manager.zip"

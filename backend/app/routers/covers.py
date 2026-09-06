@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud, schemas
+from .. import crud, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.cover_images import save_cover_from_url
@@ -23,8 +23,8 @@ class CoverUrlRequest(BaseModel):
     url: str
 
 
-@router.get("/api/covers/{book_id}")
-async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)):
+@router.get("/api/covers/{book_id}", response_model=None)
+async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     """Serves the cover image for a given book ID."""
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None or not db_book.cover_path:
@@ -44,7 +44,7 @@ async def get_cover_image(book_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/api/books/{book_id}/cover", response_model=schemas.Book)
-async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> models.Book:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -68,7 +68,7 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
 
 
 @router.post("/api/books/{book_id}/retry-cover", response_model=schemas.Book)
-async def retry_cover(book_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+async def retry_cover(book_id: int, response: Response, db: AsyncSession = Depends(get_db)) -> models.Book:
     """Queue cover extraction from the EPUB with source scraping as fallback."""
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -90,7 +90,7 @@ async def retry_cover(book_id: int, response: Response, db: AsyncSession = Depen
 
 
 @router.post("/api/books/{book_id}/cover-url", response_model=schemas.Book)
-async def set_cover_from_url(book_id: int, req: CoverUrlRequest, db: AsyncSession = Depends(get_db)):
+async def set_cover_from_url(book_id: int, req: CoverUrlRequest, db: AsyncSession = Depends(get_db)) -> models.Book:
     """Downloads an image from a URL and sets it as the book's cover."""
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:

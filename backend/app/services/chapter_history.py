@@ -43,6 +43,8 @@ def build_chapter_update_history(
     seen_initial_sync = False
     seen_post_initial_growth = False
     for log in logs:
+        if log.timestamp is None:
+            continue
         is_initial_sync = _is_initial_sync_log(log)
         included_in_stats = _is_chapter_growth_log(log)
         if not is_initial_sync and not included_in_stats:

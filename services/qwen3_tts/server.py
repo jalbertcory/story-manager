@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 import gc
 from io import BytesIO
 import json
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import threading
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -24,6 +26,10 @@ from services.omnivoice.audio_quality import AudioQualityError, validate_generat
 from services.speaker_similarity import get_speaker_verifier
 from services.tts_consistency import seed_for_attempt, voice_instruction
 from .voice_store import StoredVoice, VoiceStore
+
+if TYPE_CHECKING:
+    from qwen_tts import Qwen3TTSModel
+    from qwen_tts.inference.qwen3_tts_model import VoiceClonePromptItem
 
 logger = logging.getLogger(__name__)
 DEVICE = os.getenv("QWEN3_TTS_DEVICE", "auto")
@@ -107,15 +113,39 @@ def _instruction(profile: str | None) -> str:
     return voice_instruction(profile)
 
 
+class TTSRuntime(Protocol):
+    """Interface shared by the PyTorch and MLX HTTP adapters."""
+
+    device: str
+    _model_kind: str | None
+    _voices: VoiceStore
+
+    def load(self) -> None: ...
+
+    def generate(self, request: GenerateRequest) -> tuple[bytes, int, float | None, int]: ...
+
+    def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int, float | None, int]]: ...
+
+    def design(self, request: DesignVoiceRequest) -> tuple[StoredVoice, float | None, int]: ...
+
+    def materialize_preset(self, request: PresetVoiceRequest) -> tuple[StoredVoice, float | None, int]: ...
+
+
+class LoRAMetadata(TypedDict):
+    ref_audio: str
+    ref_audio_path: str
+    ref_text: str
+
+
 class QwenRuntime:
     def __init__(self) -> None:
         self.device = "unloaded"
         self._model_kind: str | None = None
-        self._model = None
+        self._model: Qwen3TTSModel | None = None
         self._adapter_name: str | None = None
         self._lock = threading.RLock()
         self._voices = VoiceStore(VOICE_STORE_PATH)
-        self._clone_prompts: dict[str, object] = {}
+        self._clone_prompts: dict[str, list[VoiceClonePromptItem]] = {}
 
     def load(self) -> None:
         self.device = self._resolve_device()
@@ -131,7 +161,7 @@ class QwenRuntime:
             return "mps"
         return "cpu"
 
-    def _load(self, kind: str, adapter_name: str | None = None):
+    def _load(self, kind: str, adapter_name: str | None = None) -> Qwen3TTSModel:
         if self._model is not None and self._model_kind == kind and self._adapter_name == adapter_name:
             return self._model
         from qwen_tts import Qwen3TTSModel
@@ -146,34 +176,44 @@ class QwenRuntime:
         kwargs = {"dtype": dtype}
         if self.device != "cpu":
             kwargs["device_map"] = self.device
-        self._model = Qwen3TTSModel.from_pretrained(model_id, **kwargs)
+        model = Qwen3TTSModel.from_pretrained(model_id, **kwargs)
+        self._model = model
         if kind == "lora":
             adapter_path, _metadata = self._lora_metadata(adapter_name or "")
             from peft import PeftModel
 
-            self._model.model.talker = PeftModel.from_pretrained(self._model.model.talker, adapter_path)
-            self._model.model.talker.eval()
+            model.model.talker = PeftModel.from_pretrained(model.model.talker, adapter_path)
+            model.model.talker.eval()
         self._model_kind = kind
         self._adapter_name = adapter_name
-        return self._model
+        return model
 
-    def _lora_metadata(self, name: str) -> tuple[Path, dict]:
+    def _lora_metadata(self, name: str) -> tuple[Path, LoRAMetadata]:
         if not _SAFE_ADAPTER_RE.fullmatch(name):
             raise KeyError(f"Invalid LoRA adapter name: {name!r}")
         path = (LORA_ROOT / name).resolve()
         if not path.is_relative_to(LORA_ROOT.resolve()) or not path.is_dir():
             raise KeyError(f"Unknown LoRA adapter: {name}")
         metadata = json.loads((path / "voice.json").read_text(encoding="utf-8"))
+        if (
+            not isinstance(metadata, dict)
+            or not isinstance(metadata.get("ref_audio"), str)
+            or not isinstance(metadata.get("ref_text"), str)
+        ):
+            raise ValueError(f"LoRA adapter {name} has invalid voice.json reference metadata.")
         reference = (path / str(metadata["ref_audio"])).resolve()
         if not reference.is_relative_to(path) or not reference.is_file() or not metadata.get("ref_text"):
             raise ValueError(f"LoRA adapter {name} has invalid voice.json reference metadata.")
         metadata["ref_audio_path"] = str(reference)
-        return path, metadata
+        # The reference fields above are validated; preserve any extra model metadata.
+        return path, cast(LoRAMetadata, metadata)
 
-    def _clone_prompt(self, voice_id: str):
+    def _clone_prompt(self, voice_id: str) -> list[VoiceClonePromptItem]:
         cached = self._clone_prompts.get(voice_id)
         if cached is not None:
             return cached
+        if self._model is None:
+            raise RuntimeError("Qwen3-TTS model is not loaded")
         if voice_id.startswith("lora:"):
             _path, metadata = self._lora_metadata(voice_id.removeprefix("lora:"))
             prompt = self._model.create_voice_clone_prompt(
@@ -187,7 +227,8 @@ class QwenRuntime:
                 ref_audio=str(self._voices.sample_path(voice_id)), ref_text=stored.ref_text
             )
         self._clone_prompts[voice_id] = prompt
-        return prompt
+        # Qwen returns these records; the isolated runtime has no root typing metadata.
+        return cast(list[VoiceClonePromptItem], prompt)
 
     def _reference_path(self, voice_id: str) -> Path | None:
         if voice_id.startswith("preset:"):
@@ -438,11 +479,11 @@ class QwenRuntime:
             return self._voices.create(description, DESIGN_TEXT, audio, rate), similarity, 1
 
 
-runtime = QwenRuntime()
+runtime: TTSRuntime = QwenRuntime()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     runtime.load()
     yield
 

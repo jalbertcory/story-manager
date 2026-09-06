@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import String, asc, cast, delete, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.sql import Select
 from .. import models, schemas
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
@@ -16,7 +17,7 @@ from ..lifecycle import (
 )
 
 
-def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
+def _build_books_query(sort_by: str = "title", sort_order: str = "asc") -> Select[tuple[models.Book]]:
     sort_columns = {
         "title": models.Book.title,
         "author": models.Book.author,
@@ -34,7 +35,7 @@ def _build_books_query(sort_by: str = "title", sort_order: str = "asc"):
     )
 
 
-def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc"):
+def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc") -> Select[tuple[models.Book]]:
     pattern = f"%{q}%"
     return _build_books_query(sort_by=sort_by, sort_order=sort_order).filter(
         or_(
@@ -69,7 +70,7 @@ async def get_web_books(db: AsyncSession) -> List[models.Book]:
             models.Book.deleted_at.is_(None),
         )
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_pending_web_books(db: AsyncSession) -> List[models.Book]:
@@ -81,7 +82,7 @@ async def get_pending_web_books(db: AsyncSession) -> List[models.Book]:
             models.Book.deleted_at.is_(None),
         )
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_pending_refresh_books(db: AsyncSession) -> List[models.Book]:
@@ -93,7 +94,7 @@ async def get_pending_refresh_books(db: AsyncSession) -> List[models.Book]:
             models.Book.deleted_at.is_(None),
         )
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_books(
@@ -106,13 +107,13 @@ async def get_books(
     """Retrieve a list of books from the database."""
     query = _build_books_query(sort_by=sort_by, sort_order=sort_order)
     result = await db.execute(query.offset(skip).limit(limit))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def search_books(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
     """Search books by title, author, or series (case-insensitive)."""
     result = await db.execute(_build_book_search_query(q=q).offset(skip).limit(limit))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_book_catalog(
@@ -130,7 +131,7 @@ async def get_book_catalog(
         )
     )
     result = await db.execute(query)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def create_book(db: AsyncSession, book: schemas.BookCreate) -> models.Book:
@@ -246,7 +247,7 @@ async def get_books_by_author(db: AsyncSession, author: str, skip: int = 0, limi
         .offset(skip)
         .limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_book_by_title(
@@ -374,4 +375,4 @@ async def count_books(db: AsyncSession, q: Optional[str] = None) -> int:
 async def get_books_without_series(db: AsyncSession) -> List[models.Book]:
     """Retrieve all books that have no series assigned."""
     result = await db.execute(select(models.Book).filter(models.Book.series.is_(None), models.Book.deleted_at.is_(None)))
-    return result.scalars().all()
+    return list(result.scalars().all())

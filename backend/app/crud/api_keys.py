@@ -19,7 +19,7 @@ async def create_api_key(db: AsyncSession, label: str, token: str, prefix: str) 
 
 async def get_api_keys(db: AsyncSession) -> List[models.ApiKey]:
     result = await db.execute(select(models.ApiKey).order_by(models.ApiKey.created_at.desc()))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def revoke_api_key(db: AsyncSession, key_id: int) -> bool:

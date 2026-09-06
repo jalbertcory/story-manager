@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 
 class BackupInProgressError(RuntimeError):
@@ -23,7 +24,7 @@ class BackupBarrier:
         return self._backup_active
 
     @asynccontextmanager
-    async def mutation(self):
+    async def mutation(self) -> AsyncIterator[None]:
         async with self._condition:
             if self._backup_active:
                 raise BackupInProgressError("A library backup is being created. Try again shortly.")
@@ -36,7 +37,7 @@ class BackupBarrier:
                 self._condition.notify_all()
 
     @asynccontextmanager
-    async def backup(self):
+    async def backup(self) -> AsyncIterator[None]:
         async with self._condition:
             if self._backup_active:
                 raise BackupInProgressError("A library backup is already being created.")

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud, schemas
+from .. import crud, models, schemas
 from ..auth import generate_reader_token
 from ..database import get_db
 
@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/api/reader-keys", response_model=list[schemas.ApiKey])
-async def list_reader_keys(db: AsyncSession = Depends(get_db)) -> list[schemas.ApiKey]:
+async def list_reader_keys(db: AsyncSession = Depends(get_db)) -> list[models.ApiKey]:
     return await crud.get_api_keys(db)
 
 

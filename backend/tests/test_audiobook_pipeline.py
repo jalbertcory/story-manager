@@ -2488,6 +2488,49 @@ async def test_roster_keeps_first_person_protagonist_separate_from_narrator(db, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["description", "voice_prompt"])
+@pytest.mark.parametrize("invalid_value", [[], {}, 17])
+async def test_roster_rejects_non_text_character_fields_before_replacing_existing_roster(
+    db, monkeypatch, field, invalid_value
+):
+    book = await _make_book(db, audiobook_enabled=True)
+    db.add(models.AudiobookSettings(llm_provider="ollama", llm_base_url="http://ollama.test"))
+    await crud.audiobook.create_chapter(db, book.id, 1, "story.xhtml")
+    existing = await crud.audiobook.create_characters_bulk(db, book.id, [{"name": "Existing", "is_narrator": True}])
+    character = {"name": "Narrator", "description": None, "voice_prompt": None, field: invalid_value}
+
+    async def fake_call(*_args, **_kwargs):
+        return json.dumps({"book_summary": "Summary", "characters": [character]})
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", fake_call)
+    with pytest.raises(RuntimeError, match=f"LLM character {field} must be text or null"):
+        await audiobook_llm.generate_character_roster(book.id, db)
+
+    remaining = await crud.audiobook.get_characters_for_book(db, book.id)
+    assert [character.id for character in remaining] == [existing[0].id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, "", "A calm narrative voice."])
+async def test_roster_preserves_valid_optional_character_text(db, monkeypatch, value):
+    book = await _make_book(db, audiobook_enabled=True)
+    db.add(models.AudiobookSettings(llm_provider="ollama", llm_base_url="http://ollama.test"))
+    await crud.audiobook.create_chapter(db, book.id, 1, "story.xhtml")
+
+    async def fake_call(*_args, **_kwargs):
+        return json.dumps(
+            {"book_summary": "Summary", "characters": [{"name": "Narrator", "description": value, "voice_prompt": value}]}
+        )
+
+    monkeypatch.setattr(audiobook_llm, "_call_llm", fake_call)
+    await audiobook_llm.generate_character_roster(book.id, db)
+    characters = await crud.audiobook.get_characters_for_book(db, book.id)
+    narrator = next(character for character in characters if character.is_narrator)
+    assert narrator.description == value
+    assert narrator.voice_prompt == value
+
+
+@pytest.mark.asyncio
 async def test_series_roster_reuses_and_propagates_voice_profiles(db):
     first = await _make_book(db, title="Saga One", series="Shared Saga", audiobook_enabled=True)
     second = await _make_book(db, title="Saga Two", series="Shared Saga", audiobook_enabled=True)

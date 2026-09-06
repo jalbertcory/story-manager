@@ -18,7 +18,7 @@ async def create_cleaning_config(db: AsyncSession, config: schemas.CleaningConfi
 
 async def get_cleaning_configs(db: AsyncSession) -> List[models.CleaningConfig]:
     result = await db.execute(select(models.CleaningConfig))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_matching_cleaning_config(db: AsyncSession, url: str) -> Optional[models.CleaningConfig]:

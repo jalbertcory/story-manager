@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from datetime import datetime
-from typing import Literal, Optional, List
+from typing import Any, Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
 
@@ -23,8 +23,8 @@ class BookBase(BaseModel):
     genre_tags: Optional[List[str]] = Field(default_factory=list)
     source_tags: Optional[List[str]] = Field(default_factory=list)
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
-    metadata_remote_ids: Optional[dict] = None
-    metadata_details: Optional[dict] = None
+    metadata_remote_ids: Optional[dict[str, Any]] = None
+    metadata_details: Optional[dict[str, Any]] = None
     metadata_sync_source: Optional[str] = None
     metadata_synced_at: Optional[datetime] = None
     master_word_count: Optional[int] = None
@@ -53,7 +53,7 @@ class BookUpdate(BaseModel):
     genre_tags: Optional[List[str]] = None
     user_genre_tags: Optional[List[str]] = None
     source_tags: Optional[List[str]] = None
-    metadata_remote_ids: Optional[dict] = None
+    metadata_remote_ids: Optional[dict[str, Any]] = None
     audiobook_enabled: Optional[bool] = None
     removed_chapters: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
@@ -87,7 +87,7 @@ class BookRevision(BaseModel):
     book_id: int
     action: str
     summary: str
-    snapshot: dict
+    snapshot: dict[str, Any]
     created_at: datetime
 
 
@@ -394,7 +394,7 @@ class ProcessingJobRequest(BaseModel):
     job_type: PROCESSING_JOB_TYPES
     book_ids: List[int] = Field(default_factory=list)
     target_id: Optional[int] = None
-    payload: dict = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingJob(BaseModel):
@@ -411,7 +411,7 @@ class ProcessingJob(BaseModel):
     target_content_version: Optional[int] = None
     parent_job_id: Optional[int] = None
     request_id: str
-    payload: dict = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
     progress_current: int
     progress_total: int
     progress_detail: Optional[str] = None
@@ -536,8 +536,8 @@ class MetadataSyncBookResult(BaseModel):
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
-    remote_ids: Optional[dict] = None
-    metadata_details: Optional[dict] = None
+    remote_ids: Optional[dict[str, Any]] = None
+    metadata_details: Optional[dict[str, Any]] = None
     genre_tags: List[str] = Field(default_factory=list)
     new_genre_tags: List[str] = Field(default_factory=list)
     possible_missing_series_books: List[str] = Field(default_factory=list)
@@ -595,8 +595,8 @@ class MetadataMatch(BaseModel):
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
-    remote_ids: Optional[dict] = None
-    remote_metadata: Optional[dict] = None
+    remote_ids: Optional[dict[str, Any]] = None
+    remote_metadata: Optional[dict[str, Any]] = None
     proposed_genre_tags: Optional[List[str]] = None
     possible_missing_series_books: Optional[List[str]] = None
     match_issues: Optional[List[str]] = None

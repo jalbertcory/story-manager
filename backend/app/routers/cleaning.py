@@ -22,7 +22,7 @@ class PreviewCleaningRequest(BaseModel):
     removed_chapters: List[str] = []
 
 
-async def _queue_clean_all(db: AsyncSession, detail: str):
+async def _queue_clean_all(db: AsyncSession, detail: str) -> models.ProcessingJob:
     return await queue_processing_job(
         db=db,
         job_type="clean_all",
@@ -32,20 +32,20 @@ async def _queue_clean_all(db: AsyncSession, detail: str):
     )
 
 
-@router.post("/api/books/reprocess-all")
-async def reprocess_all_books(response: Response, db: AsyncSession = Depends(get_db)):
+@router.post("/api/books/reprocess-all", response_model=None)
+async def reprocess_all_books(response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     job = await _queue_clean_all(db, "Queued from Clean All Books")
     response.headers["X-Processing-Job-Id"] = str(job.id)
     return {"status": "started"}
 
 
-@router.get("/api/books/reprocess-all/status")
-async def reprocess_all_status(db: AsyncSession = Depends(get_db)):
+@router.get("/api/books/reprocess-all/status", response_model=None)
+async def reprocess_all_status(db: AsyncSession = Depends(get_db)) -> dict[str, bool | int | str | None]:
     rows = await crud.get_processing_jobs(db, job_type="clean_all", limit=1)
     if not rows:
         return {"running": False}
     job, _title = rows[0]
-    payload = {
+    payload: dict[str, bool | int | str | None] = {
         "running": job.status in ("queued", "running"),
         "job_id": job.id,
         "status": job.status,
@@ -62,7 +62,7 @@ async def process_book_endpoint(
     book_id: int,
     response: Response,
     db: AsyncSession = Depends(get_db),
-):
+) -> models.Book:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -92,11 +92,15 @@ async def process_book_endpoint(
     return db_book
 
 
-@router.post("/api/books/{book_id}/preview-cleaning")
-async def preview_cleaning(book_id: int, req: PreviewCleaningRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/api/books/{book_id}/preview-cleaning", response_model=None)
+async def preview_cleaning(
+    book_id: int, req: PreviewCleaningRequest, db: AsyncSession = Depends(get_db)
+) -> epub_editor.EpubPreview:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    if not db_book.immutable_path:
+        raise HTTPException(status_code=404, detail="Original EPUB not available")
     configs = []
     if db_book.source_url:
         configs = await crud.get_all_matching_cleaning_configs(db, str(db_book.source_url))
@@ -110,7 +114,7 @@ async def preview_cleaning(book_id: int, req: PreviewCleaningRequest, db: AsyncS
 
 
 @router.get("/api/books/{book_id}/matched-config", response_model=List[schemas.CleaningConfig])
-async def get_book_matched_config(book_id: int, db: AsyncSession = Depends(get_db)):
+async def get_book_matched_config(book_id: int, db: AsyncSession = Depends(get_db)) -> list[models.CleaningConfig]:
     """Returns all CleaningConfigs that match the book's source URL."""
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:

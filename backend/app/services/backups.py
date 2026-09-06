@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
+from typing import IO, TypedDict, NotRequired, cast
 from uuid import uuid4
 
 from sqlalchemy.engine import URL, make_url
@@ -22,6 +22,34 @@ MANIFEST_NAME = "manifest.json"
 DATABASE_DUMP_NAME = "database.dump"
 BACKUP_SUFFIX = ".story-manager.zip"
 _COPY_CHUNK_SIZE = 1024 * 1024
+
+
+class BackupFileEntry(TypedDict):
+    path: str
+    size_bytes: int
+    sha256: str
+
+
+class VerifiedBackupManifest(TypedDict):
+    format: str
+    format_version: int
+    database: NotRequired[object]
+    files: list[BackupFileEntry]
+    created_at: NotRequired[object]
+    library: NotRequired[object]
+    integrity: NotRequired[object]
+
+
+class BackupSummary(TypedDict):
+    filename: str
+    created_at: datetime
+    size_bytes: int
+    library_file_count: int
+    library_size_bytes: int
+    valid_manifest: bool
+    verified_at_creation: bool
+    error: str | None
+    download_url: str
 
 
 class BackupError(RuntimeError):
@@ -118,14 +146,14 @@ def _dump_database_from_container(url: URL, destination: Path, container: str) -
         raise BackupError(f"Database backup failed: {detail}")
 
 
-def _sha256_stream(source: BinaryIO) -> str:
+def _sha256_stream(source: IO[bytes]) -> str:
     digest = hashlib.sha256()
     while chunk := source.read(_COPY_CHUNK_SIZE):
         digest.update(chunk)
     return digest.hexdigest()
 
 
-def _write_file(archive: zipfile.ZipFile, source: Path, archive_name: str) -> dict[str, object]:
+def _write_file(archive: zipfile.ZipFile, source: Path, archive_name: str) -> BackupFileEntry:
     digest = hashlib.sha256()
     size = 0
     with source.open("rb") as input_file, archive.open(archive_name, "w", force_zip64=True) as output_file:
@@ -155,7 +183,7 @@ def create_backup_archive(
     backup_path: Path,
     pg_dump_path: str | None = None,
     retention_count: int = 10,
-) -> dict[str, object]:
+) -> BackupSummary:
     """Create and verify an archive, publishing it atomically when complete."""
     created_at = _utc_now()
     if backup_path.resolve().is_relative_to(library_path.resolve()):
@@ -170,7 +198,7 @@ def create_backup_archive(
         archive_path = temp_dir / filename
         _dump_database(database_url, database_dump, pg_dump_path)
 
-        file_entries: list[dict[str, object]] = []
+        file_entries: list[BackupFileEntry] = []
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
             file_entries.append(_write_file(archive, database_dump, DATABASE_DUMP_NAME))
             for source in _library_files(library_path):
@@ -217,12 +245,14 @@ def _load_manifest(archive: zipfile.ZipFile) -> dict[str, object]:
         manifest = json.loads(archive.read(info))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise BackupError("Backup manifest is invalid.") from exc
+    if not isinstance(manifest, dict):
+        raise BackupError("Backup manifest is invalid.")
     if manifest.get("format") != BACKUP_FORMAT or manifest.get("format_version") != BACKUP_FORMAT_VERSION:
         raise BackupError("This backup format is not supported by this Story Manager version.")
     return manifest
 
 
-def verify_backup_archive(archive_path: Path) -> dict[str, object]:
+def verify_backup_archive(archive_path: Path) -> VerifiedBackupManifest:
     """Validate archive layout, declared sizes, and every SHA-256 checksum."""
     if not archive_path.is_file():
         raise BackupError(f"Backup archive was not found: {archive_path}")
@@ -265,14 +295,15 @@ def verify_backup_archive(archive_path: Path) -> dict[str, object]:
                 raise BackupError("Backup contains files that are not declared in its manifest.")
             if DATABASE_DUMP_NAME not in expected_names:
                 raise BackupError("Backup database dump is missing.")
-            return manifest
+            # The file inventory and each entry have been validated above.
+            return cast(VerifiedBackupManifest, manifest)
     except zipfile.BadZipFile as exc:
         raise BackupError("Backup archive is not a readable ZIP file.") from exc
 
 
-def backup_summary(archive_path: Path) -> dict[str, object]:
+def backup_summary(archive_path: Path) -> BackupSummary:
     stat = archive_path.stat()
-    summary: dict[str, object] = {
+    summary: BackupSummary = {
         "filename": archive_path.name,
         "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
         "size_bytes": stat.st_size,
@@ -286,8 +317,10 @@ def backup_summary(archive_path: Path) -> dict[str, object]:
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
             manifest = _load_manifest(archive)
-        library = manifest.get("library") if isinstance(manifest.get("library"), dict) else {}
-        integrity = manifest.get("integrity") if isinstance(manifest.get("integrity"), dict) else {}
+        raw_library = manifest.get("library")
+        library = raw_library if isinstance(raw_library, dict) else {}
+        raw_integrity = manifest.get("integrity")
+        integrity = raw_integrity if isinstance(raw_integrity, dict) else {}
         created_at = datetime.fromisoformat(str(manifest["created_at"]))
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
@@ -305,7 +338,7 @@ def backup_summary(archive_path: Path) -> dict[str, object]:
     return summary
 
 
-def list_backups(backup_path: Path) -> list[dict[str, object]]:
+def list_backups(backup_path: Path) -> list[BackupSummary]:
     if not backup_path.exists():
         return []
     archives = [item for item in backup_path.iterdir() if item.is_file() and item.name.endswith(BACKUP_SUFFIX)]
@@ -360,8 +393,8 @@ def restore_backup_archive(
         previous_library.mkdir()
         database_dump = temp_dir / DATABASE_DUMP_NAME
         with zipfile.ZipFile(archive_path, "r") as archive:
-            for entry in manifest["files"]:
-                name = str(entry["path"])
+            for file_entry in manifest["files"]:
+                name = file_entry["path"]
                 if name == DATABASE_DUMP_NAME:
                     destination = database_dump
                 elif name.startswith("library/"):

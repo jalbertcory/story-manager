@@ -12,6 +12,7 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+from collections.abc import Mapping
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,7 @@ from ..models import (
 )
 from .audiobook_import import imported_audiobook_dir, relative_library_path, sentences_for_logical_chapter
 from .endpoint_pool import configured_endpoints
+from .endpoint_pool import ProviderSettings
 from .transcription_providers import (
     TranscriptResult,
     TranscriptWord,
@@ -231,6 +233,7 @@ def _interpolate_boundaries(
     for left_index, right_index in zip(anchors, anchors[1:], strict=False):
         left_value = clean[left_index]
         right_value = clean[right_index]
+        assert left_value is not None and right_value is not None
         if right_index == left_index + 1:
             continue
         weights = [_sentence_weight(sentence_texts[index]) for index in range(left_index, right_index)]
@@ -240,7 +243,11 @@ def _interpolate_boundaries(
             cumulative += weight
             clean[boundary_index] = left_value + round((right_value - left_value) * cumulative / total)
 
-    return [int(value) for value in clean]
+    result: list[int] = []
+    for value in clean:
+        assert value is not None
+        result.append(value)
+    return result
 
 
 def align_transcript_to_sentences(
@@ -250,7 +257,7 @@ def align_transcript_to_sentences(
     source_start_ms: int = 0,
 ) -> AlignmentResult:
     """Align ASR words to canonical sentence text in reading order."""
-    canonical = []
+    canonical: list[_CanonicalToken] = []
     sentence_token_indices: list[list[int]] = [[] for _ in sentences]
     for sentence_index, (_sentence_id, text) in enumerate(sentences):
         for normalized in _normalized_tokens(text):
@@ -408,7 +415,7 @@ def _normalized_service_root(base_url: str | None) -> str | None:
 
 
 def _transcript_cache_matches(
-    payload: dict,
+    payload: Mapping[str, object],
     provider: str,
     model: str | None,
     language: str | None,
@@ -469,7 +476,7 @@ def _write_transcript_cache(
         json.dump(payload, handle, ensure_ascii=False)
 
 
-def _transcription_cache_config(settings) -> tuple[str, str | None, str | None, str | None]:
+def _transcription_cache_config(settings: ProviderSettings) -> tuple[str, str | None, str | None, str | None]:
     """Fingerprint the whole ordered pool because any endpoint may do the work."""
     if settings.transcription_endpoints is None:
         return (

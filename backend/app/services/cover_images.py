@@ -54,7 +54,7 @@ def validate_remote_cover_url(url: str) -> None:
             raise ValueError("Cover URL resolves to a private or non-routable address")
 
 
-def request_remote_cover(url: str, *, headers: dict[str, str], stream: bool = False):
+def request_remote_cover(url: str, *, headers: dict[str, str], stream: bool = False) -> http_requests.Response:
     """Fetch a public URL while validating every redirect target."""
     current_url = url
     for _ in range(MAX_REDIRECTS + 1):
@@ -165,10 +165,11 @@ def fetch_image_from_flaresolverr_context(
 ) -> tuple[str, bytes] | None:
     soup = BeautifulSoup(response_text, "html.parser")
     image = soup.select_one("img[src]")
-    if not image or not image.get("src"):
+    src = image.get("src") if image else None
+    if not isinstance(src, str) or not src:
         return None
 
-    image_url = urljoin(original_url, image["src"])
+    image_url = urljoin(original_url, src)
     headers = {
         "User-Agent": solution.get("userAgent") or "Mozilla/5.0",
         "Referer": original_url,
@@ -202,7 +203,7 @@ async def save_cover_from_url(
     covers_path = (LIBRARY_PATH / "covers").resolve()
     covers_path.mkdir(parents=True, exist_ok=True)
 
-    def fetch():
+    def fetch() -> tuple[str, bytes]:
         headers = {"User-Agent": "Mozilla/5.0"}
         if referer:
             headers["Referer"] = referer

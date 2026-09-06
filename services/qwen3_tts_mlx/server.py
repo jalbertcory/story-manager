@@ -7,6 +7,12 @@ import logging
 import os
 from pathlib import Path
 import threading
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mlx_audio.tts.models.qwen3_tts.qwen3_tts import Model
+    from mlx_audio.tts.models.base import GenerationResult
 
 import mlx.core as mx
 from mlx_audio.tts.utils import load_model
@@ -30,7 +36,7 @@ class MLXQwenRuntime:
     def __init__(self) -> None:
         self.device = "mlx"
         self._model_kind: str | None = None
-        self._model = None
+        self._model: Model | None = None
         self._adapter_name: str | None = None
         self._lock = threading.RLock()
         self._voices = VoiceStore(api.VOICE_STORE_PATH)
@@ -38,7 +44,7 @@ class MLXQwenRuntime:
     def load(self) -> None:
         logger.info("Qwen3-TTS MLX adapter ready; models will load lazily.")
 
-    def _load(self, kind: str):
+    def _load(self, kind: str) -> Model:
         if self._model is not None and self._model_kind == kind:
             return self._model
         self._model = None
@@ -84,7 +90,7 @@ class MLXQwenRuntime:
             mx.random.seed(seed)
 
     @staticmethod
-    def _audio(results) -> tuple[np.ndarray, int]:
+    def _audio(results: Iterable[GenerationResult]) -> tuple[np.ndarray, int]:
         items = list(results)
         if not items:
             raise RuntimeError("MLX Qwen returned no audio.")

@@ -1,6 +1,8 @@
 """Conservative work matching when adding an EPUB to recorded narration."""
 
 import re
+from collections.abc import Mapping
+from ebooklib import epub
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import exists, or_, select
@@ -51,7 +53,7 @@ _NUMBER = re.compile(r"\b(?:book|volume|vol\.?)\s*(\d+(?:\.\d+)?)\b", re.I)
 _DIFFERENT_WORK = {"omnibus", "collection", "boxed", "summary", "study", "workbook", "companion"}
 
 
-def _metadata(ebook, namespace, name):
+def _metadata(ebook: epub.EpubBook, namespace: str, name: str) -> list[str]:
     try:
         values = ebook.get_metadata(namespace, name)
     except KeyError:
@@ -59,19 +61,19 @@ def _metadata(ebook, namespace, name):
     return [str(value).strip() for value, _attributes in values if value]
 
 
-def _number(value):
+def _number(value: object) -> Decimal | None:
     try:
         return Decimal(str(value)) if value is not None else None
     except InvalidOperation:
         return None
 
 
-def _title_number(title):
+def _title_number(title: str | None) -> Decimal | None:
     match = _NUMBER.search(title or "")
     return _number(match.group(1)) if match else None
 
 
-def epub_identifiers(ebook):
+def epub_identifiers(ebook: epub.EpubBook) -> dict[str, str]:
     identifiers = {}
     for raw in _metadata(ebook, "DC", "identifier"):
         value = re.sub(r"^(?:urn:)?(?:isbn|asin):?\s*", "", raw, flags=re.I)
@@ -83,7 +85,7 @@ def epub_identifiers(ebook):
     return identifiers
 
 
-def _identifier_keys(identifiers):
+def _identifier_keys(identifiers: Mapping[str, object]) -> set[str]:
     keys = set()
     for key in ("isbn_10", "isbn_13", "asin"):
         values = identifiers.get(key, [])
@@ -113,7 +115,7 @@ def _work_title_keys(value: str, series: str | None) -> set[str]:
     return keys
 
 
-async def match_epub_to_audio_book(db: AsyncSession, ebook, title: str, author: str) -> Book | None:
+async def match_epub_to_audio_book(db: AsyncSession, ebook: epub.EpubBook, title: str, author: str) -> Book | None:
     # Include previously attached books so uploading another copy is idempotent,
     # even if store metadata decorates their title differently from the EPUB.
     candidates = (
@@ -139,23 +141,23 @@ async def match_epub_to_audio_book(db: AsyncSession, ebook, title: str, author: 
     exact = []
     matching = []
     for book in candidates:
-        book_author = normalize_text(book.author)
+        book_author = normalize_text(book.author or "")
         if book_author not in {"", "unknown author", author_key}:
             continue
         book_number = _number(book.series_index)
         if book_number is None:
-            book_number = _title_number(book.title)
+            book_number = _title_number(book.title or "")
         if number is not None and book_number is not None and number != book_number:
             continue
         if (_DIFFERENT_WORK & set(normalize_text(title).split())) != (
-            _DIFFERENT_WORK & set(normalize_text(book.title).split())
+            _DIFFERENT_WORK & set(normalize_text(book.title or "").split())
         ):
             continue
         if identifiers & _identifier_keys(book.metadata_remote_ids or {}):
             exact.append(book)
         elif book_author == author_key and _work_title_keys(
             title, series_values[0] if series_values else book.series
-        ) & _work_title_keys(book.title, book.series):
+        ) & _work_title_keys(book.title or "", book.series):
             matching.append(book)
     matches = exact or matching
     if len(matches) > 1:

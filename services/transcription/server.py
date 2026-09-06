@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 import logging
 import os
 from pathlib import Path
 import tempfile
 import threading
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from torch.nn import Module
+    from whisperx.asr import FasterWhisperPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +52,10 @@ def authorize(authorization: str | None = Header(default=None)) -> None:
 
 class WhisperXRuntime:
     def __init__(self) -> None:
-        self.model = None
+        self.model: FasterWhisperPipeline | None = None
         self.device = "unloaded"
         self.compute_type = "unloaded"
-        self._align_models = {}
+        self._align_models: dict[str, tuple[Module, dict[str, object]]] = {}
         self._lock = threading.Lock()
 
     def load(self) -> None:
@@ -143,7 +149,7 @@ runtime = WhisperXRuntime()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(runtime.load)
     yield
 

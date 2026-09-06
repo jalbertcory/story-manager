@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from services.gpu_scheduler.docker_control import DockerController, MANAGED_LABEL, ORDER_LABEL
 
 
@@ -88,3 +90,16 @@ def test_observe_only_never_changes_container_state():
     assert [snapshot["status"] for snapshot in snapshots] == ["running", "exited"]
     assert running.stop_timeouts == []
     assert stopped.start_count == 0
+
+
+@pytest.mark.parametrize("field", ["id", "name"])
+def test_incomplete_container_identity_reports_error_without_mutation(field):
+    container = FakeContainer("incomplete", "running", 10)
+    setattr(container, field, None)
+    controller, _collection = controller_with([container])
+
+    with pytest.raises(RuntimeError, match="Docker returned a container without"):
+        controller.inspect()
+
+    assert container.start_count == 0
+    assert container.stop_timeouts == []

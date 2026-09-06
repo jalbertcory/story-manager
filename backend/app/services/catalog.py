@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
-from ..catalog_pagination import cursor_signature, decode_cursor, encode_cursor
+from ..catalog_pagination import CursorValue, cursor_signature, decode_cursor, encode_cursor
+
+AI_GENERATED: Literal["ai_generated"] = "ai_generated"
+HUMAN_NARRATED: Literal["human_narrated"] = "human_narrated"
 
 
 def normalize_genre_tags(tags: list[str]) -> list[str]:
@@ -54,7 +58,7 @@ def _book_position(
     *,
     sort_by: str,
     human_audiobook_book_ids: set[int],
-) -> list:
+) -> list[CursorValue]:
     primary = {
         "series_index": book.series_index if book.series_index is not None else 10000,
         "author": (book.author or "").lower(),
@@ -168,10 +172,10 @@ async def build_book_catalog_page(
         serialize_catalog_book(
             book,
             audiobook_types=[
-                *(["ai_generated"] if book.audiobook_enabled else []),
-                *(["human_narrated"] if book.id in human_ids else []),
+                *([AI_GENERATED] if book.audiobook_enabled else []),
+                *([HUMAN_NARRATED] if book.id in human_ids else []),
             ],
-            series_user_genre_tags=(metadata_map.get(book.series).user_genre_tags if book.series in metadata_map else []),
+            series_user_genre_tags=(metadata_map[book.series].user_genre_tags if book.series in metadata_map else []),
             effective_series_genre_tags=effective_series_tags.get(book.series, []) if book.series else [],
         )
         for book in books

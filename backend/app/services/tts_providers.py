@@ -11,7 +11,7 @@ import shutil
 
 import httpx
 
-from ..models import AudiobookSettings
+from .endpoint_pool import ProviderSettings
 from .endpoint_pool import RoutedResult, primary_provider, route_request
 
 DEFAULT_VOICE_PROMPT = "[gender-neutral][pitch-medium][speed-normal]"
@@ -176,7 +176,7 @@ async def _stub_speech(text: str) -> bytes:
     return stdout
 
 
-def tts_provider_name(settings: AudiobookSettings | None) -> str:
+def tts_provider_name(settings: ProviderSettings | None) -> str:
     provider = primary_provider(settings, "tts", "stub")
     if provider not in SUPPORTED_TTS_PROVIDERS:
         choices = ", ".join(sorted(SUPPORTED_TTS_PROVIDERS))
@@ -185,7 +185,7 @@ def tts_provider_name(settings: AudiobookSettings | None) -> str:
 
 
 async def _synthesize_speech_endpoint(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     request: TTSRequest,
 ) -> bytes:
     """Generate an MP3 using the selected provider."""
@@ -283,7 +283,7 @@ async def _synthesize_speech_endpoint(
 
 
 async def synthesize_speech_result_routed(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     request: TTSRequest,
 ) -> RoutedResult[TTSResult]:
     return await route_request(
@@ -294,7 +294,7 @@ async def synthesize_speech_result_routed(
 
 
 async def synthesize_speech_routed(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     request: TTSRequest,
 ) -> RoutedResult[bytes]:
     """Compatibility route for health tests that only need the audio bytes."""
@@ -306,7 +306,7 @@ async def synthesize_speech_routed(
 
 
 async def _synthesize_speech_result_endpoint(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     request: TTSRequest,
 ) -> TTSResult:
     provider = tts_provider_name(settings)
@@ -347,7 +347,7 @@ def _optional_float_header(response: httpx.Response, name: str) -> float | None:
 
 
 async def synthesize_speech(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     request: TTSRequest,
 ) -> bytes:
     """Generate an MP3 using the first available endpoint."""
@@ -364,7 +364,7 @@ async def synthesize_speech(
 
 
 async def synthesize_speech_result(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     request: TTSRequest,
 ) -> TTSResult:
     if not _has_spoken_content(request.text):
@@ -376,7 +376,7 @@ async def synthesize_speech_result(
 
 
 async def _design_local_voice_endpoint(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     voice_prompt: str,
     *,
     seed: int | None = None,
@@ -405,23 +405,25 @@ async def _design_local_voice_endpoint(
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
-        payload = response.json()
+        voice_payload = response.json()
     try:
         return DesignedVoice(
-            id=str(payload["id"]),
-            sample_text=str(payload["sample_text"]),
-            sample_url=str(payload["sample_url"]),
+            id=str(voice_payload["id"]),
+            sample_text=str(voice_payload["sample_text"]),
+            sample_url=str(voice_payload["sample_url"]),
             max_cross_voice_similarity=(
-                float(payload["max_cross_voice_similarity"]) if payload.get("max_cross_voice_similarity") is not None else None
+                float(voice_payload["max_cross_voice_similarity"])
+                if voice_payload.get("max_cross_voice_similarity") is not None
+                else None
             ),
-            attempts=int(payload.get("attempts", 1)),
+            attempts=int(voice_payload.get("attempts", 1)),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError(f"{provider} returned an invalid designed voice.") from exc
 
 
 async def design_omnivoice_voice(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     voice_prompt: str,
     *,
     seed: int | None = None,
@@ -444,7 +446,7 @@ design_local_voice = design_omnivoice_voice
 
 
 async def materialize_qwen_preset_voice(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     preset_voice_id: str,
     voice_prompt: str,
     *,
@@ -489,7 +491,7 @@ async def materialize_qwen_preset_voice(
 
 
 async def _get_local_voice_sample_endpoint(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     voice_id: str,
 ) -> VoiceSample:
     provider = tts_provider_name(settings)
@@ -509,7 +511,7 @@ async def _get_local_voice_sample_endpoint(
 
 
 async def get_omnivoice_voice_sample(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     voice_id: str,
 ) -> VoiceSample:
     """Fetch a durable reference from the primary worker that created it."""
@@ -520,7 +522,7 @@ get_local_voice_sample = get_omnivoice_voice_sample
 
 
 async def synthesize_speech_batch(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     requests: list[TTSRequest],
 ) -> list[TTSResult]:
     """Generate a true model batch when supported, with a sequential fallback."""
@@ -549,7 +551,7 @@ async def synthesize_speech_batch(
 
 
 async def _synthesize_speech_batch_endpoint(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     requests: list[TTSRequest],
 ) -> list[TTSResult]:
     """Generate one batch against a specific endpoint."""

@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models
 from ..database import get_db
-from ..services.library import library_book_info, library_groups
+from ..services.library import LibraryBookInfo, library_book_info, library_groups
+from ..services.library_groups import LibraryGroup, LibraryGroupsPage
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
@@ -21,7 +22,7 @@ class UniverseMembership(BaseModel):
     series: str | None = None
 
 
-@router.get("/groups")
+@router.get("/groups", response_model=None)
 async def groups(
     group_by: Literal["series", "universe"] = "series",
     q: str = "",
@@ -35,7 +36,7 @@ async def groups(
     limit: int | None = Query(default=None, ge=1, le=100),
     cursor: str | None = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> list[LibraryGroup] | LibraryGroupsPage:
     return await library_groups(
         db,
         group_by=group_by,
@@ -52,21 +53,21 @@ async def groups(
     )
 
 
-@router.get("/universes")
-async def universes(db: AsyncSession = Depends(get_db)):
+@router.get("/universes", response_model=None)
+async def universes(db: AsyncSession = Depends(get_db)) -> list[dict[str, int | str]]:
     rows = (await db.execute(select(models.Universe).order_by(models.Universe.name_key))).scalars()
     return [{"id": row.id, "name": row.name} for row in rows]
 
 
-@router.get("/books/{book_id}/info")
-async def book_info(book_id: int, db: AsyncSession = Depends(get_db)):
+@router.get("/books/{book_id}/info", response_model=None)
+async def book_info(book_id: int, db: AsyncSession = Depends(get_db)) -> LibraryBookInfo:
     if not await crud.get_book(db, book_id):
         raise HTTPException(404, "Book not found")
     return (await library_book_info(db, [book_id]))[book_id]
 
 
-@router.put("/universe-membership")
-async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(get_db)):
+@router.put("/universe-membership", response_model=None)
+async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(get_db)) -> dict[str, int | str | None]:
     series = (body.series or "").strip()
     if bool(series) == (body.book_id is not None):
         raise HTTPException(422, "Choose either a series or a standalone book")
@@ -76,9 +77,10 @@ async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(ge
         books = await crud.get_books_by_series(db, series, limit=1)
         if not books:
             raise HTTPException(404, "Series not found")
-        series = books[0].series
+        series = books[0].series or series
         mapping = await db.get(models.UniverseSeries, series.lower())
     else:
+        assert body.book_id is not None  # The exclusive series/book validation above guarantees this.
         book = await crud.get_book(db, body.book_id)
         if not book:
             raise HTTPException(404, "Book not found")
@@ -113,8 +115,8 @@ async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(ge
     return {"universe_id": universe.id if universe else None, "universe_name": universe.name if universe else None}
 
 
-@router.get("/web-checks")
-async def web_checks(db: AsyncSession = Depends(get_db)):
+@router.get("/web-checks", response_model=None)
+async def web_checks(db: AsyncSession = Depends(get_db)) -> list[dict[str, object]]:
     from sqlalchemy import func
 
     latest = (

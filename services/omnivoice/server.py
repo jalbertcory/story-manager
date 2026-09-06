@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from io import BytesIO
 import logging
 import os
 from pathlib import Path
 import threading
+from typing import cast
 
 # Let unsupported MPS operations fall back to CPU rather than terminating a
 # long audiobook run. This must be set before importing torch.
@@ -138,7 +140,7 @@ class OmniVoiceRuntime:
             clone_prompts = [self._voice_clone_prompt(request.voice_id) if request.voice_id else None for request in requests]
             if any(clone_prompts) and not all(clone_prompts):
                 raise RuntimeError("OmniVoice cannot mix designed and undesigned voices in one native batch.")
-            return self.model.generate(
+            audio = self.model.generate(
                 text=[prompt.text for prompt in prompts],
                 language=[request.language for request in requests],
                 instruct=[prompt.instruct for prompt in prompts],
@@ -148,6 +150,9 @@ class OmniVoiceRuntime:
                 class_temperature=0.0,
                 postprocess_output=True,
             )
+
+        # OmniVoice.generate returns list[np.ndarray]; its package is untyped.
+        return cast(list[np.ndarray], audio)
 
     def _voice_clone_prompt(self, voice_id: str) -> object:
         if self.model is None:
@@ -228,6 +233,8 @@ class OmniVoiceRuntime:
     def _voice_similarity(self, request: GenerateRequest, audio: np.ndarray) -> float | None:
         if not request.voice_id:
             return None
+        if self.model is None:
+            raise RuntimeError("OmniVoice model is not loaded")
         sample_path = self._voice_store.sample_path(request.voice_id)
         return get_speaker_verifier().similarity(
             request.voice_id,
@@ -278,7 +285,7 @@ runtime = OmniVoiceRuntime()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Startup cannot serve requests until the model is ready. Loading on the
     # main thread also avoids a safetensors/Python 3.13 lock inversion seen
     # when model deserialization itself launches worker threads.

@@ -1,12 +1,23 @@
 """Library organization and availability, independent of production status."""
 
+from typing import TypedDict
+from sqlalchemy.sql.elements import ColumnElement
+
 from sqlalchemy import and_, case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 
 
-def universe_expression():
+class LibraryBookInfo(TypedDict):
+    id: int
+    universe_id: int | None
+    universe_name: str | None
+    audio_playable: bool
+    has_epub: bool
+
+
+def universe_expression() -> ColumnElement[int | None]:
     series_universe = (
         select(models.UniverseSeries.universe_id)
         .where(models.UniverseSeries.series_key == func.lower(models.Book.series))
@@ -16,7 +27,7 @@ def universe_expression():
     return case((models.Book.series.is_not(None), series_universe), else_=models.Book.universe_id)
 
 
-def playable_audio_expression():
+def playable_audio_expression() -> ColumnElement[bool]:
     # Match the admin reader: imported ready/aligning editions with tracks, or
     # generated chapters that can play without reassembly. Opt-in alone is not audio.
     imported = exists(
@@ -40,7 +51,7 @@ def playable_audio_expression():
     return imported | generated
 
 
-async def library_book_info(db: AsyncSession, book_ids: list[int]) -> dict:
+async def library_book_info(db: AsyncSession, book_ids: list[int]) -> dict[int, LibraryBookInfo]:
     if not book_ids:
         return {}
     result = await db.execute(
@@ -54,10 +65,19 @@ async def library_book_info(db: AsyncSession, book_ids: list[int]) -> dict:
         .outerjoin(models.Universe, models.Universe.id == universe_expression())
         .where(models.Book.id.in_(book_ids))
     )
-    return {row.id: dict(row._mapping) for row in result}
+    return {
+        row.id: LibraryBookInfo(
+            id=row.id,
+            universe_id=row.universe_id,
+            universe_name=row.universe_name,
+            audio_playable=row.audio_playable,
+            has_epub=row.has_epub,
+        )
+        for row in result
+    }
 
 
-async def move_series_universe(db: AsyncSession, source: str, target: str):
+async def move_series_universe(db: AsyncSession, source: str, target: str) -> None:
     """Keep membership when renaming; reject merging incompatible universes."""
     source_key, target_key = source.lower(), target.lower()
     if source_key == target_key:
@@ -78,4 +98,4 @@ async def move_series_universe(db: AsyncSession, source: str, target: str):
 
 
 # Preserve the service import used by existing clients.
-from .library_groups import library_groups  # noqa: F401, E402
+from .library_groups import library_groups as library_groups  # noqa: F401, E402

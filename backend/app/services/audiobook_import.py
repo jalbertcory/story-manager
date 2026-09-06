@@ -13,11 +13,14 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypedDict, TypeVar
+from collections.abc import Mapping
+from fastapi import UploadFile
 from uuid import uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from .. import crud
 from ..config import LIBRARY_PATH
@@ -156,7 +159,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_write_json(path: Path, payload: dict) -> bytes:
+def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> bytes:
     content = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -507,9 +510,16 @@ class LibationBackupGroup:
     source_paths: tuple[str, ...]
 
 
+class _LibationBackupEntry(TypedDict):
+    folder_name: str
+    title: str
+    product_id: str
+    source_paths: list[str]
+
+
 def libation_backup_groups(source_paths: list[str]) -> tuple[list[LibationBackupGroup], int]:
     """Group a browser directory manifest by its ``Title [product-id]`` folder."""
-    grouped: dict[str, dict[str, object]] = {}
+    grouped: dict[str, _LibationBackupEntry] = {}
     ignored_count = 0
     for raw_path in source_paths:
         normalized_path = (raw_path or "").replace("\\", "/").strip("/")
@@ -569,7 +579,7 @@ def display_name_from_filename(filename: str) -> str:
     return value or "Imported audiobook"
 
 
-async def stream_upload_to_path(upload, destination: Path, remaining_bytes: int) -> int:
+async def stream_upload_to_path(upload: UploadFile, destination: Path, remaining_bytes: int) -> int:
     """Stream an UploadFile to disk without retaining a multi-GB book in memory."""
     written = 0
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -636,7 +646,10 @@ def _extract_archive_sources(archive_path: Path, source_dir: Path) -> tuple[list
         return audio_paths, cue_paths
 
 
-def _preferred_audio_files(items: list, path_for_item=lambda item: item) -> list:
+T = TypeVar("T")
+
+
+def _preferred_audio_files(items: list[T], path_for_item: Callable[[T], Path]) -> list[T]:
     """Discard Libation's duplicate MP3 rendition when an M4B is present."""
     m4b_items = [item for item in items if path_for_item(item).suffix.lower() == ".m4b"]
     return m4b_items or items
@@ -668,13 +681,13 @@ def _prepare_sources(edition_dir: Path) -> tuple[list[Path], list[Path]]:
             destination = _unique_destination(source_dir, incoming.name)
             incoming.replace(destination)
             cue_paths.append(destination)
-    audio_paths = _preferred_audio_files(audio_paths)
+    audio_paths = _preferred_audio_files(audio_paths, lambda path: path)
     if not audio_paths:
         raise ValueError("No supported audiobook audio was uploaded.")
     return audio_paths, cue_paths
 
 
-async def _probe_audio(path: Path) -> tuple[int, list[dict]]:
+async def _probe_audio(path: Path) -> tuple[int, list[dict[str, Any]]]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         raise RuntimeError("ffprobe is required to import audiobooks.")
@@ -753,7 +766,7 @@ def _media_type(path: Path) -> str:
 
 
 async def _track_specs(audio_paths: list[Path], cue_paths: list[Path]) -> tuple[list[TrackSpec], int]:
-    probes: dict[Path, tuple[int, list[dict]]] = {}
+    probes: dict[Path, tuple[int, list[dict[str, Any]]]] = {}
     for path in audio_paths:
         probes[path] = await _probe_audio(path)
     total_duration_ms = sum(duration for duration, _chapters in probes.values())
@@ -842,6 +855,7 @@ async def sentences_for_logical_chapter(
     chapter = await db.get(AudiobookChapter, chapter_id)
     if chapter is None:
         return []
+    chapter_filter: tuple[ColumnElement[bool], ...]
     if chapter.logical_chapter_key:
         chapter_filter = (
             AudiobookChapter.book_id == chapter.book_id,
@@ -1037,17 +1051,17 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
     except Exception as exc:
         logger.exception("Audiobook import %s failed.", edition_id)
         await db.rollback()
-        edition = await db.get(ImportedAudiobook, edition_id)
-        if edition is not None:
+        failed_edition = await db.get(ImportedAudiobook, edition_id)
+        if failed_edition is not None:
             transition_state(
-                edition,
+                failed_edition,
                 "status",
                 IMPORTED_AUDIOBOOK,
                 ImportedAudiobookStatus.ERROR,
-                context=f"imported audiobook {edition.id}",
+                context=f"imported audiobook {failed_edition.id}",
             )
-            edition.error = str(exc)
-            edition.progress_detail = "Import failed"
+            failed_edition.error = str(exc)
+            failed_edition.progress_detail = "Import failed"
             await db.commit()
 
 

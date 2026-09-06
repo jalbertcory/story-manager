@@ -37,10 +37,11 @@ async def collect(source_url: str, book_id: int) -> Optional[Path]:
     html = await loop.run_in_executor(None, _fetch_page, source_url, site_config)
     soup = BeautifulSoup(html, "html.parser")
     img = soup.select_one(SELECTOR)
-    if not img or not img.get("src"):
+    src = img.get("src") if img else None
+    if not isinstance(src, str) or not src:
         return None
     return await save_cover_from_url(
-        urljoin(source_url, img["src"]),
+        urljoin(source_url, src),
         book_id,
         referer=source_url,
         flaresolverr_config=site_config,
