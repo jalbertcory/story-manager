@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Optional
+from typing import Optional
+from .responses import response_object
 
 import requests
 from requests import exceptions as requests_exceptions
@@ -72,7 +73,7 @@ def _retry_delay(response: requests.Response, attempt: int) -> float:
         return 0.5 * attempt
 
 
-def request_open_library_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def request_open_library_json(path: str, *, params: Optional[dict[str, str | int | None]] = None) -> dict[str, object]:
     last_error: Optional[Exception] = None
 
     for attempt in range(1, OPEN_LIBRARY_RETRY_ATTEMPTS + 1):
@@ -89,7 +90,7 @@ def request_open_library_json(path: str, *, params: Optional[dict[str, Any]] = N
                 continue
             response.raise_for_status()
             payload = response.json()
-            return payload if isinstance(payload, dict) else {}
+            return response_object(payload)
         except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
             last_error = exc
             if attempt < OPEN_LIBRARY_RETRY_ATTEMPTS:
@@ -106,11 +107,11 @@ def google_books_enabled() -> bool:
     return bool(GOOGLE_BOOKS_API_KEY) or GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED
 
 
-def request_google_books_json(path: str, *, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def request_google_books_json(path: str, *, params: Optional[dict[str, str | int | None]] = None) -> dict[str, object]:
     if not google_books_enabled():
         return {}
 
-    request_params = {}
+    request_params: dict[str, str | int | None] = {}
     if GOOGLE_BOOKS_API_KEY:
         request_params["key"] = GOOGLE_BOOKS_API_KEY
     if params:
@@ -131,7 +132,7 @@ def request_google_books_json(path: str, *, params: Optional[dict[str, Any]] = N
                 continue
             response.raise_for_status()
             payload = response.json()
-            return payload if isinstance(payload, dict) else {}
+            return response_object(payload)
         except (requests_exceptions.Timeout, requests_exceptions.ConnectionError) as exc:
             last_error = exc
             if attempt < GOOGLE_BOOKS_RETRY_ATTEMPTS:
@@ -152,7 +153,7 @@ def amazon_base_url() -> str:
     return f"https://www.amazon.{AMAZON_METADATA_DOMAIN}"
 
 
-def request_amazon_html(path: str, *, params: Optional[dict[str, Any]] = None) -> str:
+def request_amazon_html(path: str, *, params: Optional[dict[str, str | int | None]] = None) -> str:
     """Fetch a public Amazon page without making Amazon a hard dependency."""
 
     global _last_amazon_request_at

@@ -2503,7 +2503,7 @@ async def test_roster_rejects_non_text_character_fields_before_replacing_existin
         return json.dumps({"book_summary": "Summary", "characters": [character]})
 
     monkeypatch.setattr(audiobook_llm, "_call_llm", fake_call)
-    with pytest.raises(RuntimeError, match=f"LLM character {field} must be text or null"):
+    with pytest.raises(RuntimeError, match="LLM returned an invalid character roster"):
         await audiobook_llm.generate_character_roster(book.id, db)
 
     remaining = await crud.audiobook.get_characters_for_book(db, book.id)

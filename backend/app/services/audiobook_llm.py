@@ -11,6 +11,20 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, TypedDict
 
+from pydantic import ValidationError
+from .llm_responses import (
+    OllamaResponse,
+    OllamaStreamEvent,
+    ChatResponse,
+    AnthropicResponse,
+    AssignmentData,
+    DiarizationAssignment,
+    DiarizationData,
+    DiarizationEnvelope,
+    RosterResponse,
+    ChapterSummaryResponse,
+)
+
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -399,15 +413,15 @@ async def _call_llm_endpoint(
                         if not line:
                             continue
                         try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            logger.warning("Ignoring malformed Ollama stream event: %s", line[:200])
+                            event = OllamaStreamEvent.model_validate_json(line)
+                        except ValidationError:
+                            logger.warning("Ignoring malformed Ollama stream event")
                             continue
-                        content = event.get("message", {}).get("content") or ""
+                        content = event.message.content if event.message else ""
                         if content:
                             chunks.append(content)
                             received_chars += len(content)
-                        if received_chars - last_reported_chars >= 1024 or event.get("done"):
+                        if received_chars - last_reported_chars >= 1024 or event.done:
                             await progress_callback(received_chars)
                             last_reported_chars = received_chars
                 return "".join(chunks)
@@ -415,10 +429,7 @@ async def _call_llm_endpoint(
             if resp.is_error:
                 resp.raise_for_status()
             data = resp.json()
-        content = data["message"]["content"]
-        if not isinstance(content, str):
-            raise RuntimeError("LLM returned non-text content")
-        return content
+        return OllamaResponse.model_validate(data).message.content
 
     if provider == "anthropic":
         url = (settings.llm_base_url or "https://api.anthropic.com").rstrip("/") + "/v1/messages"
@@ -433,10 +444,7 @@ async def _call_llm_endpoint(
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-        content = data["content"][0]["text"]
-        if not isinstance(content, str):
-            raise RuntimeError("LLM returned non-text content")
-        return content
+        return AnthropicResponse.model_validate(data).text_content()
 
     else:
         # OpenAI-compatible (openai, custom, local)
@@ -458,10 +466,7 @@ async def _call_llm_endpoint(
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise RuntimeError("LLM returned non-text content")
-        return content
+        return ChatResponse.model_validate(data).choices[0].message.content
 
 
 async def _call_llm_routed(
@@ -500,7 +505,7 @@ async def _call_llm(
     return routed.value
 
 
-def _extract_json(raw: str) -> Any:
+def _extract_json(raw: str) -> object:
     """Strip markdown code fences if present and parse JSON."""
     text = raw.strip()
     if text.startswith("```"):
@@ -514,13 +519,13 @@ class _DiarizationResponseError(ValueError):
     """The model response cannot safely be applied to a diarization batch."""
 
 
-def _salvage_complete_assignments(raw: str) -> list[dict[str, Any]]:
+def _salvage_complete_assignments(raw: str) -> list[object]:
     """Recover complete assignment objects from a truncated JSON array."""
     match = re.search(r'"assignments"\s*:\s*\[', raw)
     if match is None:
         return []
 
-    assignments: list[dict[str, Any]] = []
+    assignments: list[object] = []
     object_start: int | None = None
     object_depth = 0
     in_string = False
@@ -563,7 +568,7 @@ def _salvage_complete_assignments(raw: str) -> list[dict[str, Any]]:
 def _parse_diarization_response(
     raw: str,
     expected_ids: list[int],
-) -> tuple[dict[str, Any], set[int], bool]:
+) -> tuple[DiarizationData, set[int], bool]:
     """Parse, de-duplicate, and salvage any safe diarization assignments."""
     salvaged = False
     try:
@@ -577,47 +582,42 @@ def _parse_diarization_response(
 
     if isinstance(result, list):
         result = {"assignments": result, "chapter_summary": None}
-    if not isinstance(result, dict) or not isinstance(result.get("assignments"), list):
-        raise _DiarizationResponseError(f"expected an assignments array, got {type(result).__name__}")
+    try:
+        envelope = DiarizationEnvelope.model_validate(result)
+    except ValidationError as exc:
+        raise _DiarizationResponseError("expected a valid assignments envelope") from exc
 
     expected_id_set = set(expected_ids)
-    by_id: dict[int, dict[str, Any]] = {}
-    for assignment in result["assignments"]:
-        if not isinstance(assignment, dict):
+    by_id: dict[int, AssignmentData] = {}
+    ranking_confidence: dict[int, float] = {}
+    for raw_assignment in envelope.assignments:
+        try:
+            assignment = DiarizationAssignment.model_validate(raw_assignment)
+        except ValidationError:
             continue
-        sentence_id = assignment.get("id", assignment.get("i"))
-        if not isinstance(sentence_id, int) or sentence_id not in expected_id_set:
+        if assignment.id not in expected_id_set:
             continue
-        normalized = {
-            **assignment,
-            "id": sentence_id,
-            "character_id": assignment.get(
-                "character_id",
-                assignment.get("c"),
-            ),
-            "expression": assignment.get(
-                "expression",
-                assignment.get("e"),
-            ),
+        normalized: AssignmentData = {
+            "id": assignment.id,
+            "character_id": assignment.character_id,
+            "expression": assignment.expression,
+            "tagged_text": assignment.tagged_text,
+            "confidence": assignment.confidence,
+            "reason": assignment.reason,
         }
-        current = by_id.get(sentence_id)
-        try:
-            candidate_confidence = float(normalized.get("confidence") or 0)
-        except (TypeError, ValueError):
-            candidate_confidence = 0
-        try:
-            current_confidence = float(current.get("confidence") or 0) if current else -1
-        except (TypeError, ValueError):
-            current_confidence = 0
-        if current is None or candidate_confidence >= current_confidence:
-            by_id[sentence_id] = normalized
+        score = assignment.confidence if "confidence" in assignment.model_fields_set else 0.0
+        if assignment.id not in by_id or score >= ranking_confidence[assignment.id]:
+            by_id[assignment.id] = normalized
+            ranking_confidence[assignment.id] = score
 
     if not by_id:
-        raise _DiarizationResponseError("response did not contain any requested sentence ids")
+        raise _DiarizationResponseError("response did not contain any valid requested sentence assignments")
 
-    result["assignments"] = [by_id[sentence_id] for sentence_id in expected_ids if sentence_id in by_id]
-    missing_ids = expected_id_set - set(by_id)
-    return result, missing_ids, salvaged
+    batch: DiarizationData = {
+        "assignments": [by_id[sentence_id] for sentence_id in expected_ids if sentence_id in by_id],
+        "chapter_summary": envelope.chapter_summary,
+    }
+    return batch, expected_id_set - set(by_id), salvaged
 
 
 def _sanitize_tagged_text(original: str, tagged: Any) -> str:
@@ -940,7 +940,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         ),
     )
 
-    roster_result: dict[str, Any]
+    roster_result: object
     if provider == STUB_PROVIDER:
         roster_result = {
             "book_summary": "Deterministic local harness analysis.",
@@ -984,33 +984,22 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 
     if isinstance(roster_result, list):
         roster_result = {"book_summary": None, "characters": roster_result}
-    if not isinstance(roster_result, dict):
-        raise RuntimeError(f"Expected a JSON object from LLM, got: {type(roster_result)}")
-    characters_data = roster_result.get("characters")
-    if not isinstance(characters_data, list):
-        raise RuntimeError(f"Expected a JSON array from LLM, got: {type(characters_data)}")
+    try:
+        roster = RosterResponse.model_validate(roster_result)
+    except ValidationError as exc:
+        raise RuntimeError("LLM returned an invalid character roster.") from exc
 
-    # Normalise keys to match our model
-    normalised: list[CharacterData] = []
-    for c in characters_data:
-        if not isinstance(c, dict):
-            continue
-        description: object = c.get("description")
-        if description is not None and not isinstance(description, str):
-            raise RuntimeError("LLM character description must be text or null.")
-        voice_prompt: object = c.get("voice_prompt")
-        if voice_prompt is not None and not isinstance(voice_prompt, str):
-            raise RuntimeError("LLM character voice_prompt must be text or null.")
-        normalised.append(
-            {
-                "name": str(c.get("name", "Unknown")),
-                "aliases": [str(alias) for alias in c.get("aliases", []) if alias],
-                "description": description,
-                "evidence": [str(item) for item in c.get("evidence", []) if item][:3],
-                "voice_prompt": voice_prompt,
-                "is_narrator": str(c.get("name", "")).strip().casefold() == "narrator",
-            }
-        )
+    normalised: list[CharacterData] = [
+        {
+            "name": character.name,
+            "aliases": [alias for alias in character.aliases if alias],
+            "description": character.description,
+            "evidence": [item for item in character.evidence if item][:3],
+            "voice_prompt": character.voice_prompt,
+            "is_narrator": character.name.strip().casefold() == "narrator",
+        }
+        for character in roster.characters
+    ]
     if not normalised:
         raise RuntimeError("LLM returned an empty character roster.")
     existing_names = {character["name"].strip().casefold() for character in normalised}
@@ -1160,7 +1149,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
             created_characters,
             prefer_series=True,
         )
-    await crud.audiobook.set_book_audiobook_summary(db, book_id, roster_result.get("book_summary"))
+    await crud.audiobook.set_book_audiobook_summary(db, book_id, roster.book_summary)
     await crud.audiobook.update_book_pipeline_progress(
         db, book_id, current=1, total=1, detail=f"Created {len(normalised[:15])} character profiles"
     )
@@ -1235,8 +1224,8 @@ async def _generate_chapter_summary(
             [{"role": "user", "content": prompt}],
             response_schema=CHAPTER_SUMMARY_SCHEMA,
         )
-        result = _extract_json(raw)
-        summary = str(result.get("summary") or "").strip() if isinstance(result, dict) else ""
+        result = ChapterSummaryResponse.model_validate(_extract_json(raw))
+        summary = result.summary.strip()
         if summary:
             await crud.audiobook.update_chapter_summary(db, chapter.id, summary[:4000])
             chapter.summary = summary[:4000]
@@ -1449,7 +1438,7 @@ async def diarize_sentences(
                     f"attributing {len(batch)} sentences"
                 ),
             )
-            batch_result: dict[str, Any]
+            batch_result: DiarizationData
             if provider == STUB_PROVIDER:
                 batch_result = {
                     "assignments": [
