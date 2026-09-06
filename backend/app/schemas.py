@@ -88,7 +88,7 @@ class BookRevision(BaseModel):
     book_id: int
     action: str
     summary: str
-    snapshot: dict[str, Any]
+    snapshot: dict[str, JsonValue]
     created_at: datetime
 
 

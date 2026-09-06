@@ -192,7 +192,7 @@ class BookRevision(Base):
     book_id: Mapped[int] = mapped_column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String, nullable=False)
     summary: Mapped[str] = mapped_column(String, nullable=False)
-    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    snapshot: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
@@ -407,9 +407,9 @@ class AudiobookSettings(Base):
     transcription_base_url: Mapped[str | None] = mapped_column(String, nullable=True)
     transcription_model: Mapped[str | None] = mapped_column(String, nullable=True)
     transcription_language: Mapped[str | None] = mapped_column(String, nullable=True)
-    llm_endpoints: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
-    tts_endpoints: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
-    transcription_endpoints: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    llm_endpoints: Mapped[list[dict[str, JsonValue]] | None] = mapped_column(JSON, nullable=True)
+    tts_endpoints: Mapped[list[dict[str, JsonValue]] | None] = mapped_column(JSON, nullable=True)
+    transcription_endpoints: Mapped[list[dict[str, JsonValue]] | None] = mapped_column(JSON, nullable=True)
     roster_prompt_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     diarization_prompt_template: Mapped[str | None] = mapped_column(Text, nullable=True)
 

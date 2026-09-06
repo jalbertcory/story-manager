@@ -81,6 +81,7 @@ from ..services.endpoint_pool import (
     reset_cooldowns,
     settings_for_provider,
 )
+from ..endpoint_types import EndpointConfig, EndpointUpdate, EndpointStats
 from ..services.endpoint_metrics import endpoint_summaries
 from ..services.metadata.scoring import normalize_text, title_similarity
 from ..services.tts_providers import (
@@ -283,44 +284,6 @@ class SettingsResponse(BaseModel):
     transcription_endpoints: list[EndpointResponse]
     roster_prompt_template: Optional[str]
     diarization_prompt_template: Optional[str]
-
-
-class EndpointUpdate(BaseModel):
-    id: str
-    name: str
-    provider: str
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    model: Optional[str] = None
-    default_voice: Optional[str] = None
-    language: Optional[str] = None
-
-
-class EndpointSpeedBuckets(BaseModel):
-    under_5s: int
-    from_5s_to_15s: int
-    from_15s_to_60s: int
-    over_60s: int
-
-
-class EndpointStats(BaseModel):
-    endpoint_id: str
-    name: str
-    provider: str
-    model: Optional[str]
-    requests: int
-    answered: int
-    failed: int
-    success_rate: Optional[float]
-    average_ms: Optional[float]
-    p50_ms: Optional[float]
-    p95_ms: Optional[float]
-    fastest_ms: Optional[float]
-    slowest_ms: Optional[float]
-    answered_24h: int
-    average_24h_ms: Optional[float]
-    speed_buckets: EndpointSpeedBuckets
-    last_answered_at: Optional[datetime]
 
 
 class EndpointStatsResponse(BaseModel):
@@ -2215,26 +2178,26 @@ async def download_audiobook(book_id: int, db: AsyncSession = Depends(get_db)) -
 # ---------------------------------------------------------------------------
 
 
-def _default_endpoint(capability: str) -> dict[str, Any]:
-    return {
-        "id": f"default-{capability}",
-        "name": "Primary",
-        "provider": {"llm": "stub", "tts": "stub", "transcription": "none"}[capability],
-    }
+def _default_endpoint(capability: str) -> EndpointConfig:
+    return EndpointConfig(
+        id=f"default-{capability}",
+        name="Primary",
+        provider={"llm": "stub", "tts": "stub", "transcription": "none"}[capability],
+    )
 
 
 def _public_endpoints(settings: AudiobookSettings | None, capability: str) -> list[EndpointResponse]:
     endpoints = configured_endpoints(settings, capability) if settings is not None else [_default_endpoint(capability)]
     return [
         EndpointResponse(
-            id=str(endpoint.get("id") or f"{capability}-{index + 1}"),
-            name=str(endpoint.get("name") or f"Endpoint {index + 1}"),
-            provider=str(endpoint.get("provider") or _default_endpoint(capability)["provider"]),
-            api_key_set=bool(endpoint.get("api_key")),
-            base_url=endpoint.get("base_url"),
-            model=endpoint.get("model"),
-            default_voice=endpoint.get("default_voice"),
-            language=endpoint.get("language"),
+            id=str(endpoint.id or f"{capability}-{index + 1}"),
+            name=str(endpoint.name or f"Endpoint {index + 1}"),
+            provider=str(endpoint.provider or _default_endpoint(capability).provider),
+            api_key_set=bool(endpoint.api_key),
+            base_url=endpoint.base_url,
+            model=endpoint.model,
+            default_voice=endpoint.default_voice,
+            language=endpoint.language,
         )
         for index, endpoint in enumerate(endpoints)
     ]
@@ -2296,54 +2259,44 @@ def _settings_response(settings: AudiobookSettings | None) -> SettingsResponse:
     )
 
 
-def _merge_endpoint_secrets(
-    incoming: list[dict[str, Any]],
-    existing: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    existing_by_id = {str(endpoint.get("id")): endpoint for endpoint in existing}
+def _merge_endpoint_secrets(incoming: list[EndpointUpdate], existing: list[EndpointConfig]) -> list[EndpointConfig]:
+    existing_by_id = {endpoint.id: endpoint for endpoint in existing}
     merged = []
     for index, endpoint in enumerate(incoming):
-        endpoint = dict(endpoint)
-        endpoint_id = str(endpoint.get("id") or f"endpoint-{index + 1}")
-        previous = existing_by_id.get(endpoint_id, {})
-        if "api_key" not in endpoint:
-            if previous.get("provider") == endpoint.get("provider"):
-                endpoint["api_key"] = previous.get("api_key")
-        elif not endpoint["api_key"]:
-            endpoint["api_key"] = None
-        endpoint["id"] = endpoint_id
-        endpoint["name"] = str(endpoint.get("name") or f"Endpoint {index + 1}").strip()
-        endpoint["provider"] = str(endpoint.get("provider") or "").strip().lower()
-        merged.append(endpoint)
+        endpoint_id = endpoint.id or f"endpoint-{index + 1}"
+        previous = existing_by_id.get(endpoint_id)
+        api_key = endpoint.api_key or None
+        if "api_key" not in endpoint.model_fields_set and previous is not None and previous.provider == endpoint.provider:
+            api_key = previous.api_key
+        merged.append(
+            EndpointConfig(
+                id=endpoint_id,
+                name=(endpoint.name or f"Endpoint {index + 1}").strip(),
+                provider=endpoint.provider,
+                api_key=api_key,
+                base_url=endpoint.base_url,
+                model=endpoint.model,
+                default_voice=endpoint.default_voice,
+                language=endpoint.language,
+            )
+        )
     return merged
 
 
-def _sync_primary_columns(data: dict[str, Any], capability: str, endpoints: list[dict[str, Any]]) -> None:
+def _sync_primary_columns(data: dict[str, object], capability: str, endpoints: list[EndpointConfig]) -> None:
     primary = endpoints[0]
-    prefix = "transcription" if capability == "transcription" else capability
-    for endpoint_field, column_field in (
-        ("provider", f"{prefix}_provider"),
-        ("api_key", f"{prefix}_api_key"),
-        ("base_url", f"{prefix}_base_url"),
-        ("model", f"{prefix}_model"),
-    ):
-        data[column_field] = primary.get(endpoint_field)
+    data[f"{capability}_provider"] = primary.provider
+    data[f"{capability}_api_key"] = primary.api_key
+    data[f"{capability}_base_url"] = primary.base_url
+    data[f"{capability}_model"] = primary.model
     if capability == "tts":
-        data["tts_default_voice"] = primary.get("default_voice")
+        data["tts_default_voice"] = primary.default_voice
     elif capability == "transcription":
-        data["transcription_language"] = primary.get("language")
+        data["transcription_language"] = primary.language
 
 
-def _tts_signature(endpoints: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
-    return [
-        (
-            endpoint.get("provider"),
-            endpoint.get("base_url"),
-            endpoint.get("model"),
-            endpoint.get("default_voice"),
-        )
-        for endpoint in endpoints
-    ]
+def _tts_signature(endpoints: list[EndpointConfig]) -> list[tuple[str, str | None, str | None, str | None]]:
+    return [(endpoint.provider, endpoint.base_url, endpoint.model, endpoint.default_voice) for endpoint in endpoints]
 
 
 @router.get("/api/audiobook/settings", response_model=SettingsResponse)
@@ -2354,18 +2307,29 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsResponse:
 
 @router.put("/api/audiobook/settings", response_model=SettingsResponse)
 async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_db)) -> SettingsResponse:
-    data = body.model_dump(exclude_unset=True)
+    data: dict[str, object] = body.model_dump(exclude_unset=True)
     previous = await crud.audiobook.get_audiobook_settings(db)
     previous_tts_endpoints = configured_endpoints(previous, "tts") if previous else []
 
-    for capability in ("llm", "tts", "transcription"):
+    next_tts_endpoints = previous_tts_endpoints
+    for capability, incoming in (
+        ("llm", body.llm_endpoints),
+        ("tts", body.tts_endpoints),
+        ("transcription", body.transcription_endpoints),
+    ):
         field = f"{capability}_endpoints"
-        if field not in data:
+        if field not in body.model_fields_set:
             continue
+        if incoming is None:
+            raise HTTPException(status_code=422, detail=f"{field} must contain at least one endpoint")
         existing = configured_endpoints(previous, capability) if previous else []
-        endpoints = _merge_endpoint_secrets(data[field], existing)
-        data[field] = endpoints
+        endpoints = _merge_endpoint_secrets(incoming, existing)
+        if len({endpoint.id for endpoint in endpoints}) != len(endpoints):
+            raise HTTPException(status_code=422, detail=f"{field} endpoint IDs must be unique")
+        data[field] = [endpoint.model_dump(mode="json") for endpoint in endpoints]
         _sync_primary_columns(data, capability, endpoints)
+        if capability == "tts":
+            next_tts_endpoints = endpoints
 
     previous_provider = tts_provider_name(previous)
     next_provider = str(data.get("tts_provider") or previous_provider).strip().lower()
@@ -2392,9 +2356,7 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
     next_tts = {name: data.get(name, value) for name, value in previous_tts.items()}
     next_tts["tts_provider"] = next_provider
     if "tts_endpoints" in data:
-        tts_changed = (
-            _tts_signature(previous_tts_endpoints) != _tts_signature(data["tts_endpoints"]) or next_tts != previous_tts
-        )
+        tts_changed = _tts_signature(previous_tts_endpoints) != _tts_signature(next_tts_endpoints) or next_tts != previous_tts
     else:
         tts_changed = next_tts != previous_tts
     settings = await crud.audiobook.upsert_audiobook_settings(db, data)
@@ -2434,11 +2396,11 @@ def _endpoint_test_results(
     for priority, probe in enumerate(probes, start=1):
         endpoint = probe.endpoint
         result = {
-            "endpoint_id": endpoint.get("id"),
-            "endpoint": endpoint.get("name") or endpoint.get("base_url") or endpoint.get("id"),
+            "endpoint_id": endpoint.id,
+            "endpoint": endpoint.name or endpoint.base_url or endpoint.id,
             "priority": priority,
-            "provider": endpoint.get("provider"),
-            "model": endpoint.get("model"),
+            "provider": endpoint.provider,
+            "model": endpoint.model,
             "status": "ready" if probe.success else "error",
             "duration_ms": round(probe.duration_ms, 1),
             "error": probe.error,
