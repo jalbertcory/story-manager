@@ -18,7 +18,7 @@ function HealthCard({
 }: {
   label: string;
   status?: string;
-  detail?: string;
+  detail?: string | undefined;
 }) {
   const healthy = ["alive", "available", "configured"].includes(status ?? "");
   return (
@@ -45,7 +45,7 @@ function Logs({ onBack }: { onBack?: () => void }) {
   const logsQuery = useQuery({
     queryKey: ["logs", level],
     queryFn: () =>
-      getLogs({ limit: 500, level: level !== "ALL" ? level : undefined }),
+      getLogs({ limit: 500, ...(level !== "ALL" ? { level } : {}) }),
     refetchInterval: autoRefresh ? 3000 : false,
   });
   const healthQuery = useQuery({
@@ -64,9 +64,9 @@ function Logs({ onBack }: { onBack?: () => void }) {
   const metrics = metricsQuery.data;
   const reversed = [...logs].reverse();
   const refreshAll = () => {
-    logsQuery.refetch();
-    healthQuery.refetch();
-    metricsQuery.refetch();
+    void logsQuery.refetch();
+    void healthQuery.refetch();
+    void metricsQuery.refetch();
   };
 
   return (

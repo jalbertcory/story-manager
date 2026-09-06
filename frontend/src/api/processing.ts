@@ -22,9 +22,9 @@ export function getProcessingJobs({
     api.GET("/api/processing/jobs", {
       params: {
         query: {
-          statuses: statuses || undefined,
-          job_type: jobType || undefined,
-          book_id: bookId || undefined,
+          ...(statuses ? { statuses } : {}),
+          ...(jobType ? { job_type: jobType } : {}),
+          ...(bookId ? { book_id: bookId } : {}),
           limit,
         },
       },

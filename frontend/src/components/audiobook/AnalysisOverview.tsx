@@ -5,7 +5,7 @@ function AnalysisOverview({
   status,
   chapters = [],
 }: {
-  status?: AudioStatus;
+  status: AudioStatus | undefined;
   chapters?: Chapter[];
 }) {
   const analyzed = chapters.filter((chapter) => chapter.summary);

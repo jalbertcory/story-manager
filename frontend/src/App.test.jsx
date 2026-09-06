@@ -96,6 +96,25 @@ describe("App workspaces", () => {
     };
   });
 
+  it("shows sign-out failures and lets the user retry", async () => {
+    mockApi((url) => url === "/api/auth/status"
+      ? { mode: "password", authenticated: true } : undefined);
+    renderWithClient(<App />);
+    const button = await screen.findByRole("button", { name: "Sign out" });
+    await screen.findByAltText("Saga cover");
+    const originalFetch = fetch.getMockImplementation();
+    fetch.mockImplementation((url, options) => url === "/api/auth/logout"
+      ? Promise.reject(new Error("Sign out unavailable")) : originalFetch(url, options));
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sign out unavailable");
+    expect(button).toBeEnabled();
+    fetch.mockImplementation((url, options) => url === "/api/auth/logout"
+      ? Promise.resolve({ ok: true, json: async () => ({ mode: "password", authenticated: false }) })
+      : originalFetch(url, options));
+    fireEvent.click(button);
+    expect(await screen.findByRole("heading", { name: "Admin Login" })).toBeInTheDocument();
+  });
+
   it("starts with cover groups and pages series books in server order", async () => {
     mockApi();
     renderWithClient(<App />);

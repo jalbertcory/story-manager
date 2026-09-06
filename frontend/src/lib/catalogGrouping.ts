@@ -60,10 +60,8 @@ export function buildCatalogGroups(
     }
 
     if (book.series && !book.download_status) {
-      if (!seriesMap[book.series]) {
-        seriesMap[book.series] = [];
-      }
-      seriesMap[book.series].push(book);
+      const group = (seriesMap[book.series] ??= []);
+      group.push(book);
     } else if (book.source_type !== "web") {
       standaloneBooks.push(book);
     }
@@ -81,46 +79,46 @@ export function buildCatalogGroups(
   );
 
   const dir = sortOrder === "desc" ? -1 : 1;
-  const sortedSeries = Object.keys(seriesMap).sort((a, b) => {
-    const booksA = seriesMap[a];
-    const booksB = seriesMap[b];
-    if (sortBy === "author") {
-      return (
-        dir * (booksA[0].author || "").localeCompare(booksB[0].author || "")
-      );
-    }
-    if (sortBy === "word_count") {
-      const wcA = booksA.reduce(
-        (sum, bk) => sum + (bk.current_word_count || 0),
-        0,
-      );
-      const wcB = booksB.reduce(
-        (sum, bk) => sum + (bk.current_word_count || 0),
-        0,
-      );
-      return dir * (wcA - wcB);
-    }
-    if (sortBy === "updated_at") {
-      const latestA = Math.max(
-        ...booksA.map((bk) => new Date(bk.updated_at || 0).getTime()),
-      );
-      const latestB = Math.max(
-        ...booksB.map((bk) => new Date(bk.updated_at || 0).getTime()),
-      );
-      return dir * (latestA - latestB);
-    }
-    if (sortBy === "audiobook_enabled") {
-      const enabledA = booksA.some(
-        (book) => book.audiobook_enabled || book.audiobook_types?.length,
-      );
-      const enabledB = booksB.some(
-        (book) => book.audiobook_enabled || book.audiobook_types?.length,
-      );
-      const byEnabled = Number(enabledA) - Number(enabledB);
-      return byEnabled !== 0 ? dir * byEnabled : a.localeCompare(b);
-    }
-    return dir * a.localeCompare(b);
-  });
+  const sortedSeries = Object.entries(seriesMap)
+    .sort(([a, booksA], [b, booksB]) => {
+      if (sortBy === "author") {
+        return (
+          dir * (booksA[0]?.author || "").localeCompare(booksB[0]?.author || "")
+        );
+      }
+      if (sortBy === "word_count") {
+        const wcA = booksA.reduce(
+          (sum, bk) => sum + (bk.current_word_count || 0),
+          0,
+        );
+        const wcB = booksB.reduce(
+          (sum, bk) => sum + (bk.current_word_count || 0),
+          0,
+        );
+        return dir * (wcA - wcB);
+      }
+      if (sortBy === "updated_at") {
+        const latestA = Math.max(
+          ...booksA.map((bk) => new Date(bk.updated_at || 0).getTime()),
+        );
+        const latestB = Math.max(
+          ...booksB.map((bk) => new Date(bk.updated_at || 0).getTime()),
+        );
+        return dir * (latestA - latestB);
+      }
+      if (sortBy === "audiobook_enabled") {
+        const enabledA = booksA.some(
+          (book) => book.audiobook_enabled || book.audiobook_types?.length,
+        );
+        const enabledB = booksB.some(
+          (book) => book.audiobook_enabled || book.audiobook_types?.length,
+        );
+        const byEnabled = Number(enabledA) - Number(enabledB);
+        return byEnabled !== 0 ? dir * byEnabled : a.localeCompare(b);
+      }
+      return dir * a.localeCompare(b);
+    })
+    .map(([name]) => name);
 
   return {
     seriesMap,

@@ -39,14 +39,14 @@ function EpubEditor({
       content_selectors: string[];
     }) => updateBook(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
     },
   });
 
   const processMutation = useMutation({
     mutationFn: ({ id }: { id: number }) => processBook(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       onBack();
     },
   });
@@ -122,7 +122,9 @@ function EpubEditor({
         {saveMutation.isPending ? "Saving..." : "Save Changes"}
       </button>
       <button
-        onClick={handleProcessBook}
+        onClick={() => {
+          void handleProcessBook();
+        }}
         disabled={saveMutation.isPending || processMutation.isPending}
       >
         {processMutation.isPending

@@ -4,7 +4,7 @@ export { getWebChecks } from "./admin";
 
 type GroupQuery = Query<"/api/library/groups">;
 export interface LibraryGroupParams {
-  groupBy: GroupQuery["group_by"];
+  groupBy: NonNullable<GroupQuery["group_by"]>;
   q?: string;
   universe?: number | null;
   source?: GroupQuery["source"] | "";
@@ -35,14 +35,14 @@ export async function getLibraryGroups({
         query: {
           group_by: groupBy,
           q,
-          universe: universe ?? undefined,
-          source: source || undefined,
-          genre: genre || undefined,
-          audiobook: audiobook || undefined,
-          review: review || undefined,
+          ...(universe != null ? { universe } : {}),
+          ...(source ? { source } : {}),
+          ...(genre ? { genre } : {}),
+          ...(audiobook ? { audiobook } : {}),
+          ...(review ? { review } : {}),
           sort_by: sortBy,
           sort_order: sortOrder,
-          cursor: cursor || undefined,
+          ...(cursor ? { cursor } : {}),
           limit,
         },
       },

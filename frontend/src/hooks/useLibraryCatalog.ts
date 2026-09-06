@@ -3,48 +3,12 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { getBookCatalog } from "../api/books";
 
 function useLibraryCatalog({
-  q,
-  view,
-  review,
-  audiobook,
-  genre,
-  sortBy,
-  sortOrder,
   enabled = true,
-  series,
-  universe,
-  source,
+  ...params
 }: Parameters<typeof getBookCatalog>[0] & { enabled?: boolean }) {
   return useInfiniteQuery({
-    queryKey: [
-      "book-catalog",
-      {
-        q,
-        view,
-        review,
-        audiobook,
-        genre,
-        sortBy,
-        sortOrder,
-        series,
-        universe,
-        source,
-      },
-    ],
-    queryFn: ({ pageParam }) =>
-      getBookCatalog({
-        q,
-        series,
-        universe,
-        source,
-        view,
-        review,
-        audiobook,
-        genre,
-        sortBy,
-        sortOrder,
-        cursor: pageParam,
-      }),
+    queryKey: ["book-catalog", params],
+    queryFn: ({ pageParam }) => getBookCatalog({ ...params, cursor: pageParam }),
     initialPageParam: "",
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled,

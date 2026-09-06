@@ -1,3 +1,4 @@
+import { errorMessage } from "./lib/errors";
 import type { MouseEvent } from "react";
 import type { NavigationState, OpenBook } from "./types";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -26,6 +27,7 @@ import {
   buildBookPath,
   getPrimarySection,
   parseLocation,
+  parseNavigationState,
   PRIMARY_NAV,
   SECTION_NAV,
 } from "./lib/navigation";
@@ -57,7 +59,9 @@ export default function App() {
       pendingScroll.current = null;
     }
   }, []);
-  const returnTo = useRef(window.history.state?.returnTo || "/");
+  const returnTo = useRef(
+    parseNavigationState(window.history.state).returnTo || "/",
+  );
   const route = parseLocation(
     location.pathname,
     location.hash,
@@ -70,11 +74,14 @@ export default function App() {
   useEffect(() => {
     getAuthStatus()
       .then(setAuthStatus)
-      .catch((error) => setAuthError(error.message));
+      .catch((error: unknown) => setAuthError(errorMessage(error)));
   }, []);
   const navigate = useCallback((href: string, state: NavigationState = {}) => {
     window.history.replaceState(
-      { ...window.history.state, scrollY: window.scrollY },
+      {
+        ...parseNavigationState(window.history.state),
+        scrollY: window.scrollY,
+      },
       "",
     );
     window.history.pushState(
@@ -88,8 +95,10 @@ export default function App() {
   }, []);
   useEffect(() => {
     const onPop = () => {
-      pendingScroll.current = window.history.state?.scrollY ?? null;
-      returnTo.current = window.history.state?.returnTo || "/";
+      pendingScroll.current =
+        parseNavigationState(window.history.state).scrollY ?? null;
+      returnTo.current =
+        parseNavigationState(window.history.state).returnTo || "/";
       setLocation(currentLocation());
     };
     window.addEventListener("popstate", onPop);
@@ -161,12 +170,15 @@ export default function App() {
         section,
         tab || audioTabs[route.bookId] || "sources",
       ),
-      { libraryScrollY: window.history.state?.libraryScrollY },
+      {
+        libraryScrollY:
+          parseNavigationState(window.history.state).libraryScrollY ?? 0,
+      },
     );
   };
   const backToLibrary = () =>
     navigate(returnTo.current, {
-      scrollY: window.history.state?.libraryScrollY || 0,
+      scrollY: parseNavigationState(window.history.state).libraryScrollY || 0,
     });
 
   useEffect(() => {
@@ -340,11 +352,17 @@ export default function App() {
         {authStatus.mode === "password" && (
           <button
             className="btn-text"
-            onClick={async () => setAuthStatus(await logout())}
+            onClick={() => {
+              setAuthError("");
+              void logout()
+                .then(setAuthStatus)
+                .catch((error: unknown) => setAuthError(errorMessage(error)));
+            }}
           >
             Sign out
           </button>
         )}
+        {authError && <p role="alert">{authError}</p>}
       </header>
       <div className="workspace-layout">
         <nav className="workspace-nav" aria-label="Primary navigation">

@@ -57,21 +57,25 @@ function SentenceRow({
       updateSentence(sentence.id, data),
     onSuccess: () => {
       setEditing(false);
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-sentences", bookId],
       });
-      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
     },
   });
 
   const audioMutation = useMutation({
     mutationFn: () => generateSentenceAudio(bookId, sentence.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-sentences", bookId],
       });
-      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
       });
     },
@@ -253,9 +257,9 @@ function ScriptEditor({
 }) {
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
   const sentenceLifecycle = lifecycleDefinitions?.sentence;
-  const statusLabels = Object.fromEntries(
+  const statusLabels = Object.fromEntries<string>(
     (sentenceLifecycle?.states ?? []).map((state) => [
-      state.value,
+      String(state.value),
       state.label,
     ]),
   );
@@ -294,7 +298,7 @@ function ScriptEditor({
       getSentences(bookId, {
         page,
         limit,
-        chapterId: chapterFilter ? Number(chapterFilter) : undefined,
+        ...(chapterFilter ? { chapterId: Number(chapterFilter) } : {}),
         reviewOnly,
       }),
     placeholderData: keepPreviousData,

@@ -34,7 +34,7 @@ function ReaderKeys({ showHeading = true }) {
   };
 
   useEffect(() => {
-    loadKeys();
+    void loadKeys();
   }, []);
 
   const handleCreate = async (e: FormEvent) => {
@@ -74,7 +74,9 @@ function ReaderKeys({ showHeading = true }) {
       </p>
 
       <form
-        onSubmit={handleCreate}
+        onSubmit={(event) => {
+          void handleCreate(event);
+        }}
         style={{
           display: "flex",
           gap: "0.75rem",
@@ -162,7 +164,9 @@ function ReaderKeys({ showHeading = true }) {
               {!key.revoked_at && (
                 <button
                   className="btn-danger"
-                  onClick={() => handleRevoke(key.id)}
+                  onClick={() => {
+                    void handleRevoke(key.id);
+                  }}
                 >
                   Revoke
                 </button>

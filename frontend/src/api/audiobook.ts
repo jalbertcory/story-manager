@@ -170,7 +170,12 @@ export function getSentences(
     api.GET("/api/books/{book_id}/audiobook/sentences", {
       params: {
         path: { book_id: bookId },
-        query: { page, limit, chapter_id: chapterId, review_only: reviewOnly },
+        query: {
+          page,
+          limit,
+          ...(chapterId !== undefined ? { chapter_id: chapterId } : {}),
+          review_only: reviewOnly,
+        },
       },
     }),
     "Failed to fetch sentences",
@@ -260,7 +265,7 @@ export function uploadImportedAudiobook(
   const body = {
     files,
     source_paths: files.map((file) => file.webkitRelativePath || file.name),
-    name: name.trim() || undefined,
+    ...(name.trim() ? { name: name.trim() } : {}),
     auto_align: autoAlign,
   };
   if (newBook) {

@@ -52,6 +52,25 @@ export default defineConfig([
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}"],
+    // Tests are outside the production TS project. The compile-only contract
+    // fixture deliberately contains unsafe calls that tsc must reject.
+    ignores: ["src/**/*.test.*", "src/api/api.contract-check.ts"],
+    extends: [tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+  {
     files: ["src/browser.d.ts"],
     rules: { "@typescript-eslint/no-unused-vars": "off" },
   },

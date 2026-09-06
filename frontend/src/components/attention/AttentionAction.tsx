@@ -21,7 +21,9 @@ export default function AttentionAction({
       <button
         disabled={actions.busy(kind, item)}
         aria-label={`${label} for ${title}`}
-        onClick={() => actions.run(kind, item)}
+        onClick={() => {
+          void actions.run(kind, item);
+        }}
       >
         {actions.busy(kind, item) ? "In progress…" : label}
       </button>

@@ -114,7 +114,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       setReprocessStatus(data);
       if (!data.running) {
         setPolling(false);
-        queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+        void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       }
     } catch {
       setPolling(false);
@@ -123,12 +123,14 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
 
   useEffect(() => {
     // Check if a reprocess is already running on mount
-    pollStatus();
+    void pollStatus();
   }, [pollStatus]);
 
   useEffect(() => {
     if (!polling) return;
-    const interval = setInterval(pollStatus, 2000);
+    const interval = setInterval(() => {
+      void pollStatus();
+    }, 2000);
     return () => clearInterval(interval);
   }, [polling, pollStatus]);
 
@@ -156,7 +158,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
     mutationFn: createCleaningConfig,
     onSuccess: () => {
       setJobNotice("Cleaning config saved; affected book cleaning is queued.");
-      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setCreating(false);
     },
   });
@@ -168,7 +170,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       setJobNotice(
         "Cleaning config updated; affected book cleaning is queued.",
       );
-      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setEditingId(null);
       setPolling(true);
     },
@@ -180,8 +182,10 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       setJobNotice(
         "Cleaning config deleted; restoring affected books is queued.",
       );
-      queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
-      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
     },
   });
 

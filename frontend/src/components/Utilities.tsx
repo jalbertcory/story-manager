@@ -1,4 +1,4 @@
-import { stringValue } from "../lib/errors";
+import { stringValue, displayValue } from "../lib/errors";
 import { formatBytes } from "../lib/format";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -199,25 +199,25 @@ function Utilities({
   const queueMetadataMutation = useMutation({
     mutationFn: () => queueMetadataSync(null, "manual"),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
     },
   });
 
   const approveMatchMutation = useMutation({
     mutationFn: (matchId: number) => approveMetadataMatch(matchId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
-      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
     },
   });
 
   const rejectMatchMutation = useMutation({
     mutationFn: (matchId: number) => rejectMetadataMatch(matchId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
-      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
+      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
     },
   });
 
@@ -232,9 +232,9 @@ function Utilities({
   const restoreBookMutation = useMutation({
     mutationFn: restoreRecycledBook,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
     },
   });
 
@@ -242,7 +242,7 @@ function Utilities({
     mutationFn: permanentlyDeleteRecycledBook,
     onSuccess: () => {
       setPermanentDeleteTarget(null);
-      queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
     },
   });
 
@@ -265,11 +265,13 @@ function Utilities({
       setAudiobookRebuildNotice(
         `${data.queued_count} human audiobook rebuild${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
       );
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["human-audiobook-rebuild-preview"],
       });
-      queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
     },
   });
   const audiobookRebuildTargetCount = audiobookRebuildForce
@@ -282,7 +284,7 @@ function Utilities({
     try {
       const data = await detectSeries();
       if (data.updated > 0) {
-        queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+        void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
       }
       setDetectState(data);
     } catch {
@@ -431,7 +433,9 @@ function Utilities({
             </p>
             <div className="settings-actions">
               <button
-                onClick={handleDetectSeries}
+                onClick={() => {
+                  void handleDetectSeries();
+                }}
                 disabled={detectState === "pending"}
               >
                 {detectState === "pending"
@@ -561,8 +565,9 @@ function Utilities({
                         const candidateSeries = stringValue(
                           selectedMatch?.remote_metadata?.series,
                         );
-                        const candidateSeriesIndex =
-                          selectedMatch?.remote_metadata?.series_index;
+                        const candidateSeriesIndex = displayValue(
+                          selectedMatch?.remote_metadata?.series_index,
+                        );
                         const evidenceNote = selectedMatch?.note ?? entry.note;
 
                         return (

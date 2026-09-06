@@ -38,7 +38,12 @@ export const postClientLog = (
   message: string,
   source?: string,
   level = "ERROR",
-) => unwrap(api.POST("/api/logs/client", { body: { message, source, level } }));
+) =>
+  unwrap(
+    api.POST("/api/logs/client", {
+      body: { message, ...(source !== undefined ? { source } : {}), level },
+    }),
+  );
 export const sendClientLog = postClientLog;
 export const removeAllBooks = (dryRun = true) =>
   unwrap(

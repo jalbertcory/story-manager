@@ -9,7 +9,7 @@ export default function UniverseMembership({
 }: {
   bookId?: number;
   series?: string | null;
-  currentName?: string | null;
+  currentName?: string | null | undefined;
 }) {
   const client = useQueryClient();
   const [name, setName] = useState(currentName || "");
@@ -18,11 +18,18 @@ export default function UniverseMembership({
     queryFn: getUniverses,
   });
   const mutation = useMutation({
-    mutationFn: () =>
-      setUniverseMembership({
+    mutationFn: () => {
+      const target = series
+        ? { series }
+        : bookId != null
+          ? { book_id: bookId }
+          : null;
+      if (!target) throw new Error("Choose a book or series first.");
+      return setUniverseMembership({
         name: name.trim() || null,
-        ...(series ? { series } : { book_id: bookId }),
-      }),
+        ...target,
+      });
+    },
     onSuccess: () => {
       for (const key of [
         "universes",
@@ -31,7 +38,7 @@ export default function UniverseMembership({
         "book-catalog",
         "series-books",
       ]) {
-        client.invalidateQueries({ queryKey: [key] });
+        void client.invalidateQueries({ queryKey: [key] });
       }
     },
   });

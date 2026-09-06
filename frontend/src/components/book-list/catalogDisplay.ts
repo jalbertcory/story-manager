@@ -10,5 +10,5 @@ export function getCoverUrl(book: Pick<CatalogBook, "id" | "cover_path">) {
 
 export function getSeriesGenreTags(books: CatalogBook[]) {
   if (!books.length) return [];
-  return books[0].effective_series_genre_tags || [];
+  return books[0]?.effective_series_genre_tags || [];
 }

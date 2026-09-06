@@ -105,7 +105,7 @@ function BookList({
     if (!el || !hasNextPage || isFetchingNextPage) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry?.isIntersecting) {
           void fetchNextPage?.();
         }
       },
@@ -123,7 +123,7 @@ function BookList({
             <SeriesSummaryRow
               key={series}
               series={series}
-              books={seriesMap[series]}
+              books={seriesMap[series] ?? []}
               onEdit={onEdit}
               allSeries={allSeries}
             />

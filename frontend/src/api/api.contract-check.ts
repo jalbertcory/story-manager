@@ -1,5 +1,5 @@
 import { api, apiUrl } from "./client";
-import { getBook, updateBook } from "./books";
+import { getBook, getBookCatalog, updateBook } from "./books";
 import { uploadEpubs } from "./imports";
 
 // Compiled by tsc, never executed. These expected errors prove the generated
@@ -32,6 +32,12 @@ export async function checkApiContract(): Promise<void> {
   await api.POST("/api/books/upload_epubs", { body: { files: ["book.epub"] } });
   // @ts-expect-error URL builders enforce backend path parameter names.
   apiUrl("/api/books/{book_id}/download", { id: 12 });
+
+  // @ts-expect-error Optional request fields must be omitted, not set to undefined.
+  await updateBook(12, { title: undefined });
+  const catalog = await getBookCatalog();
+  // @ts-expect-error A catalog page may be empty; check the item before accessing it.
+  catalog.items[0].id.toFixed();
 
   const book = await getBook(12);
   if (book) {

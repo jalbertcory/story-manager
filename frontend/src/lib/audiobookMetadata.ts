@@ -25,7 +25,7 @@ export function audiobookCueMetadata(text: string) {
   for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
     if (/^\s*TRACK\s+\d+/i.test(line)) break;
     const match = line.match(/^\s*(TITLE|PERFORMER)\s+"([^"]+)"\s*$/i);
-    if (match)
+    if (match?.[1] && match[2])
       metadata[match[1].toUpperCase() === "TITLE" ? "title" : "author"] =
         match[2].trim();
   }

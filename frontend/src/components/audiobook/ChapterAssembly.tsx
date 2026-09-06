@@ -19,8 +19,11 @@ function ChapterAssembly({
   const queryClient = useQueryClient();
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
   const previewLifecycle = lifecycleDefinitions?.chapter_preview;
-  const previewLabels = Object.fromEntries(
-    (previewLifecycle?.states ?? []).map((state) => [state.value, state.label]),
+  const previewLabels = Object.fromEntries<string>(
+    (previewLifecycle?.states ?? []).map((state) => [
+      String(state.value),
+      state.label,
+    ]),
   );
   const activePreviewStatuses = new Set(previewLifecycle?.active_states ?? []);
   const failedPreviewStatuses = new Set(previewLifecycle?.failure_states ?? []);
@@ -28,10 +31,12 @@ function ChapterAssembly({
     mutationFn: (chapterId: number) =>
       generateChapterPreview(bookId, chapterId),
     onSuccess: () => {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
       });
-      queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
     },
   });
   if (!chapters || chapters.length === 0) {

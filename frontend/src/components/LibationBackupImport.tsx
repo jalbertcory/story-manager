@@ -56,6 +56,7 @@ function libationSourceKey(pathValue: string) {
   const folderIndex = parts.findIndex((part) => LIBATION_ID_RE.test(part));
   if (folderIndex < 0) return null;
   let folderName = parts[folderIndex];
+  if (!folderName) return null;
   if (folderIndex === parts.length - 1 && extension(folderName) === ".zip") {
     folderName = folderName.slice(0, -4);
   }
@@ -162,15 +163,12 @@ function LibationBackupImport() {
   };
 
   const importMatches = async () => {
-    const matches = (preview?.groups || [])
-      .filter((group) => {
-        const selection = review[group.source_key];
-        return selection?.included;
-      })
-      .map((group) => ({
-        ...group,
-        book_id: review[group.source_key].bookId,
-      }));
+    const matches = (preview?.groups || []).flatMap((group) => {
+      const selection = review[group.source_key];
+      return selection?.included
+        ? [{ ...group, book_id: selection.bookId }]
+        : [];
+    });
     const groupedFiles = filesBySourceKey(files);
     const results: ImportResult[] = [];
     setImportState({ current: 0, total: matches.length, results, done: false });
@@ -206,8 +204,8 @@ function LibationBackupImport() {
         done: index + 1 === matches.length,
       });
     }
-    queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-    queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+    void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
   };
 
   const reset = () => {
@@ -308,7 +306,9 @@ function LibationBackupImport() {
           webkitdirectory=""
           directory=""
           disabled={Boolean(importState && !importState.done)}
-          onChange={(event) => inspectFiles(event.target.files)}
+          onChange={(event) => {
+            void inspectFiles(event.target.files);
+          }}
         />
       </label>
       {previewing && (
@@ -459,7 +459,7 @@ function LibationBackupImport() {
                             setReview((current) => ({
                               ...current,
                               [group.source_key]: {
-                                ...current[group.source_key],
+                                ...(current[group.source_key] ?? selection),
                                 included: event.target.checked,
                               },
                             }))
@@ -501,7 +501,9 @@ function LibationBackupImport() {
               disabled={
                 selectedCount === 0 || Boolean(importState) || previewing
               }
-              onClick={importMatches}
+              onClick={() => {
+                void importMatches();
+              }}
             >
               Import {selectedCount} Selected{" "}
               {selectedCount === 1 ? "Book" : "Books"}

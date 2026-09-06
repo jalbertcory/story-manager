@@ -17,8 +17,8 @@ export default function LibraryToolbar({
   change: (next: LibraryValues) => void;
   genres?: { name: string; count: number }[];
   inSeries: boolean;
-  filtersOpen?: boolean;
-  onFiltersToggle?: (open: boolean) => void;
+  filtersOpen?: boolean | undefined;
+  onFiltersToggle?: ((open: boolean) => void) | undefined;
 }) {
   const [localOpen, setLocalOpen] = useState(false);
   const expanded = filtersOpen ?? localOpen;

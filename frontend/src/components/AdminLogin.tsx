@@ -36,7 +36,12 @@ function AdminLogin({
         <h1>Story Manager</h1>
       </header>
       <main className="login-panel">
-        <form className="login-form" onSubmit={handleSubmit}>
+        <form
+          className="login-form"
+          onSubmit={(event) => {
+            void handleSubmit(event);
+          }}
+        >
           <h2>Admin Login</h2>
           <label>
             Password

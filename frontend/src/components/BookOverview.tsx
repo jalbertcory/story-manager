@@ -35,7 +35,7 @@ export default function BookOverview({
     mutationFn: () => refreshBook(book.id),
     onSuccess: (updated) => {
       client.setQueryData(["book", book.id], updated);
-      client.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void client.invalidateQueries({ queryKey: ["active-processing-jobs"] });
     },
   });
   const checking = ["queued", "processing"].includes(book.refresh_status || "");

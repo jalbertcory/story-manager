@@ -5,6 +5,7 @@ import {
   buildTabPath,
   getPrimarySection,
   parseLocation,
+  parseNavigationState,
   PRIMARY_NAV,
 } from "./navigation";
 
@@ -85,5 +86,30 @@ describe("application navigation", () => {
     expect(buildBookPath(12, "audiobooks", "unknown")).toBe(
       "/books/12/audiobooks?tab=sources",
     );
+  });
+});
+
+describe("browser navigation state", () => {
+  it("preserves valid routes and scroll positions", () => {
+    expect(
+      parseNavigationState({
+        returnTo: "/?series=Saga",
+        scrollY: 0,
+        libraryScrollY: 320,
+      }),
+    ).toEqual({
+      returnTo: "/?series=Saga",
+      scrollY: 0,
+      libraryScrollY: 320,
+    });
+  });
+  it.each([
+    null,
+    false,
+    "bad",
+    { returnTo: 42, scrollY: "20", libraryScrollY: -1 },
+    { returnTo: "//example.com", scrollY: Infinity, libraryScrollY: NaN },
+  ])("ignores malformed state %j", (state) => {
+    expect(parseNavigationState(state)).toEqual({});
   });
 });

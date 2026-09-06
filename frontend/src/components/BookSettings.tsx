@@ -1,4 +1,4 @@
-import { displayValue } from "../lib/errors";
+import { displayValue, stringValue } from "../lib/errors";
 import type { Book, BookSectionChange } from "../types";
 import type { components } from "../api/schema";
 import { useRef, useState } from "react";
@@ -92,9 +92,10 @@ function describeRevisionSnapshot(
     return `Previous content rules: ${removedCount} removed chapter${removedCount === 1 ? "" : "s"}, ${selectorCount} selector${selectorCount === 1 ? "" : "s"}`;
   }
   if (revision.action === "series_changed") {
-    return `Previous series: ${snapshot.series || "None"}${snapshot.series_index != null ? ` · order ${snapshot.series_index}` : ""}`;
+    const seriesIndex = displayValue(snapshot.series_index);
+    return `Previous series: ${stringValue(snapshot.series) || "None"}${seriesIndex != null ? ` · order ${seriesIndex}` : ""}`;
   }
-  return `Previous metadata: “${snapshot.title || "Untitled"}” by ${snapshot.author || "Unknown author"}`;
+  return `Previous metadata: “${stringValue(snapshot.title) || "Untitled"}” by ${stringValue(snapshot.author) || "Unknown author"}`;
 }
 
 function BookSettings({
@@ -106,8 +107,8 @@ function BookSettings({
 }: {
   book: Book;
   onBack: () => void;
-  bookSection?: string;
-  audiobookTab?: string | null;
+  bookSection?: string | undefined;
+  audiobookTab?: string | null | undefined;
   onNavigationChange?: BookSectionChange;
 }) {
   const queryClient = useQueryClient();
@@ -260,13 +261,13 @@ function BookSettings({
       updateBook(book.id, data),
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
     },
   });
 
@@ -274,10 +275,10 @@ function BookSettings({
     mutationFn: () => updateBook(book.id, { audiobook_enabled: true }),
     onSuccess: (updatedBook) => {
       queryClient.setQueryData(["book", book.id], updatedBook);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
       setBookTab("audiobook");
@@ -288,13 +289,13 @@ function BookSettings({
     mutationFn: () => processBook(book.id),
     onSuccess: () => {
       setJobNotice("EPUB cleaning job queued.");
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["cleaned-chapters", book.id],
       });
     },
@@ -309,13 +310,13 @@ function BookSettings({
     onSuccess: (updatedBook) => {
       setJobNotice("Source refresh job queued.");
       queryClient.setQueryData(["book", book.id], updatedBook);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["book-update-history", book.id],
       });
     },
@@ -324,10 +325,10 @@ function BookSettings({
   const detachSourceMutation = useMutation({
     mutationFn: () => detachBookSource(book.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
       onBack();
@@ -337,10 +338,10 @@ function BookSettings({
   const deleteMutation = useMutation({
     mutationFn: () => deleteBook(book.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
       onBack();
@@ -353,15 +354,17 @@ function BookSettings({
       setConfirmAction(null);
       setJobNotice("Original EPUB restored.");
       queryClient.setQueryData(["book", book.id], updatedBook);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
-      queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
+        queryKey: ["book-revisions", book.id],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
+      void queryClient.invalidateQueries({
         queryKey: ["cleaned-chapters", book.id],
       });
     },
@@ -373,13 +376,15 @@ function BookSettings({
     onSuccess: (updatedBook) => {
       setConfirmAction(null);
       queryClient.setQueryData(["book", book.id], updatedBook);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({ queryKey: ["book-revisions", book.id] });
+      void queryClient.invalidateQueries({
+        queryKey: ["book-revisions", book.id],
+      });
     },
   });
 
@@ -404,13 +409,13 @@ function BookSettings({
     mutationFn: (file: File) => uploadBookCover(book.id, file),
     onSuccess: () => {
       bumpCoverVersion();
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
+      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
     },
   });
 
@@ -418,7 +423,9 @@ function BookSettings({
     mutationFn: () => retryBookCover(book.id),
     onSuccess: () => {
       setJobNotice("Cover re-extraction job queued.");
-      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
     },
   });
 
@@ -426,13 +433,13 @@ function BookSettings({
     mutationFn: (url: string) => setBookCoverUrl(book.id, url),
     onSuccess: () => {
       bumpCoverVersion();
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
-      queryClient.invalidateQueries({ queryKey: ["book", book.id] });
+      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
       setCoverUrl("");
     },
   });
@@ -1084,7 +1091,9 @@ function BookSettings({
               </button>
               {book.current_path && (
                 <button
-                  onClick={handleProcess}
+                  onClick={() => {
+                    void handleProcess();
+                  }}
                   disabled={isBusy}
                   title="Save changes and rebuild the EPUB file with current cleaning rules"
                 >

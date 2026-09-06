@@ -64,11 +64,11 @@ export default function SeriesSummaryRow({
     onSuccess: (_, newName) => {
       onSeriesChange?.(newName);
       setEditing(null);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
@@ -78,11 +78,11 @@ export default function SeriesSummaryRow({
       onSeriesChange?.(target);
       setEditing(null);
       setMergeTarget("");
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
@@ -92,11 +92,11 @@ export default function SeriesSummaryRow({
     onSuccess: () => {
       setDraggedBookId(null);
       setDragOverBookId(null);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
     onError: () => {
       setOrderedBooks(books);
@@ -110,11 +110,11 @@ export default function SeriesSummaryRow({
       updateSeriesGenres(series, userGenreTags),
     onSuccess: () => {
       setEditing(null);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
     },
   });
 
@@ -156,6 +156,7 @@ export default function SeriesSummaryRow({
 
     const next = [...orderedBooks];
     const [moved] = next.splice(currentIndex, 1);
+    if (!moved) return;
     next.splice(targetIndex, 0, moved);
     setOrderedBooks(next);
     reorderMutation.mutate(next.map((book) => book.id));
