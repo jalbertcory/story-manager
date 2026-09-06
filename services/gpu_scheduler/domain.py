@@ -37,12 +37,16 @@ class TimeWindow(BaseModel):
         return value
 
 
+def _default_schedule() -> dict[str, list[TimeWindow]]:
+    return {day: [] for day in DAY_NAMES}
+
+
 class SchedulerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     timezone: str = Field(default_factory=_default_timezone)
-    schedule: dict[str, list[TimeWindow]] = Field(default_factory=lambda: {day: [] for day in DAY_NAMES})
+    schedule: dict[str, list[TimeWindow]] = Field(default_factory=_default_schedule)
     stop_timeout_seconds: int = Field(default=10, ge=1, le=120)
     override_mode: Literal["automatic", "available", "unavailable"] = "automatic"
     override_until: datetime | None = None

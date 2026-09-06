@@ -68,7 +68,8 @@ def search_amazon(query: str, *, limit: int = 5) -> list[AmazonCandidate]:
     candidates: list[AmazonCandidate] = []
     seen_asins: set[str] = set()
     for item in soup.select('[data-component-type="s-search-result"][data-asin]'):
-        asin = (item.get("data-asin") or "").strip()
+        raw_asin = item.get("data-asin")
+        asin = raw_asin.strip() if isinstance(raw_asin, str) else ""
         title_element = item.select_one("h2 a span, h2 span")
         link_element = item.select_one("h2 a[href]")
         if not asin or asin in seen_asins or title_element is None:

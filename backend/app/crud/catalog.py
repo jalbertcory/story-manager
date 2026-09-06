@@ -1,14 +1,19 @@
 """Catalog filtering, keyset pagination, and aggregate facets."""
 
-from sqlalchemy import and_, asc, case, cast, desc, exists, func, literal, or_, select, true, union
+from typing import Any, TypedDict
+from collections.abc import Sequence
+
+from sqlalchemy import SQLColumnExpression, and_, asc, case, cast, desc, exists, func, literal, or_, select, true, union
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import TableValuedAlias, Select
 
 from .. import models
-from ..catalog_pagination import seek_condition
+from ..catalog_pagination import CursorValue, seek_condition
 from .series import _series_order_columns
 
 
-def catalog_has_audiobook_expression():
+def catalog_has_audiobook_expression() -> ColumnElement[bool]:
     return or_(
         models.Book.audiobook_enabled.is_(True),
         exists(select(models.ImportedAudiobook.id).where(models.ImportedAudiobook.book_id == models.Book.id)),
@@ -26,8 +31,8 @@ def build_catalog_filter_conditions(
     series: str | None = None,
     universe: int | None = None,
     source: str | None = None,
-):
-    conditions = [models.Book.deleted_at.is_(None)]
+) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = [models.Book.deleted_at.is_(None)]
     if snapshot_max_id is not None:
         conditions.append(models.Book.id <= snapshot_max_id)
     if q and q.strip():
@@ -92,7 +97,7 @@ def build_catalog_filter_conditions(
     return conditions
 
 
-def _catalog_book_sort_expressions(sort_by: str):
+def _catalog_book_sort_expressions(sort_by: str) -> tuple[SQLColumnExpression[Any], ...]:
     primary = {
         "series_index": func.coalesce(models.Book.series_index, 10000),
         "author": func.lower(func.coalesce(models.Book.author, "")),
@@ -106,11 +111,11 @@ def _catalog_book_sort_expressions(sort_by: str):
 async def get_catalog_book_page(
     db: AsyncSession,
     *,
-    conditions,
+    conditions: Sequence[ColumnElement[bool]],
     sort_by: str,
     sort_order: str,
     limit: int,
-    position: list | None,
+    position: Sequence[CursorValue] | None,
 ) -> tuple[list[models.Book], bool]:
     expressions = _catalog_book_sort_expressions(sort_by)
     primary_order = desc(expressions[0]) if sort_order == "desc" else asc(expressions[0])
@@ -122,7 +127,7 @@ async def get_catalog_book_page(
     return books[:limit], len(books) > limit
 
 
-def _catalog_series_sort_expressions(sort_by: str):
+def _catalog_series_sort_expressions(sort_by: str) -> tuple[SQLColumnExpression[Any], ...]:
     primary = {
         "author": func.min(func.lower(func.coalesce(models.Book.author, ""))),
         "word_count": func.sum(func.coalesce(models.Book.current_word_count, 0)),
@@ -135,15 +140,15 @@ def _catalog_series_sort_expressions(sort_by: str):
 async def get_catalog_series_page(
     db: AsyncSession,
     *,
-    conditions,
+    conditions: Sequence[ColumnElement[bool]],
     sort_by: str,
     sort_order: str,
     limit: int,
-    position: list | None,
-) -> tuple[list[models.Book], bool, list]:
+    position: Sequence[CursorValue] | None,
+) -> tuple[list[models.Book], bool, list[CursorValue]]:
     expressions = _catalog_series_sort_expressions(sort_by)
     primary_order = desc(expressions[0]) if sort_order == "desc" else asc(expressions[0])
-    groups = (
+    groups: Select[tuple[str | None, Any, Any, Any]] = (
         select(
             models.Book.series.label("series"),
             expressions[0].label("sort_value"),
@@ -167,6 +172,8 @@ async def get_catalog_series_page(
     )
     by_series: dict[str, list[models.Book]] = {name: [] for name in names}
     for book in book_result.scalars().all():
+        # The IN predicate above excludes NULL series.
+        assert book.series is not None
         by_series[book.series].append(book)
     books = [book for name in names for book in by_series[name]]
     last = page_rows[-1]
@@ -178,13 +185,35 @@ async def get_catalog_snapshot_max_id(db: AsyncSession) -> int:
     return int(result.scalar_one())
 
 
-async def get_catalog_total_count(db: AsyncSession, *, conditions, view: str) -> int:
+async def get_catalog_total_count(db: AsyncSession, *, conditions: Sequence[ColumnElement[bool]], view: str) -> int:
     expression = func.count(func.distinct(models.Book.series)) if view == "series" else func.count(models.Book.id)
     result = await db.execute(select(expression).where(*conditions))
     return int(result.scalar_one() or 0)
 
 
-async def get_catalog_facets(db: AsyncSession, *, conditions, genre_conditions=None) -> dict:
+class GenreFacet(TypedDict):
+    name: str
+    count: int
+
+
+class CatalogFacets(TypedDict):
+    series: int
+    standalone: int
+    web: int
+    audiobook_available: int
+    audiobook_missing: int
+    missing_series: int
+    refreshing: int
+    refresh_attention: int
+    genres: list[GenreFacet]
+
+
+async def get_catalog_facets(
+    db: AsyncSession,
+    *,
+    conditions: Sequence[ColumnElement[bool]],
+    genre_conditions: Sequence[ColumnElement[bool]] | None = None,
+) -> CatalogFacets:
     has_audio = catalog_has_audiobook_expression()
     series_condition = and_(models.Book.series.is_not(None), models.Book.download_status.is_(None))
     standalone_condition = and_(
@@ -222,8 +251,8 @@ async def get_catalog_facets(db: AsyncSession, *, conditions, genre_conditions=N
         )
     ).one()
 
-    def tag_values(column):
-        if db.bind.dialect.name == "postgresql":
+    def tag_values(column: SQLColumnExpression[list[str] | None]) -> TableValuedAlias:
+        if db.get_bind().dialect.name == "postgresql":
             from sqlalchemy.dialects.postgresql import JSONB
 
             return func.jsonb_array_elements_text(func.coalesce(cast(column, JSONB), literal([], type_=JSONB))).table_valued(

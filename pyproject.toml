@@ -67,6 +67,12 @@ dev = [
     "flake8==7.3.0",
     "black==26.3.1",
     "autoflake==2.3.3",
+    "mypy==2.3.1",
+    "types-requests==2.33.0.20260712",
+    "types-PyYAML==6.0.12.20260815",
+    "types-beautifulsoup4==4.12.0.20250516",
+    "types-docker==7.2.0.20260827",
+    "lxml-stubs==0.5.1",
 ]
 
 [tool.pytest.ini_options]
@@ -83,3 +89,24 @@ target-version = ["py313"]
 
 [tool.flake8]
 max-line-length = 127
+
+[tool.mypy]
+python_version = "3.13"
+files = ["backend/app", "services"]
+exclude = ["(^|/)(tests|\\.venv)/"]
+strict = true
+show_error_codes = true
+
+# These upstream libraries do not publish typing metadata.
+[[tool.mypy.overrides]]
+module = ["ebooklib.*", "fanficfare.*", "apscheduler.*"]
+ignore_missing_imports = true
+
+# Model runtimes live in isolated service environments, not the main dev/CI
+# environment. Only their imports are exempt; our adapter code is checked.
+[[tool.mypy.overrides]]
+module = [
+    "torch.*", "transformers.*", "soundfile.*", "whisperx.*",
+    "pydub.*", "qwen_tts.*", "peft.*", "omnivoice.*", "mlx.*", "mlx_audio.*",
+]
+ignore_missing_imports = true

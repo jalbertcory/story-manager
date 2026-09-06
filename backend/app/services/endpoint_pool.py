@@ -10,6 +10,38 @@ from typing import Any, Awaitable, Callable, Generic, TypeVar
 
 from ..models import AudiobookSettings
 
+
+class EndpointSettings(SimpleNamespace):
+    """Typed projection of persisted settings for one provider or endpoint."""
+
+    id: int
+    llm_provider: str | None
+    llm_api_key: str | None
+    llm_base_url: str | None
+    llm_model: str | None
+    tts_provider: str | None
+    tts_api_key: str | None
+    tts_base_url: str | None
+    tts_model: str | None
+    tts_default_voice: str | None
+    tts_max_block_chars: int
+    tts_voice_similarity_threshold: float
+    tts_quality_attempts: int
+    transcription_provider: str | None
+    transcription_api_key: str | None
+    transcription_base_url: str | None
+    transcription_model: str | None
+    transcription_language: str | None
+    llm_endpoints: list[dict[str, Any]] | None
+    tts_endpoints: list[dict[str, Any]] | None
+    transcription_endpoints: list[dict[str, Any]] | None
+    roster_prompt_template: str | None
+    diarization_prompt_template: str | None
+
+
+ProviderSettings = AudiobookSettings | EndpointSettings
+
+
 COOLDOWN_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
@@ -37,7 +69,7 @@ class EndpointProbeResult(Generic[T]):
 _cooldowns: dict[tuple[str, str], float] = {}
 
 
-def _legacy_endpoint(settings: AudiobookSettings, capability: str) -> dict[str, Any]:
+def _legacy_endpoint(settings: ProviderSettings, capability: str) -> dict[str, Any]:
     prefix = "transcription" if capability == "transcription" else capability
     provider_default = {"llm": "stub", "tts": "stub", "transcription": "none"}[capability]
     endpoint: dict[str, Any] = {
@@ -55,7 +87,7 @@ def _legacy_endpoint(settings: AudiobookSettings, capability: str) -> dict[str, 
     return endpoint
 
 
-def configured_endpoints(settings: AudiobookSettings | None, capability: str) -> list[dict[str, Any]]:
+def configured_endpoints(settings: ProviderSettings | None, capability: str) -> list[dict[str, Any]]:
     """Return endpoints in priority order, falling back to legacy columns."""
     if settings is None:
         return []
@@ -66,7 +98,7 @@ def configured_endpoints(settings: AudiobookSettings | None, capability: str) ->
     return [dict(endpoint) for endpoint in stored if isinstance(endpoint, dict)]
 
 
-def configured_providers(settings: AudiobookSettings | None, capability: str) -> list[str]:
+def configured_providers(settings: ProviderSettings | None, capability: str) -> list[str]:
     """Return unique configured providers in endpoint priority order."""
     return list(
         dict.fromkeys(
@@ -81,7 +113,7 @@ def settings_for_provider(
     settings: AudiobookSettings,
     capability: str,
     provider: str,
-) -> SimpleNamespace:
+) -> EndpointSettings:
     """Restrict routing to endpoints owned by one persisted provider."""
     normalized = provider.strip().lower()
     endpoints = [
@@ -103,10 +135,10 @@ def settings_for_provider(
         values["tts_default_voice"] = primary.get("default_voice")
     elif capability == "transcription":
         values["transcription_language"] = primary.get("language")
-    return SimpleNamespace(**values)
+    return EndpointSettings(**values)
 
 
-def primary_provider(settings: AudiobookSettings | None, capability: str, default: str) -> str:
+def primary_provider(settings: ProviderSettings | None, capability: str, default: str) -> str:
     endpoints = configured_endpoints(settings, capability)
     provider = endpoints[0].get("provider") if endpoints else default
     return str(provider or default).strip().lower()
@@ -120,10 +152,10 @@ def _endpoint_key(capability: str, endpoint: dict[str, Any]) -> tuple[str, str]:
 
 
 def _endpoint_settings(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     capability: str,
     endpoint: dict[str, Any],
-) -> SimpleNamespace:
+) -> EndpointSettings:
     """Expose one generic endpoint through the legacy provider field names."""
     if hasattr(settings, "__table__"):
         values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
@@ -136,7 +168,7 @@ def _endpoint_settings(
         values["tts_default_voice"] = endpoint.get("default_voice")
     elif capability == "transcription":
         values["transcription_language"] = endpoint.get("language")
-    return SimpleNamespace(**values)
+    return EndpointSettings(**values)
 
 
 def cooldown_remaining(capability: str, endpoint: dict[str, Any]) -> float:
@@ -171,9 +203,9 @@ def _error_detail(exc: Exception) -> str:
 
 
 async def probe_endpoints(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     capability: str,
-    attempt: Callable[[Any], Awaitable[T]],
+    attempt: Callable[[EndpointSettings], Awaitable[T]],
 ) -> list[EndpointProbeResult[T]]:
     """Test every endpoint, including endpoints currently in cooldown."""
     results: list[EndpointProbeResult[T]] = []
@@ -223,9 +255,9 @@ async def probe_endpoints(
 
 
 async def route_request(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     capability: str,
-    attempt: Callable[[Any], Awaitable[T]],
+    attempt: Callable[[EndpointSettings], Awaitable[T]],
 ) -> RoutedResult[T]:
     """Try available endpoints in priority order and cool failed hosts down."""
     endpoints = configured_endpoints(settings, capability)
@@ -279,7 +311,7 @@ async def route_request(
 
 
 async def _record_endpoint_attempt(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     capability: str,
     endpoint: dict[str, Any],
     **measurement: Any,

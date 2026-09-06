@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..metadata_sync import MetadataSuggestion
+    from .evidence import SearchIdentity
 
 from ...models import AudiobookSettings, Book
 from ..audiobook_llm import _call_llm
@@ -47,7 +51,7 @@ def _llm_available(settings: AudiobookSettings | None) -> bool:
     return False
 
 
-def _needs_arbitration(candidates: list[Any]) -> bool:
+def _needs_arbitration(candidates: list[MetadataSuggestion]) -> bool:
     matched = [candidate for candidate in candidates if candidate.matched]
     if not matched:
         return False
@@ -70,10 +74,12 @@ def _parse_json(raw: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-async def refine_unmatched_search_identity(identity: Any, settings: AudiobookSettings | None) -> dict[str, Any] | None:
+async def refine_unmatched_search_identity(
+    identity: SearchIdentity, settings: AudiobookSettings | None
+) -> dict[str, Any] | None:
     """Derive one conservative retry query when all provider searches failed."""
 
-    if not _llm_available(settings) or identity.used_llm or not identity.opening_excerpt:
+    if settings is None or not _llm_available(settings) or identity.used_llm or not identity.opening_excerpt:
         return None
     prompt = f"""The initial Google Books and Open Library searches returned no plausible candidate. Derive the exact
 published title and primary author for one retry from explicit title-page, copyright, and ISBN context. Remove filename,
@@ -113,13 +119,13 @@ Opening-page evidence:
 
 async def arbitrate_candidate_suggestions(
     book: Book,
-    identity: Any,
-    candidates: list[Any],
+    identity: SearchIdentity,
+    candidates: list[MetadataSuggestion],
     settings: AudiobookSettings | None,
-) -> list[Any]:
+) -> list[MetadataSuggestion]:
     """Re-rank a close candidate set without overriding hard contradictions."""
 
-    if not _llm_available(settings) or not _needs_arbitration(candidates):
+    if settings is None or not _llm_available(settings) or not _needs_arbitration(candidates):
         return candidates
 
     candidate_payload = [
@@ -186,7 +192,7 @@ Candidates:
             candidates[0].match_confidence = min(candidates[0].match_confidence, 0.89)
         return candidates
 
-    selected = candidates[selected_payload["index"]]
+    selected = candidates[selected_index]
     if not exact_match or confidence < 0.9:
         return candidates
 

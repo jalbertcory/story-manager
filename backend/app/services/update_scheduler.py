@@ -7,6 +7,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.job import Job
 
 from .. import crud, models
 from ..database import SessionLocal
@@ -39,18 +40,18 @@ def get_scheduler() -> AsyncIOScheduler:
 
 
 def is_scheduler_running() -> bool:
-    return _scheduler.running
+    return bool(_scheduler.running)
 
 
 def get_metadata_schedule_label() -> str:
     return f"Check for stale metadata every {METADATA_STALE_SCAN_INTERVAL_HOURS} hours"
 
 
-def get_scheduled_job():
+def get_scheduled_job() -> Job | None:
     return _scheduler.get_job(WEB_NOVEL_UPDATE_JOB_ID)
 
 
-def get_metadata_scheduled_job():
+def get_metadata_scheduled_job() -> Job | None:
     return _scheduler.get_job(METADATA_STALE_SCAN_JOB_ID)
 
 
@@ -66,13 +67,19 @@ def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+def _daily_schedule(settings: Optional[models.SchedulerSettings]) -> tuple[int, int, str] | None:
+    if settings is None:
+        return None
+    hour = settings.web_novel_schedule_hour
+    minute = settings.web_novel_schedule_minute
+    zone = settings.web_novel_schedule_timezone
+    if hour is None or minute is None or not zone:
+        return None
+    return hour, minute, zone
+
+
 def has_daily_schedule(settings: Optional[models.SchedulerSettings]) -> bool:
-    return bool(
-        settings is not None
-        and settings.web_novel_schedule_hour is not None
-        and settings.web_novel_schedule_minute is not None
-        and settings.web_novel_schedule_timezone
-    )
+    return _daily_schedule(settings) is not None
 
 
 def get_schedule_mode(settings: Optional[models.SchedulerSettings]) -> str:
@@ -80,15 +87,15 @@ def get_schedule_mode(settings: Optional[models.SchedulerSettings]) -> str:
 
 
 def get_schedule_time_local(settings: Optional[models.SchedulerSettings]) -> Optional[str]:
-    if not has_daily_schedule(settings):
+    schedule = _daily_schedule(settings)
+    if schedule is None:
         return None
-    return f"{settings.web_novel_schedule_hour:02d}:{settings.web_novel_schedule_minute:02d}"
+    return f"{schedule[0]:02d}:{schedule[1]:02d}"
 
 
 def get_schedule_timezone(settings: Optional[models.SchedulerSettings]) -> Optional[str]:
-    if not has_daily_schedule(settings):
-        return None
-    return settings.web_novel_schedule_timezone
+    schedule = _daily_schedule(settings)
+    return schedule[2] if schedule is not None else None
 
 
 def _format_hour_minute(hour: int, minute: int) -> str:
@@ -98,11 +105,10 @@ def _format_hour_minute(hour: int, minute: int) -> str:
 
 
 def get_schedule_label(settings: Optional[models.SchedulerSettings] = None) -> str:
-    if has_daily_schedule(settings):
-        return (
-            f"Daily at {_format_hour_minute(settings.web_novel_schedule_hour, settings.web_novel_schedule_minute)} "
-            f"({settings.web_novel_schedule_timezone})"
-        )
+    schedule = _daily_schedule(settings)
+    if schedule is not None:
+        hour, minute, zone = schedule
+        return f"Daily at {_format_hour_minute(hour, minute)} ({zone})"
     return f"Every {WEB_NOVEL_UPDATE_INTERVAL_HOURS} hours"
 
 
@@ -157,13 +163,9 @@ def get_next_run_time_for_task(
     now_utc = _as_utc(now) or datetime.now(timezone.utc)
     if task is not None and task.status == "interrupted" and task.completed_books < task.total_books:
         return now_utc + OVERDUE_RUN_DELAY
-    if has_daily_schedule(schedule_settings):
-        return calculate_next_daily_run_time(
-            schedule_settings.web_novel_schedule_hour,
-            schedule_settings.web_novel_schedule_minute,
-            schedule_settings.web_novel_schedule_timezone,
-            now=now_utc,
-        )
+    schedule = _daily_schedule(schedule_settings)
+    if schedule is not None:
+        return calculate_next_daily_run_time(*schedule, now=now_utc)
     return calculate_next_run_time(get_last_run_anchor(task), now=now_utc)
 
 

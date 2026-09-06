@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 import logging
 import filecmp
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from collections.abc import Sequence
+from typing import TypeAlias, TypedDict
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import ebooklib
 from ebooklib import epub
@@ -10,6 +16,23 @@ import re
 
 from . import models
 from .services.epub_utils import collect_epub_book_styled_classes, normalize_xhtml_prose_blocks
+
+TocLeaf: TypeAlias = epub.Link | epub.Section | epub.EpubItem
+TocNode: TypeAlias = "TocLeaf | tuple[TocLeaf, TocItems]"
+TocItems: TypeAlias = list[TocNode] | tuple[TocNode, ...]
+SpineEntry: TypeAlias = str | epub.EpubItem | tuple[str | epub.EpubItem, str]
+
+
+class EpubChapter(TypedDict):
+    filename: str
+    title: str
+    content: str
+
+
+class EpubPreview(TypedDict):
+    elements_removed: int
+    estimated_word_count: int
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,24 +45,28 @@ def _files_match(left: Path, right: Path) -> bool:
     return filecmp.cmp(str(left), str(right), shallow=False)
 
 
-def _spine_entry_name(book: epub.EpubBook, spine_entry) -> str | None:
+def _spine_entry_name(book: epub.EpubBook, spine_entry: SpineEntry) -> str | None:
     item_ref = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
     if hasattr(item_ref, "get_name"):
-        return item_ref.get_name()
+        name = item_ref.get_name()
+        return name if isinstance(name, str) else None
     if isinstance(item_ref, str):
         item = book.get_item_with_id(item_ref)
-        return item.get_name() if item is not None else None
+        name = item.get_name() if item is not None else None
+        return name if isinstance(name, str) else None
     return None
 
 
-def _toc_item_href(item) -> str | None:
+def _toc_item_href(item: TocLeaf) -> str | None:
     if isinstance(item, epub.Link):
-        return item.href.split("#")[0]
+        href = item.href
+        return href.split("#")[0] if isinstance(href, str) else None
     if isinstance(item, epub.Section):
         href = getattr(item, "href", None)
-        return href.split("#")[0] if href else None
+        return href.split("#")[0] if isinstance(href, str) and href else None
     if hasattr(item, "get_name"):
-        return item.get_name().split("#")[0]
+        name = item.get_name()
+        return name.split("#")[0] if isinstance(name, str) else None
     return None
 
 
@@ -52,17 +79,17 @@ def _toc_link_with_uid(item: epub.Link, uid_counter: list[int]) -> epub.Link:
     return epub.Link(item.href, item.title, f"toc-{uid_counter[0]}-{uid_slug}")
 
 
-def _normalize_toc_item(item, uid_counter: list[int]):
+def _normalize_toc_item(item: TocLeaf, uid_counter: list[int]) -> TocLeaf:
     if isinstance(item, epub.Link):
         return _toc_link_with_uid(item, uid_counter)
     return item
 
 
-def _filter_toc(items, chapters_to_remove: set[str], uid_counter: list[int] | None = None):
+def _filter_toc(items: TocItems, chapters_to_remove: set[str], uid_counter: list[int] | None = None) -> TocItems:
     if uid_counter is None:
         uid_counter = [0]
 
-    filtered = []
+    filtered: list[TocNode] = []
     for item in items:
         if isinstance(item, tuple):
             section, children = item
@@ -81,7 +108,9 @@ def _filter_toc(items, chapters_to_remove: set[str], uid_counter: list[int] | No
     return tuple(filtered) if isinstance(items, tuple) else filtered
 
 
-def _merge_cleaning_rules(book, configs) -> tuple[list[str], list[str], list[str]]:
+def _merge_cleaning_rules(
+    book: models.Book, configs: Sequence[models.CleaningConfig]
+) -> tuple[list[str], list[str], list[str]]:
     chapter_selectors: list[str] = []
     content_selectors: list[str] = []
     for cfg in configs:
@@ -92,19 +121,21 @@ def _merge_cleaning_rules(book, configs) -> tuple[list[str], list[str], list[str
     return removed_chapters, content_selectors, chapter_selectors
 
 
-def _match_cleaning_configs(book, cleaning_configs) -> list:
+def _match_cleaning_configs(
+    book: models.Book, cleaning_configs: Sequence[models.CleaningConfig]
+) -> list[models.CleaningConfig]:
     if not book.source_url:
         return []
     return [cfg for cfg in cleaning_configs if re.search(cfg.url_pattern, str(book.source_url))]
 
 
-def get_chapters(epub_path: str):
+def get_chapters(epub_path: str) -> list[EpubChapter]:
     book = epub.read_epub(epub_path)
 
     # Build filename -> title map from the TOC
     title_map: dict[str, str] = {}
 
-    def _walk_toc(items):
+    def _walk_toc(items: TocItems) -> None:
         for item in items:
             if isinstance(item, epub.Link):
                 href = item.href.split("#")[0]
@@ -120,7 +151,7 @@ def get_chapters(epub_path: str):
 
     _walk_toc(book.toc)
 
-    chapters = []
+    chapters: list[EpubChapter] = []
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         filename = item.get_name()
         title = title_map.get(filename)
@@ -230,7 +261,7 @@ def preview_epub(
     removed_chapters: list[str],
     content_selectors: list[str],
     chapter_selectors: list[str] = [],
-) -> dict:
+) -> EpubPreview:
     book = epub.read_epub(immutable_path)
     chapters_to_remove = set(removed_chapters)
     if chapter_selectors:
@@ -252,7 +283,9 @@ def preview_epub(
     return {"elements_removed": elements_removed, "estimated_word_count": estimated_word_count}
 
 
-async def apply_book_cleaning(book, db, force: bool = False, cleaning_configs: list | None = None) -> bool:
+async def apply_book_cleaning(
+    book: models.Book, db: AsyncSession, force: bool = False, cleaning_configs: list[models.CleaningConfig] | None = None
+) -> bool:
     """Apply all cleaning rules (site-wide configs + per-book settings) to a book.
 
     Looks up all matching CleaningConfigs for the book's source URL, merges their

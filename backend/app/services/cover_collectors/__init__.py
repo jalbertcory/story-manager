@@ -2,13 +2,22 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 from . import royalroad, scribblehub
 
 logger = logging.getLogger(__name__)
 
-COLLECTORS = (
+
+class _CoverCollector(Protocol):
+    __name__: str
+
+    def supports(self, source_url: str) -> bool: ...
+
+    async def collect(self, source_url: str, book_id: int) -> Optional[Path]: ...
+
+
+COLLECTORS: tuple[_CoverCollector, ...] = (
     royalroad,
     scribblehub,
 )

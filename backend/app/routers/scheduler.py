@@ -4,9 +4,10 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from apscheduler.job import Job
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud, schemas
+from .. import crud, models, schemas
 from ..database import get_db
 from ..services import update_scheduler
 from ..services.processing_queue import queue_processing_job
@@ -17,9 +18,9 @@ router = APIRouter()
 
 
 def _build_scheduler_job_status(
-    latest_task: Optional[schemas.UpdateTask],
-    schedule_settings,
-    job,
+    latest_task: Optional[models.UpdateTask],
+    schedule_settings: models.SchedulerSettings | None,
+    job: Job | None,
 ) -> schemas.SchedulerJobStatus:
     next_run_at = job.next_run_time if job is not None else None
     return schemas.SchedulerJobStatus(
@@ -38,12 +39,12 @@ def _build_scheduler_job_status(
 
 
 @router.get("/api/scheduler/status", response_model=Optional[schemas.UpdateTask])
-async def get_scheduler_status(db: AsyncSession = Depends(get_db)):
+async def get_scheduler_status(db: AsyncSession = Depends(get_db)) -> models.UpdateTask | None:
     return await crud.get_latest_update_task(db)
 
 
 @router.get("/api/scheduler/job", response_model=schemas.SchedulerJobStatus)
-async def get_scheduler_job_status(db: AsyncSession = Depends(get_db)):
+async def get_scheduler_job_status(db: AsyncSession = Depends(get_db)) -> schemas.SchedulerJobStatus:
     latest_task = await crud.get_latest_update_task(db)
     schedule_settings = await crud.get_scheduler_settings(db)
     job = update_scheduler.get_scheduled_job()
@@ -51,7 +52,9 @@ async def get_scheduler_job_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/api/scheduler/config", response_model=schemas.SchedulerJobStatus)
-async def update_scheduler_config(config: schemas.SchedulerConfigUpdate, db: AsyncSession = Depends(get_db)):
+async def update_scheduler_config(
+    config: schemas.SchedulerConfigUpdate, db: AsyncSession = Depends(get_db)
+) -> schemas.SchedulerJobStatus:
     hour_text, minute_text = config.time_local.split(":")
     schedule_settings = await crud.upsert_scheduler_settings(
         db,
@@ -65,8 +68,8 @@ async def update_scheduler_config(config: schemas.SchedulerConfigUpdate, db: Asy
     return _build_scheduler_job_status(latest_task, schedule_settings, job)
 
 
-@router.post("/api/scheduler/trigger", status_code=202)
-async def trigger_scheduler(db: AsyncSession = Depends(get_db)):
+@router.post("/api/scheduler/trigger", status_code=202, response_model=None)
+async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     job = await queue_processing_job(
         db=db,
         job_type="refresh_all",
@@ -78,25 +81,31 @@ async def trigger_scheduler(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/api/scheduler/history", response_model=List[schemas.UpdateTask])
-async def get_scheduler_history(limit: int = 20, offset: int = 0, db: AsyncSession = Depends(get_db)):
+async def get_scheduler_history(
+    limit: int = 20, offset: int = 0, db: AsyncSession = Depends(get_db)
+) -> list[models.UpdateTask]:
     return await crud.get_update_tasks(db, limit=limit, offset=offset)
 
 
 @router.get("/api/scheduler/history/{task_id}/logs", response_model=List[schemas.BookLogWithTitle])
-async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)):
+async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)) -> list[schemas.BookLogWithTitle]:
     task, rows = await crud.get_book_logs_for_task(db, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    return [
-        schemas.BookLogWithTitle(
-            id=log.id,
-            book_id=log.book_id,
-            book_title=title,
-            entry_type=log.entry_type,
-            previous_chapter_count=log.previous_chapter_count,
-            new_chapter_count=log.new_chapter_count,
-            words_added=log.words_added,
-            timestamp=log.timestamp,
+    assert rows is not None
+    results = []
+    for log, title in rows:
+        assert log.timestamp is not None  # Persisted logs receive the database timestamp default.
+        results.append(
+            schemas.BookLogWithTitle(
+                id=log.id,
+                book_id=log.book_id,
+                book_title=title or "",
+                entry_type=log.entry_type,
+                previous_chapter_count=log.previous_chapter_count,
+                new_chapter_count=log.new_chapter_count,
+                words_added=log.words_added,
+                timestamp=log.timestamp,
+            )
         )
-        for log, title in rows
-    ]
+    return results

@@ -9,10 +9,15 @@ import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from spacy.language import Language
 
 import ebooklib
 from ebooklib import epub
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
@@ -36,7 +41,7 @@ from .audiobook_text import SpeechSegment, split_speech_segments
 
 logger = logging.getLogger(__name__)
 
-_NLP = None  # lazy-load spaCy model to avoid startup cost
+_NLP: Language | None = None  # lazy-load spaCy model to avoid startup cost
 _SKIP_TEXT_ANCESTORS = {"script", "style", "head", "title", "svg", "math", "audio", "video"}
 _INDEPENDENT_CHAPTER_TITLE_RE = re.compile(
     r"^(?:chapter(?:\s+|$)|prologue\b|epilogue\b|foreword\b|afterword\b|introduction\b|appendix\b|\d+\s*$)",
@@ -44,7 +49,7 @@ _INDEPENDENT_CHAPTER_TITLE_RE = re.compile(
 )
 
 
-def _get_nlp():
+def _get_nlp() -> Language:
     global _NLP
     if _NLP is None:
         import spacy
@@ -97,13 +102,14 @@ def _tokenize_speech_units(
     return units, ending_quote_state
 
 
-def _span_for_sentence(span_id: str, text: str):
+def _span_for_sentence(span_id: str, text: str) -> Tag:
     span = BeautifulSoup(f'<span id="{span_id}"></span>', "html.parser").find("span")
+    assert isinstance(span, Tag)
     span.string = text
     return span
 
 
-def _replace_text_node(text_node: NavigableString, replacement_nodes: list) -> None:
+def _replace_text_node(text_node: NavigableString, replacement_nodes: list[Tag | NavigableString]) -> None:
     first, *rest = replacement_nodes
     text_node.replace_with(first)
     previous = first
@@ -121,7 +127,7 @@ def _should_skip_text_node(text_node: NavigableString) -> bool:
     return False
 
 
-def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
+def _ensure_toc_link_ids(toc_items: Sequence[object], prefix: str = "toc") -> None:
     for index, item in enumerate(toc_items or []):
         uid = f"{prefix}_{index}"
         if isinstance(item, epub.Link) and not item.uid:
@@ -140,6 +146,14 @@ def _stable_sentence_id(chapter_key: str, text: str, occurrence: int) -> str:
     return f"{chapter_key}-{digest}-{occurrence}"
 
 
+class SentenceData(TypedDict):
+    html_element_id: str
+    sequence_order: int
+    original_text: str
+    tagged_text: str
+    status: str
+
+
 def _inject_spans_into_text_node(
     text_node: NavigableString,
     chapter_key: str,
@@ -147,12 +161,12 @@ def _inject_spans_into_text_node(
     occurrences: Counter[str],
     existing_ids: list[str] | None = None,
     quote_state: str | None = None,
-) -> tuple[int, list[dict], str | None]:
+) -> tuple[int, list[SentenceData], str | None]:
     """Wrap one text node's sentences without disturbing surrounding markup.
 
     Returns (next_sequence_number, list_of_sentence_dicts).
     """
-    sentences_data = []
+    sentences_data: list[SentenceData] = []
     seq = start_seq
 
     raw_text = str(text_node)
@@ -167,7 +181,7 @@ def _inject_spans_into_text_node(
     leading_whitespace = raw_text[: len(raw_text) - len(raw_text.lstrip())]
     trailing_start = len(raw_text.rstrip())
     trailing_whitespace = raw_text[trailing_start:]
-    replacement_nodes: list = []
+    replacement_nodes: list[Tag | NavigableString] = []
     if leading_whitespace:
         replacement_nodes.append(NavigableString(leading_whitespace))
 
@@ -207,10 +221,10 @@ def _source_content_hash(soup: BeautifulSoup) -> str:
     return hashlib.sha256(str(soup).encode("utf-8")).hexdigest()
 
 
-def _toc_title_map(toc_items) -> dict[str, str]:
+def _toc_title_map(toc_items: Sequence[object]) -> dict[str, str]:
     titles: dict[str, str] = {}
 
-    def visit(items) -> None:
+    def visit(items: Sequence[object]) -> None:
         for item in items or []:
             if isinstance(item, (tuple, list)):
                 if item:
@@ -229,7 +243,7 @@ def _toc_title_map(toc_items) -> dict[str, str]:
 
 
 def _chapter_title(
-    item,
+    item: epub.EpubHtml,
     soup: BeautifulSoup,
     chapter_number: int,
     toc_titles: dict[str, str] | None = None,
@@ -284,10 +298,12 @@ def _chapter_artifact_paths(chapter: AudiobookChapter, sentences: list[Audiobook
 
 async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     """Diff the current EPUB into stable chapters and publish its text rendition."""
-    book: Book = await db.get(Book, book_id)
+    book = await db.get(Book, book_id)
     if book is None:
         raise ValueError(f"Book {book_id} not found")
 
+    if not book.current_path:
+        raise ValueError(f"Book {book_id} has no EPUB path")
     epub_path = (LIBRARY_PATH.parent / book.current_path).resolve()
     ingested_content_version = book.content_version or 1
     logger.info("Ingesting EPUB for book %s from %s", book_id, epub_path)
@@ -315,9 +331,9 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         for chapter in existing_chapters
     }
     by_hash: dict[str, list[AudiobookChapter]] = {}
-    for chapter in existing_chapters:
-        if chapter.source_content_hash:
-            by_hash.setdefault(chapter.source_content_hash, []).append(chapter)
+    for existing_chapter in existing_chapters:
+        if existing_chapter.source_content_hash:
+            by_hash.setdefault(existing_chapter.source_content_hash, []).append(existing_chapter)
 
     # Collect spine items in order
     spine_items = []
@@ -406,7 +422,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         key = chapter.stable_chapter_key or stable_chapter_key(href)
         existing_ids = [sentence.html_element_id for sentence in previous_sentences] if unchanged else None
 
-        chapter_sentences: list[dict] = []
+        chapter_sentences: list[SentenceData] = []
         seq = 0
         occurrences: Counter[str] = Counter()
         quote_state: str | None = None

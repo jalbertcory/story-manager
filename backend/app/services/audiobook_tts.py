@@ -11,19 +11,22 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from typing import cast
+from collections.abc import Callable
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence, AudiobookSettings
+from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
 from .audiobook_text import split_speech_segments
-from .endpoint_pool import settings_for_provider
+from .endpoint_pool import ProviderSettings, settings_for_provider
 from .tts_providers import (
     DEFAULT_VOICE_PROMPT,
     TTSRequest,
     TTSResult,
+    DesignedVoice,
     design_omnivoice_voice,
     materialize_qwen_preset_voice,
     synthesize_speech_batch,
@@ -97,7 +100,7 @@ _VOICE_RESONANCES = (
 async def _book_tts_settings(
     db: AsyncSession,
     book_id: int,
-) -> AudiobookSettings | None:
+) -> ProviderSettings | None:
     """Lock a book/series to one provider and expose only its endpoints."""
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = await crud.audiobook.lock_book_tts_provider(
@@ -121,14 +124,14 @@ def _relative_path(full_path: Path) -> str:
 
 
 def _get_mp3_duration_ms(path: Path) -> int:
-    from mutagen.mp3 import MP3
+    from mutagen.mp3 import MP3, MPEGInfo
 
-    audio = MP3(str(path))
-    return round(audio.info.length * 1000)
+    audio = cast(Callable[[str], MP3], MP3)(str(path))
+    return round(cast(MPEGInfo, audio.info).length * 1000)
 
 
 def _voice_id_for_provider(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     character: AudiobookCharacter,
 ) -> str | None:
     if character.tts_voice_provider != tts_provider_name(settings):
@@ -171,11 +174,11 @@ def _compatible_qwen_presets(character: AudiobookCharacter) -> list[str]:
 
 
 async def _materialize_distinct_qwen_preset(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     character: AudiobookCharacter,
     voice_prompt: str,
     avoid_voice_ids: list[str],
-):
+) -> DesignedVoice:
     last_conflict: httpx.HTTPStatusError | None = None
     for preset_voice_id in _compatible_qwen_presets(character):
         try:
@@ -197,7 +200,7 @@ async def _materialize_distinct_qwen_preset(
 
 
 async def _ensure_character_voice(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     character: AudiobookCharacter | None,
     db: AsyncSession,
 ) -> None:
@@ -267,7 +270,7 @@ async def _ensure_character_voice(
 
 
 async def _generate_sentence_clip(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     book_id: int,
     sentence: AudiobookSentence,
     db: AsyncSession,
@@ -292,7 +295,7 @@ async def _generate_sentence_clip(
 
 
 async def _build_sentence_request(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     sentence: AudiobookSentence,
     db: AsyncSession,
 ) -> TTSRequest:
@@ -302,7 +305,7 @@ async def _build_sentence_request(
 
 
 def _request_for_character(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     character: AudiobookCharacter | None,
     text: str,
 ) -> TTSRequest:
@@ -320,7 +323,7 @@ def _request_for_character(
 
 
 async def _build_sentence_requests(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     sentence: AudiobookSentence,
     db: AsyncSession,
 ) -> list[TTSRequest]:
@@ -415,7 +418,7 @@ async def _concatenate_mp3_parts(parts: list[bytes], sentence_id: int) -> bytes:
 
 
 async def _synthesize_with_retries(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     sentence_id: int,
     request: TTSRequest,
 ) -> TTSResult:
@@ -450,7 +453,7 @@ async def _synthesize_with_retries(
 
 
 async def _synthesize_batch_with_retries(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     sentence_id: int,
     requests: list[TTSRequest],
 ) -> list[TTSResult]:
@@ -518,7 +521,7 @@ async def _persist_sentence_audio(
 
 
 async def _generate_sentence_clips(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     book_id: int,
     sentences: list[AudiobookSentence],
     db: AsyncSession,
@@ -541,7 +544,7 @@ async def _generate_sentence_clips(
                 await _generate_sentence_clip(settings, book_id, sentence, db, requests)
                 block_index += 1
             else:
-                stable_blocks = []
+                stable_blocks: list[list[tuple[AudiobookSentence, list[TTSRequest]]]] = []
                 while block_index < len(blocks) and len(stable_blocks) < TTS_BATCH_SIZE:
                     candidate = blocks[block_index]
                     if len(candidate) == 1 or len(candidate[0][1]) != 1:
@@ -606,7 +609,7 @@ def _generation_blocks(
 
 
 async def _generate_stable_block(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     book_id: int,
     sentences: list[AudiobookSentence],
     prototype: TTSRequest,
@@ -621,7 +624,7 @@ async def _generate_stable_block(
 
 
 async def _generate_stable_blocks(
-    settings: AudiobookSettings | None,
+    settings: ProviderSettings | None,
     book_id: int,
     blocks: list[list[tuple[AudiobookSentence, list[TTSRequest]]]],
     db: AsyncSession,

@@ -3,7 +3,7 @@ from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,8 +26,10 @@ engine = create_async_engine(DATABASE_URL)
 # This is the factory for our database sessions.
 SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
+
 # Create a base class for our declarative models.
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 # Dependency to get a DB session.

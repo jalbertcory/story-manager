@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import cast, Iterable, Any
 from uuid import uuid4
 
 from sqlalchemy import and_, case, desc, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.engine import CursorResult
 
 from ..lifecycle import PROCESSING_JOB, ProcessingJobStatus, transition_state
 from ..models import Book, ProcessingJob
@@ -26,7 +27,7 @@ async def create_processing_job(
     target_id: int | None = None,
     target_content_version: int | None = None,
     parent_job_id: int | None = None,
-    payload: dict | None = None,
+    payload: dict[str, Any] | None = None,
     dedupe_key: str | None = None,
     resource_lane: str = "maintenance",
     max_attempts: int = 3,
@@ -132,7 +133,7 @@ async def get_processing_jobs(
     if book_id is not None:
         query = query.where(ProcessingJob.book_id == book_id)
     result = await db.execute(query)
-    return list(result.all())
+    return list(result.tuples().all())
 
 
 async def claim_processing_job(
@@ -197,7 +198,7 @@ async def heartbeat_processing_job(
         .values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=lease_seconds))
     )
     await db.commit()
-    return bool(result.rowcount)
+    return bool(cast(CursorResult[tuple[()]], result).rowcount)
 
 
 async def defer_processing_job_for_backup(db: AsyncSession, job_id: int, *, lease_owner: str) -> bool:
@@ -254,7 +255,7 @@ async def recover_abandoned_processing_jobs(db: AsyncSession) -> tuple[int, int]
         )
     )
     await db.commit()
-    return canceled.rowcount or 0, exhausted.rowcount or 0
+    return cast(CursorResult[tuple[()]], canceled).rowcount or 0, cast(CursorResult[tuple[()]], exhausted).rowcount or 0
 
 
 async def update_processing_job_progress(

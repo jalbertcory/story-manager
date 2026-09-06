@@ -8,7 +8,8 @@ import shutil
 from datetime import datetime
 from difflib import get_close_matches
 from pathlib import Path
-from typing import Any, Optional
+from collections.abc import Callable, Sequence
+from typing import Any, Optional, TypeVar, TypedDict
 from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -26,6 +27,7 @@ from ..models import (
     AudiobookChapter,
     AudiobookCharacter,
     AudiobookSentence,
+    AudiobookSettings,
     Book,
     SourceType,
     ImportedAudiobook,
@@ -60,6 +62,8 @@ from ..services.transcription_providers import (
     transcription_provider_name,
 )
 from ..services.endpoint_pool import (
+    EndpointSettings,
+    EndpointProbeResult,
     configured_endpoints,
     configured_providers,
     probe_endpoints,
@@ -100,19 +104,19 @@ class _LegacyQueueHook:
 _legacy_queue_hook = _LegacyQueueHook()
 
 
-def get_audiobook_queue():
+def get_audiobook_queue() -> _LegacyQueueHook:
     return _legacy_queue_hook
 
 
-def get_audiobook_import_queue():
+def get_audiobook_import_queue() -> _LegacyQueueHook:
     return _legacy_queue_hook
 
 
-def get_audiobook_alignment_queue():
+def get_audiobook_alignment_queue() -> _LegacyQueueHook:
     return _legacy_queue_hook
 
 
-async def _notify_legacy_queue(getter, method: str, *args) -> None:
+async def _notify_legacy_queue(getter: Callable[[], _LegacyQueueHook], method: str, *args: int) -> None:
     queue = getter()
     if queue is not _legacy_queue_hook:
         await getattr(queue, method)(*args)
@@ -350,10 +354,15 @@ class SentenceListResponse(BaseModel):
     limit: int
 
 
+class ReadingBlockFields(TypedDict):
+    reading_block_index: int | None
+    reading_block_type: str | None
+
+
 def _reading_block_fields(
     reading_blocks: dict[str, ReadingBlock],
     html_element_id: str,
-) -> dict[str, int | str | None]:
+) -> ReadingBlockFields:
     block = reading_blocks.get(html_element_id)
     return {
         "reading_block_index": block.index if block else None,
@@ -1433,6 +1442,8 @@ async def get_imported_track_smil(
     seq = ET.SubElement(body, "seq")
     for cue, sentence in rows:
         sentence_chapter = chapters.get(sentence.chapter_id, primary_chapter)
+        if not sentence_chapter.content_file_name:
+            raise HTTPException(status_code=404, detail="Matched chapter has no EPUB content file")
         chapter_text_href = sentence_chapter.content_file_name.replace("\\", "/").rsplit("/", 1)[-1]
         par = ET.SubElement(seq, "par")
         ET.SubElement(
@@ -1498,7 +1509,7 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
         progress_detail="Queued to run audiobook to completion",
     )
     await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
-    current_status = (await db.get(Book, book_id)).audiobook_pipeline_status
+    current_status = (await _get_book_or_404(book_id, db)).audiobook_pipeline_status
     return {"status": current_status, "queued": True}
 
 
@@ -1758,7 +1769,7 @@ async def update_book_tts_provider(
 async def _settings_for_locked_book_provider(
     db: AsyncSession,
     book_id: int,
-):
+) -> tuple[str, EndpointSettings | None]:
     settings = await crud.audiobook.get_audiobook_settings(db)
     try:
         provider = await crud.audiobook.lock_book_tts_provider(
@@ -1766,9 +1777,12 @@ async def _settings_for_locked_book_provider(
             book_id,
             tts_provider_name(settings),
         )
-        effective_settings = (
-            None if settings is None and provider == "stub" else settings_for_provider(settings, "tts", provider)
-        )
+        if settings is None:
+            if provider != "stub":
+                raise RuntimeError("Audiobook settings are required for the book's locked TTS provider")
+            effective_settings = None
+        else:
+            effective_settings = settings_for_provider(settings, "tts", provider)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return provider, effective_settings
@@ -1794,8 +1808,8 @@ async def list_characters(book_id: int, db: AsyncSession = Depends(get_db)) -> l
             is_narrator=character.is_narrator,
             aliases=character.aliases or [],
             evidence=character.evidence or [],
-            sentence_count=stats.get(character.id, {}).get("sentence_count", 0),
-            average_confidence=stats.get(character.id, {}).get("average_confidence"),
+            sentence_count=stats[character.id]["sentence_count"] if character.id in stats else 0,
+            average_confidence=stats[character.id]["average_confidence"] if character.id in stats else None,
         )
         for character in chars
     ]
@@ -1829,6 +1843,8 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
         data["tts_voice_provider"] = provider if voice_id else None
 
     char = await crud.audiobook.update_character(db, char_id, data)
+    if char is None:
+        raise HTTPException(status_code=404, detail="Character not found")
     linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, char)
 
     if voice_changed:
@@ -2177,7 +2193,7 @@ def _default_endpoint(capability: str) -> dict[str, Any]:
     }
 
 
-def _public_endpoints(settings, capability: str) -> list[EndpointResponse]:
+def _public_endpoints(settings: AudiobookSettings | None, capability: str) -> list[EndpointResponse]:
     endpoints = configured_endpoints(settings, capability) if settings is not None else [_default_endpoint(capability)]
     return [
         EndpointResponse(
@@ -2194,7 +2210,7 @@ def _public_endpoints(settings, capability: str) -> list[EndpointResponse]:
     ]
 
 
-def _settings_response(settings) -> SettingsResponse:
+def _settings_response(settings: AudiobookSettings | None) -> SettingsResponse:
     if settings is None:
         return SettingsResponse(
             id=None,
@@ -2361,7 +2377,9 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
 async def get_llm_endpoint_stats(db: AsyncSession = Depends(get_db)) -> EndpointStatsResponse:
     """Compare reliability and response latency across configured LLM endpoints."""
     settings = await crud.audiobook.get_audiobook_settings(db)
-    return EndpointStatsResponse(endpoints=await endpoint_summaries(db, settings, "llm"))
+    return EndpointStatsResponse(
+        endpoints=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "llm")]
+    )
 
 
 @router.get("/api/audiobook/settings/endpoint-stats", response_model=AllEndpointStatsResponse)
@@ -2369,13 +2387,19 @@ async def get_endpoint_stats(db: AsyncSession = Depends(get_db)) -> AllEndpointS
     """Compare reliability and response latency across all configured AI endpoints."""
     settings = await crud.audiobook.get_audiobook_settings(db)
     return AllEndpointStatsResponse(
-        llm=await endpoint_summaries(db, settings, "llm"),
-        tts=await endpoint_summaries(db, settings, "tts"),
-        transcription=await endpoint_summaries(db, settings, "transcription"),
+        llm=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "llm")],
+        tts=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "tts")],
+        transcription=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "transcription")],
     )
 
 
-def _endpoint_test_results(probes, value_details=None) -> list[dict[str, Any]]:
+ProbeValue = TypeVar("ProbeValue")
+
+
+def _endpoint_test_results(
+    probes: Sequence[EndpointProbeResult[ProbeValue]],
+    value_details: Callable[[ProbeValue], dict[str, object]] | None = None,
+) -> list[dict[str, Any]]:
     results = []
     for priority, probe in enumerate(probes, start=1):
         endpoint = probe.endpoint
@@ -2391,7 +2415,7 @@ def _endpoint_test_results(probes, value_details=None) -> list[dict[str, Any]]:
         }
         if probe.success and isinstance(probe.value, dict):
             result["response"] = probe.value
-        if probe.success and value_details is not None:
+        if probe.success and probe.value is not None and value_details is not None:
             result.update(value_details(probe.value))
         results.append(result)
     return results
@@ -2415,7 +2439,7 @@ async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
         "required": ["status"],
     }
 
-    async def attempt(endpoint_settings):
+    async def attempt(endpoint_settings: EndpointSettings) -> dict[str, object]:
         if endpoint_settings.llm_provider == "stub":
             return {"status": "ready", "response": "local harness"}
         raw = await audiobook_llm._call_llm_endpoint(
@@ -2447,7 +2471,7 @@ async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     if settings is None:
         return {"status": "ready", "provider": "stub", "model": None, "audio_bytes": 0}
 
-    async def attempt(endpoint_settings):
+    async def attempt(endpoint_settings: EndpointSettings) -> bytes:
         audio = await _synthesize_speech_endpoint(
             endpoint_settings,
             TTSRequest(text="Story Manager text to speech is ready."),

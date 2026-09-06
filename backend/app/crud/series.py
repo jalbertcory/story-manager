@@ -2,12 +2,13 @@
 
 import math
 from decimal import Decimal
-from typing import List
+from typing import Any, List, cast
 
 from fastapi import HTTPException
-from sqlalchemy import asc, case, func
+from sqlalchemy import Table, update, asc, case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.sql.elements import UnaryExpression
 from .. import models
 
 MAX_TAGS_PER_SERIES = 20
@@ -32,7 +33,7 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
     return sorted(normalized, key=str.casefold)
 
 
-def _series_order_columns():
+def _series_order_columns() -> tuple[UnaryExpression[Any], ...]:
     return (
         asc(case((models.Book.series_index.is_(None), 1), else_=0)),
         asc(models.Book.series_index),
@@ -50,7 +51,7 @@ async def get_books_by_series(db: AsyncSession, series: str, skip: int = 0, limi
         .offset(skip)
         .limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def reorder_series_books(db: AsyncSession, series: str, ordered_book_ids: List[int]) -> int:
@@ -218,7 +219,7 @@ async def _merge_audiobook_series_rosters(db: AsyncSession, source: str, target:
             target_profiles[profile.canonical_name] = profile
             continue
         await db.execute(
-            models.AudiobookCharacter.__table__.update()
+            update(cast(Table, models.AudiobookCharacter.__table__))
             .where(models.AudiobookCharacter.series_character_id == profile.id)
             .values(series_character_id=existing.id)
         )
@@ -244,7 +245,7 @@ def validate_genre_tags(tags: list[str]) -> None:
 
 
 def compute_effective_series_genre_tags(
-    books: list,
+    books: list[models.Book],
     series_metadata: "models.SeriesMetadata | None",
 ) -> list[str]:
     """Compute effective genre tags for a series.

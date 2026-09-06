@@ -6,10 +6,11 @@ import posixpath
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import cast, Optional
 from urllib.parse import unquote
 
 import ebooklib
+from bs4.element import PageElement
 from bs4 import BeautifulSoup, NavigableString, Tag
 from ebooklib import epub
 from lxml import etree
@@ -134,12 +135,12 @@ def _strip_unstyled_classes(tag: Tag, styled_classes: set[str] | None) -> bool:
     return True
 
 
-def _append_copied_children(target: Tag, children: list) -> None:
+def _append_copied_children(target: Tag, children: list[PageElement]) -> None:
     for child in children:
         target.append(copy.copy(child) if isinstance(child, NavigableString) else copy.deepcopy(child))
 
 
-def _trim_empty_edge_text(children: list) -> list:
+def _trim_empty_edge_text(children: list[PageElement]) -> list[PageElement]:
     trimmed = list(children)
     while trimmed and isinstance(trimmed[0], NavigableString) and not str(trimmed[0]).strip():
         trimmed.pop(0)
@@ -148,15 +149,15 @@ def _trim_empty_edge_text(children: list) -> list:
     return trimmed
 
 
-def _split_children_on_double_br(children: list) -> list[list]:
-    chunks: list[list] = []
-    current: list = []
+def _split_children_on_double_br(children: list[PageElement]) -> list[list[PageElement]]:
+    chunks: list[list[PageElement]] = []
+    current: list[PageElement] = []
     index = 0
 
     while index < len(children):
         child = children[index]
         if isinstance(child, Tag) and child.name == "br":
-            run: list = [child]
+            run: list[PageElement] = [child]
             br_count = 1
             index += 1
             while index < len(children):
@@ -346,7 +347,8 @@ def get_epub_word_and_chapter_count(epub_path: Path) -> tuple[int, int]:
 
 def _read_rootfile_path(archive: zipfile.ZipFile) -> Optional[str]:
     container = etree.fromstring(archive.read("META-INF/container.xml"))
-    rootfiles = container.xpath(
+    rootfiles = _xpath_elements(
+        container,
         "/u:container/u:rootfiles/u:rootfile",
         namespaces=CONTAINER_NS,
     )
@@ -377,7 +379,7 @@ def _is_image_item(item: etree._Element) -> bool:
 
 
 def _manifest_items(package: etree._Element) -> list[etree._Element]:
-    return package.xpath("//opf:manifest/opf:item", namespaces=OPF_NS)
+    return _xpath_elements(package, "//opf:manifest/opf:item", namespaces=OPF_NS)
 
 
 def _manifest_item_by_id(package: etree._Element, item_id: str | None) -> Optional[etree._Element]:
@@ -394,7 +396,7 @@ def _image_path_from_html(archive: zipfile.ZipFile, html_path: str) -> Optional[
 
     for image in soup.select("img[src], image[href], image[xlink\\:href]"):
         image_href = image.get("src") or image.get("href") or image.get("xlink:href")
-        image_path = _resolve_epub_href(html_path, image_href)
+        image_path = _resolve_epub_href(html_path, image_href if isinstance(image_href, str) else None)
         if image_path and image_path in archive.namelist() and _is_image_path(image_path):
             return image_path
     return None
@@ -405,7 +407,7 @@ def _cover_image_path_from_guide(
     rootfile_path: str,
     package: etree._Element,
 ) -> Optional[str]:
-    guide_refs = package.xpath("//opf:guide/opf:reference[@type='cover']", namespaces=OPF_NS)
+    guide_refs = _xpath_elements(package, "//opf:guide/opf:reference[@type='cover']", namespaces=OPF_NS)
     for guide_ref in guide_refs:
         cover_path = _resolve_epub_href(rootfile_path, guide_ref.get("href"))
         if not cover_path or cover_path not in archive.namelist():
@@ -423,7 +425,7 @@ def _find_cover_image_path(
     rootfile_path: str,
     package: etree._Element,
 ) -> Optional[tuple[str, Optional[str]]]:
-    meta_cover = package.xpath("//opf:metadata/opf:meta[@name='cover']", namespaces=OPF_NS)
+    meta_cover = _xpath_elements(package, "//opf:metadata/opf:meta[@name='cover']", namespaces=OPF_NS)
     for meta in meta_cover:
         item = _manifest_item_by_id(package, meta.get("content"))
         if item is not None and _is_image_item(item):
@@ -511,7 +513,7 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
 
 def _extract_title_page_tag_groups(html: bytes) -> dict[str, list[str]]:
     soup = BeautifulSoup(html, "html.parser")
-    tag_groups = {"category": [], "genre": []}
+    tag_groups: dict[str, list[str]] = {"category": [], "genre": []}
     for label in soup.find_all(["b", "strong"]):
         label_text = label.get_text(" ", strip=True).rstrip(":").casefold()
         if label_text not in {"category", "genre"}:
@@ -554,7 +556,7 @@ def _extract_title_page_tag_metadata(
 
 def _extract_subject_tags(package: etree._Element) -> list[str]:
     tags: list[str] = []
-    for subject in package.xpath("//opf:metadata/dc:subject", namespaces=DC_NS):
+    for subject in _xpath_elements(package, "//opf:metadata/dc:subject", namespaces=DC_NS):
         value = (subject.text or "").strip()
         if not value or value in SYNTHETIC_SUBJECTS:
             continue
@@ -565,11 +567,11 @@ def _extract_subject_tags(package: etree._Element) -> list[str]:
 
 
 def _is_scribblehub_package(package: etree._Element) -> bool:
-    values = []
+    values: list[str] = []
     for field in ("source", "publisher"):
         values.extend(
             (node.text or "").strip()
-            for node in package.xpath(f"//opf:metadata/dc:{field}", namespaces=DC_NS)
+            for node in _xpath_elements(package, f"//opf:metadata/dc:{field}", namespaces=DC_NS)
             if (node.text or "").strip()
         )
     return any("scribblehub.com" in value.casefold() for value in values)
@@ -620,3 +622,9 @@ def get_epub_genre_tags(epub_path: Path) -> list[str]:
 def get_epub_source_tags(epub_path: Path) -> list[str]:
     """Return source-site category/tag metadata from an EPUB."""
     return get_epub_tag_metadata(epub_path)["source_tags"]
+
+
+def _xpath_elements(element: etree._Element, path: str, *, namespaces: dict[str, str]) -> list[etree._Element]:
+    """Read element-only XPath expressions used for EPUB metadata."""
+    # Every caller supplies a node selection, not a scalar XPath function.
+    return cast(list[etree._Element], element.xpath(path, namespaces=namespaces))

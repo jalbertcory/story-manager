@@ -5,14 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud, schemas
+from .. import crud, models, schemas
 from ..database import get_db
 from ..services.processing_queue import queue_processing_job
 
 router = APIRouter()
 
 
-def _response(job, book_title: str | None = None) -> schemas.ProcessingJob:
+def _response(job: models.ProcessingJob, book_title: str | None = None) -> schemas.ProcessingJob:
     return schemas.ProcessingJob.model_validate(job).model_copy(update={"book_title": book_title})
 
 
@@ -77,7 +77,7 @@ async def create_processing_jobs(
         for book in books:
             payload = body.payload or {}
             mode = payload.get("mode", "reconcile")
-            if body.job_type == "refresh_book" and (book.source_type != "web" or not book.source_url):
+            if body.job_type == "refresh_book" and (book.source_type != models.SourceType.web or not book.source_url):
                 raise HTTPException(status_code=422, detail=f"Book {book.id} is not a refreshable web book")
             if body.job_type == "audiobook_pipeline" and not book.audiobook_enabled:
                 raise HTTPException(status_code=422, detail=f"AI audiobook generation is not enabled for book {book.id}")

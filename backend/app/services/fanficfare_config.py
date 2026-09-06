@@ -65,9 +65,13 @@ def get_fff_config_paths() -> List[Path]:
     return config_paths
 
 
+class _CaseSensitiveConfigParser(configparser.ConfigParser):
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
+
+
 def get_fff_site_config(site_domain: str) -> dict[str, str]:
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.optionxform = str
+    parser = _CaseSensitiveConfigParser(interpolation=None)
     parser.read([str(path) for path in get_fff_config_paths()])
 
     config: dict[str, str] = {}

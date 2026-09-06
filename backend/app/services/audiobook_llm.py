@@ -8,16 +8,16 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, NotRequired, TypedDict
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
-from ..models import AudiobookSettings, Book
+from ..models import AudiobookSettings, AudiobookChapter, AudiobookSentence, Book
 from .audiobook_text import quote_group_ids, quote_groups
-from .endpoint_pool import RoutedResult, route_request
+from .endpoint_pool import ProviderSettings, RoutedResult, route_request
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ ROSTER_SCHEMA = {
     "required": ["book_summary", "characters"],
 }
 
-DIARIZATION_SCHEMA = {
+DIARIZATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "assignments": {
@@ -354,7 +354,7 @@ CHAPTER_SUMMARY_SCHEMA = {
 
 
 async def _call_llm_endpoint(
-    settings: AudiobookSettings,
+    settings: ProviderSettings,
     messages: list[dict[str, Any]],
     *,
     response_schema: dict[str, Any] | None = None,
@@ -368,10 +368,11 @@ async def _call_llm_endpoint(
     model = settings.llm_model or ("qwen3.5:9b" if provider == "ollama" else "gpt-4o")
 
     headers = {"Content-Type": "application/json"}
+    payload: dict[str, Any]
 
     if provider == "ollama":
         url = (settings.llm_base_url or "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
-        payload: dict[str, Any] = {
+        payload = {
             "model": model,
             "messages": messages,
             "stream": progress_callback is not None,
@@ -414,13 +415,16 @@ async def _call_llm_endpoint(
             if resp.is_error:
                 resp.raise_for_status()
             data = resp.json()
-        return data["message"]["content"]
+        content = data["message"]["content"]
+        if not isinstance(content, str):
+            raise RuntimeError("LLM returned non-text content")
+        return content
 
     if provider == "anthropic":
         url = (settings.llm_base_url or "https://api.anthropic.com").rstrip("/") + "/v1/messages"
         headers["x-api-key"] = settings.llm_api_key or ""
         headers["anthropic-version"] = "2023-06-01"
-        payload: dict[str, Any] = {
+        payload = {
             "model": model,
             "max_tokens": 4096,
             "messages": messages,
@@ -429,7 +433,10 @@ async def _call_llm_endpoint(
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-        return data["content"][0]["text"]
+        content = data["content"][0]["text"]
+        if not isinstance(content, str):
+            raise RuntimeError("LLM returned non-text content")
+        return content
 
     else:
         # OpenAI-compatible (openai, custom, local)
@@ -437,7 +444,7 @@ async def _call_llm_endpoint(
         url = base.rstrip("/") + "/v1/chat/completions"
         if settings.llm_api_key:
             headers["Authorization"] = f"Bearer {settings.llm_api_key}"
-        payload: dict[str, Any] = {
+        payload = {
             "model": model,
             "messages": messages,
             "temperature": 0,
@@ -451,7 +458,10 @@ async def _call_llm_endpoint(
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise RuntimeError("LLM returned non-text content")
+        return content
 
 
 async def _call_llm_routed(
@@ -632,7 +642,7 @@ def _sanitize_tagged_text(original: str, tagged: Any) -> str:
 
 
 def _grounded_expression(
-    expression: Any,
+    expression: object,
     *,
     text: str,
     previous_text: str,
@@ -641,7 +651,7 @@ def _grounded_expression(
     """Reject model-added sounds that lack an explicit nearby textual cue."""
 
     evidence = f"{text} {next_text}"
-    if expression in _ALLOWED_EXPRESSION_TAGS:
+    if isinstance(expression, str) and expression in _ALLOWED_EXPRESSION_TAGS:
         cue = _EXPRESSION_CUES.get(expression)
         if cue and cue.search(evidence):
             return expression
@@ -679,7 +689,7 @@ def _apply_speaker_guardrails(
         if attribution:
             gender = attribution.group(1).casefold()
             fallback_id = minor_female_id if gender == "she" else minor_male_id
-            selected_gender = (character_genders or {}).get(character_id)
+            selected_gender = (character_genders or {}).get(character_id) if character_id is not None else None
             gender_conflict = selected_gender in {"male", "female"} and selected_gender != (
                 "female" if gender == "she" else "male"
             )
@@ -692,9 +702,9 @@ def _apply_speaker_guardrails(
     return character_id, reason, None
 
 
-async def _build_roster_excerpt(chapters, db: AsyncSession) -> str:
+async def _build_roster_excerpt(chapters: Sequence[AudiobookChapter], db: AsyncSession) -> str:
     """Sample real story chapters across the book instead of front matter."""
-    candidates: list[tuple[Any, list[Any]]] = []
+    candidates: list[tuple[AudiobookChapter, list[AudiobookSentence]]] = []
     for chapter in chapters:
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
         if len(sentences) >= 40:
@@ -798,7 +808,16 @@ _CANDIDATE_STOP_WORDS = {
 }
 
 
-async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tuple[str, list[dict[str, Any]]]:
+class _CharacterCandidate(TypedDict):
+    name: str
+    mention_count: int
+    dialogue_count: int
+    evidence: str | None
+
+
+async def _build_character_candidate_analysis(
+    chapters: Sequence[AudiobookChapter], db: AsyncSession
+) -> tuple[str, list[_CharacterCandidate]]:
     """Provide whole-book evidence so sampled cameos do not crowd out recurring cast."""
     counts: Counter[str] = Counter()
     contextual_counts: Counter[str] = Counter()
@@ -832,7 +851,7 @@ async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tup
         if dialogue_count and name in dialogue_examples:
             line += f'; example: "{dialogue_examples[name]}"'
         lines.append(line)
-    confirmed = [
+    confirmed: list[_CharacterCandidate] = [
         {
             "name": name,
             "mention_count": count,
@@ -847,9 +866,21 @@ async def _build_character_candidate_analysis(chapters, db: AsyncSession) -> tup
     return heading + ("\n".join(lines) or "(none)"), confirmed
 
 
-async def _build_character_candidate_hints(chapters, db: AsyncSession) -> str:
+async def _build_character_candidate_hints(chapters: Sequence[AudiobookChapter], db: AsyncSession) -> str:
     hints, _ = await _build_character_candidate_analysis(chapters, db)
     return hints
+
+
+class CharacterData(TypedDict):
+    name: str
+    aliases: list[str]
+    description: str | None
+    evidence: list[str]
+    voice_prompt: str | None
+    is_narrator: bool
+    series_character_id: NotRequired[int]
+    tts_voice_id: NotRequired[str | None]
+    tts_voice_provider: NotRequired[str | None]
 
 
 async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
@@ -909,6 +940,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         ),
     )
 
+    roster_result: dict[str, Any]
     if provider == STUB_PROVIDER:
         roster_result = {
             "book_summary": "Deterministic local harness analysis.",
@@ -924,6 +956,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
             ],
         }
     else:
+        assert settings is not None
         prompt_template = settings.roster_prompt_template or DEFAULT_ROSTER_PROMPT
         prompt = prompt_template.format(
             text=combined_text,
@@ -958,24 +991,30 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         raise RuntimeError(f"Expected a JSON array from LLM, got: {type(characters_data)}")
 
     # Normalise keys to match our model
-    normalised: list[dict] = []
+    normalised: list[CharacterData] = []
     for c in characters_data:
         if not isinstance(c, dict):
             continue
+        description: object = c.get("description")
+        if description is not None and not isinstance(description, str):
+            raise RuntimeError("LLM character description must be text or null.")
+        voice_prompt: object = c.get("voice_prompt")
+        if voice_prompt is not None and not isinstance(voice_prompt, str):
+            raise RuntimeError("LLM character voice_prompt must be text or null.")
         normalised.append(
             {
                 "name": str(c.get("name", "Unknown")),
                 "aliases": [str(alias) for alias in c.get("aliases", []) if alias],
-                "description": c.get("description"),
+                "description": description,
                 "evidence": [str(item) for item in c.get("evidence", []) if item][:3],
-                "voice_prompt": c.get("voice_prompt"),
+                "voice_prompt": voice_prompt,
                 "is_narrator": str(c.get("name", "")).strip().casefold() == "narrator",
             }
         )
     if not normalised:
         raise RuntimeError("LLM returned an empty character roster.")
     existing_names = {character["name"].strip().casefold() for character in normalised}
-    promoted_protagonists: list[dict] = []
+    promoted_protagonists: list[CharacterData] = []
     for character in normalised:
         if not character["is_narrator"]:
             continue
@@ -1019,7 +1058,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         for offset, protagonist in enumerate(promoted_protagonists, start=1):
             normalised.insert(narrator_index + offset, protagonist)
 
-    def character_tokens(character: dict) -> set[str]:
+    def character_tokens(character: CharacterData) -> set[str]:
         values = [character["name"], *character["aliases"]]
         return {token.casefold() for value in values for token in _CANDIDATE_TOKEN_RE.findall(value)}
 
@@ -1054,7 +1093,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
 
     dialogue_scores = {candidate["name"].casefold(): candidate["dialogue_count"] for candidate in confirmed_speakers}
 
-    def roster_priority(character: dict) -> tuple[int, int, str]:
+    def roster_priority(character: CharacterData) -> tuple[int, int, str]:
         if character["is_narrator"]:
             return (3, 0, character["name"])
         if "protagonist" in str(character.get("description") or "").casefold():
@@ -1140,7 +1179,7 @@ def _chapter_summary_excerpt(chapter_sentences: list[Any], max_chars: int = 12_0
     section_chars = max_chars // 3
 
     def take_section(section: list[str], *, reverse: bool = False) -> str:
-        selected = []
+        selected: list[str] = []
         used = 0
         items = reversed(section) if reverse else iter(section)
         for text in items:
@@ -1224,7 +1263,7 @@ async def diarize_sentences(
 
     characters = await crud.audiobook.get_characters_for_book(db, book_id)
     character_ids = {character.id for character in characters}
-    character_names = {character.id: character.name for character in characters}
+    character_names: dict[int | None, str] = {character.id: character.name for character in characters}
     character_genders = {}
     character_aliases = {
         character.id: [character.name, *(character.aliases or [])] for character in characters if not character.is_narrator
@@ -1271,7 +1310,7 @@ async def diarize_sentences(
         sentence_lengths = {sentence.id: len(sentence.tagged_text or sentence.original_text) for sentence in chapter_sentences}
         pending = [sentence for sentence in chapter_sentences if sentence.status == "pending_diarization"]
         if not pending:
-            if provider != STUB_PROVIDER and chapter.summary is None and chapter_sentences:
+            if settings is not None and provider != STUB_PROVIDER and chapter.summary is None and chapter_sentences:
                 await _generate_chapter_summary(
                     settings,
                     chapter,
@@ -1303,7 +1342,7 @@ async def diarize_sentences(
                 )
                 ready_sentence_ids.append(sentence.id)
             if on_sentences_ready and ready_sentence_ids:
-                ready_sentence_ids.sort(key=sentence_lengths.get)
+                ready_sentence_ids.sort(key=sentence_lengths.__getitem__)
                 await on_sentences_ready(ready_sentence_ids)
             processed += len(pending)
             await crud.audiobook.update_chapter_summary(db, chapter.id, "Front matter or section divider.")
@@ -1320,7 +1359,7 @@ async def diarize_sentences(
             model_sentence_ids = _sentence_ids_requiring_diarization(chapter_sentences)
             narration_ids = [sentence.id for sentence in pending if sentence.id not in model_sentence_ids]
             if narration_ids:
-                narration_ids.sort(key=sentence_lengths.get)
+                narration_ids.sort(key=sentence_lengths.__getitem__)
                 await crud.audiobook.mark_sentences_as_narration(
                     db,
                     narration_ids,
@@ -1410,6 +1449,7 @@ async def diarize_sentences(
                     f"attributing {len(batch)} sentences"
                 ),
             )
+            batch_result: dict[str, Any]
             if provider == STUB_PROVIDER:
                 batch_result = {
                     "assignments": [
@@ -1425,6 +1465,7 @@ async def diarize_sentences(
                     "chapter_summary": "Deterministic local harness chapter summary.",
                 }
             else:
+                assert settings is not None
                 prompt_template = settings.diarization_prompt_template or DEFAULT_DIARIZATION_PROMPT
                 prompt = prompt_template.format(
                     roster_json=roster_json,
@@ -1632,7 +1673,7 @@ async def diarize_sentences(
             ]
             chapter_dialogue_ready_ids.extend(delayed_ready_ids)
             if on_sentences_ready and immediate_ready_ids:
-                immediate_ready_ids.sort(key=sentence_lengths.get)
+                immediate_ready_ids.sort(key=sentence_lengths.__getitem__)
                 await on_sentences_ready(immediate_ready_ids)
 
             chapter_summary = str(batch_result.get("chapter_summary") or chapter.summary or "")[:4000]
@@ -1672,10 +1713,10 @@ async def diarize_sentences(
             )
 
         if on_sentences_ready and chapter_dialogue_ready_ids:
-            ready_ids = sorted(set(chapter_dialogue_ready_ids), key=sentence_lengths.get)
+            ready_ids = sorted(set(chapter_dialogue_ready_ids), key=sentence_lengths.__getitem__)
             await on_sentences_ready(ready_ids)
 
-        if provider != STUB_PROVIDER and chapter.summary is None:
+        if settings is not None and provider != STUB_PROVIDER and chapter.summary is None:
             await _generate_chapter_summary(
                 settings,
                 chapter,

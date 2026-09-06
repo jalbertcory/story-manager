@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 import wave
 
 import numpy as np
@@ -12,6 +13,9 @@ import torch
 import torch.nn.functional as F
 
 from services.tts_consistency import candidate_has_enough_speech
+
+if TYPE_CHECKING:
+    from transformers import Wav2Vec2FeatureExtractor, WavLMForXVector
 
 MODEL_ID = os.getenv("SPEAKER_VERIFIER_MODEL", "microsoft/wavlm-base-plus-sv")
 DEVICE = os.getenv("SPEAKER_VERIFIER_DEVICE", "cpu")
@@ -26,15 +30,15 @@ def _resample(audio: np.ndarray, source_rate: int) -> np.ndarray:
         raise ValueError("source sampling rate must be positive")
     target_length = max(1, round(samples.size * SAMPLING_RATE / source_rate))
     tensor = torch.from_numpy(samples).view(1, 1, -1)
-    return F.interpolate(tensor, size=target_length, mode="linear", align_corners=False).view(-1).numpy()
+    return np.asarray(F.interpolate(tensor, size=target_length, mode="linear", align_corners=False).view(-1).numpy())
 
 
 class SpeakerVerifier:
     """Compare generated speech with a character enrollment sample."""
 
     def __init__(self) -> None:
-        self._extractor = None
-        self._model = None
+        self._extractor: Wav2Vec2FeatureExtractor | None = None
+        self._model: WavLMForXVector | None = None
         self._reference_embeddings: dict[str, torch.Tensor] = {}
 
     def _load(self) -> None:
@@ -47,6 +51,8 @@ class SpeakerVerifier:
 
     def embedding(self, audio: np.ndarray, sampling_rate: int) -> torch.Tensor:
         self._load()
+        if self._extractor is None or self._model is None:
+            raise RuntimeError("Speaker verification model is not loaded.")
         samples = _resample(audio, sampling_rate)
         inputs = self._extractor(
             samples,

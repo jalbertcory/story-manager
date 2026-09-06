@@ -565,8 +565,8 @@ def build_metadata_proposal_summary(
     return schemas.MetadataProposalSummary(
         id=proposal.id,
         book_id=book.id,
-        book_title=book.title,
-        book_author=book.author,
+        book_title=book.title or "",
+        book_author=book.author or "",
         book_series=book.series,
         book_series_index=float(book.series_index) if book.series_index is not None else None,
         match=schemas.MetadataMatch.model_validate(match) if match is not None else None,

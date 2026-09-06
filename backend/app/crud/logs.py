@@ -30,7 +30,7 @@ async def get_book_logs(db: AsyncSession, book_id: int) -> List[models.BookLog]:
     result = await db.execute(
         select(models.BookLog).filter(models.BookLog.book_id == book_id).order_by(models.BookLog.timestamp.asc())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def count_book_logs(db: AsyncSession, book_id: int) -> int:
@@ -98,10 +98,12 @@ async def get_update_tasks(db: AsyncSession, limit: int = 20, offset: int = 0) -
     result = await db.execute(
         select(models.UpdateTask).order_by(models.UpdateTask.started_at.desc()).offset(offset).limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
-async def get_book_logs_for_task(db: AsyncSession, task_id: int) -> tuple[Optional[models.UpdateTask], Optional[list]]:
+async def get_book_logs_for_task(
+    db: AsyncSession, task_id: int
+) -> tuple[models.UpdateTask, list[tuple[models.BookLog, str | None]]] | tuple[None, None]:
     task_result = await db.execute(select(models.UpdateTask).filter(models.UpdateTask.id == task_id))
     task = task_result.scalars().first()
     if task is None:
@@ -120,4 +122,4 @@ async def get_book_logs_for_task(db: AsyncSession, task_id: int) -> tuple[Option
         .filter(*conditions)
         .order_by(models.BookLog.timestamp.asc())
     )
-    return task, result.all()
+    return task, list(result.tuples().all())

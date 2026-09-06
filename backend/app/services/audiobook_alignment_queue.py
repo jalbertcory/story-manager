@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, cast
 
-from sqlalchemy import select
+from sqlalchemy import Table, select
 
 from ..database import SessionLocal
 from ..models import ImportedAudiobook
@@ -47,7 +47,8 @@ class AudiobookAlignmentQueue:
             ids = list(result.scalars().all())
             if ids:
                 await db.execute(
-                    ImportedAudiobook.__table__.update()
+                    cast(Table, ImportedAudiobook.__table__)
+                    .update()
                     .where(ImportedAudiobook.id.in_(ids))
                     .values(progress_detail="Timestamp alignment queued after restart")
                 )

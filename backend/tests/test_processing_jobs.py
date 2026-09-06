@@ -2,6 +2,8 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
@@ -77,6 +79,37 @@ async def test_processing_queue_creates_backup_under_write_barrier(sqlite_sessio
     assert observed["library_path"] == tmp_path / "library"
     assert observed["backup_path"] == tmp_path / "backups"
     assert processing_queue_module.backup_barrier.backup_active is False
+
+
+@pytest.mark.asyncio
+async def test_worker_defers_claimed_job_when_backup_barrier_wins_race(sqlite_sessionmaker, monkeypatch):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(db, job_type="clean_book", resource_lane="cpu")
+        job_id = job.id
+
+    # The first wait permits polling, but a backup is active by the time the
+    # worker has claimed the job. Stop at the second wait, after deferral.
+    barrier = SimpleNamespace(
+        backup_active=True,
+        wait_until_writes_allowed=AsyncMock(side_effect=[None, asyncio.CancelledError]),
+    )
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "backup_barrier", barrier)
+    queue = ProcessingQueue()
+    execute = AsyncMock()
+    monkeypatch.setattr(queue, "_execute_with_heartbeat", execute)
+
+    with pytest.raises(asyncio.CancelledError):
+        await queue._run("cpu", 1)
+
+    execute.assert_not_awaited()
+    async with sqlite_sessionmaker() as db:
+        deferred = await db.get(ProcessingJob, job_id)
+        assert deferred.status == "queued"
+        assert deferred.attempt_count == 0
+        assert deferred.lease_owner is None
+        assert deferred.lease_expires_at is None
+        assert deferred.progress_detail == "Waiting for library backup to finish"
 
 
 @pytest.mark.asyncio

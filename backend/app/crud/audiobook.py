@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import cast, Optional, TypedDict
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.engine import CursorResult
 
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..lifecycle import (
@@ -62,7 +64,7 @@ async def get_audiobook_settings(db: AsyncSession) -> Optional[AudiobookSettings
     return result.scalar_one_or_none()
 
 
-async def upsert_audiobook_settings(db: AsyncSession, data: dict) -> AudiobookSettings:
+async def upsert_audiobook_settings(db: AsyncSession, data: Mapping[str, object]) -> AudiobookSettings:
     settings = await get_audiobook_settings(db)
     if settings is None:
         settings = AudiobookSettings(**data)
@@ -258,7 +260,7 @@ async def update_book_pipeline_progress(
     detail: Optional[str],
     llm_request_increment: int = 0,
 ) -> None:
-    values = {
+    values: dict[str, object] = {
         "audiobook_progress_current": max(0, current),
         "audiobook_progress_total": max(0, total),
         "audiobook_progress_detail": detail,
@@ -532,7 +534,9 @@ async def delete_chapters_for_book(db: AsyncSession, book_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def create_characters_bulk(db: AsyncSession, book_id: int, characters_data: list[dict]) -> list[AudiobookCharacter]:
+async def create_characters_bulk(
+    db: AsyncSession, book_id: int, characters_data: Sequence[Mapping[str, object]]
+) -> list[AudiobookCharacter]:
     chars = [AudiobookCharacter(book_id=book_id, **c) for c in characters_data]
     db.add_all(chars)
     await db.commit()
@@ -554,7 +558,7 @@ async def get_character(db: AsyncSession, char_id: int) -> Optional[AudiobookCha
     return await db.get(AudiobookCharacter, char_id)
 
 
-async def update_character(db: AsyncSession, char_id: int, data: dict) -> Optional[AudiobookCharacter]:
+async def update_character(db: AsyncSession, char_id: int, data: Mapping[str, object]) -> Optional[AudiobookCharacter]:
     char = await db.get(AudiobookCharacter, char_id)
     if char is None:
         return None
@@ -688,7 +692,7 @@ async def propagate_character_profile_across_series(
     profile.aliases = character.aliases or []
     profile.evidence = character.evidence or []
 
-    result = await db.execute(
+    character_result = await db.execute(
         select(AudiobookCharacter)
         .join(Book, Book.id == AudiobookCharacter.book_id)
         .where(
@@ -699,7 +703,7 @@ async def propagate_character_profile_across_series(
             ),
         )
     )
-    matching = list(result.scalars().all())
+    matching = list(character_result.scalars().all())
     if character not in matching:
         matching.append(character)
     for sibling in matching:
@@ -895,7 +899,7 @@ async def reset_audio_generation_for_book(db: AsyncSession, book_id: int) -> int
     )
     await db.commit()
     await invalidate_packaged_audiobook(db, book_id)
-    return result.rowcount or 0
+    return cast(CursorResult[tuple[()]], result).rowcount or 0
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +907,7 @@ async def reset_audio_generation_for_book(db: AsyncSession, book_id: int) -> int
 # ---------------------------------------------------------------------------
 
 
-async def create_sentences_bulk(db: AsyncSession, chapter_id: int, sentences_data: list[dict]) -> int:
+async def create_sentences_bulk(db: AsyncSession, chapter_id: int, sentences_data: Sequence[Mapping[str, object]]) -> int:
     sentences = [AudiobookSentence(chapter_id=chapter_id, **s) for s in sentences_data]
     db.add_all(sentences)
     await db.commit()
@@ -1112,7 +1116,7 @@ async def reset_error_sentences_for_book(db: AsyncSession, book_id: int) -> int:
     )
     await db.execute(update(AudiobookChapter).where(AudiobookChapter.book_id == book_id).values(needs_reassembly=True))
     await db.commit()
-    return result.rowcount or 0
+    return cast(CursorResult[tuple[()]], result).rowcount or 0
 
 
 async def reset_interrupted_sentences_for_book(db: AsyncSession, book_id: int) -> int:
@@ -1134,7 +1138,7 @@ async def reset_interrupted_sentences_for_book(db: AsyncSession, book_id: int) -
         )
     )
     await db.commit()
-    return result.rowcount or 0
+    return cast(CursorResult[tuple[()]], result).rowcount or 0
 
 
 async def update_sentence_speaker(
@@ -1205,7 +1209,12 @@ async def count_sentence_review_flags(db: AsyncSession, book_id: int) -> dict[st
     }
 
 
-async def get_character_sentence_stats(db: AsyncSession, book_id: int) -> dict[int, dict[str, float | int | None]]:
+class CharacterSentenceStats(TypedDict):
+    sentence_count: int
+    average_confidence: float | None
+
+
+async def get_character_sentence_stats(db: AsyncSession, book_id: int) -> dict[int, CharacterSentenceStats]:
     result = await db.execute(
         select(
             AudiobookSentence.character_id,
@@ -1236,7 +1245,7 @@ async def has_sentence_status(db: AsyncSession, book_id: int, statuses: str | li
             AudiobookSentence.status.in_(status_values),
         )
     )
-    return result.scalar_one() > 0
+    return bool(result.scalar_one() > 0)
 
 
 async def get_book_pipeline_status(db: AsyncSession, book_id: int) -> Optional[str]:
@@ -1293,7 +1302,7 @@ async def chapter_all_audio_generated(db: AsyncSession, chapter_id: int) -> bool
         .where(AudiobookSentence.chapter_id == chapter_id)
     )
     total, pending = result.one()
-    return total > 0 and pending == 0
+    return bool(total > 0 and pending == 0)
 
 
 async def all_sentences_audio_generated(db: AsyncSession, book_id: int) -> bool:
@@ -1307,4 +1316,4 @@ async def all_sentences_audio_generated(db: AsyncSession, book_id: int) -> bool:
         .where(AudiobookChapter.book_id == book_id)
     )
     total, pending = result.one()
-    return total > 0 and pending == 0
+    return bool(total > 0 and pending == 0)

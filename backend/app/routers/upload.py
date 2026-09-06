@@ -3,7 +3,7 @@
 import logging
 from io import BytesIO
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from collections.abc import Iterator
 from typing import List, Optional
 
@@ -131,14 +131,16 @@ def _extract_epubs_from_zip(zip_name: str, payload: bytes) -> Iterator[tuple[str
         ) from e
 
 
-async def _existing_epub_target(db, ebook, title, author):
+async def _existing_epub_target(db: AsyncSession, ebook: epub.EpubBook, title: str, author: str) -> models.Book | None:
     existing = await crud.get_book_by_title_and_author(db, title=title, author=author)
     if existing and (existing.deleted_at is not None or existing.source_type != models.SourceType.audiobook):
         return existing
     return await match_epub_to_audio_book(db, ebook, title, author)
 
 
-async def _attach_epub_to_audio_book(book, ebook, title, author, original, current, db):
+async def _attach_epub_to_audio_book(
+    book: models.Book, ebook: epub.EpubBook, title: str, author: str, original: Path, current: Path, db: AsyncSession
+) -> models.Book:
     # Include the existing ID in the filename so a same-title EPUB elsewhere in
     # the library cannot be overwritten when adding this book's text.
     immutable_path, current_path = build_book_paths(f"{title} - {author} - book {book.id}.epub", author)
@@ -315,7 +317,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
         source_tags=tag_metadata["source_tags"],
         immutable_path=str(immutable_path.relative_to(LIBRARY_PATH.parent)),
         current_path=str(current_path.relative_to(LIBRARY_PATH.parent)),
-        source_url=source_url,
+        source_url=HttpUrl(source_url) if source_url is not None else None,
         source_type=source_type,
         master_word_count=master_word_count,
         current_word_count=master_word_count,
@@ -355,10 +357,11 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
 async def _upload_epub_file(file: UploadFile, db: AsyncSession) -> models.Book:
     payload = await read_and_validate_upload(file)
+    assert file.filename is not None  # read_and_validate_upload rejects missing filenames.
     return await _upload_epub_bytes(file.filename, payload, db)
 
 
-def _first_epub_metadata(epub_book, namespace: str, key: str) -> Optional[str]:
+def _first_epub_metadata(epub_book: epub.EpubBook, namespace: str, key: str) -> Optional[str]:
     try:
         values = epub_book.get_metadata(namespace, key)
     except KeyError:
@@ -603,7 +606,11 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
                     found_epub = True
                     try:
                         db_book = await _upload_epub_bytes(safe_name, payload, db)
-                        results.append(EpubUploadResult(filename=display_name, status="success", book=db_book))
+                        results.append(
+                            EpubUploadResult(
+                                filename=display_name, status="success", book=schemas.Book.model_validate(db_book)
+                            )
+                        )
                         created_books.append(db_book)
                     except HTTPException as e:
                         status_str = "skipped" if e.status_code == 409 else "error"
@@ -622,7 +629,11 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
                 continue
 
             db_book = await _upload_epub_file(file, db)
-            results.append(EpubUploadResult(filename=file.filename, status="success", book=db_book))
+            results.append(
+                EpubUploadResult(
+                    filename=file.filename or "upload", status="success", book=schemas.Book.model_validate(db_book)
+                )
+            )
             created_books.append(db_book)
         except HTTPException as e:
             status_str = "skipped" if e.status_code == 409 else "error"
@@ -652,8 +663,8 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
     return results
 
 
-@router.post("/api/books/detect-series")
-async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict:
+@router.post("/api/books/detect-series", response_model=dict)
+async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict[str, int | list[str]]:
     """
     Scans all books without an assigned series and auto-detects groupings
     using title patterns like "<series> <number> [- <subtitle>]".

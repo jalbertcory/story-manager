@@ -118,6 +118,40 @@ Use Alembic migrations for database changes. Do not put one-time schema or data 
 
 ## Tests
 
+Run the checks required before publishing a PR:
+
+```bash
+make pr-check
+```
+
+This runs Python formatting/linting, Python type checking, frontend linting,
+and frontend dependency audits. CI also audits Python dependencies.
+
+Run Python type checking on its own:
+
+```bash
+make typecheck
+```
+
+Mypy runs in strict mode across all application modules in `backend/app` and all
+production Python under `services`. Functions need complete signatures, collections
+need type arguments, and typed functions cannot silently return `Any` or call
+untyped functions. Strict mode also checks incompatible comparisons and requires
+explicit public re-exports.
+It targets Python 3.13, matching the development and CI environment. Test fixtures,
+Alembic migration scripts, and operational scripts are outside this gate.
+New application/service modules are included automatically.
+
+The pinned checker and third-party stubs are installed with the root `dev` extra.
+Optional model runtimes remain in their isolated environments; narrow import
+exceptions in `pyproject.toml` cover those packages and upstream libraries without
+typing metadata. Their APIs are not fully checked, but our adapter code is.
+Keep exceptions limited to the external library; do not exclude application modules
+or add broad error suppressions. Use precise schemas, `TypedDict`, protocols, and
+explicit handling of nullable values when fixing errors. Dynamic JSON and untyped
+external libraries still require narrow validation or documented casts at their
+boundaries; strict mode does not mean every external value is statically known.
+
 Run backend and frontend unit tests:
 
 ```bash

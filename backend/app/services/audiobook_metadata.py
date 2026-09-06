@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 from pathlib import Path, PurePosixPath
+from typing import Any, TypedDict, cast
+from decimal import Decimal
 import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +20,18 @@ _SERIES = re.compile(r"^(.+?)[_:]\s*(.+?),\s*(?:book|volume|vol\.?)\s*(\d+(?:\.\
 _EXTENSIONS = {".m4b", ".m4a", ".mp3", ".mp4", ".aac", ".flac", ".ogg", ".opus", ".wav", ".cue", ".zip"}
 
 
-def filename_metadata(names: list[str]) -> dict:
+class AudioMetadata(TypedDict, total=False):
+    title: str | None
+    author: str | None
+    series: str | None
+    series_index: float
+    asin: str
+    narrator: str | None
+    description: str | None
+    genre: str | None
+
+
+def filename_metadata(names: list[str]) -> AudioMetadata:
     parts = [part for name in names for part in PurePosixPath(name.replace("\\", "/")).parts]
     value = next((part for part in parts if _ASIN.search(part)), parts[0] if len(parts) == 1 else "")
     if not value and names:
@@ -27,40 +40,45 @@ def filename_metadata(names: list[str]) -> dict:
         value = value[: -len(Path(value).suffix)]
     asin = _ASIN.search(value)
     value = _ASIN.sub("", value).strip(" ._-")
-    result = {"title": value or "Imported audiobook"}
+    result: AudioMetadata = {"title": value or "Imported audiobook"}
     if asin:
         result["asin"] = asin.group(1).upper()
     series = _SERIES.fullmatch(value)
     if series and float(series.group(3)) < 10000:
-        result.update(title=series.group(1).strip(), series=series.group(2).strip(), series_index=float(series.group(3)))
+        result.update(
+            {"title": series.group(1).strip(), "series": series.group(2).strip(), "series_index": float(series.group(3))}
+        )
     return result
 
 
-def cue_metadata(path: Path) -> dict:
+def cue_metadata(path: Path) -> AudioMetadata:
     # Album-level fields only: TRACK titles and performers describe individual tracks.
     payload = path.read_bytes()[:256_000]
     try:
         content = payload.decode("utf-8-sig")
     except UnicodeDecodeError:
         content = payload.decode("cp1252", errors="replace")
-    result = {}
+    result: AudioMetadata = {}
     for line in content.splitlines():
         if re.match(r"\s*TRACK\s+\d+", line, re.I):
             break
         match = re.fullmatch(r'\s*(TITLE|PERFORMER)\s+"([^"]+)"\s*', line, re.I)
         if match:
-            result["title" if match.group(1).upper() == "TITLE" else "author"] = match.group(2).strip()
+            if match.group(1).upper() == "TITLE":
+                result["title"] = match.group(2).strip()
+            else:
+                result["author"] = match.group(2).strip()
     return result
 
 
-def tag_metadata(payload: dict, *, single_file: bool) -> dict:
+def tag_metadata(payload: dict[str, Any], *, single_file: bool) -> AudioMetadata:
     tags = {str(key).casefold(): str(value).strip() for key, value in payload.get("format", {}).get("tags", {}).items()}
 
-    def value(*keys):
+    def value(*keys: str) -> str | None:
         return next((tags[key][:2000] for key in keys if tags.get(key)), None)
 
     # In a multi-file book, a file TITLE usually names a chapter. ALBUM names the book.
-    result = {
+    result: AudioMetadata = {
         "title": value("album") or (value("title") if single_file else None),
         "author": value("author", "artist", "album_artist", "albumartist"),
         "series": value("series", "series_name", "series-name", "mvnm"),
@@ -74,7 +92,7 @@ def tag_metadata(payload: dict, *, single_file: bool) -> dict:
     asin = value("asin", "audible_asin", "audibleasin")
     if asin and re.fullmatch(r"(?:B[0-9A-Z]{9}|[0-9]{9}[0-9X])", asin, re.I):
         result["asin"] = asin.upper()
-    return {key: val for key, val in result.items() if val is not None}
+    return cast(AudioMetadata, {key: val for key, val in result.items() if val is not None})
 
 
 async def _run(*command: str) -> bytes:
@@ -155,7 +173,8 @@ async def enrich_audio_only_book(
         book.author = metadata.get("author") or book.author
     if not book.series and metadata.get("series"):
         book.series = metadata["series"]
-        book.series_index = metadata.get("series_index")
+        series_index = metadata.get("series_index")
+        book.series_index = Decimal(str(series_index)) if series_index is not None else None
     if not book.cover_path and cover_path:
         # The edition path always sits under library/audiobooks/<book>/imported/<edition>.
         from .audiobook_import import relative_library_path

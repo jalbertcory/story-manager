@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from docker import DockerClient
+    from docker.models.containers import Container
 
 MANAGED_LABEL = "story-manager.gpu-scheduler.managed"
 ORDER_LABEL = "story-manager.gpu-scheduler.order"
@@ -29,9 +33,9 @@ class DockerController:
     """Start and stop only containers explicitly opted in through a label."""
 
     def __init__(self) -> None:
-        self._client = None
+        self._client: DockerClient | None = None
 
-    def _docker_client(self):
+    def _docker_client(self) -> DockerClient:
         if self._client is None:
             import docker
 
@@ -39,29 +43,39 @@ class DockerController:
         return self._client
 
     @staticmethod
-    def _order(container) -> int:
+    def _order(container: Container) -> int:
         raw = container.labels.get(ORDER_LABEL, "100")
         try:
             return int(raw)
         except (TypeError, ValueError):
             return 100
 
-    def _managed_containers(self):
+    @staticmethod
+    def _name(container: Container) -> str:
+        name = container.name
+        if name is None:
+            raise RuntimeError("Docker returned a container without a name.")
+        return name
+
+    def _managed_containers(self) -> list[Container]:
         containers = self._docker_client().containers.list(
             all=True,
             filters={"label": f"{MANAGED_LABEL}=true"},
         )
-        return sorted(containers, key=lambda item: (self._order(item), item.name.casefold()))
+        return sorted(containers, key=lambda item: (self._order(item), self._name(item).casefold()))
 
     @classmethod
-    def _snapshot(cls, container) -> ContainerSnapshot:
+    def _snapshot(cls, container: Container) -> ContainerSnapshot:
         container.reload()
         state = container.attrs.get("State") or {}
         health = (state.get("Health") or {}).get("Status")
         tags = container.image.tags if container.image is not None else []
+        identifier = container.id
+        if identifier is None:
+            raise RuntimeError("Docker returned a container without an ID.")
         return ContainerSnapshot(
-            id=container.id[:12],
-            name=container.name,
+            id=identifier[:12],
+            name=cls._name(container),
             status=state.get("Status") or container.status,
             health=health,
             order=cls._order(container),

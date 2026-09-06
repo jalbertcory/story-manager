@@ -7,7 +7,7 @@ import shutil
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,14 @@ from ..logging_config import read_persisted_logs, redact_value
 from ..models import ProcessingJob
 from .endpoint_pool import configured_endpoints
 from .processing_queue import ProcessingQueue
+
+
+@overload
+def _aware(value: datetime) -> datetime: ...
+
+
+@overload
+def _aware(value: None) -> None: ...
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -56,7 +64,7 @@ async def processing_job_metrics(db: AsyncSession, *, window_hours: int = 24) ->
             for row in rows
             if row.completed_at and row.started_at
         ]
-        statuses = defaultdict(int)
+        statuses: defaultdict[str, int] = defaultdict(int)
         for row in rows:
             statuses[row.status] += 1
         return {
@@ -172,7 +180,9 @@ def diagnostic_configuration() -> dict[str, Any]:
         "PROCESSING_TTS_CONCURRENCY",
         "PROCESSING_TRANSCRIPTION_CONCURRENCY",
     )
-    return redact_value({name: os.getenv(name, "default") for name in names})
+    redacted = redact_value({name: os.getenv(name, "default") for name in names})
+    assert isinstance(redacted, dict)
+    return redacted
 
 
 def diagnostic_logs(limit: int = 500) -> list[dict[str, Any]]:

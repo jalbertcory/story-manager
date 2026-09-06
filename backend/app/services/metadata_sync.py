@@ -76,8 +76,8 @@ class MetadataSuggestion:
     def to_schema(self) -> schemas.MetadataSyncBookResult:
         return schemas.MetadataSyncBookResult(
             book_id=self.book.id,
-            title=self.book.title,
-            author=self.book.author,
+            title=self.book.title or "",
+            author=self.book.author or "",
             matched=self.matched,
             source=self.source if self.matched else None,
             match_confidence=round(self.match_confidence, 3),
@@ -127,8 +127,8 @@ def _strip_trailing_metadata(value: str) -> str:
 
 
 def _title_search_variants(book: models.Book) -> list[str]:
-    variants = _bibliographic_title_variants(book.title, book.series or "") or [book.title.strip()]
-    stripped = _strip_trailing_metadata(book.title)
+    variants = _bibliographic_title_variants(book.title or "", book.series or "") or [(book.title or "").strip()]
+    stripped = _strip_trailing_metadata(book.title or "")
     if stripped and _normalize_text(stripped) not in {_normalize_text(variant) for variant in variants}:
         variants.append(stripped)
     if book.series and stripped:
@@ -160,8 +160,8 @@ def _score_search_doc(book: models.Book, doc: dict[str, Any]) -> float:
         series_index=doc.get("series_index"),
     )
     return _score_metadata_candidate(
-        local_title=book.title,
-        local_author=book.author,
+        local_title=book.title or "",
+        local_author=book.author or "",
         remote_title=remote_title,
         remote_authors=[str(author) for author in author_names if author],
         local_ids=_get_manual_remote_ids(book),
@@ -353,7 +353,7 @@ def _suggestion_match_issues(
     metadata_details: dict[str, Any],
 ) -> list[str]:
     return _series_match_issues(
-        local_title=book.title,
+        local_title=book.title or "",
         local_series=book.series or "",
         local_series_index=book.series_index,
         remote_title=remote_title,
@@ -393,8 +393,8 @@ def _infer_possible_missing_books(
         return []
 
     local_titles = {
-        _normalize_text(local_book.title)
-        for local_book in local_books_by_author.get(_normalize_text(book.author), [])
+        _normalize_text(local_book.title or "")
+        for local_book in local_books_by_author.get(_normalize_text(book.author or ""), [])
         if local_book.series and _normalize_series(local_book.series) == normalized_series
     }
 
@@ -580,8 +580,8 @@ def _score_google_books_volume(book: models.Book, volume: dict[str, Any]) -> flo
         authors = [authors]
     metadata_details = _google_books_metadata_details(volume)
     return _score_metadata_candidate(
-        local_title=book.title,
-        local_author=book.author,
+        local_title=book.title or "",
+        local_author=book.author or "",
         remote_title=str(volume_doc.get("title") or ""),
         remote_authors=[str(author) for author in authors if author],
         local_ids=_get_manual_remote_ids(book),
@@ -630,7 +630,7 @@ def _series_peer_author_keys(
     if not book.series:
         return set()
 
-    author_books = local_books_by_author.get(_normalize_text(book.author), [])
+    author_books = local_books_by_author.get(_normalize_text(book.author or ""), [])
     keys: set[str] = set()
     for local_book in author_books:
         if local_book.id == book.id or not local_book.series:
@@ -894,8 +894,8 @@ def _collect_amazon_matches(
         except requests.RequestException:
             detailed = candidate
         score = _score_metadata_candidate(
-            local_title=book.title,
-            local_author=book.author,
+            local_title=book.title or "",
+            local_author=book.author or "",
             remote_title=detailed.title,
             remote_authors=detailed.authors,
             local_ids=manual_remote_ids,
@@ -983,7 +983,7 @@ def _fetch_author_work_entries(
             "title": entry.get("title", "").strip(),
         }
         for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("title"), str) and entry.get("title").strip()
+        if isinstance(entry, dict) and isinstance(entry.get("title"), str) and entry["title"].strip()
     ]
     author_work_cache[author_key] = normalized_entries
     return normalized_entries

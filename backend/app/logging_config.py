@@ -11,12 +11,13 @@ import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
+from types import TracebackType
 
 from .config import LOG_BACKUP_COUNT, LOG_DIR, LOG_MAX_BYTES
 from .observability_context import job_id_var, request_id_var
 
-_LOG_BUFFER: collections.deque = collections.deque(maxlen=1000)
+_LOG_BUFFER: collections.deque[dict[str, Any]] = collections.deque(maxlen=1000)
 _LOG_FILE = LOG_DIR / "story-manager.jsonl"
 QUIET_SUCCESS_PATHS = frozenset(
     {
@@ -131,7 +132,9 @@ class _RedactedTextFormatter(logging.Formatter):
         finally:
             record.msg, record.args = original_message, original_args
 
-    def formatException(self, exc_info) -> str:
+    def formatException(
+        self, exc_info: tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
+    ) -> str:
         return redact_text(super().formatException(exc_info))
 
 
@@ -143,7 +146,7 @@ class _MemoryLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def setup_logging() -> tuple[logging.StreamHandler, _MemoryLogHandler, RotatingFileHandler]:
+def setup_logging() -> tuple[logging.StreamHandler[TextIO], _MemoryLogHandler, RotatingFileHandler]:
     use_json = os.getenv("LOG_FORMAT", "").lower() == "json"
     correlation_filter = _CorrelationFilter()
     root_logger = logging.getLogger()
@@ -178,12 +181,12 @@ def setup_logging() -> tuple[logging.StreamHandler, _MemoryLogHandler, RotatingF
     return console_handler, mem_handler, file_handler
 
 
-def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file: Path | None = None) -> list[dict]:
+def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file: Path | None = None) -> list[dict[str, Any]]:
     """Read the newest structured entries across the bounded rotated files."""
     target = log_file or _LOG_FILE
     candidates = [target.with_name(f"{target.name}.{index}") for index in range(LOG_BACKUP_COUNT, 0, -1)]
     candidates.append(target)
-    entries: collections.deque = collections.deque(maxlen=max(1, limit))
+    entries: collections.deque[dict[str, Any]] = collections.deque(maxlen=max(1, limit))
     for candidate in candidates:
         if not candidate.is_file():
             continue

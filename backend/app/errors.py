@@ -1,6 +1,7 @@
 """Structured error responses and global exception handlers."""
 
 import logging
+from collections.abc import Mapping
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -24,7 +25,9 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", None) or request_id_var.get()
 
 
-def _error_response(request: Request, status_code: int, detail, *, headers=None) -> JSONResponse:
+def _error_response(
+    request: Request, status_code: int, detail: object, *, headers: Mapping[str, str] | None = None
+) -> JSONResponse:
     request_id = _request_id(request)
     response_headers = dict(headers or {})
     if request_id:

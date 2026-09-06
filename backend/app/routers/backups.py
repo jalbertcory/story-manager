@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import schemas
+from .. import models, schemas
 from ..config import BACKUP_PATH, BACKUP_RETENTION_COUNT
 from ..database import get_db
 from ..services.backups import BackupError, list_backups, resolve_backup
@@ -15,7 +15,7 @@ from ..services.processing_queue import queue_processing_job
 router = APIRouter()
 
 
-def _job_response(job) -> schemas.ProcessingJob:
+def _job_response(job: models.ProcessingJob) -> schemas.ProcessingJob:
     return schemas.ProcessingJob.model_validate(job)
 
 

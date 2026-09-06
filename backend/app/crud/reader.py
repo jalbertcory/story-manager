@@ -1,16 +1,18 @@
 """Reader API CRUD operations."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, TypedDict
 
 from fastapi import HTTPException
 from sqlalchemy import asc, case, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 from .. import models
 
 
-def _has_reader_content():
+def _has_reader_content() -> ColumnElement[bool]:
     return or_(
         models.Book.current_path.is_not(None),
         select(models.ImportedAudiobook.id)
@@ -22,7 +24,7 @@ def _has_reader_content():
     )
 
 
-def _reader_books_query():
+def _reader_books_query() -> Select[tuple[models.Book]]:
     return select(models.Book).where(
         _has_reader_content(),
         models.Book.download_status.is_(None),
@@ -34,7 +36,7 @@ async def get_reader_books(db: AsyncSession, skip: int = 0, limit: int = 100) ->
     result = await db.execute(
         _reader_books_query().order_by(desc(models.Book.content_updated_at), asc(models.Book.title)).offset(skip).limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def search_reader_books(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[models.Book]:
@@ -54,7 +56,7 @@ async def search_reader_books(db: AsyncSession, q: str, skip: int = 0, limit: in
         .offset(skip)
         .limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_reader_book(db: AsyncSession, book_id: int) -> models.Book:
@@ -65,7 +67,15 @@ async def get_reader_book(db: AsyncSession, book_id: int) -> models.Book:
     return book
 
 
-async def get_reader_series(db: AsyncSession) -> List[dict]:
+class ReaderSeriesSummary(TypedDict):
+    name: str
+    book_count: int
+    total_words: int
+    latest_update: datetime
+    cover_book_id: int | None
+
+
+async def get_reader_series(db: AsyncSession) -> list[ReaderSeriesSummary]:
     """Group reader-eligible books by series, returning summary stats."""
     query = (
         select(
@@ -100,7 +110,7 @@ async def get_reader_series(db: AsyncSession) -> List[dict]:
 async def get_reader_standalone_books(db: AsyncSession) -> List[models.Book]:
     """Get reader-eligible books that have no series assigned."""
     result = await db.execute(_reader_books_query().where(models.Book.series.is_(None)).order_by(asc(models.Book.title)))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_reader_books_by_series(db: AsyncSession, name: str) -> List[models.Book]:
@@ -110,13 +120,13 @@ async def get_reader_books_by_series(db: AsyncSession, name: str) -> List[models
     result = await db.execute(
         _reader_books_query().where(func.lower(models.Book.series) == name.lower()).order_by(*_series_order_columns())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_all_reader_books(db: AsyncSession) -> List[models.Book]:
     """Return all reader-eligible books."""
     result = await db.execute(_reader_books_query().order_by(asc(models.Book.title)))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> List[models.Book]:
@@ -124,7 +134,7 @@ async def get_reader_updates(db: AsyncSession, since: Optional[datetime]) -> Lis
     if since is not None:
         query = query.where(models.Book.content_updated_at > since)
     result = await db.execute(query.order_by(desc(models.Book.content_updated_at), asc(models.Book.title)))
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_reader_books_by_series_names(db: AsyncSession, series_names: list[str]) -> dict[str, list[models.Book]]:

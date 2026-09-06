@@ -1,11 +1,39 @@
 """Filtered group summaries with bounded payloads and stable cursor traversal."""
 
+from typing import TypedDict
+
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from sqlalchemy.sql.elements import ColumnElement
 from .. import models
-from ..crud.catalog import build_catalog_filter_conditions, get_catalog_facets, get_catalog_snapshot_max_id
+from ..crud.catalog import CatalogFacets, build_catalog_filter_conditions, get_catalog_facets, get_catalog_snapshot_max_id
 from ..catalog_pagination import cursor_signature, decode_cursor, encode_cursor, seek_condition
+
+
+class LibraryGroup(TypedDict):
+    name: str | None
+    book_count: int
+    author: str | None
+    author_count: int
+    audio_count: int
+    universe_id: int | None
+    cover_ids: list[int]
+
+
+class LibraryGroupsPage(TypedDict):
+    items: list[LibraryGroup]
+    next_cursor: str | None
+    total_count: int | None
+    facets: CatalogFacets
+
+
+class _CatalogFilters(TypedDict):
+    q: str
+    universe: int | None
+    source: str | None
+    genre: str | None
+    audiobook: str | None
+    review: str | None
 
 
 async def library_groups(
@@ -22,10 +50,10 @@ async def library_groups(
     sort_order: str = "asc",
     limit: int | None = None,
     cursor: str | None = None,
-):
+) -> list[LibraryGroup] | LibraryGroupsPage:
     from .library import universe_expression, playable_audio_expression
 
-    filters = dict(q=q, universe=universe, source=source, genre=genre, audiobook=audiobook, review=review)
+    filters: _CatalogFilters = dict(q=q, universe=universe, source=source, genre=genre, audiobook=audiobook, review=review)
     signature = cursor_signature(dict(**filters, group_by=group_by, sort_by=sort_by, sort_order=sort_order, limit=limit))
     if cursor:
         snapshot, position = decode_cursor(cursor, signature=signature, sort_by=sort_by)
@@ -73,7 +101,7 @@ async def library_groups(
 
     # Rank covers only for the groups on this page.
     page_keys = [g["name"].lower() if group_by == "series" else g["name"] for g in groups if g["name"] is not None]
-    page_condition = key.in_(page_keys)
+    page_condition: ColumnElement[bool] = key.in_(page_keys)
     if any(g["name"] is None for g in groups):
         page_condition = page_condition | key.is_(None)
     covers = (
@@ -89,7 +117,7 @@ async def library_groups(
         .where(*conditions, page_condition, models.Book.cover_path.is_not(None))
         .subquery()
     )
-    cover_map = {}
+    cover_map: dict[str | None, list[int]] = {}
     if groups:
         for row in await db.execute(select(covers).where(covers.c.rank <= 3).order_by(covers.c.rank)):
             cover_map.setdefault(row.name, []).append(row.id)
@@ -101,16 +129,26 @@ async def library_groups(
             signature=signature,
             position=[last["sort_value"], last["name_value"], last["first_id"]],
         )
+    result: list[LibraryGroup] = []
     for group in groups:
         cover_key = group["name"].lower() if group_by == "series" and group["name"] else group["name"]
-        group["cover_ids"] = cover_map.get(cover_key, [])
-        for internal in ("sort_value", "name_value", "first_id", "word_count", "updated_at"):
-            group.pop(internal)
+        result.append(
+            LibraryGroup(
+                name=group["name"],
+                book_count=group["book_count"],
+                author=group["author"],
+                author_count=group["author_count"],
+                audio_count=group["audio_count"],
+                universe_id=group["universe_id"],
+                cover_ids=cover_map.get(cover_key, []),
+            )
+        )
     if limit is None:
-        return groups
-    genre_conditions = build_catalog_filter_conditions(**{**filters, "genre": None}, snapshot_max_id=snapshot)
+        return result
+    genre_filters: _CatalogFilters = {**filters, "genre": None}
+    genre_conditions = build_catalog_filter_conditions(**genre_filters, snapshot_max_id=snapshot)
     return {
-        "items": groups,
+        "items": result,
         "next_cursor": next_cursor,
         "total_count": await db.scalar(select(func.count()).select_from(aggregate)),
         "facets": await get_catalog_facets(db, conditions=conditions, genre_conditions=genre_conditions),

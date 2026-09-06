@@ -2,10 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.types import Scope
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -52,7 +54,7 @@ RASTER_COVER_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 class RasterCoverStaticFiles(StaticFiles):
     """Serve only passive raster cover formats from the public cover directory."""
 
-    async def get_response(self, path: str, scope):
+    async def get_response(self, path: str, scope: Scope) -> Response:
         if Path(path).suffix.lower() not in RASTER_COVER_EXTENSIONS:
             return JSONResponse(status_code=404, content={"detail": "Cover not found"})
         response = await super().get_response(path, scope)
@@ -67,7 +69,7 @@ _processing_queue = get_processing_queue()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     is_test_app = bool(app.dependency_overrides)
     validate_admin_auth_configuration()
     # Re-attach handlers after uvicorn resets logging config on startup
@@ -135,8 +137,8 @@ app.include_router(reader.router)
 app.include_router(metadata.router)
 
 
-@app.get("/health")
-async def health_check(db: AsyncSession = Depends(get_db)):
+@app.get("/health", response_model=None)
+async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str] | JSONResponse:
     """Health check endpoint for container orchestration."""
     try:
         await db.execute(text("SELECT 1"))
@@ -149,14 +151,14 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         )
 
 
-@app.get("/health/live")
-async def liveness_check():
+@app.get("/health/live", response_model=None)
+async def liveness_check() -> dict[str, str]:
     """Process-only health check that never depends on external services."""
     return {"status": "alive"}
 
 
 @app.get("/health/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)):
+async def readiness_check(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     """Required-dependency readiness check for container orchestration."""
     from .services.observability import health_report
 
@@ -179,7 +181,7 @@ if _FRONTEND_DIST.is_dir():
     )
 
     @app.get("/{full_path:path}")
-    async def serve_frontend(request: Request, full_path: str):
+    async def serve_frontend(request: Request, full_path: str) -> FileResponse:
         """Serve the SPA index.html for any non-API, non-reader path."""
         # Try to serve the exact file first (e.g. favicon.ico, robots.txt)
         file_path = _FRONTEND_DIST / full_path
@@ -189,6 +191,6 @@ if _FRONTEND_DIST.is_dir():
 
 else:
 
-    @app.get("/")
-    def read_root() -> dict:
+    @app.get("/", response_model=dict)
+    def read_root() -> dict[str, str]:
         return {"message": "Welcome to the Story Manager API"}

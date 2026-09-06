@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import cast
+from collections.abc import Callable, Sequence
+
 import asyncio
 import logging
 import posixpath
@@ -16,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
-from ..models import AudiobookChapter
+from ..models import AudiobookChapter, AudiobookSentence
 from .audiobook_publication import publish_reader_audiobook
 
 logger = logging.getLogger(__name__)
@@ -38,7 +41,7 @@ def _ms_to_clock(ms: int) -> str:
     return f"{hours:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
 
-def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
+def _ensure_toc_link_ids(toc_items: Sequence[object], prefix: str = "toc") -> None:
     for index, item in enumerate(toc_items or []):
         uid = f"{prefix}_{index}"
         if isinstance(item, epub.Link) and not item.uid:
@@ -51,7 +54,7 @@ def _ensure_toc_link_ids(toc_items, prefix: str = "toc") -> None:
                 _ensure_toc_link_ids(item[1], uid)
 
 
-def _sanitize_epub3_metadata(ebook) -> None:
+def _sanitize_epub3_metadata(ebook: epub.EpubBook) -> None:
     """Remove EPUB 2-only metadata syntax that is invalid in an EPUB 3 package."""
     ebook.metadata.pop(_CALIBRE_NAMESPACE, None)
     for entries in ebook.metadata.get(_DC_NAMESPACE, {}).values():
@@ -63,7 +66,7 @@ def _sanitize_epub3_metadata(ebook) -> None:
                     del attributes[name]
 
 
-def _document_ids(ebook) -> dict[str, set[str]]:
+def _document_ids(ebook: epub.EpubBook) -> dict[str, set[str]]:
     ids_by_name: dict[str, set[str]] = {}
     for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         soup = BeautifulSoup(item.content, "html.parser")
@@ -71,7 +74,7 @@ def _document_ids(ebook) -> dict[str, set[str]]:
     return ids_by_name
 
 
-def _sanitize_toc_targets(toc_items, ids_by_name: dict[str, set[str]]) -> None:
+def _sanitize_toc_targets(toc_items: Sequence[object], ids_by_name: dict[str, set[str]]) -> None:
     """Strip only fragments that do not exist in their target XHTML document."""
     for item in toc_items or []:
         target = item[0] if isinstance(item, (tuple, list)) and item else item
@@ -93,7 +96,7 @@ def _document_resource_target(document_name: str, raw_href: str) -> tuple[str, s
     return target, fragment
 
 
-def _sanitize_document_targets(ebook, ids_by_name: dict[str, set[str]]) -> None:
+def _sanitize_document_targets(ebook: epub.EpubBook, ids_by_name: dict[str, set[str]]) -> None:
     """Keep inherited hyperlinks usable when their source fragments are stale."""
     for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         soup = BeautifulSoup(item.content, "html.parser")
@@ -113,7 +116,7 @@ def _sanitize_document_targets(ebook, ids_by_name: dict[str, set[str]]) -> None:
             item.content = str(soup).encode("utf-8")
 
 
-def _remove_invalid_placeholder_resources(ebook) -> None:
+def _remove_invalid_placeholder_resources(ebook: epub.EpubBook) -> None:
     """Drop tiny, non-image placeholders that EPUB readers cannot render."""
     placeholders = [
         item
@@ -137,7 +140,7 @@ def _remove_invalid_placeholder_resources(ebook) -> None:
         ebook.items.remove(placeholder)
 
 
-def _normalize_resource_media_types(ebook) -> None:
+def _normalize_resource_media_types(ebook: epub.EpubBook) -> None:
     replacements = {
         "application/x-font-truetype": "font/ttf",
         "application/x-font-opentype": "font/otf",
@@ -146,7 +149,7 @@ def _normalize_resource_media_types(ebook) -> None:
         item.media_type = replacements.get(item.media_type, item.media_type)
 
 
-def _prepare_epub3_documents(ebook) -> None:
+def _prepare_epub3_documents(ebook: epub.EpubBook) -> None:
     """Supply required document titles and declare embedded SVG content."""
     fallback_title = ebook.title or "Audiobook"
     for item in ebook.get_items_of_type(ebooklib.ITEM_DOCUMENT):
@@ -160,12 +163,12 @@ def _prepare_epub3_documents(ebook) -> None:
             item.properties.append("svg")
 
 
-def _ensure_epub3_navigation(ebook) -> None:
+def _ensure_epub3_navigation(ebook: epub.EpubBook) -> None:
     if not any(isinstance(item, epub.EpubNav) for item in ebook.get_items()):
         ebook.add_item(epub.EpubNav(uid="nav", file_name="nav.xhtml", title="Navigation"))
 
 
-def _build_smil(chapter, sentences: list, audio_filename: str) -> str:
+def _build_smil(chapter: AudiobookChapter, sentences: list[AudiobookSentence], audio_filename: str) -> str:
     """Generate EPUB 3 Media Overlay SMIL XML for a chapter."""
     text_file_name = chapter.content_file_name or f"chapter{chapter.chapter_number:04d}.xhtml"
     root = ET.Element(
@@ -203,7 +206,9 @@ def _build_smil(chapter, sentences: list, audio_filename: str) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
 
 
-async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: Path, db: AsyncSession) -> None:
+async def _assemble_chapter(
+    book_id: int, chapter: AudiobookChapter, sentences: list[AudiobookSentence], output_dir: Path, db: AsyncSession
+) -> None:
     if not sentences:
         logger.warning("Chapter %s has no sentences with audio; skipping assembly.", chapter.id)
         return
@@ -221,14 +226,14 @@ async def _assemble_chapter(book_id: int, chapter, sentences: list, output_dir: 
     # provider-reported durations, which accumulated into visibly incorrect
     # SMIL timelines. Rounding cumulative frame durations preserves both every
     # intermediate boundary and the exact rounded chapter total.
-    from mutagen.mp3 import MP3
+    from mutagen.mp3 import MP3, MPEGInfo
 
     cumulative_exact_ms = 0.0
     previous_boundary_ms = 0
     corrected_durations = 0
     for sentence, snippet_path in zip(sentences, snippet_paths, strict=True):
-        snippet = MP3(str(snippet_path))
-        cumulative_exact_ms += snippet.info.length * 1000
+        snippet = cast(Callable[[str], MP3], MP3)(str(snippet_path))
+        cumulative_exact_ms += cast(MPEGInfo, snippet.info).length * 1000
         next_boundary_ms = round(cumulative_exact_ms)
         duration_ms = next_boundary_ms - previous_boundary_ms
         if sentence.audio_duration_ms != duration_ms:

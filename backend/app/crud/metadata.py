@@ -7,6 +7,7 @@ from typing import Optional
 
 from sqlalchemy import asc, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.future import select
 
 from .. import models
@@ -51,7 +52,7 @@ async def get_pending_metadata_sync_jobs(db: AsyncSession) -> list[models.Metada
         .where(models.MetadataSyncJob.status == MetadataJobStatus.QUEUED.value)
         .order_by(asc(models.MetadataSyncJob.created_at))
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def reset_running_metadata_sync_jobs(db: AsyncSession) -> None:
@@ -129,7 +130,7 @@ async def get_metadata_matches_by_book_id(db: AsyncSession, book_id: int) -> lis
         .where(models.BookMetadataMatch.book_id == book_id)
         .order_by(models.BookMetadataMatch.match_confidence.desc().nullslast(), models.BookMetadataMatch.id.desc())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def get_metadata_match(db: AsyncSession, match_id: int) -> Optional[models.BookMetadataMatch]:
@@ -147,7 +148,7 @@ async def get_metadata_proposal(db: AsyncSession, proposal_id: int) -> Optional[
     return result.scalars().first()
 
 
-def actionable_metadata_proposal_conditions():
+def actionable_metadata_proposal_conditions() -> tuple[ColumnElement[bool], ...]:
     """Only proposals with a pending decision belong in the review queue.
 
     Approved matches can retain open informational proposals about missing
@@ -202,4 +203,4 @@ async def get_stale_books_for_metadata_sync(
         .order_by(asc(models.Book.id))
         .limit(limit)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())

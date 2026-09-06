@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -126,7 +127,7 @@ manager = AvailabilityManager(store, DockerController())
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     task = asyncio.create_task(manager.run())
     try:
         yield
@@ -185,7 +186,7 @@ async def reconcile() -> dict[str, Any]:
 
 
 @app.get("/")
-async def index():
+async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 

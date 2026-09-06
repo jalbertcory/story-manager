@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, cast
 
-from sqlalchemy import select
+from sqlalchemy import Table, select
 
 from ..database import SessionLocal
 from ..models import ImportedAudiobook
@@ -49,7 +49,8 @@ class AudiobookImportQueue:
             ids = list(result.scalars().all())
             if ids:
                 await db.execute(
-                    ImportedAudiobook.__table__.update()
+                    cast(Table, ImportedAudiobook.__table__)
+                    .update()
                     .where(ImportedAudiobook.id.in_(ids))
                     .values(status="queued", progress_detail="Queued after restart")
                 )

@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "verify":
             manifest = verify_backup_archive(args.archive.resolve())
-            library = manifest.get("library", {})
+            raw_library = manifest.get("library")
+            library = raw_library if isinstance(raw_library, dict) else {}
             print(
                 json.dumps(
                     {

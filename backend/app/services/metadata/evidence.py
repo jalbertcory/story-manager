@@ -254,11 +254,11 @@ def _needs_llm(book: Book, evidence: EpubEvidence) -> bool:
         return False
     if _unstable(book.title) or _unstable(book.author):
         return True
-    if evidence.package_title and title_similarity(book.title, evidence.package_title) < 0.72:
+    if evidence.package_title and title_similarity(book.title or "", evidence.package_title) < 0.72:
         return True
-    if evidence.package_author and author_similarity(book.author, evidence.package_author) < 0.65:
+    if evidence.package_author and author_similarity(book.author or "", evidence.package_author) < 0.65:
         return True
-    if evidence.heading_title and title_similarity(book.title, evidence.heading_title) < 0.72:
+    if evidence.heading_title and title_similarity(book.title or "", evidence.heading_title) < 0.72:
         return True
     return False
 

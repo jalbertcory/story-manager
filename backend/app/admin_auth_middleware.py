@@ -1,6 +1,6 @@
 """Middleware that protects admin API routes when password auth is enabled."""
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -8,7 +8,7 @@ from .auth import ADMIN_AUTH_COOKIE, is_admin_auth_enabled, validate_admin_sessi
 
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not self._requires_admin_auth(request):
             return await call_next(request)
 

@@ -123,7 +123,7 @@ def _reader_book_payload(
     series_user_genre_tags: list[str] | None = None,
     audiobook_chapters: list[models.AudiobookChapter] | None = None,
     has_human_audiobook: bool = False,
-) -> dict:
+) -> dict[str, object]:
     base_url = str(request.base_url).rstrip("/")
     audiobook = _reader_audiobook_capability(book, audiobook_chapters or [])
     return {
@@ -162,7 +162,7 @@ def _reader_audiobook_status(book: models.Book, ready: int, total: int) -> str:
 def _reader_audiobook_capability(
     book: models.Book,
     chapters: list[models.AudiobookChapter],
-) -> dict | None:
+) -> dict[str, str | int] | None:
     has_current_text = _has_current_audiobook_text(book)
     if not book.audiobook_enabled and not has_current_text:
         return None
@@ -488,7 +488,7 @@ async def get_reader_human_audiobook_smil(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     response = await audiobook_router.get_imported_track_smil(edition_id, track_id, db)
-    text = response.body.decode("utf-8")
+    text = bytes(response.body).decode("utf-8")
     admin_audio_prefix = f"/api/imported-audiobooks/{edition_id}/tracks/"
     reader_audio_prefix = f"/reader/human-audiobooks/{edition_id}/tracks/"
     return Response(text.replace(admin_audio_prefix, reader_audio_prefix), media_type="application/smil+xml")
@@ -515,7 +515,7 @@ def _asset_headers(etag: str, size: int, *, ranges: bool = False) -> dict[str, s
     return headers
 
 
-def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict:
+def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict[str, str | int | None]:
     href = normalize_resource_href(chapter.source_href or chapter.content_file_name, chapter.chapter_number)
     key = chapter.stable_chapter_key or stable_chapter_key(href)
     audio_path = chapter_reader_audio_path(chapter)
@@ -528,7 +528,7 @@ def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict:
         and (chapter.audio_revision or 0) > 0
     )
     state = chapter.generation_state if chapter.generation_state in {"pending", "processing", "error"} else "ready"
-    payload = {
+    payload: dict[str, str | int | None] = {
         "key": key,
         "title": chapter.title or f"Chapter {chapter.chapter_number}",
         "href": href,
@@ -544,6 +544,7 @@ def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict:
     }
     if not is_ready:
         return payload
+    assert audio_path is not None and smil_content is not None
     version = chapter.audio_revision
     payload.update(
         {
