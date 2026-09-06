@@ -301,7 +301,7 @@ export function ChapterUpdateHistory({
   isError,
   error,
 }: {
-  updateHistory?: components["schemas"]["BookChapterUpdateHistory"];
+  updateHistory: components["schemas"]["BookChapterUpdateHistory"] | undefined;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;

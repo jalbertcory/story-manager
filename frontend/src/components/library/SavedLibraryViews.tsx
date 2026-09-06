@@ -11,10 +11,12 @@ function readViews(): SavedView[] {
     const data: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     return Array.isArray(data)
       ? data.filter(
-          (v): v is SavedView =>
+          (v: unknown): v is SavedView =>
             v != null &&
             typeof v === "object" &&
+            "name" in v &&
             typeof v.name === "string" &&
+            "path" in v &&
             typeof v.path === "string" &&
             /^\/(?:\?|$)/.test(v.path),
         )

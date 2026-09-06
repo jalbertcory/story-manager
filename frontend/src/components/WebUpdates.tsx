@@ -40,7 +40,7 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
         "active-processing-jobs",
         "web-checks",
       ])
-        client.invalidateQueries({ queryKey: [key] });
+        void client.invalidateQueries({ queryKey: [key] });
     },
   });
   const checks = new Map(

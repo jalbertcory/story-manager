@@ -1,3 +1,35 @@
+import type { NavigationState } from "../types";
+
+export function parseNavigationState(value: unknown): NavigationState {
+  if (value === null || typeof value !== "object") return {};
+  const state: NavigationState = {};
+  if (
+    "returnTo" in value &&
+    typeof value.returnTo === "string" &&
+    value.returnTo.startsWith("/") &&
+    !value.returnTo.startsWith("//")
+  ) {
+    state.returnTo = value.returnTo;
+  }
+  if (
+    "scrollY" in value &&
+    typeof value.scrollY === "number" &&
+    Number.isFinite(value.scrollY) &&
+    value.scrollY >= 0
+  ) {
+    state.scrollY = value.scrollY;
+  }
+  if (
+    "libraryScrollY" in value &&
+    typeof value.libraryScrollY === "number" &&
+    Number.isFinite(value.libraryScrollY) &&
+    value.libraryScrollY >= 0
+  ) {
+    state.libraryScrollY = value.libraryScrollY;
+  }
+  return state;
+}
+
 export interface ParsedLocation {
   view: "book" | "tab";
   bookId?: number;
@@ -67,8 +99,9 @@ export const SECTION_NAV = {
   ],
 };
 
+const DEFAULT_ROUTE = { key: "library", path: "/", section: "library" };
 const ROUTES = [
-  { key: "library", path: "/", section: "library" },
+  DEFAULT_ROUTE,
   { key: "import", path: "/import", section: "library" },
   { key: "updates", path: "/updates", section: "updates" },
   { key: "review", path: "/review", section: "review" },
@@ -112,7 +145,7 @@ function normalizePath(pathname: string) {
 }
 
 export function getRoute(tabKey: string) {
-  return ROUTES.find((route) => route.key === tabKey) || ROUTES[0];
+  return ROUTES.find((route) => route.key === tabKey) || DEFAULT_ROUTE;
 }
 
 export function getPrimarySection(tabKey: string) {
@@ -128,7 +161,7 @@ export function parseLocation(
   const match = normalizedPath.match(
     /^\/books\/(\d+)(?:\/(overview|details|audiobooks))?$/,
   );
-  if (match) {
+  if (match?.[1]) {
     const requestedTab = new URLSearchParams(search).get("tab");
     const audiobookTab = AUDIOBOOK_TABS.some((tab) => tab.key === requestedTab)
       ? requestedTab
@@ -145,7 +178,7 @@ export function parseLocation(
   const legacyTab = LEGACY_ROUTES[normalizedPath];
   const route = legacyTab
     ? getRoute(legacyTab)
-    : ROUTES.find((item) => item.path === normalizedPath) || ROUTES[0];
+    : ROUTES.find((item) => item.path === normalizedPath) || DEFAULT_ROUTE;
   const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1))
     ? hash.slice(1)
     : "series";

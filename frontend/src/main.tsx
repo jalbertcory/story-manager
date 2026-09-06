@@ -19,7 +19,7 @@ window.addEventListener("error", (event) => {
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-  const reason = event.reason;
+  const reason: unknown = event.reason;
   const msg =
     reason instanceof Error
       ? `${reason.message}\n${reason.stack || ""}`

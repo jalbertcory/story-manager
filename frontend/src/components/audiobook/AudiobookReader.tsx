@@ -16,6 +16,7 @@ function findActiveCue(cues: ReadingCue[], currentMs: number) {
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const cue = cues[middle];
+    if (!cue) return null;
     if (currentMs < cue.clip_begin_ms) high = middle - 1;
     else if (currentMs >= cue.clip_end_ms) low = middle + 1;
     else return cue;
@@ -219,14 +220,20 @@ function ImportedEditionReader({
             <button
               type="button"
               disabled={selectedIndex <= 0}
-              onClick={() => setTrackId(playable[selectedIndex - 1].id)}
+              onClick={() => {
+                const target = playable[selectedIndex - 1];
+                if (target) setTrackId(target.id);
+              }}
             >
               Previous
             </button>
             <button
               type="button"
               disabled={selectedIndex >= playable.length - 1}
-              onClick={() => setTrackId(playable[selectedIndex + 1].id)}
+              onClick={() => {
+                const target = playable[selectedIndex + 1];
+                if (target) setTrackId(target.id);
+              }}
             >
               Next
             </button>
@@ -310,8 +317,10 @@ function GeneratedEditionReader({
   const selected = selectedIndex >= 0 ? playable[selectedIndex] : null;
   const { data, isLoading } = useQuery({
     queryKey: ["audiobook-reader-sentences", bookId, chapterId],
-    queryFn: () =>
-      getSentences(bookId, { chapterId: chapterId ?? undefined, limit: 1000 }),
+    queryFn: () => {
+      if (chapterId == null) throw new Error("Choose a chapter first.");
+      return getSentences(bookId, { chapterId, limit: 1000 });
+    },
     enabled: chapterId != null,
   });
   const cues = useMemo(() => {
@@ -388,14 +397,20 @@ function GeneratedEditionReader({
             <button
               type="button"
               disabled={selectedIndex <= 0}
-              onClick={() => setChapterId(playable[selectedIndex - 1].id)}
+              onClick={() => {
+                const target = playable[selectedIndex - 1];
+                if (target) setChapterId(target.id);
+              }}
             >
               Previous
             </button>
             <button
               type="button"
               disabled={selectedIndex >= playable.length - 1}
-              onClick={() => setChapterId(playable[selectedIndex + 1].id)}
+              onClick={() => {
+                const target = playable[selectedIndex + 1];
+                if (target) setChapterId(target.id);
+              }}
             >
               Next
             </button>

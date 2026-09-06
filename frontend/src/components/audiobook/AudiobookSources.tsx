@@ -46,16 +46,16 @@ function AudiobookSources({
   aiEnabled?: boolean;
   audioOnly?: boolean;
   aiPipelineActive?: boolean;
-  onEnableAi?: () => void;
+  onEnableAi?: (() => void) | undefined;
 }) {
   const queryClient = useQueryClient();
   const [jobNotice, setJobNotice] = useState("");
   const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
-    queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
-    queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+    void queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
+    void queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
+    void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
   };
   const retryMutation = useMutation({
     mutationFn: retryImportedAudiobook,

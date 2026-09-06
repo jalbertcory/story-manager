@@ -29,8 +29,8 @@ export default function SeriesOrganizer({
         {books.error?.message || allSeries.error?.message}
         <button
           onClick={() => {
-            books.refetch();
-            allSeries.refetch();
+            void books.refetch();
+            void allSeries.refetch();
           }}
         >
           Try again

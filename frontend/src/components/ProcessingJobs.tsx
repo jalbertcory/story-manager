@@ -28,7 +28,7 @@ function JobProgress({
   runningState,
 }: {
   job: components["schemas"]["ProcessingJob"];
-  runningState?: string | null;
+  runningState?: string | null | undefined;
 }) {
   const measured = job.progress_total > 0;
   if (!measured && job.status !== runningState) return null;
@@ -73,9 +73,9 @@ function ProcessingJobs() {
   );
   const statusLabels = useMemo(
     () =>
-      Object.fromEntries(
+      Object.fromEntries<string>(
         (processingLifecycle?.states ?? []).map((state) => [
-          state.value,
+          String(state.value),
           state.label,
         ]),
       ),
@@ -138,8 +138,8 @@ function ProcessingJobs() {
   }, [catalog, debouncedBookSearch, operation]);
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-    queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+    void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
   };
   const queueMutation = useMutation({
     mutationFn: ({

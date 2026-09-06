@@ -233,3 +233,41 @@ it("retries a failed processing job through its existing endpoint", async () => 
     ),
   );
 });
+
+it("shows a retryable error when a queue request returns no jobs", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobs: [] }),
+    }),
+  );
+  render(
+    <AttentionDashboard
+      onRefresh={vi.fn()}
+      data={dashboard({
+        total_count: 1,
+        failed_refreshes: {
+          count: 1,
+          items: [
+            {
+              book_id: 7,
+              title: "Missing job",
+              can_retry_refresh: true,
+            },
+          ],
+        },
+      })}
+    />,
+  );
+  const button = screen.getByRole("button", {
+    name: "Retry source check for Missing job",
+  });
+  fireEvent.click(button);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The server did not queue a job. Please retry.",
+  );
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+});

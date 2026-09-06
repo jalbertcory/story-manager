@@ -94,7 +94,7 @@ export default function LibraryWorkspace({
     universe == null && group === "universe" ? "universe" : "series";
   const request = {
     q: query,
-    universe,
+    ...(universe != null ? { universe } : {}),
     source,
     genre,
     audiobook,
@@ -120,7 +120,7 @@ export default function LibraryWorkspace({
   });
   const catalog = useLibraryCatalog({
     ...request,
-    series,
+    ...(series != null ? { series } : {}),
     view: "all",
     enabled: !grouped,
   });
@@ -222,7 +222,7 @@ export default function LibraryWorkspace({
         q={q}
         setQ={setQ}
         change={change}
-        genres={facets?.genres}
+        genres={facets?.genres ?? []}
         inSeries={Boolean(series)}
       />
       <SavedLibraryViews path={libraryPath(current)} onNavigate={onNavigate} />
@@ -237,11 +237,11 @@ export default function LibraryWorkspace({
         <div className="error" role="alert">
           {active.error.message}
           <button
-            onClick={() =>
-              active.isFetchNextPageError
+            onClick={() => {
+              void (active.isFetchNextPageError
                 ? active.fetchNextPage()
-                : active.refetch()
-            }
+                : active.refetch());
+            }}
           >
             Try again
           </button>
@@ -317,7 +317,9 @@ export default function LibraryWorkspace({
         <button
           className="load-more"
           disabled={active.isFetchingNextPage}
-          onClick={() => active.fetchNextPage()}
+          onClick={() => {
+            void active.fetchNextPage();
+          }}
         >
           {active.isFetchingNextPage
             ? "Loading…"

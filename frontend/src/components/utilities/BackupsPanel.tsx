@@ -44,7 +44,7 @@ export default function BackupsPanel() {
 
   useEffect(() => {
     if (latestBackupJob?.completed_at)
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: ["backups"] });
   }, [latestBackupJob?.completed_at, queryClient]);
 
   const createBackupMutation = useMutation({
@@ -63,7 +63,7 @@ export default function BackupsPanel() {
     mutationFn: deleteBackup,
     onSuccess: () => {
       setBackupDeleteTarget(null);
-      queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: ["backups"] });
     },
   });
 

@@ -254,11 +254,11 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
   const triggerMutation = useMutation({
     mutationFn: triggerScheduler,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
-      queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
-      queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
+      void queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
     },
   });
 

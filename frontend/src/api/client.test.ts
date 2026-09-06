@@ -60,6 +60,40 @@ describe("OpenAPI HTTP transport", () => {
     expect(url.searchParams.get("sort_order")).toBe("desc");
   });
 
+  it("omits absent optional catalog filters from the request", async () => {
+    let sent: Request | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: Request) => {
+        sent = request;
+        return Response.json({
+          items: [],
+          next_cursor: null,
+          total_count: 0,
+          facets: {},
+        });
+      }),
+    );
+    await getBookCatalog({
+      series: null,
+      universe: null,
+      source: "",
+      review: "",
+    });
+    const url = new URL(sent!.url);
+    for (const name of [
+      "series",
+      "universe",
+      "source",
+      "review",
+      "audiobook",
+      "genre",
+      "cursor",
+    ]) {
+      expect(url.searchParams.has(name)).toBe(false);
+    }
+  });
+
   it("sends real multipart files with browser-generated boundaries", async () => {
     let sent: Request | undefined;
     vi.stubGlobal(

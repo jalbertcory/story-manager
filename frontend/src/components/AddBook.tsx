@@ -179,9 +179,7 @@ function bookLabel(book: CatalogBook) {
 function titleVariants(title: string) {
   const full = normalizeMatchText(title);
   const titleText = String(title || "");
-  const primary = normalizeMatchText(
-    titleText.split(":", 1)[0].split("(", 1)[0].split("[", 1)[0],
-  );
+  const primary = normalizeMatchText(titleText.split(/[:([]/, 1)[0] ?? "");
   return [...new Set([full, primary].filter(Boolean))];
 }
 
@@ -228,11 +226,12 @@ function findFilenameBookMatch(files: File[], catalog: CatalogBook[]) {
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score);
 
-  if (!candidates.length) return null;
-  if (candidates[1] && candidates[0].score - candidates[1].score < 5) {
+  const [best, runnerUp] = candidates;
+  if (!best) return null;
+  if (runnerUp && best.score - runnerUp.score < 5) {
     return null;
   }
-  return candidates[0].book;
+  return best.book;
 }
 
 function scoreBookSearch(book: CatalogBook, normalizedQuery: string) {
@@ -316,7 +315,13 @@ const AddBook = forwardRef<
   const audioOnly = createsBook || selectedBook?.source_type === "audiobook";
 
   const addEntryFiles = async (entries: FileSystemEntry[]) => {
-    const newFiles = await extractEpubsFromEntries(entries);
+    let newFiles: File[];
+    try {
+      newFiles = await extractEpubsFromEntries(entries);
+    } catch (error) {
+      setPreviewError(errorMessage(error));
+      return;
+    }
     if (newFiles.length) {
       setImportType("books");
       setFiles((current) => [...current, ...newFiles]);
@@ -514,13 +519,14 @@ const AddBook = forwardRef<
               : null,
           );
           completed.push({
-            name: edition.name || editionName || audioFiles[0].name,
+            name:
+              edition.name || editionName || audioFiles[0]?.name || "Audiobook",
             status: "queued",
             detail: "Import and chapter matching will continue in Activity.",
           });
         } catch (error) {
           completed.push({
-            name: editionName || audioFiles[0].name,
+            name: editionName || audioFiles[0]?.name || "Audiobook",
             status: "failed",
             detail: errorMessage(error),
           });
@@ -539,12 +545,14 @@ const AddBook = forwardRef<
           );
       }
       setResults(completed);
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({ queryKey: ["import-book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({ queryKey: ["import-book-catalog"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
     } finally {
       setImporting(false);
     }
@@ -612,7 +620,9 @@ const AddBook = forwardRef<
                   setDragging(true);
                 }}
                 onDragLeave={() => setDragging(false)}
-                onDrop={handleDrop}
+                onDrop={(event) => {
+                  void handleDrop(event);
+                }}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <strong>Drop EPUBs, ZIPs, or folders here</strong>
@@ -704,7 +714,9 @@ const AddBook = forwardRef<
                     type="file"
                     multiple
                     accept=".zip,.cue,.m4b,.m4a,.mp3,.mp4,.aac,.flac,.ogg,.opus,.wav,audio/*"
-                    onChange={(event) => chooseAudioFiles(event.target.files)}
+                    onChange={(event) => {
+                      void chooseAudioFiles(event.target.files);
+                    }}
                   />
                 </label>
                 <label>
@@ -715,7 +727,9 @@ const AddBook = forwardRef<
                     multiple
                     webkitdirectory=""
                     directory=""
-                    onChange={(event) => chooseAudioFiles(event.target.files)}
+                    onChange={(event) => {
+                      void chooseAudioFiles(event.target.files);
+                    }}
                   />
                 </label>
               </div>
@@ -735,7 +749,12 @@ const AddBook = forwardRef<
               {catalogFailed && (
                 <p className="error">
                   Could not check your library.{" "}
-                  <button type="button" onClick={() => reloadCatalog()}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void reloadCatalog();
+                    }}
+                  >
                     Retry
                   </button>
                 </p>
@@ -825,7 +844,9 @@ const AddBook = forwardRef<
               type="button"
               className="btn-primary"
               disabled={!canInspect || previewing || importing}
-              onClick={directImport ? execute : inspect}
+              onClick={() => {
+                void (directImport ? execute() : inspect());
+              }}
             >
               {directImport
                 ? importing
@@ -889,7 +910,9 @@ const AddBook = forwardRef<
               type="button"
               className="btn-primary"
               disabled={!canImport || importing}
-              onClick={execute}
+              onClick={() => {
+                void execute();
+              }}
             >
               {importing
                 ? "Starting import…"

@@ -17,7 +17,7 @@ function AttentionDashboard({
   onRefresh,
   isRefreshing,
 }: {
-  data?: Schemas["AttentionDashboard"];
+  data: Schemas["AttentionDashboard"] | undefined;
   isLoading: boolean;
   error: Error | null;
   onRefresh: () => unknown;
@@ -42,7 +42,9 @@ function AttentionDashboard({
       <button
         className="attention-bulk-actions"
         disabled={!eligible.length}
-        onClick={() => actions.runMany(kind, eligible)}
+        onClick={() => {
+          void actions.runMany(kind, eligible);
+        }}
       >
         {label} ({eligible.length})
       </button>

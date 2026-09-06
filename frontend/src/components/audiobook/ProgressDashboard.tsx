@@ -33,6 +33,7 @@ function useProgressRates(analyzed: number, audio: number) {
       (sample) => now - sample.now <= 120_000,
     );
     const baseline = samples.current[0];
+    if (!baseline) return;
     const elapsedMinutes = (now - baseline.now) / 60_000;
     if (elapsedMinutes <= 0) return;
     setRates({
@@ -74,14 +75,14 @@ function ProgressDashboard({
   status,
   chapters = [],
 }: {
-  status?: AudioStatus;
+  status: AudioStatus | undefined;
   chapters?: Chapter[];
 }) {
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
   const pipelineLifecycle = lifecycleDefinitions?.audiobook_pipeline;
-  const stateLabels = Object.fromEntries(
+  const stateLabels = Object.fromEntries<string>(
     (pipelineLifecycle?.states ?? []).map((state) => [
-      state.value,
+      String(state.value),
       state.label,
     ]),
   );

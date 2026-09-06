@@ -186,11 +186,11 @@ function EndpointPoolEditor({
     setEndpoints((current) => {
       const target = index + direction;
       if (target < 0 || target >= current.length) return current;
+      const sourceEndpoint = current[index];
+      const targetEndpoint = current[target];
+      if (!sourceEndpoint || !targetEndpoint) return current;
       const reordered = [...current];
-      [reordered[index], reordered[target]] = [
-        reordered[target],
-        reordered[index],
-      ];
+      [reordered[index], reordered[target]] = [targetEndpoint, sourceEndpoint];
       return reordered;
     });
   };
@@ -599,8 +599,10 @@ function AudiobookSettings() {
     setLlmEndpoints(clearTypedSecrets);
     setTtsEndpoints(clearTypedSecrets);
     setTranscriptionEndpoints(clearTypedSecrets);
-    queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
-    queryClient.invalidateQueries({ queryKey: ["audiobook-endpoint-stats"] });
+    void queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["audiobook-endpoint-stats"],
+    });
   };
 
   const saveMutation = useMutation({
@@ -749,7 +751,9 @@ function AudiobookSettings() {
             capability="LLM"
             isLoading={endpointStatsQuery.isLoading}
             error={endpointStatsQuery.error}
-            onRefresh={() => endpointStatsQuery.refetch()}
+            onRefresh={() => {
+              void endpointStatsQuery.refetch();
+            }}
             isRefreshing={endpointStatsQuery.isFetching}
           />
         </section>
@@ -766,7 +770,9 @@ function AudiobookSettings() {
             capability="TTS"
             isLoading={endpointStatsQuery.isLoading}
             error={endpointStatsQuery.error}
-            onRefresh={() => endpointStatsQuery.refetch()}
+            onRefresh={() => {
+              void endpointStatsQuery.refetch();
+            }}
             isRefreshing={endpointStatsQuery.isFetching}
           />
           <div className="endpoint-fields">
@@ -825,7 +831,9 @@ function AudiobookSettings() {
             capability="speech-to-text"
             isLoading={endpointStatsQuery.isLoading}
             error={endpointStatsQuery.error}
-            onRefresh={() => endpointStatsQuery.refetch()}
+            onRefresh={() => {
+              void endpointStatsQuery.refetch();
+            }}
             isRefreshing={endpointStatsQuery.isFetching}
           />
         </section>

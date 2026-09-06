@@ -36,7 +36,7 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
       queryKey: ["attention-action-job", result.job.id],
       queryFn: () => getProcessingJob(result.job.id),
       initialData: result.job,
-      refetchInterval: ({ state }: { state: { data?: Job } }) =>
+      refetchInterval: ({ state }: { state: { data: Job | undefined } }) =>
         active(state.data?.status) ? 2000 : false,
     })),
   });
@@ -49,11 +49,11 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
       "book",
       "library-book-info",
     ])
-      client.invalidateQueries({ queryKey: [key] });
+      void client.invalidateQueries({ queryKey: [key] });
   };
   const statuses = tracked.map(([key], index) => ({
     key,
-    job: queries[index].data,
+    job: queries[index]?.data,
   }));
   useEffect(() => {
     let changed = false;
@@ -116,6 +116,7 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
                 [item.book_id],
               )
             ).jobs[0];
+      if (!job) throw new Error("The server did not queue a job. Please retry.");
       client.setQueryData(["attention-action-job", job.id], job);
       setRequests((previous) => ({ ...previous, [key]: { title, job } }));
       invalidate();

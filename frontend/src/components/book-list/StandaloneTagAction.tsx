@@ -21,11 +21,11 @@ export default function StandaloneTagAction({
     mutationFn: (nextSeries: string) =>
       updateBook(book.id, { series: nextSeries.trim() || null }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      queryClient.invalidateQueries({ queryKey: ["series"] });
-      queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
     },

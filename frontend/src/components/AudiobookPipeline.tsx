@@ -54,7 +54,7 @@ function JobInspector({
   totalSentences,
   doneCount,
 }: {
-  statusData?: AudioStatus;
+  statusData: AudioStatus | undefined;
   totalSentences: number;
   doneCount: number;
 }) {
@@ -132,7 +132,7 @@ function AudiobookPipeline({
     "id" | "source_type" | "series" | "audiobook_enabled"
   >;
   onEnableAi?: () => void;
-  audiobookTab?: string;
+  audiobookTab?: string | undefined;
   onAudiobookTabChange?: (tab: string) => void;
 }) {
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
@@ -140,9 +140,9 @@ function AudiobookPipeline({
   const importedLifecycle = lifecycleDefinitions?.imported_audiobook;
   const previewLifecycle = lifecycleDefinitions?.chapter_preview;
   const sentenceLifecycle = lifecycleDefinitions?.sentence;
-  const stateLabels = Object.fromEntries(
+  const stateLabels = Object.fromEntries<string>(
     (pipelineLifecycle?.states ?? []).map((state) => [
-      state.value,
+      String(state.value),
       state.label,
     ]),
   );
@@ -226,11 +226,15 @@ function AudiobookPipeline({
   });
 
   const invalidateAll = () => {
-    queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
-    queryClient.invalidateQueries({
+    void queryClient.invalidateQueries({
+      queryKey: ["audiobook-status", bookId],
+    });
+    void queryClient.invalidateQueries({
       queryKey: ["audiobook-characters", bookId],
     });
-    queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
+    void queryClient.invalidateQueries({
+      queryKey: ["audiobook-chapters", bookId],
+    });
   };
 
   const startMutation = useMutation({
@@ -296,10 +300,10 @@ function AudiobookPipeline({
   // review screen always reflects the checkpoint that was just reached.
   useEffect(() => {
     if (aiEnabled && pipelineStatus !== undefined) {
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
-      queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
       });
     }
@@ -537,7 +541,7 @@ function AudiobookPipeline({
             pipelineStatus={pipelineStatus}
             series={book.series}
             ttsProvider={statusData?.tts_provider}
-            ttsProviderLocked={statusData?.tts_provider_locked}
+            ttsProviderLocked={statusData?.tts_provider_locked ?? false}
             availableTtsProviders={statusData?.available_tts_providers || []}
           />
         )}
