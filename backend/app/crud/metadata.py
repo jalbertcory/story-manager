@@ -11,6 +11,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.future import select
 
 from .. import models
+from ..metadata_types import MetadataJobScope
 from ..lifecycle import METADATA_JOB, MetadataJobStatus, transition_state
 
 
@@ -20,15 +21,16 @@ async def create_metadata_sync_job(
     trigger: str,
     book_ids: list[int],
 ) -> models.MetadataSyncJob:
+    scope = MetadataJobScope(book_ids=book_ids)
     job = models.MetadataSyncJob(
         trigger=trigger,
         status=MetadataJobStatus.QUEUED.value,
-        total_books=len(book_ids),
+        total_books=len(scope.book_ids),
         processed_books=0,
         matched_books=0,
         proposed_books=0,
         applied_books=0,
-        scope={"book_ids": book_ids},
+        scope=scope.model_dump(mode="json"),
     )
     db.add(job)
     await db.commit()

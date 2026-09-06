@@ -7,7 +7,7 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
@@ -59,8 +59,8 @@ def _remove_book_files(book: models.Book) -> list[str]:
     return removed_paths
 
 
-def _book_cleanup_preview(book: models.Book) -> dict[str, Any]:
-    files = []
+def _book_cleanup_preview(book: models.Book, log_entries: int = 0) -> contracts.BookRemovalPreview:
+    files: list[contracts.FileSize] = []
 
     for relative_path in [book.immutable_path, book.current_path, book.cover_path]:
         if not relative_path:
@@ -86,6 +86,7 @@ def _book_cleanup_preview(book: models.Book) -> dict[str, Any]:
         "title": book.title,
         "author": book.author,
         "files": files,
+        "log_entries": log_entries,
     }
 
 
@@ -143,7 +144,7 @@ async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
 @router.put("/api/series/{series_name}", response_model=contracts.SeriesRenamed)
 async def rename_series(
     series_name: str, body: schemas.SeriesRename, db: AsyncSession = Depends(get_db)
-) -> dict[str, int | str]:
+) -> contracts.SeriesRenamed:
     """Rename a series, updating all books that belong to it."""
     new_name = body.new_name.strip()
     if not new_name:
@@ -163,7 +164,7 @@ async def rename_series(
 
 
 @router.post("/api/series/merge", response_model=contracts.SeriesMerged)
-async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)) -> dict[str, int | str]:
+async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)) -> contracts.SeriesMerged:
     """Merge source series into target series."""
     source = body.source.strip()
     target = body.target.strip()
@@ -188,7 +189,7 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
 @router.post("/api/series/{series_name}/reorder", response_model=contracts.SeriesReordered)
 async def reorder_series(
     series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)
-) -> dict[str, int | str]:
+) -> contracts.SeriesReordered:
     """Persist the order of every book in a series."""
     books = await crud.get_books_by_series(db, series=series_name, skip=0, limit=100000)
     for book in books:
@@ -270,7 +271,7 @@ async def search_books_by_series(
 
 
 @router.get("/api/books/count", response_model=contracts.BookCount)
-async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)) -> contracts.BookCount:
     total = await crud.count_books(db, q=q)
     return {"total": total}
 
@@ -496,10 +497,10 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> Fil
 
 
 @router.post("/api/books/remove-all", response_model=contracts.RemoveAllBooks)
-async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> contracts.RemoveAllBooks:
     books = await crud.get_books(db, limit=100000)
 
-    preview_books = []
+    preview_books: list[contracts.BookRemovalPreview] = []
     total_files = 0
     total_bytes = 0
     total_logs = 0
@@ -571,7 +572,7 @@ async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depe
 
 
 @router.post("/api/recycle-bin/purge-expired", response_model=contracts.PurgedBooks)
-async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> contracts.PurgedBooks:
     now = datetime.now(timezone.utc)
     expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]
     for book in expired:

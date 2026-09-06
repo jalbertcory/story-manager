@@ -9,7 +9,7 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import ValidationError
 from .llm_responses import (
@@ -30,8 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookSentence, Book
-from .audiobook_text import quote_group_ids, quote_groups
+from .audiobook_text import AttributedSentence, SentenceText, quote_group_ids, quote_groups
 from .endpoint_pool import ProviderSettings, RoutedResult, route_request
+
+
+class LLMMessage(TypedDict):
+    role: Literal["user", "assistant", "system"]
+    content: str
+
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +234,7 @@ def _diarization_schema(assignment_count: int) -> dict[str, Any]:
     return schema
 
 
-def _sentence_ids_requiring_diarization(sentences: list[Any]) -> set[int]:
+def _sentence_ids_requiring_diarization(sentences: Sequence[SentenceText]) -> set[int]:
     """Keep quoted spans for the model; prose outside them is narrator-owned."""
     in_dialogue = False
     requiring_model: set[int] = set()
@@ -251,7 +257,7 @@ def _sentence_ids_requiring_diarization(sentences: list[Any]) -> set[int]:
 
 
 def _quote_speaker_overrides(
-    sentences: list[Any],
+    sentences: Sequence[AttributedSentence],
     *,
     narrator_id: int | None,
     minor_female_id: int | None,
@@ -369,7 +375,7 @@ CHAPTER_SUMMARY_SCHEMA = {
 
 async def _call_llm_endpoint(
     settings: ProviderSettings,
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     *,
     response_schema: dict[str, Any] | None = None,
     progress_callback: Callable[[int], Awaitable[None]] | None = None,
@@ -382,7 +388,7 @@ async def _call_llm_endpoint(
     model = settings.llm_model or ("qwen3.5:9b" if provider == "ollama" else "gpt-4o")
 
     headers = {"Content-Type": "application/json"}
-    payload: dict[str, Any]
+    payload: dict[str, object]
 
     if provider == "ollama":
         url = (settings.llm_base_url or "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
@@ -471,7 +477,7 @@ async def _call_llm_endpoint(
 
 async def _call_llm_routed(
     settings: AudiobookSettings,
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     *,
     response_schema: dict[str, Any] | None = None,
     progress_callback: Callable[[int], Awaitable[None]] | None = None,
@@ -490,7 +496,7 @@ async def _call_llm_routed(
 
 async def _call_llm(
     settings: AudiobookSettings,
-    messages: list[dict[str, Any]],
+    messages: list[LLMMessage],
     *,
     response_schema: dict[str, Any] | None = None,
     progress_callback: Callable[[int], Awaitable[None]] | None = None,
@@ -620,7 +626,7 @@ def _parse_diarization_response(
     return batch, expected_id_set - set(by_id), salvaged
 
 
-def _sanitize_tagged_text(original: str, tagged: Any) -> str:
+def _sanitize_tagged_text(original: str, tagged: object) -> str:
     """Accept expression-tag insertion, but reject unsupported tags or prose rewrites."""
     if not isinstance(tagged, str) or not tagged.strip():
         return original
@@ -1158,7 +1164,7 @@ async def generate_character_roster(book_id: int, db: AsyncSession) -> None:
         await crud.audiobook.set_book_pipeline_status(db, book_id, "diarizing")
 
 
-def _chapter_summary_excerpt(chapter_sentences: list[Any], max_chars: int = 12_000) -> str:
+def _chapter_summary_excerpt(chapter_sentences: Sequence[SentenceText], max_chars: int = 12_000) -> str:
     """Sample contiguous beginning, middle, and ending text for one summary call."""
     texts = [sentence.original_text for sentence in chapter_sentences if sentence.original_text.strip()]
     complete = "\n".join(texts)
@@ -1193,8 +1199,8 @@ def _chapter_summary_excerpt(chapter_sentences: list[Any], max_chars: int = 12_0
 
 async def _generate_chapter_summary(
     settings: AudiobookSettings,
-    chapter: Any,
-    chapter_sentences: list[Any],
+    chapter: AudiobookChapter,
+    chapter_sentences: Sequence[SentenceText],
     db: AsyncSession,
     *,
     book_id: int,

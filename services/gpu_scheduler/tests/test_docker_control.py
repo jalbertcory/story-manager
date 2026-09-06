@@ -62,7 +62,7 @@ def test_controller_queries_only_opted_in_containers_and_starts_in_order():
 
     assert collection.filters == {"label": f"{MANAGED_LABEL}=true"}
     assert actions == ["Started early", "Started late"]
-    assert [snapshot["name"] for snapshot in snapshots] == ["early", "late"]
+    assert [snapshot.name for snapshot in snapshots] == ["early", "late"]
 
 
 def test_controller_stops_in_reverse_order_and_leaves_exited_container_alone():
@@ -87,7 +87,7 @@ def test_observe_only_never_changes_container_state():
     snapshots, actions = controller.reconcile(None, 10)
 
     assert actions == []
-    assert [snapshot["status"] for snapshot in snapshots] == ["running", "exited"]
+    assert [snapshot.status for snapshot in snapshots] == ["running", "exited"]
     assert running.stop_timeouts == []
     assert stopped.start_count == 0
 
@@ -102,4 +102,15 @@ def test_incomplete_container_identity_reports_error_without_mutation(field):
         controller.inspect()
 
     assert container.start_count == 0
+    assert container.stop_timeouts == []
+
+
+@pytest.mark.parametrize("state", [{"Status": ["running"]}, {"Status": "running", "Health": {"Status": 7}}])
+def test_malformed_docker_state_is_rejected_before_reporting_a_snapshot(state):
+    container = FakeContainer("invalid-state", "running", 10)
+    container.reload = lambda: None
+    container.attrs["State"] = state
+    controller, _ = controller_with([container])
+    with pytest.raises(ValueError):
+        controller.inspect()
     assert container.stop_timeouts == []

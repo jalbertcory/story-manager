@@ -7,7 +7,20 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
+from collections.abc import Mapping
+from decimal import Decimal
+import math
+
+from pydantic import JsonValue
+
+from ..metadata_types import (
+    MetadataDetails,
+    metadata_details as validate_metadata_details,
+    metadata_json,
+    remote_identifiers,
+    searchable_identifiers,
+)
 
 import requests
 from bs4 import BeautifulSoup
@@ -81,9 +94,15 @@ class MetadataSuggestion:
     new_genre_tags: list[str] | None = None
     possible_missing_series_books: list[str] | None = None
     note: Optional[str] = None
-    remote_ids: dict[str, Any] | None = None
-    metadata_details: dict[str, Any] | None = None
+    remote_ids: dict[str, JsonValue] | None = None
+    metadata_details: MetadataDetails | None = None
     match_issues: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.remote_ids is not None:
+            self.remote_ids = remote_identifiers(self.remote_ids)
+        if self.metadata_details is not None:
+            self.metadata_details = validate_metadata_details(self.metadata_details)
 
     def to_schema(self) -> schemas.MetadataSyncBookResult:
         return schemas.MetadataSyncBookResult(
@@ -97,7 +116,7 @@ class MetadataSuggestion:
             remote_author=self.remote_author,
             remote_url=self.remote_url,
             remote_ids=self.remote_ids,
-            metadata_details=self.metadata_details,
+            metadata_details=metadata_json(self.metadata_details) if self.metadata_details is not None else None,
             match_issues=self.match_issues or [],
             genre_tags=self.genre_tags or [],
             new_genre_tags=self.new_genre_tags or [],
@@ -114,7 +133,7 @@ class GoogleBooksMatch:
     categories: list[str]
     info_link: Optional[str]
     remote_ids: dict[str, str]
-    metadata_details: dict[str, Any]
+    metadata_details: MetadataDetails
     match_confidence: float
 
 
@@ -126,7 +145,7 @@ class AmazonMatch:
     categories: list[str]
     remote_url: str
     remote_ids: dict[str, str]
-    metadata_details: dict[str, Any]
+    metadata_details: MetadataDetails
     match_confidence: float
 
 
@@ -204,22 +223,22 @@ def _extract_subjects(doc: OpenLibraryDoc, work_data: OpenLibraryWork) -> list[s
     return deduped
 
 
-def _merge_remote_ids(*groups: dict[str, Any]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
+def _merge_remote_ids(*groups: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    merged: dict[str, JsonValue] = {}
     for group in groups:
         merged.update(group)
     return merged
 
 
-def _stable_remote_identifiers(remote_ids: dict[str, Any] | None) -> set[tuple[str, str]]:
-    remote_ids = remote_ids or {}
+def _stable_remote_identifiers(remote_ids: dict[str, JsonValue] | None) -> set[tuple[str, str]]:
+    identifiers_by_name = searchable_identifiers(remote_ids)
     identifiers = {
-        (key, str(remote_ids[key]).strip())
+        (key, str(identifiers_by_name[key]).strip())
         for key in ("google_books_volume_id", "open_library_work_key", "asin")
-        if remote_ids.get(key) and str(remote_ids[key]).strip()
+        if identifiers_by_name.get(key) and str(identifiers_by_name[key]).strip()
     }
     identifiers.update(
-        ("isbn", normalized) for key in ("isbn_10", "isbn_13") if (normalized := _canonical_isbn(remote_ids.get(key)))
+        ("isbn", normalized) for key in ("isbn_10", "isbn_13") if (normalized := _canonical_isbn(identifiers_by_name.get(key)))
     )
     return identifiers
 
@@ -326,28 +345,32 @@ def allocate_unique_candidate_suggestions(
     return allocated
 
 
-def _compact_metadata_details(**values: Any) -> dict[str, Any]:
-    return {
-        key: value.strip() if isinstance(value, str) else value
-        for key, value in values.items()
-        if value is not None and (not isinstance(value, str) or value.strip())
-    }
+def _compact_metadata_details(**values: object) -> MetadataDetails:
+    return validate_metadata_details(
+        {
+            key: value.strip() if isinstance(value, str) else value
+            for key, value in values.items()
+            if value is not None and (not isinstance(value, str) or value.strip())
+        }
+    )
 
 
-def _safe_series_index(value: Any) -> Optional[float]:
+def _safe_series_index(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed > 0 else None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
 def _series_metadata_details(
     title: str,
     *,
-    series: Any = None,
-    series_index: Any = None,
-) -> dict[str, Any]:
+    series: object = None,
+    series_index: object = None,
+) -> MetadataDetails:
     raw_series = _first_list_value(series)
     series_name = str(raw_series).strip() if raw_series is not None else ""
     resolved_index = _safe_series_index(_first_list_value(series_index))
@@ -362,7 +385,7 @@ def _suggestion_match_issues(
     book: models.Book,
     *,
     remote_title: str,
-    metadata_details: dict[str, Any],
+    metadata_details: MetadataDetails,
 ) -> list[str]:
     return _series_match_issues(
         local_title=book.title or "",
@@ -374,7 +397,7 @@ def _suggestion_match_issues(
     )
 
 
-def _description_value(value: Any) -> Optional[str]:
+def _description_value(value: object) -> Optional[str]:
     if isinstance(value, str):
         return " ".join(BeautifulSoup(value, "html.parser").get_text(" ", strip=True).split()) or None
     if isinstance(value, dict) and isinstance(value.get("value"), str):
@@ -534,7 +557,7 @@ def _google_books_categories(volume: GoogleVolume) -> list[str]:
     return deduped
 
 
-def _google_books_metadata_details(volume: GoogleVolume) -> dict[str, Any]:
+def _google_books_metadata_details(volume: GoogleVolume) -> MetadataDetails:
     volume_info = _extract_google_volume_info(volume)
     image_links = volume_info.get("imageLinks")
     if not isinstance(image_links, dict):
@@ -604,10 +627,7 @@ def _score_google_books_volume(book: models.Book, volume: GoogleVolume) -> float
 
 
 def _get_manual_remote_ids(book: models.Book) -> dict[str, str]:
-    raw_ids = book.metadata_remote_ids or {}
-    if not isinstance(raw_ids, dict):
-        return {}
-    return {key: str(value).strip() for key, value in raw_ids.items() if value is not None and str(value).strip()}
+    return searchable_identifiers(book.metadata_remote_ids)
 
 
 def _fetch_search_docs(params: dict[str, str | int | None]) -> list[OpenLibraryDoc]:
@@ -924,7 +944,7 @@ def _collect_amazon_matches(
                 categories=detailed.categories,
                 remote_url=detailed.url,
                 remote_ids=detailed.remote_ids,
-                metadata_details=detailed.metadata_details,
+                metadata_details=validate_metadata_details(detailed.metadata_details),
                 match_confidence=score,
             )
         )
@@ -944,13 +964,13 @@ def _fetch_work_data(doc: OpenLibraryDoc) -> OpenLibraryWork:
         return {}
 
 
-def _first_list_value(value: Any) -> Any:
+def _first_list_value(value: object) -> object:
     if isinstance(value, list):
         return value[0] if value else None
     return value
 
 
-def _open_library_metadata_details(doc: OpenLibraryDoc, work_data: OpenLibraryWork) -> dict[str, Any]:
+def _open_library_metadata_details(doc: OpenLibraryDoc, work_data: OpenLibraryWork) -> MetadataDetails:
     cover_id = doc.get("cover_i") or _first_list_value(work_data.get("covers"))
     title = str(doc.get("title") or work_data.get("title") or "")
     series_details = _series_metadata_details(
@@ -1035,7 +1055,7 @@ def _build_open_library_suggestion(
         genre_tags=genre_tags,
         new_genre_tags=new_tags,
         possible_missing_series_books=possible_missing,
-        remote_ids=remote_ids,
+        remote_ids=remote_identifiers(remote_ids),
         metadata_details=metadata_details,
         match_issues=_suggestion_match_issues(
             book,
@@ -1060,7 +1080,7 @@ def _build_google_books_suggestion(book: models.Book, match: GoogleBooksMatch) -
         genre_tags=genre_tags,
         new_genre_tags=[tag for tag in genre_tags if tag.casefold() not in existing_tags],
         possible_missing_series_books=[],
-        remote_ids=match.remote_ids,
+        remote_ids=remote_identifiers(match.remote_ids),
         metadata_details=match.metadata_details,
         match_issues=_suggestion_match_issues(
             book,
@@ -1085,7 +1105,7 @@ def _build_amazon_suggestion(book: models.Book, match: AmazonMatch) -> MetadataS
         genre_tags=genre_tags,
         new_genre_tags=[tag for tag in genre_tags if tag.casefold() not in existing_tags],
         possible_missing_series_books=[],
-        remote_ids=match.remote_ids,
+        remote_ids=remote_identifiers(match.remote_ids),
         metadata_details=match.metadata_details,
         match_issues=_suggestion_match_issues(
             book,
@@ -1132,11 +1152,13 @@ def _merge_matching_suggestions(primary: MetadataSuggestion, corroborating: Meta
         dict.fromkeys([*(primary.possible_missing_series_books or []), *(corroborating.possible_missing_series_books or [])])
     )
     merged_source = _merge_sources(primary.source, corroborating.source)
-    metadata_details = {
-        **(corroborating.metadata_details or {}),
-        **(primary.metadata_details or {}),
-        "corroborating_sources": merged_source.split("+"),
-    }
+    metadata_details = validate_metadata_details(
+        {
+            **(corroborating.metadata_details or {}),
+            **(primary.metadata_details or {}),
+            "corroborating_sources": merged_source.split("+"),
+        }
+    )
     match_issues = list(dict.fromkeys([*(primary.match_issues or []), *(corroborating.match_issues or [])]))
     confidence = min(1.0, max(primary.match_confidence, corroborating.match_confidence) + 0.03)
     if len(merged_source.split("+")) >= 2 and not match_issues:
@@ -1152,7 +1174,7 @@ def _merge_matching_suggestions(primary: MetadataSuggestion, corroborating: Meta
         genre_tags=genre_tags,
         new_genre_tags=[tag for tag in genre_tags if tag.casefold() not in existing_tags],
         possible_missing_series_books=possible_missing,
-        remote_ids=remote_ids,
+        remote_ids=remote_identifiers(remote_ids),
         metadata_details=metadata_details,
         match_issues=match_issues,
         note=None if genre_tags or possible_missing else primary.note or corroborating.note,
@@ -1415,6 +1437,10 @@ def apply_suggestion_to_book(
     if not suggestion.matched or (suggestion.match_issues and not allow_match_issues):
         return False
 
+    validated_ids = remote_identifiers(suggestion.remote_ids or {})
+    validated_details = (
+        validate_metadata_details(suggestion.metadata_details) if suggestion.metadata_details is not None else None
+    )
     resolved_source = source or suggestion.source or "open_library"
     synced_timestamp = synced_at or datetime.now(timezone.utc)
     merged_genres = sorted(
@@ -1424,13 +1450,14 @@ def apply_suggestion_to_book(
         },
         key=str.casefold,
     )
+    stored_ids = book.metadata_remote_ids if isinstance(book.metadata_remote_ids, dict) else {}
     next_remote_ids = {
-        **{key: value for key, value in _get_manual_remote_ids(book).items() if key not in KNOWN_REMOTE_ID_KEYS},
-        **(suggestion.remote_ids or {}),
+        **{key: value for key, value in stored_ids.items() if key not in KNOWN_REMOTE_ID_KEYS},
+        **validated_ids,
     }
     next_metadata_details = {
         **(book.metadata_details or {}),
-        **(suggestion.metadata_details or {}),
+        **(metadata_json(validated_details) if validated_details is not None else {}),
     } or None
 
     changed = (

@@ -55,7 +55,7 @@ async def groups(
 
 
 @router.get("/universes", response_model=list[contracts.UniverseSummary])
-async def universes(db: AsyncSession = Depends(get_db)) -> list[dict[str, int | str]]:
+async def universes(db: AsyncSession = Depends(get_db)) -> list[contracts.UniverseSummary]:
     rows = (await db.execute(select(models.Universe).order_by(models.Universe.name_key))).scalars()
     return [{"id": row.id, "name": row.name} for row in rows]
 
@@ -68,7 +68,7 @@ async def book_info(book_id: int, db: AsyncSession = Depends(get_db)) -> Library
 
 
 @router.put("/universe-membership", response_model=contracts.UniverseMembershipResult)
-async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(get_db)) -> dict[str, int | str | None]:
+async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(get_db)) -> contracts.UniverseMembershipResult:
     series = (body.series or "").strip()
     if bool(series) == (body.book_id is not None):
         raise HTTPException(422, "Choose either a series or a standalone book")
@@ -117,7 +117,7 @@ async def set_membership(body: UniverseMembership, db: AsyncSession = Depends(ge
 
 
 @router.get("/web-checks", response_model=list[contracts.WebCheck])
-async def web_checks(db: AsyncSession = Depends(get_db)) -> list[dict[str, object]]:
+async def web_checks(db: AsyncSession = Depends(get_db)) -> list[contracts.WebCheck]:
     from sqlalchemy import func
 
     latest = (

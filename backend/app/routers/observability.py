@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 
 @router.get("/health", response_model=contracts.HealthReport)
-async def get_health(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def get_health(db: AsyncSession = Depends(get_db)) -> contracts.HealthReport:
     return await health_report(db, get_processing_queue())
 
 
@@ -40,7 +40,7 @@ async def get_readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
 async def get_job_metrics(
     window_hours: int = Query(default=24, ge=1, le=24 * 90),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
+) -> contracts.JobMetrics:
     return await processing_job_metrics(db, window_hours=window_hours)
 
 

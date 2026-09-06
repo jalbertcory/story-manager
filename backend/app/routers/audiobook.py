@@ -20,7 +20,7 @@ from datetime import datetime
 from difflib import get_close_matches
 from pathlib import Path
 from collections.abc import Callable, Sequence
-from typing import Any, Optional, TypeVar, TypedDict
+from typing import Any, Literal, Optional, TypeVar, TypedDict
 from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -81,6 +81,8 @@ from ..services.endpoint_pool import (
     reset_cooldowns,
     settings_for_provider,
 )
+from ..orm_updates import CharacterPatch, SettingsPatch
+from pydantic import ValidationError
 from ..endpoint_types import EndpointConfig, EndpointUpdate, EndpointStats
 from ..services.endpoint_metrics import endpoint_summaries
 from ..services.metadata.scoring import normalize_text, title_similarity
@@ -1075,7 +1077,7 @@ async def upgrade_imported_audiobook(
 
 
 @router.post("/api/audiobook/imports/upgrade-all", response_model=contracts.QueuedImports)
-async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) -> contracts.QueuedImports:
     """Queue every ready human audiobook that has rebuildable legacy assets."""
     result = await db.execute(select(ImportedAudiobook).order_by(ImportedAudiobook.id))
     editions = list(result.scalars().all())
@@ -1160,7 +1162,7 @@ async def preview_human_audiobook_rebuilds(
 async def rebuild_all_human_audiobooks(
     force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, int]:
+) -> contracts.RebuiltImports:
     """Queue ready editions that are behind the current rebuild pipeline."""
     editions, track_counts = await _human_audiobook_rebuild_inventory(db)
     queued = 0
@@ -1457,7 +1459,7 @@ def _reset_phase_endpoint_cooldowns(phase: str) -> None:
 
 
 @router.post("/api/books/{book_id}/audiobook/start", response_model=contracts.PipelineQueued)
-async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     book = await _get_audiobook_book_or_404(book_id, db)
     status = book.audiobook_pipeline_status
 
@@ -1493,7 +1495,7 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
 
 @router.post("/api/books/{book_id}/audiobook/step", response_model=contracts.PipelineQueued)
-async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     """Run exactly the next recoverable phase, then stop for review."""
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
@@ -1525,7 +1527,7 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dic
 
 
 @router.post("/api/books/{book_id}/audiobook/run-batch", response_model=contracts.PipelineQueued)
-async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     """Run one durable LLM/TTS/assembly work unit, then pause for review."""
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
@@ -1557,7 +1559,7 @@ async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -
 
 
 @router.post("/api/books/{book_id}/audiobook/pause", response_model=contracts.PipelinePaused)
-async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelinePaused:
     book = await _get_audiobook_book_or_404(book_id, db)
     active = book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling")
     await crud.audiobook.request_book_pipeline_pause(db, book_id)
@@ -1568,7 +1570,7 @@ async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
 
 
 @router.post("/api/books/{book_id}/audiobook/rebuild", response_model=contracts.PipelineQueued)
-async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     book = await _get_audiobook_book_or_404(book_id, db)
     legacy_queue = get_audiobook_queue()
     if book.audiobook_pipeline_status in (
@@ -1594,7 +1596,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
 
 
 @router.post("/api/books/{book_id}/audiobook/audio/rebuild", response_model=contracts.PipelineQueued)
-async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     """Regenerate AI TTS and assembly without changing speaker analysis."""
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
@@ -1630,7 +1632,7 @@ async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -
 
 
 @router.post("/api/books/{book_id}/audiobook/roster/rebuild", response_model=contracts.PipelineQueued)
-async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     """Re-run roster and diarization analysis without parsing the EPUB again."""
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
@@ -1716,7 +1718,7 @@ async def update_book_tts_provider(
     book_id: int,
     body: BookTTSProviderUpdate,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> contracts.TTSProviderChanged:
     book = await _get_audiobook_book_or_404(book_id, db)
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = body.provider.strip().lower()
@@ -1821,7 +1823,11 @@ async def update_character(char_id: int, body: CharacterUpdate, db: AsyncSession
         provider, _settings = await _settings_for_locked_book_provider(db, existing.book_id)
         data["tts_voice_provider"] = provider if voice_id else None
 
-    char = await crud.audiobook.update_character(db, char_id, data)
+    try:
+        patch = CharacterPatch.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Invalid character update") from exc
+    char = await crud.audiobook.update_character(db, char_id, patch)
     if char is None:
         raise HTTPException(status_code=404, detail="Character not found")
     linked_characters = await crud.audiobook.propagate_character_profile_across_series(db, char)
@@ -1911,7 +1917,7 @@ async def get_character_voice_sample(
 async def share_character_roster_with_series(
     book_id: int,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> contracts.RosterShared:
     book = await _get_audiobook_book_or_404(book_id, db)
     if not book.series:
         raise HTTPException(status_code=409, detail="Assign this book to a series before sharing its roster")
@@ -2007,7 +2013,7 @@ async def generate_sentence_audio(
     book_id: int,
     sentence_id: int,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> contracts.SentenceQueued:
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
         raise HTTPException(status_code=409, detail="Pause the full-book pipeline before generating sentence audio")
@@ -2106,7 +2112,7 @@ async def generate_chapter_preview(
     book_id: int,
     chapter_id: int,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> contracts.ChapterPreviewQueued:
     book = await _get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
         raise HTTPException(status_code=409, detail="Pause the full-book pipeline before generating a preview")
@@ -2359,7 +2365,11 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         tts_changed = _tts_signature(previous_tts_endpoints) != _tts_signature(next_tts_endpoints) or next_tts != previous_tts
     else:
         tts_changed = next_tts != previous_tts
-    settings = await crud.audiobook.upsert_audiobook_settings(db, data)
+    try:
+        settings_patch = SettingsPatch.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Invalid audiobook settings update") from exc
+    settings = await crud.audiobook.upsert_audiobook_settings(db, settings_patch)
     if tts_changed:
         await crud.audiobook.invalidate_generated_audio_for_tts_change(db)
     return _settings_response(settings)
@@ -2390,12 +2400,12 @@ ProbeValue = TypeVar("ProbeValue")
 
 def _endpoint_test_results(
     probes: Sequence[EndpointProbeResult[ProbeValue]],
-    value_details: Callable[[ProbeValue], dict[str, object]] | None = None,
-) -> list[dict[str, Any]]:
-    results = []
+    value_details: Callable[[ProbeValue], contracts.EndpointProbeDetails] | None = None,
+) -> list[contracts.EndpointProbe]:
+    results: list[contracts.EndpointProbe] = []
     for priority, probe in enumerate(probes, start=1):
         endpoint = probe.endpoint
-        result = {
+        result: contracts.EndpointProbe = {
             "endpoint_id": endpoint.id,
             "endpoint": endpoint.name or endpoint.base_url or endpoint.id,
             "priority": priority,
@@ -2408,12 +2418,24 @@ def _endpoint_test_results(
         if probe.success and isinstance(probe.value, dict):
             result["response"] = probe.value
         if probe.success and probe.value is not None and value_details is not None:
-            result.update(value_details(probe.value))
+            details = value_details(probe.value)
+            if "audio_bytes" in details:
+                result["audio_bytes"] = details["audio_bytes"]
+            if "service_status" in details:
+                result["service_status"] = details["service_status"]
+            if "device" in details:
+                result["device"] = details["device"]
+            if "loaded_model" in details:
+                result["loaded_model"] = details["loaded_model"]
         results.append(result)
     return results
 
 
-def _pool_test_status(results: list[dict[str, Any]]) -> str:
+def _optional_probe_text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _pool_test_status(results: list[contracts.EndpointProbe]) -> Literal["ready", "partial", "failed"]:
     ready_count = sum(result["status"] == "ready" for result in results)
     if ready_count == len(results) and results:
         return "ready"
@@ -2421,7 +2443,7 @@ def _pool_test_status(results: list[dict[str, Any]]) -> str:
 
 
 @router.post("/api/audiobook/settings/test-llm", response_model=contracts.LLMTest)
-async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> contracts.LLMTest:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
         return {"status": "ready", "provider": "stub", "model": None, "response": "local harness"}
@@ -2458,7 +2480,7 @@ async def test_llm_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
 
 
 @router.post("/api/audiobook/settings/test-tts", response_model=contracts.TTSTest)
-async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> contracts.TTSTest:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
         return {"status": "ready", "provider": "stub", "model": None, "audio_bytes": 0}
@@ -2486,7 +2508,7 @@ async def test_tts_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any
 
 
 @router.post("/api/audiobook/settings/test-transcription", response_model=contracts.TranscriptionTest)
-async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> contracts.TranscriptionTest:
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None:
         raise HTTPException(status_code=409, detail="Configure a transcription provider first.")
@@ -2494,9 +2516,9 @@ async def test_transcription_settings(db: AsyncSession = Depends(get_db)) -> dic
     results = _endpoint_test_results(
         probes,
         value_details=lambda payload: {
-            "service_status": payload.get("status"),
-            "device": payload.get("device"),
-            "loaded_model": payload.get("model"),
+            "service_status": _optional_probe_text(payload.get("status")),
+            "device": _optional_probe_text(payload.get("device")),
+            "loaded_model": _optional_probe_text(payload.get("model")),
         },
     )
     first_ready = next((result for result in results if result["status"] == "ready"), None)

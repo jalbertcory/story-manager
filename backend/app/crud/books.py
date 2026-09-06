@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.sql import Select
 from .. import models, schemas
+from ..orm_updates import apply_book_patch
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
     WEB_IMPORT,
@@ -174,11 +175,7 @@ async def get_books_by_ids(db: AsyncSession, book_ids: List[int]) -> List[models
 
 async def update_book(db: AsyncSession, book: models.Book, update_data: schemas.BookUpdate) -> models.Book:
     """Update a book record in the database."""
-    update_data_dict = update_data.model_dump(exclude_unset=True)
-    for key, value in update_data_dict.items():
-        setattr(book, key, value)
-    if "series" in update_data_dict and not update_data_dict["series"]:
-        book.series_index = None
+    apply_book_patch(book, update_data)
     await db.commit()
     await db.refresh(book)
     return book

@@ -1,7 +1,7 @@
 from .api_model import APIModel as BaseModel
 from pydantic import ConfigDict, Field, HttpUrl, JsonValue, field_validator
 from datetime import datetime
-from typing import Any, Literal, Optional, List
+from typing import Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
 
@@ -24,8 +24,8 @@ class BookBase(BaseModel):
     genre_tags: Optional[List[str]] = Field(default_factory=list)
     source_tags: Optional[List[str]] = Field(default_factory=list)
     user_genre_tags: Optional[List[str]] = Field(default_factory=list)
-    metadata_remote_ids: Optional[dict[str, Any]] = None
-    metadata_details: Optional[dict[str, Any]] = None
+    metadata_remote_ids: Optional[dict[str, JsonValue]] = None
+    metadata_details: Optional[dict[str, JsonValue]] = None
     metadata_sync_source: Optional[str] = None
     metadata_synced_at: Optional[datetime] = None
     master_word_count: Optional[int] = None
@@ -54,11 +54,18 @@ class BookUpdate(BaseModel):
     genre_tags: Optional[List[str]] = None
     user_genre_tags: Optional[List[str]] = None
     source_tags: Optional[List[str]] = None
-    metadata_remote_ids: Optional[dict[str, Any]] = None
+    metadata_remote_ids: Optional[dict[str, JsonValue]] = None
     audiobook_enabled: Optional[bool] = None
     removed_chapters: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
     notes: Optional[str] = None
+
+    @field_validator("audiobook_enabled", mode="before")
+    @classmethod
+    def audiobook_enabled_cannot_be_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("audiobook_enabled cannot be null")
+        return value
 
 
 # Pydantic model for reading a book (API response).
@@ -184,6 +191,13 @@ class CleaningConfigUpdate(BaseModel):
     url_pattern: Optional[str] = None
     chapter_selectors: Optional[List[str]] = None
     content_selectors: Optional[List[str]] = None
+
+    @field_validator("name", "url_pattern", mode="before")
+    @classmethod
+    def required_strings_cannot_be_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("name and url_pattern cannot be null")
+        return value
 
 
 class UpdateTask(BaseModel):
@@ -516,8 +530,8 @@ class MetadataSyncBookResult(BaseModel):
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
-    remote_ids: Optional[dict[str, Any]] = None
-    metadata_details: Optional[dict[str, Any]] = None
+    remote_ids: Optional[dict[str, JsonValue]] = None
+    metadata_details: Optional[dict[str, JsonValue]] = None
     genre_tags: List[str] = Field(default_factory=list)
     new_genre_tags: List[str] = Field(default_factory=list)
     possible_missing_series_books: List[str] = Field(default_factory=list)
@@ -575,8 +589,8 @@ class MetadataMatch(BaseModel):
     remote_title: Optional[str] = None
     remote_author: Optional[str] = None
     remote_url: Optional[str] = None
-    remote_ids: Optional[dict[str, Any]] = None
-    remote_metadata: Optional[dict[str, Any]] = None
+    remote_ids: Optional[dict[str, JsonValue]] = None
+    remote_metadata: Optional[dict[str, JsonValue]] = None
     proposed_genre_tags: Optional[List[str]] = None
     possible_missing_series_books: Optional[List[str]] = None
     match_issues: Optional[List[str]] = None

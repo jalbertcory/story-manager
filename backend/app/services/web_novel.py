@@ -8,8 +8,9 @@ import tempfile
 import traceback
 import zipfile
 from dataclasses import dataclass
+from collections.abc import Hashable
 from pathlib import Path
-from typing import cast, Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import cast, Callable, Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from ebooklib import epub
@@ -36,6 +37,16 @@ from .epub_utils import (
     normalize_epub_prose_blocks,
 )
 from .fanficfare_config import get_fff_config_paths
+from .fanficfare_types import (
+    EpubMetadata,
+    ChapterMetadata,
+    ChapterNormalizer,
+    ChapterRecord,
+    Configuration,
+    UpdateAdapter,
+    UpdateData,
+    Writer,
+)
 from .library_paths import build_book_paths
 from .metadata_jobs import queue_metadata_sync_job
 
@@ -54,7 +65,7 @@ class LosslessChapterUpdateError(RuntimeError):
 
 @dataclass(frozen=True)
 class _LosslessChapterMerge:
-    chapters: List[Dict[str, Any]]
+    chapters: list[ChapterRecord]
     existing_ids: frozenset[str]
     remote_ids: frozenset[str]
     historical_ids: frozenset[str]
@@ -73,10 +84,20 @@ def _canonical_chapter_id(normalize_url: Callable[[str], str], url: str) -> str:
     return (canonical or url).strip()
 
 
+def _chapter_record(chapter: Mapping[str, object]) -> ChapterRecord:
+    url = chapter.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise LosslessChapterUpdateError("Source returned a chapter without a URL.")
+    if "title" in chapter and not isinstance(chapter["title"], str):
+        raise LosslessChapterUpdateError("Source returned a chapter with a non-text title.")
+    # Validate the known fields without discarding adapter-specific metadata.
+    return cast(ChapterRecord, copy.deepcopy(dict(chapter)))
+
+
 def _build_lossless_chapter_merge(
     existing_urls: Sequence[str],
-    existing_data: Mapping[str, Mapping[str, Any]],
-    remote_chapters: Sequence[Mapping[str, Any]],
+    existing_data: ChapterMetadata,
+    remote_chapters: Sequence[Mapping[str, object]],
     normalize_url: Callable[[str], str],
 ) -> _LosslessChapterMerge:
     """Return an ordered URL union that never drops chapters from the EPUB.
@@ -93,15 +114,13 @@ def _build_lossless_chapter_merge(
             raise LosslessChapterUpdateError(f"Existing EPUB has duplicate chapter identity: {chapter_id}")
         existing_by_id[chapter_id] = url
 
-    remote_by_id: Dict[str, Mapping[str, Any]] = {}
+    remote_by_id: dict[str, ChapterRecord] = {}
     for chapter in remote_chapters:
-        url = str(chapter.get("url") or "").strip()
-        if not url:
-            raise LosslessChapterUpdateError("Source returned a chapter without a URL.")
-        chapter_id = _canonical_chapter_id(normalize_url, url)
+        record = _chapter_record(chapter)
+        chapter_id = _canonical_chapter_id(normalize_url, record["url"].strip())
         if chapter_id in remote_by_id:
             raise LosslessChapterUpdateError(f"Source has duplicate chapter identity: {chapter_id}")
-        remote_by_id[chapter_id] = chapter
+        remote_by_id[chapter_id] = record
 
     existing_ids = frozenset(existing_by_id)
     remote_ids = frozenset(remote_by_id)
@@ -114,14 +133,14 @@ def _build_lossless_chapter_merge(
     historical_ids = existing_ids - remote_ids
     new_ids = remote_ids - existing_ids
 
-    def historical_chapter(chapter_id: str, index: int) -> Dict[str, Any]:
+    def historical_chapter(chapter_id: str, index: int) -> ChapterRecord:
         url = existing_by_id[chapter_id]
         metadata = existing_data.get(url, {})
         title = metadata.get("chapterorigtitle") or metadata.get("chaptertitle") or f"Chapter {index + 1}"
         return {"title": str(title), "url": url}
 
-    before_anchor: Dict[str, List[Dict[str, Any]]] = {}
-    pending_historical: List[Dict[str, Any]] = []
+    before_anchor: dict[str, list[ChapterRecord]] = {}
+    pending_historical: list[ChapterRecord] = []
     last_shared_id: Optional[str] = None
     for index, (chapter_id, _) in enumerate(existing_by_id.items()):
         if chapter_id in remote_ids:
@@ -133,10 +152,10 @@ def _build_lossless_chapter_merge(
             pending_historical.append(historical_chapter(chapter_id, index))
 
     trailing_historical = pending_historical
-    merged: List[Dict[str, Any]] = []
+    merged: list[ChapterRecord] = []
     for chapter_id, chapter in remote_by_id.items():
         merged.extend(before_anchor.pop(chapter_id, []))
-        merged.append(copy.deepcopy(dict(chapter)))
+        merged.append(copy.deepcopy(chapter))
         if chapter_id == last_shared_id:
             merged.extend(trailing_historical)
 
@@ -145,7 +164,7 @@ def _build_lossless_chapter_merge(
     if trailing_historical and last_shared_id is None:
         merged = trailing_historical + merged
 
-    merged_ids = [_canonical_chapter_id(normalize_url, str(chapter["url"])) for chapter in merged]
+    merged_ids = [_canonical_chapter_id(normalize_url, chapter["url"]) for chapter in merged]
     expected_ids = existing_ids | remote_ids
     if len(merged_ids) != len(set(merged_ids)) or frozenset(merged_ids) != expected_ids:
         raise LosslessChapterUpdateError("Ordered chapter merge did not produce the complete unique URL union.")
@@ -166,7 +185,7 @@ def _validate_lossless_epub(
 ) -> None:
     from fanficfare.epubutils import get_update_data
 
-    update_data = get_update_data(epub_path)
+    update_data = cast(UpdateData, get_update_data(epub_path))
     file_count = update_data[1]
     output_urls = list(update_data[7])
     output_ids = [_canonical_chapter_id(normalize_url, url) for url in output_urls]
@@ -188,9 +207,9 @@ def _validate_lossless_epub(
 
 
 def _realign_adapter_chapter_index(
-    adapter: Any,
-    remote_chapters: Sequence[Mapping[str, Any]],
-    merged_chapters: Sequence[Mapping[str, Any]],
+    adapter: ChapterNormalizer,
+    remote_chapters: Sequence[ChapterRecord],
+    merged_chapters: Sequence[ChapterRecord],
 ) -> None:
     """Keep adapter URL-index caches valid after historical chapters are inserted."""
 
@@ -198,21 +217,22 @@ def _realign_adapter_chapter_index(
     if not isinstance(chapter_index, dict) or not chapter_index:
         return
 
-    opaque_id_by_chapter_id: Dict[str, Any] = {}
-    for opaque_id, remote_index in chapter_index.items():
-        if not isinstance(remote_index, int) or not 0 <= remote_index < len(remote_chapters):
+    # Dict keys are necessarily hashable; validate each index before using it.
+    index_entries = cast(dict[Hashable, object], chapter_index)
+    opaque_id_by_chapter_id: dict[str, Hashable] = {}
+    for opaque_id, remote_index in index_entries.items():
+        if type(remote_index) is not int or not 0 <= remote_index < len(remote_chapters):
             raise LosslessChapterUpdateError("FanFicFare adapter returned an invalid chapter URL index.")
-        remote_url = str(remote_chapters[remote_index].get("url") or "")
+        remote_url = remote_chapters[remote_index]["url"]
         chapter_id = _canonical_chapter_id(adapter.normalize_chapterurl, remote_url)
         opaque_id_by_chapter_id[chapter_id] = opaque_id
 
-    realigned_index: Dict[Any, int] = {}
+    realigned_index: dict[Hashable, int] = {}
     for merged_index, chapter in enumerate(merged_chapters):
-        chapter_id = _canonical_chapter_id(adapter.normalize_chapterurl, str(chapter.get("url") or ""))
-        opaque_id = opaque_id_by_chapter_id.get(chapter_id)
-        if opaque_id is not None:
-            realigned_index[opaque_id] = merged_index
-    adapter.chapterURLIndex = realigned_index
+        chapter_id = _canonical_chapter_id(adapter.normalize_chapterurl, chapter["url"])
+        if chapter_id in opaque_id_by_chapter_id:
+            realigned_index[opaque_id_by_chapter_id[chapter_id]] = merged_index
+    setattr(adapter, "chapterURLIndex", realigned_index)
 
 
 def _run_fff_lossless_update(
@@ -226,7 +246,7 @@ def _run_fff_lossless_update(
     from fanficfare import adapters, cli, writers
     from fanficfare.epubutils import get_update_data
 
-    old_update_data = get_update_data(existing_epub_path)
+    old_update_data = cast(UpdateData, get_update_data(existing_epub_path))
     old_chapter_count = old_update_data[1]
     old_chapter_map = old_update_data[7]
     if old_chapter_count == 0 or not old_chapter_map:
@@ -246,21 +266,24 @@ def _run_fff_lossless_update(
     options, _ = parser.parse_args(args)
     cli.expandOptions(options)
     cli.setup(options)
-    configuration = cli.get_configuration(
-        source_url,
-        passed_defaultsini=None,
-        passed_personalini=None,
-        options=options,
-        chaptercount=old_chapter_count,
-        output_filename=str(existing_epub_path),
+    configuration = cast(
+        Configuration,
+        cli.get_configuration(
+            source_url,
+            passed_defaultsini=None,
+            passed_personalini=None,
+            options=options,
+            chaptercount=old_chapter_count,
+            output_filename=str(existing_epub_path),
+        ),
     )
 
     normalized_url, chapter_begin, chapter_end = adapters.get_url_chapter_range(source_url)
-    adapter = adapters.getAdapter(configuration, normalized_url)
+    adapter = cast(UpdateAdapter, adapters.getAdapter(configuration, normalized_url))
     adapter.setChaptersRange(chapter_begin, chapter_end)
     adapter.getStoryMetadataOnly()
 
-    remote_chapters = adapter.get_chapters()
+    remote_chapters = [_chapter_record(chapter) for chapter in adapter.get_chapters()]
     merge = _build_lossless_chapter_merge(
         existing_urls=list(old_chapter_map),
         existing_data=old_update_data[8],
@@ -306,7 +329,7 @@ def _run_fff_lossless_update(
 
     try:
         configuration.set("overrides", "output_filename", str(temp_path))
-        writer = writers.getWriter("epub", configuration, adapter)
+        writer = cast(Writer, writers.getWriter("epub", configuration, adapter))
         writer.writeStory()
         if not temp_path.is_file():
             raise LosslessChapterUpdateError("FanFicFare completed without producing an updated EPUB.")
@@ -377,16 +400,20 @@ def _get_story_manager_output_filename() -> str:
     return str((LIBRARY_PATH / "${title}-${siteabbrev}_${storyId}${formatext}").resolve())
 
 
-def _read_epub_metadata(epub_path: Path) -> Dict[str, Any]:
+def _read_epub_metadata(epub_path: Path) -> EpubMetadata:
     book = epub.read_epub(epub_path)
-    title = book.get_metadata("DC", "title")[0][0]
-    author = book.get_metadata("DC", "creator")[0][0]
+    title: object = book.get_metadata("DC", "title")[0][0]
+    author: object = book.get_metadata("DC", "creator")[0][0]
+    if not isinstance(title, str) or not isinstance(author, str):
+        raise ValueError("EPUB title and author must be text")
     try:
         series_metadata = book.get_metadata("calibre", "series")
     except KeyError:
         series_metadata = []
-    series = series_metadata[0][0] if series_metadata else None
-    metadata = {"title": title, "author": author, "series": series}
+    series: object = series_metadata[0][0] if series_metadata else None
+    if series is not None and not isinstance(series, str):
+        raise ValueError("EPUB series must be text or absent")
+    metadata: EpubMetadata = {"title": title, "author": author, "series": series}
     tag_metadata = get_epub_tag_metadata(epub_path)
     if tag_metadata["genre_tags"]:
         metadata["genre_tags"] = tag_metadata["genre_tags"]
@@ -490,7 +517,7 @@ async def download_web_novel(
     source_url: str,
     overwrite: bool = False,
     existing_epub_path: Optional[Path] = None,
-) -> Optional[tuple[Path, Dict[str, Any]]]:
+) -> Optional[tuple[Path, EpubMetadata]]:
     """
     Downloads a web novel via FanFicFare and returns (epub_path, metadata) or None.
 

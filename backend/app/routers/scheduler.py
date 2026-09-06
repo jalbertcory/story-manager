@@ -72,7 +72,7 @@ async def update_scheduler_config(
 
 
 @router.post("/api/scheduler/trigger", status_code=202, response_model=contracts.SchedulerTriggered)
-async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
+async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> contracts.SchedulerTriggered:
     job = await queue_processing_job(
         db=db,
         job_type="refresh_all",

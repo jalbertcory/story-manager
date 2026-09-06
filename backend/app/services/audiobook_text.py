@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Protocol
+from collections.abc import Sequence
 
 _SPEAKABLE_RE = re.compile(r"[\w\d]", re.UNICODE)
+
+
+class SentenceText(Protocol):
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def original_text(self) -> str: ...
+
+
+class AttributedSentence(SentenceText, Protocol):
+    @property
+    def character_id(self) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -98,7 +112,7 @@ def split_speech_segments(
     return segments, quote_state
 
 
-def quote_groups(sentences: list[Any]) -> list[list[int]]:
+def quote_groups(sentences: Sequence[SentenceText]) -> list[list[int]]:
     """Return sentence-id groups that belong to uninterrupted quotations."""
 
     groups: list[list[int]] = []
@@ -121,7 +135,7 @@ def quote_groups(sentences: list[Any]) -> list[list[int]]:
     return [group for group in groups if group]
 
 
-def quote_group_ids(sentences: list[Any]) -> dict[int, int]:
+def quote_group_ids(sentences: Sequence[SentenceText]) -> dict[int, int]:
     """Map unambiguous sentence ids to a stable chapter-local quote group."""
 
     memberships: dict[int, list[int]] = {}

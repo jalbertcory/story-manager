@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 import re
-from typing import Any, Optional
+from typing import Optional
+from decimal import Decimal
+import math
+
+from ...metadata_types import searchable_identifiers
 
 import ebooklib
 from bs4 import BeautifulSoup
@@ -104,9 +108,12 @@ def _metadata_values(book: epub.EpubBook, namespace: str, name: str) -> list[str
     return [cleaned for value, _attributes in entries if (cleaned := " ".join(str(value or "").split()).strip())]
 
 
-def _safe_float(value: Any) -> Optional[float]:
+def _safe_float(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
     try:
-        return float(value) if value not in {None, ""} else None
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 
@@ -345,7 +352,7 @@ async def resolve_search_identity(
                 "LLM EPUB identity inference failed for book %s; using deterministic evidence.", book.id, exc_info=True
             )
 
-    stored_remote_ids = book.metadata_remote_ids if isinstance(book.metadata_remote_ids, dict) else {}
+    stored_remote_ids = searchable_identifiers(book.metadata_remote_ids)
     remote_ids = {**stored_remote_ids, **evidence.remote_ids}
     return SearchIdentity(
         title=title,

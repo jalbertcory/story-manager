@@ -7,14 +7,19 @@ import shutil
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, overload
+from typing import TYPE_CHECKING, overload
+
+if TYPE_CHECKING:
+    from .. import api_schemas as contracts
+
+from ..log_types import LogEntry
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
-from ..logging_config import read_persisted_logs, redact_value
+from ..logging_config import read_persisted_logs, redact_text
 from ..models import ProcessingJob
 from .endpoint_pool import configured_endpoints
 from .processing_queue import ProcessingQueue
@@ -38,7 +43,7 @@ def _average(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 1) if values else None
 
 
-async def processing_job_metrics(db: AsyncSession, *, window_hours: int = 24) -> dict[str, Any]:
+async def processing_job_metrics(db: AsyncSession, *, window_hours: int = 24) -> contracts.JobMetrics:
     """Summarize queue delay, runtime, retries, cancellation, and failures."""
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=window_hours)
@@ -53,7 +58,7 @@ async def processing_job_metrics(db: AsyncSession, *, window_hours: int = 24) ->
     for job in jobs:
         grouped[job.job_type].append(job)
 
-    def summarize(rows: list[ProcessingJob]) -> dict[str, Any]:
+    def summarize(rows: list[ProcessingJob]) -> contracts.JobMetricSummary:
         queue_delays = [
             max(0.0, ((_aware(row.started_at) - _aware(row.created_at)).total_seconds() * 1000))
             for row in rows
@@ -87,7 +92,7 @@ async def processing_job_metrics(db: AsyncSession, *, window_hours: int = 24) ->
     }
 
 
-def storage_health(path: Path = LIBRARY_PATH) -> dict[str, Any]:
+def storage_health(path: Path = LIBRARY_PATH) -> contracts.StorageHealth:
     """Report capacity and writability without exposing the host path."""
     target = path if path.exists() else path.parent
     try:
@@ -108,10 +113,10 @@ def storage_health(path: Path = LIBRARY_PATH) -> dict[str, Any]:
         return {"status": "unavailable", "writable": False}
 
 
-async def provider_health(db: AsyncSession) -> list[dict[str, Any]]:
+async def provider_health(db: AsyncSession) -> list[contracts.ProviderHealth]:
     """Describe optional provider configuration without returning secrets or URLs."""
     settings = await crud.audiobook.get_audiobook_settings(db)
-    providers = []
+    providers: list[contracts.ProviderHealth] = []
     for capability in ("llm", "tts", "transcription"):
         endpoints = configured_endpoints(settings, capability) if settings else []
         enabled = [
@@ -127,15 +132,15 @@ async def provider_health(db: AsyncSession) -> list[dict[str, Any]]:
     return providers
 
 
-def _unknown_providers() -> list[dict[str, Any]]:
+def _unknown_providers() -> list[contracts.ProviderHealth]:
     return [
         {"capability": capability, "status": "unknown", "configured_endpoints": 0}
         for capability in ("llm", "tts", "transcription")
     ]
 
 
-async def health_report(db: AsyncSession, queue: ProcessingQueue) -> dict[str, Any]:
-    database = {"status": "available"}
+async def health_report(db: AsyncSession, queue: ProcessingQueue) -> contracts.HealthReport:
+    database: contracts.StatusResponse = {"status": "available"}
     try:
         await db.execute(text("SELECT 1"))
     except Exception:
@@ -160,7 +165,7 @@ async def health_report(db: AsyncSession, queue: ProcessingQueue) -> dict[str, A
     }
 
 
-def diagnostic_configuration() -> dict[str, Any]:
+def diagnostic_configuration() -> dict[str, str]:
     """Return an explicit allowlist of non-secret runtime configuration."""
     names = (
         "LOG_FORMAT",
@@ -178,11 +183,9 @@ def diagnostic_configuration() -> dict[str, Any]:
         "PROCESSING_TTS_CONCURRENCY",
         "PROCESSING_TRANSCRIPTION_CONCURRENCY",
     )
-    redacted = redact_value({name: os.getenv(name, "default") for name in names})
-    assert isinstance(redacted, dict)
-    return redacted
+    return {name: redact_text(os.getenv(name, "default")) for name in names}
 
 
-def diagnostic_logs(limit: int = 500) -> list[dict[str, Any]]:
+def diagnostic_logs(limit: int = 500) -> list[LogEntry]:
     """Read the bounded, already-redacted recent application log history."""
     return read_persisted_logs(limit=limit)

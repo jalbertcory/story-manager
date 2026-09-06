@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..job_payloads import MetadataSyncPayload
+from ..metadata_types import MetadataJobScope, metadata_details, metadata_json, remote_identifiers
 
 import logging
 from datetime import datetime, timezone
@@ -44,8 +45,9 @@ async def create_metadata_sync_job_request(
     trigger: str,
     book_ids: Optional[list[int]] = None,
 ) -> models.MetadataSyncJob:
-    if book_ids:
-        resolved_books = await crud.get_books_by_ids(db, book_ids)
+    if book_ids is not None:
+        scope = MetadataJobScope(book_ids=book_ids)
+        resolved_books = await crud.get_books_by_ids(db, scope.book_ids)
     else:
         resolved_books = await crud.get_books(db, limit=100000)
     resolved_ids = [book.id for book in resolved_books]
@@ -89,6 +91,16 @@ def _upsert_match(
     checked_at: datetime,
     preserve_approval: bool = False,
 ) -> models.BookMetadataMatch:
+    validated_ids = (
+        remote_identifiers(suggestion.remote_ids)
+        if suggestion and suggestion.matched and suggestion.remote_ids is not None
+        else None
+    )
+    validated_details = (
+        metadata_json(metadata_details(suggestion.metadata_details))
+        if suggestion and suggestion.matched and suggestion.metadata_details is not None
+        else None
+    )
     match = existing_match or models.BookMetadataMatch(book_id=book_id)
     match.status = status
     match.source = suggestion.source if suggestion and suggestion.matched else None
@@ -96,8 +108,8 @@ def _upsert_match(
     match.remote_title = suggestion.remote_title if suggestion and suggestion.matched else None
     match.remote_author = suggestion.remote_author if suggestion and suggestion.matched else None
     match.remote_url = suggestion.remote_url if suggestion and suggestion.matched else None
-    match.remote_ids = suggestion.remote_ids if suggestion and suggestion.matched else None
-    match.remote_metadata = suggestion.metadata_details if suggestion and suggestion.matched else None
+    match.remote_ids = validated_ids
+    match.remote_metadata = validated_details
     match.proposed_genre_tags = suggestion.new_genre_tags if suggestion and suggestion.matched else []
     match.possible_missing_series_books = suggestion.possible_missing_series_books if suggestion and suggestion.matched else []
     match.match_issues = suggestion.match_issues if suggestion and suggestion.matched else []
@@ -342,8 +354,8 @@ async def process_metadata_sync_job(db: AsyncSession, job_id: int) -> None:
     await crud.mark_metadata_sync_job_running(db, job)
 
     try:
-        scope = job.scope or {}
-        book_ids = scope.get("book_ids") or []
+        scope = MetadataJobScope.model_validate(job.scope if job.scope is not None else {})
+        book_ids = scope.book_ids
         target_books = await crud.get_books_by_ids(db, book_ids)
         all_books = await crud.get_books(db, limit=100000)
         target_books.sort(
@@ -451,6 +463,21 @@ async def approve_metadata_match(
     if proposal is None:
         raise ValueError("Metadata proposal not found")
 
+    genre_tags = match.proposed_genre_tags if match.proposed_genre_tags is not None else proposal.proposed_genre_tags or []
+    selected_suggestion = MetadataSuggestion(
+        book=book,
+        matched=True,
+        source=match.source or "open_library",
+        match_confidence=float(match.match_confidence or 0),
+        remote_title=match.remote_title,
+        remote_author=match.remote_author,
+        remote_url=match.remote_url,
+        genre_tags=genre_tags,
+        remote_ids=match.remote_ids or {},
+        metadata_details=metadata_details(match.remote_metadata) if match.remote_metadata is not None else None,
+        match_issues=match.match_issues or [],
+    )
+
     from .book_recovery import add_book_revision
 
     add_book_revision(
@@ -465,22 +492,6 @@ async def approve_metadata_match(
     match.rejected_at = None
     proposal.match_id = match.id
 
-    genre_tags = match.proposed_genre_tags if match.proposed_genre_tags is not None else proposal.proposed_genre_tags or []
-    merged_genres = sorted({*(book.genre_tags or []), *genre_tags}, key=str.casefold)
-    book.genre_tags = merged_genres
-    selected_suggestion = MetadataSuggestion(
-        book=book,
-        matched=True,
-        source=match.source or "open_library",
-        match_confidence=float(match.match_confidence or 0),
-        remote_title=match.remote_title,
-        remote_author=match.remote_author,
-        remote_url=match.remote_url,
-        genre_tags=genre_tags,
-        remote_ids=match.remote_ids or {},
-        metadata_details=match.remote_metadata,
-        match_issues=match.match_issues or [],
-    )
     apply_suggestion_to_book(
         book,
         selected_suggestion,

@@ -42,7 +42,7 @@ def _default_schedule() -> dict[str, list[TimeWindow]]:
 
 
 class SchedulerConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_serialization_defaults_required=True)
 
     enabled: bool = False
     timezone: str = Field(default_factory=_default_timezone)

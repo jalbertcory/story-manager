@@ -36,19 +36,19 @@ async def _queue_clean_all(db: AsyncSession, detail: str) -> models.ProcessingJo
 
 
 @router.post("/api/books/reprocess-all", response_model=contracts.StatusResponse)
-async def reprocess_all_books(response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+async def reprocess_all_books(response: Response, db: AsyncSession = Depends(get_db)) -> contracts.StatusResponse:
     job = await _queue_clean_all(db, "Queued from Clean All Books")
     response.headers["X-Processing-Job-Id"] = str(job.id)
     return {"status": "started"}
 
 
 @router.get("/api/books/reprocess-all/status", response_model=contracts.ReprocessStatus)
-async def reprocess_all_status(db: AsyncSession = Depends(get_db)) -> dict[str, bool | int | str | None]:
+async def reprocess_all_status(db: AsyncSession = Depends(get_db)) -> contracts.ReprocessStatus:
     rows = await crud.get_processing_jobs(db, job_type="clean_all", limit=1)
     if not rows:
         return {"running": False}
     job, _title = rows[0]
-    payload: dict[str, bool | int | str | None] = {
+    payload: contracts.ReprocessStatus = {
         "running": job.status in ("queued", "running"),
         "job_id": job.id,
         "status": job.status,

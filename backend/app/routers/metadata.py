@@ -1,5 +1,6 @@
 """Metadata sync endpoints for background jobs, match approval, and proposals."""
 
+from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +55,8 @@ async def approve_match(
 ) -> schemas.MetadataMatch:
     try:
         match, _proposal = await approve_metadata_match(db, match_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Stored metadata is malformed and cannot be applied.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return schemas.MetadataMatch.model_validate(match)
