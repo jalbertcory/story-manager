@@ -1,3 +1,4 @@
+import { queueProcessingJobs } from "./processing";
 import { api, apiUrl } from "./client";
 import { getBook, getBookCatalog, updateBook } from "./books";
 import { uploadEpubs } from "./imports";
@@ -38,6 +39,14 @@ export async function checkApiContract(): Promise<void> {
   const catalog = await getBookCatalog();
   // @ts-expect-error A catalog page may be empty; check the item before accessing it.
   catalog.items[0].id.toFixed();
+
+  await queueProcessingJobs({ job_type: "audiobook_pipeline", book_ids: [12], payload: { mode: "reconcile" } });
+  // @ts-expect-error Payload fields must belong to the selected job type.
+  await queueProcessingJobs({ job_type: "clean_book", book_ids: [12], payload: { mode: "rebuild" } });
+  // @ts-expect-error Pipeline modes are restricted to supported operations.
+  await queueProcessingJobs({ job_type: "audiobook_pipeline", book_ids: [12], payload: { mode: "invented" } });
+  // @ts-expect-error Backup verification requires a filename payload.
+  await queueProcessingJobs({ job_type: "verify_backup" });
 
   const book = await getBook(12);
   if (book) {

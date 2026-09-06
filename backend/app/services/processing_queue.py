@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import socket
-from typing import Any, Awaitable, Callable, TypeVar, TypedDict
+from typing import Awaitable, Callable, TypeVar, TypedDict
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -15,6 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import BACKUP_PATH, BACKUP_RETENTION_COUNT, LIBRARY_PATH
 from ..database import DATABASE_URL, SessionLocal
+from ..job_payloads import (
+    JobPayload,
+    validate_job_payload,
+    VerifyBackupPayload,
+    ImportWebBookPayload,
+    RefreshAllPayload,
+    ImportAudiobookPayload,
+    RematchImportedAudiobookPayload,
+    MetadataSyncPayload,
+    AudiobookPipelinePayload,
+)
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
     IMPORTED_AUDIOBOOK,
@@ -281,7 +292,7 @@ class ProcessingQueue:
                 return "lost"
 
     async def _execute(self, job: ProcessingJob) -> str:
-        payload = job.payload or {}
+        validate_job_payload(job.job_type, job.payload)
         if job.job_type == "create_backup":
             async with backup_barrier.backup():
                 async with SessionLocal() as db:
@@ -307,7 +318,7 @@ class ProcessingQueue:
                 await self._update_progress(job.id, 2, 2, f"Verified {summary['filename']}")
                 return f"Backup created and verified: {summary['filename']}"
         if job.job_type == "verify_backup":
-            filename = str(payload.get("filename") or "")
+            filename = VerifyBackupPayload.model_validate(job.payload or {}).filename
             archive = resolve_backup(BACKUP_PATH, filename)
             await self._update_progress(job.id, 0, 1, f"Verifying {filename}")
             await asyncio.to_thread(verify_backup_archive, archive)
@@ -331,7 +342,7 @@ class ProcessingQueue:
         if job.job_type == "import_web_book":
             if job.book_id is None:
                 raise ValueError("Web import job has no book.")
-            source_url = str(payload.get("source_url") or "")
+            source_url = ImportWebBookPayload.model_validate(job.payload or {}).source_url
             if not source_url:
                 raise ValueError("Web import job has no source URL.")
             await self._update_progress(job.id, 0, 1, "Downloading web book")
@@ -347,7 +358,7 @@ class ProcessingQueue:
         if job.job_type == "refresh_all":
 
             async def refresh_all() -> bool:
-                return await run_web_novel_update(payload.get("trigger", "manual"))
+                return await run_web_novel_update(RefreshAllPayload.model_validate(job.payload or {}).trigger)
 
             await self._run_with_progress_mirror(
                 job.id,
@@ -385,7 +396,7 @@ class ProcessingQueue:
                     )
                 )
             if (
-                payload.get("auto_align", True)
+                ImportAudiobookPayload.model_validate(job.payload or {}).auto_align
                 and edition is not None
                 and matched_count
                 and transcription_provider_name(settings) != "none"
@@ -457,7 +468,7 @@ class ProcessingQueue:
                 rematch_audio,
                 lambda: self._imported_audio_progress(target_id),
             )
-            if payload.get("realign"):
+            if RematchImportedAudiobookPayload.model_validate(job.payload or {}).realign:
                 child = await queue_processing_job(
                     job_type="align_imported_audiobook",
                     book_id=job.book_id,
@@ -487,7 +498,7 @@ class ProcessingQueue:
                     raise RuntimeError(edition.alignment_error)
             return "Human audiobook timing alignment completed"
         if job.job_type == "metadata_sync":
-            metadata_job_id = payload.get("metadata_job_id") or job.target_id
+            metadata_job_id = MetadataSyncPayload.model_validate(job.payload or {}).metadata_job_id or job.target_id
             if metadata_job_id is None:
                 raise ValueError("Metadata processing job has no metadata job.")
             metadata_job_id = int(metadata_job_id)
@@ -589,7 +600,7 @@ class ProcessingQueue:
 
     async def _run_audiobook_pipeline(self, job: ProcessingJob) -> str:
         book_id = _required_book(job)
-        mode = (job.payload or {}).get("mode", "resume")
+        mode = AudiobookPipelinePayload.model_validate(job.payload or {}).mode
         async with SessionLocal() as db:
             book = await db.get(Book, job.book_id)
             if book is None:
@@ -798,7 +809,7 @@ async def queue_processing_job(
     target_id: int | None = None,
     target_content_version: int | None = None,
     parent_job_id: int | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: JobPayload | None = None,
     dedupe_key: str | None = None,
     progress_detail: str | None = "Queued",
 ) -> ProcessingJob:
@@ -806,6 +817,7 @@ async def queue_processing_job(
         resource_lane, max_attempts = JOB_POLICIES[job_type]
     except KeyError as exc:
         raise ValueError(f"Unsupported processing job type: {job_type}") from exc
+    payload = validate_job_payload(job_type, payload)
     owns_session = db is None
     session = db or SessionLocal()
     try:
@@ -870,7 +882,7 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
                 target_id=edition.id,
                 target_content_version=content_version,
                 parent_job_id=parent_job_id,
-                payload={"realign": realign},
+                payload=RematchImportedAudiobookPayload(realign=realign),
                 dedupe_key=f"rematch_imported_audiobook:imported_audiobook:{edition.id}:v{content_version}",
                 progress_detail=f"Queued to rematch against cleaned content v{content_version}",
             )
@@ -885,7 +897,7 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
                 target_id=book.id,
                 target_content_version=content_version,
                 parent_job_id=parent_job_id,
-                payload={"mode": "reconcile"},
+                payload=AudiobookPipelinePayload(mode="reconcile"),
                 dedupe_key=f"audiobook_pipeline:book:{book.id}:v{content_version}",
                 progress_detail=f"Queued for cleaned content v{content_version}",
             )

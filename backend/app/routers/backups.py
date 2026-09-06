@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..job_payloads import VerifyBackupPayload
+
 from .. import api_schemas as contracts
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
@@ -49,7 +51,7 @@ async def verify_backup(filename: str, db: AsyncSession = Depends(get_db)) -> sc
     job = await queue_processing_job(
         db=db,
         job_type="verify_backup",
-        payload={"filename": filename},
+        payload=VerifyBackupPayload(filename=filename),
         dedupe_key=f"verify_backup:{filename}",
         progress_detail=f"Queued to verify {filename}",
     )

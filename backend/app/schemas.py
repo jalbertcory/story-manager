@@ -1,5 +1,5 @@
 from .api_model import APIModel as BaseModel
-from pydantic import ConfigDict, Field, HttpUrl, field_validator
+from pydantic import ConfigDict, Field, HttpUrl, JsonValue, field_validator
 from datetime import datetime
 from typing import Any, Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -372,33 +372,6 @@ class ReaderBook(BaseModel):
     audiobook_types: List[AudiobookType] = Field(default_factory=list)
 
 
-PROCESSING_JOB_TYPES = Literal[
-    "clean_book",
-    "clean_all",
-    "refresh_book",
-    "refresh_all",
-    "audiobook_pipeline",
-    "import_audiobook",
-    "upgrade_imported_audiobook",
-    "rebuild_imported_audiobook",
-    "rematch_imported_audiobook",
-    "align_imported_audiobook",
-    "metadata_sync",
-    "generate_sentence_audio",
-    "generate_chapter_preview",
-    "retry_cover",
-    "create_backup",
-    "verify_backup",
-]
-
-
-class ProcessingJobRequest(BaseModel):
-    job_type: PROCESSING_JOB_TYPES
-    book_ids: List[int] = Field(default_factory=list)
-    target_id: Optional[int] = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 class ProcessingJob(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -413,7 +386,7 @@ class ProcessingJob(BaseModel):
     target_content_version: Optional[int] = None
     parent_job_id: Optional[int] = None
     request_id: str
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     progress_current: int
     progress_total: int
     progress_detail: Optional[str] = None
@@ -427,6 +400,11 @@ class ProcessingJob(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def normalize_legacy_empty_payload(cls, value: object) -> object:
+        return {} if value is None else value
 
 
 class ProcessingJobsCreated(BaseModel):

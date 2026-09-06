@@ -1,3 +1,5 @@
+from ..job_payloads import CleanAllPayload
+
 """Cleaning configuration, preview, and durable processing endpoints."""
 
 from .. import api_schemas as contracts
@@ -27,7 +29,7 @@ async def _queue_clean_all(db: AsyncSession, detail: str) -> models.ProcessingJo
     return await queue_processing_job(
         db=db,
         job_type="clean_all",
-        payload={"reason": detail},
+        payload=CleanAllPayload(reason=detail),
         dedupe_key="clean_all",
         progress_detail=detail,
     )

@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from ..job_payloads import (
+    AudiobookPipelinePayload,
+    ImportAudiobookPayload,
+    RebuildImportedAudiobookPayload,
+    RematchImportedAudiobookPayload,
+    UpgradeImportedAudiobookPayload,
+)
+
 from ..api_model import APIModel as BaseModel
 
 from .. import api_schemas as contracts
@@ -975,7 +983,7 @@ async def upload_imported_audiobook(
             book_id=book_id,
             target_type="imported_audiobook",
             target_id=edition.id,
-            payload={"auto_align": auto_align},
+            payload=ImportAudiobookPayload(auto_align=auto_align),
             dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
             progress_detail="Queued after audiobook upload",
         )
@@ -1096,7 +1104,7 @@ async def upgrade_imported_audiobook(
         book_id=edition.book_id,
         target_type="imported_audiobook",
         target_id=edition.id,
-        payload={"format_version": CURRENT_DERIVED_FORMAT_VERSION},
+        payload=UpgradeImportedAudiobookPayload(format_version=CURRENT_DERIVED_FORMAT_VERSION),
         dedupe_key=f"upgrade_imported_audiobook:imported_audiobook:{edition.id}",
         progress_detail=f"Queued chapter-audio format v{CURRENT_DERIVED_FORMAT_VERSION}",
     )
@@ -1123,7 +1131,7 @@ async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) ->
             book_id=edition.book_id,
             target_type="imported_audiobook",
             target_id=edition.id,
-            payload={"format_version": CURRENT_DERIVED_FORMAT_VERSION},
+            payload=UpgradeImportedAudiobookPayload(format_version=CURRENT_DERIVED_FORMAT_VERSION),
             dedupe_key=f"upgrade_imported_audiobook:imported_audiobook:{edition.id}",
             progress_detail=f"Queued chapter-audio format v{CURRENT_DERIVED_FORMAT_VERSION}",
         )
@@ -1206,10 +1214,7 @@ async def rebuild_all_human_audiobooks(
             target_type="imported_audiobook",
             target_id=edition.id,
             target_content_version=edition.matched_content_version,
-            payload={
-                "pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
-                "force": force,
-            },
+            payload=RebuildImportedAudiobookPayload(pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION, force=force),
             dedupe_key=(
                 f"rebuild_imported_audiobook:imported_audiobook:{edition.id}:" f"v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
             ),
@@ -1321,7 +1326,7 @@ async def rematch_imported_audiobook(
         target_type="imported_audiobook",
         target_id=edition.id,
         target_content_version=book.content_version,
-        payload={"realign": realign},
+        payload=RematchImportedAudiobookPayload(realign=realign),
         dedupe_key=f"rematch_imported_audiobook:imported_audiobook:{edition.id}:v{book.content_version or 1}",
         progress_detail="Queued to restore human-audio chapter matches and text cues",
     )
@@ -1515,7 +1520,7 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> di
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "resume"},
+        payload=AudiobookPipelinePayload(mode="resume"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail="Queued to run audiobook to completion",
     )
@@ -1548,7 +1553,7 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> dic
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "resume"},
+        payload=AudiobookPipelinePayload(mode="resume"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail=f"Queued next audiobook stage: {next_phase}",
     )
@@ -1580,7 +1585,7 @@ async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "resume"},
+        payload=AudiobookPipelinePayload(mode="resume"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail=f"Queued one audiobook batch: {next_phase}",
     )
@@ -1618,7 +1623,7 @@ async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> 
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "rebuild"},
+        payload=AudiobookPipelinePayload(mode="rebuild"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:rebuild",
         progress_detail="Queued AI audiobook rebuild; human editions preserved",
     )
@@ -1653,7 +1658,7 @@ async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "audio"},
+        payload=AudiobookPipelinePayload(mode="audio"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:audio-rebuild",
         progress_detail="Queued AI TTS regeneration; speakers and human editions preserved",
     )
@@ -1685,7 +1690,7 @@ async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_
         target_type="book",
         target_id=book_id,
         target_content_version=book.content_version,
-        payload={"mode": "roster"},
+        payload=AudiobookPipelinePayload(mode="roster"),
         dedupe_key=f"audiobook_pipeline:book:{book_id}:roster",
         progress_detail="Queued character-roster regeneration",
     )
