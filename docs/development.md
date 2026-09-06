@@ -124,8 +124,9 @@ Run the checks required before publishing a PR:
 make pr-check
 ```
 
-This runs Python formatting/linting, Python and frontend type checking, frontend
-linting, generated API contract drift checks, and frontend dependency audits. CI also audits Python dependencies.
+This validates the frontend lockfile with a dry-run clean install, then runs Python
+formatting/linting, Python and frontend type checking, frontend linting, generated
+API contract drift checks, and frontend dependency audits. CI also audits Python dependencies.
 
 Run Python type checking on its own:
 

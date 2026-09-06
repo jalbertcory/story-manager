@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui typecheck typecheck-ui api-check api-generate audit-ui pr-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui pr-check test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -191,7 +191,10 @@ api-generate:
 api-check:
 	cd frontend && npm run api:check
 
-pr-check: lint typecheck typecheck-ui api-check audit-ui
+check-ui-install:
+	cd frontend && npm ci --dry-run --ignore-scripts --no-audit --no-fund --loglevel=error
+
+pr-check: check-ui-install lint typecheck typecheck-ui api-check audit-ui
 
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
