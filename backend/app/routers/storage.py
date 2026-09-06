@@ -1,5 +1,6 @@
 """Storage cleanup and persistent log endpoints."""
 
+from .. import api_schemas as contracts
 import logging
 from typing import Optional, TypedDict
 
@@ -30,7 +31,7 @@ class ClientLogEntry(BaseModel):
     source: Optional[str] = None
 
 
-@router.post("/api/logs/client", response_model=None)
+@router.post("/api/logs/client", response_model=contracts.OkResponse)
 async def post_client_log(entry: ClientLogEntry) -> dict[str, bool]:
     """Receive log entries from the frontend UI."""
     msg = entry.message
@@ -41,7 +42,7 @@ async def post_client_log(entry: ClientLogEntry) -> dict[str, bool]:
     return {"ok": True}
 
 
-@router.get("/api/logs", response_model=None)
+@router.get("/api/logs", response_model=list[contracts.LogEntry])
 async def get_logs(
     limit: int = Query(default=200, ge=1, le=1000),
     level: Optional[str] = None,
@@ -59,7 +60,7 @@ async def get_logs(
     return entries[-limit:]
 
 
-@router.get("/api/library/validate", response_model=None)
+@router.get("/api/library/validate", response_model=contracts.LibraryValidation)
 async def validate_library(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """
     Check every book record for missing or broken file paths.
@@ -73,7 +74,7 @@ async def validate_library(db: AsyncSession = Depends(get_db)) -> dict[str, obje
     return {"total_books": len(books), "issues_count": len(issues), "issues": issues}
 
 
-@router.post("/api/storage/cleanup", response_model=None)
+@router.post("/api/storage/cleanup", response_model=contracts.StorageCleanup)
 async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """
     Scans the library directory for files not referenced by any book record and

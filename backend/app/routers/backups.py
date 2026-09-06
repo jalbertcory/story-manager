@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .. import api_schemas as contracts
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,7 +56,9 @@ async def verify_backup(filename: str, db: AsyncSession = Depends(get_db)) -> sc
     return _job_response(job)
 
 
-@router.get("/api/backups/{filename}/download")
+@router.get(
+    "/api/backups/{filename}/download", response_class=Response, responses=contracts.media_responses("application/zip")
+)
 async def download_backup(filename: str) -> FileResponse:
     try:
         archive = resolve_backup(BACKUP_PATH, filename)

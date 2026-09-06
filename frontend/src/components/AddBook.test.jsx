@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AddBook from "./AddBook.jsx";
 import { renderWithClient } from "../test-utils.jsx";
 
+function catalogResponse(items) {
+  return jsonResponse({ items, next_cursor: null, total_count: items.length,
+    facets: { series: 0, standalone: items.length, web: 0, genres: [] } });
+}
+
 function jsonResponse(payload, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -173,7 +178,7 @@ describe("AddBook", () => {
   it("imports directly into a selected library book", async () => {
     globalThis.fetch
       .mockResolvedValueOnce(
-        jsonResponse([
+        catalogResponse([
           { id: 42, title: "Matched Book", author: "Narrated Author" },
         ]),
       )
@@ -220,7 +225,7 @@ describe("AddBook", () => {
 
   it("suggests a strong library match from the audiobook filename", async () => {
     globalThis.fetch.mockResolvedValueOnce(
-      jsonResponse([
+      catalogResponse([
         {
           id: 42,
           title: "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure",
@@ -276,7 +281,7 @@ describe("AddBook", () => {
 
   it("rechecks the library match when different audio files are chosen", async () => {
     globalThis.fetch.mockResolvedValue(
-      jsonResponse([{ id: 42, title: "First Book", author: "Author" }]),
+      catalogResponse([{ id: 42, title: "First Book", author: "Author" }]),
     );
     window.history.replaceState({}, "", "/import?type=audiobook");
     renderWithClient(<AddBook />);

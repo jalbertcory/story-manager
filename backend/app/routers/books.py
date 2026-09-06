@@ -1,10 +1,11 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
+from .. import api_schemas as contracts
 import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
@@ -137,7 +138,7 @@ async def list_series(db: AsyncSession = Depends(get_db)) -> List[str]:
     return await crud.get_all_series(db)
 
 
-@router.put("/api/series/{series_name}", response_model=None)
+@router.put("/api/series/{series_name}", response_model=contracts.SeriesRenamed)
 async def rename_series(
     series_name: str, body: schemas.SeriesRename, db: AsyncSession = Depends(get_db)
 ) -> dict[str, int | str]:
@@ -159,7 +160,7 @@ async def rename_series(
     return {"updated": count, "old_name": series_name, "new_name": new_name}
 
 
-@router.post("/api/series/merge", response_model=None)
+@router.post("/api/series/merge", response_model=contracts.SeriesMerged)
 async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get_db)) -> dict[str, int | str]:
     """Merge source series into target series."""
     source = body.source.strip()
@@ -182,7 +183,7 @@ async def merge_series(body: schemas.SeriesMerge, db: AsyncSession = Depends(get
     return {"merged": count, "source": source, "target": target}
 
 
-@router.post("/api/series/{series_name}/reorder", response_model=None)
+@router.post("/api/series/{series_name}/reorder", response_model=contracts.SeriesReordered)
 async def reorder_series(
     series_name: str, body: schemas.SeriesReorder, db: AsyncSession = Depends(get_db)
 ) -> dict[str, int | str]:
@@ -266,7 +267,7 @@ async def search_books_by_series(
     return await crud.get_books_by_series(db, series=series, skip=skip, limit=limit)
 
 
-@router.get("/api/books/count", response_model=None)
+@router.get("/api/books/count", response_model=contracts.BookCount)
 async def count_books_endpoint(q: Optional[str] = None, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
     total = await crud.count_books(db, q=q)
     return {"total": total}
@@ -432,7 +433,7 @@ async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)
     return book
 
 
-@router.get("/api/books/{book_id}/chapters", response_model=List[Dict[str, Any]])
+@router.get("/api/books/{book_id}/chapters", response_model=list[epub_editor.EpubChapter])
 async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[epub_editor.EpubChapter]:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -447,7 +448,7 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)) ->
     return epub_editor.get_chapters(str(epub_path))
 
 
-@router.get("/api/books/{book_id}/cleaned-chapters", response_model=List[Dict[str, Any]])
+@router.get("/api/books/{book_id}/cleaned-chapters", response_model=list[epub_editor.EpubChapter])
 async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[epub_editor.EpubChapter]:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -462,7 +463,12 @@ async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get
     return epub_editor.get_chapters(str(epub_path))
 
 
-@router.get("/api/books/{book_id}/download", response_model=None)
+@router.get(
+    "/api/books/{book_id}/download",
+    response_model=None,
+    response_class=Response,
+    responses=contracts.media_responses("application/epub+zip"),
+)
 async def download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     db_book = await crud.get_book(db, book_id=book_id)
     if db_book is None:
@@ -480,7 +486,7 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> Fil
     )
 
 
-@router.post("/api/books/remove-all", response_model=None)
+@router.post("/api/books/remove-all", response_model=contracts.RemoveAllBooks)
 async def remove_all_books(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     books = await crud.get_books(db, limit=100000)
 
@@ -555,7 +561,7 @@ async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depe
     return None
 
 
-@router.post("/api/recycle-bin/purge-expired", response_model=None)
+@router.post("/api/recycle-bin/purge-expired", response_model=contracts.PurgedBooks)
 async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]

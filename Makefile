@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui typecheck audit-ui pr-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui typecheck typecheck-ui api-check api-generate audit-ui pr-check test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -34,7 +34,7 @@ help:
 	@echo "  make gpu-services-status Show scheduler and managed-container state"
 	@echo "  make test-gpu-scheduler Run scheduler unit tests"
 	@echo "  make typecheck        Check backend and service Python types"
-	@echo "  make pr-check         Run lint, Python type checks, and frontend dependency audits"
+	@echo "  make pr-check         Run lint, type checks, API contract checks, and frontend dependency audits"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
@@ -182,7 +182,16 @@ audit-ui:
 typecheck:
 	.venv/bin/python3 -m mypy
 
-pr-check: lint typecheck audit-ui
+typecheck-ui:
+	cd frontend && npm run typecheck
+
+api-generate:
+	cd frontend && npm run api:generate
+
+api-check:
+	cd frontend && npm run api:check
+
+pr-check: lint typecheck typecheck-ui api-check audit-ui
 
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests

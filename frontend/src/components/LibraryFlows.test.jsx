@@ -22,11 +22,16 @@ describe("Library workflow actions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save universe" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/library/universe-membership", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Cosmere", series: "Mistborn" }),
-      }),
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/library/universe-membership",
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.objectContaining({
+            "content-type": "application/json",
+          }),
+          body: JSON.stringify({ name: "Cosmere", series: "Mistborn" }),
+        }),
+      ),
     );
     unmount();
     renderWithClient(<UniverseMembership bookId={3} currentName="Cosmere" />);
@@ -36,32 +41,42 @@ describe("Library workflow actions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save universe" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/library/universe-membership", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: null, book_id: 3 }),
-      }),
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/library/universe-membership",
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.objectContaining({
+            "content-type": "application/json",
+          }),
+          body: JSON.stringify({ name: null, book_id: 3 }),
+        }),
+      ),
     );
   });
 
   it("surfaces failed source checks first, filters changes, and retries the affected book", async () => {
     globalThis.fetch = vi.fn((url) => {
       if (url.startsWith("/api/books/catalog?"))
-        return ok([
-          {
-            id: 1,
-            title: "A changed novel",
-            author: "Writer",
-            source_type: "web",
-          },
-          {
-            id: 2,
-            title: "Z failed novel",
-            author: "Writer",
-            source_type: "web",
-            refresh_status: "error",
-          },
-        ]);
+        return ok({
+          items: [
+            {
+              id: 1,
+              title: "A changed novel",
+              author: "Writer",
+              source_type: "web",
+            },
+            {
+              id: 2,
+              title: "Z failed novel",
+              author: "Writer",
+              source_type: "web",
+              refresh_status: "error",
+            },
+          ],
+          next_cursor: null,
+          total_count: 2,
+          facets: {},
+        });
       if (url === "/api/library/web-checks")
         return ok([
           {
@@ -85,9 +100,12 @@ describe("Library workflow actions", () => {
     expect(screen.getByText(/2 chapters added/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry check" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/books/2/refresh", {
-        method: "POST",
-      }),
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/books/2/refresh",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      ),
     );
     fireEvent.change(screen.getByLabelText("Filter web updates"), {
       target: { value: "updated" },

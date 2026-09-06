@@ -100,9 +100,9 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/7/detach-source", {
+      expect(fetchMock).toHaveBeenCalledWith("/api/books/7/detach-source", expect.objectContaining({
         method: "POST",
-      });
+      }));
     });
     await waitFor(() => {
       expect(onBack).toHaveBeenCalled();
@@ -199,9 +199,9 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/8/detach-source", {
+      expect(fetchMock).toHaveBeenCalledWith("/api/books/8/detach-source", expect.objectContaining({
         method: "POST",
-      });
+      }));
     });
     await waitFor(() => {
       expect(onBack).toHaveBeenCalled();
@@ -394,7 +394,7 @@ describe("BookSettings", () => {
     expect(screen.getByText(/8,000 words/)).toBeInTheDocument();
     expect(screen.getByText(/Initial sync/)).toBeInTheDocument();
     expect(screen.getByText(/Catch-up sync/)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/books/11/update-history");
+    expect(fetchMock).toHaveBeenCalledWith("/api/books/11/update-history", expect.objectContaining({method: "GET"}));
   });
 
   it("saves manual metadata identifiers", async () => {
@@ -507,7 +507,7 @@ describe("BookSettings", () => {
       );
       expect(saveCall).toBeTruthy();
       expect(saveCall[1].headers).toEqual({
-        "Content-Type": "application/json",
+        "content-type": "application/json",
       });
       expect(JSON.parse(saveCall[1].body)).toEqual({
         title: "Identifier Book",

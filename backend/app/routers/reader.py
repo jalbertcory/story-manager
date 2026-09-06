@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .. import api_schemas as contracts
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -199,7 +200,7 @@ def _has_current_audiobook_text(book: models.Book) -> bool:
     return book.audiobook_text_content_version == content_version and text_reader_path(book) is not None
 
 
-@router.get("/reader/opds")
+@router.get("/reader/opds", response_class=Response, responses=contracts.media_responses("application/atom+xml", binary=False))
 async def reader_opds_root(request: Request) -> Response:
     base_url = str(request.base_url).rstrip("/")
     nav_type = "application/atom+xml;profile=opds-catalog;kind=navigation"
@@ -234,7 +235,9 @@ async def reader_opds_root(request: Request) -> Response:
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
 
 
-@router.get("/reader/opds/catalog")
+@router.get(
+    "/reader/opds/catalog", response_class=Response, responses=contracts.media_responses("application/atom+xml", binary=False)
+)
 async def reader_opds_catalog(
     request: Request,
     page: int = 0,
@@ -264,7 +267,9 @@ async def reader_opds_catalog(
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
 
 
-@router.get("/reader/opds/search")
+@router.get(
+    "/reader/opds/search", response_class=Response, responses=contracts.media_responses("application/atom+xml", binary=False)
+)
 async def reader_opds_search(request: Request, q: str = "", db: AsyncSession = Depends(get_db)) -> Response:
     base_url = str(request.base_url).rstrip("/")
     books = await crud.search_reader_books(db, q=q, skip=0, limit=100)
@@ -284,7 +289,9 @@ async def reader_opds_search(request: Request, q: str = "", db: AsyncSession = D
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
 
 
-@router.get("/reader/opds/series")
+@router.get(
+    "/reader/opds/series", response_class=Response, responses=contracts.media_responses("application/atom+xml", binary=False)
+)
 async def reader_opds_series(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     base_url = str(request.base_url).rstrip("/")
     nav_type = "application/atom+xml;profile=opds-catalog;kind=navigation"
@@ -311,7 +318,11 @@ async def reader_opds_series(request: Request, db: AsyncSession = Depends(get_db
     return Response(content=_opds_xml(feed), media_type="application/atom+xml; charset=utf-8")
 
 
-@router.get("/reader/opds/series/{series_name}")
+@router.get(
+    "/reader/opds/series/{series_name}",
+    response_class=Response,
+    responses=contracts.media_responses("application/atom+xml", binary=False),
+)
 async def reader_opds_series_books(series_name: str, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     base_url = str(request.base_url).rstrip("/")
     acq_type = "application/atom+xml;profile=opds-catalog;kind=acquisition"
@@ -472,7 +483,11 @@ async def get_reader_human_audiobook_chapters(
     return await audiobook_router.list_chapters(book_id, db)
 
 
-@router.get("/reader/human-audiobooks/{edition_id}/tracks/{track_id}/audio")
+@router.get(
+    "/reader/human-audiobooks/{edition_id}/tracks/{track_id}/audio",
+    response_class=Response,
+    responses=contracts.media_responses("audio/*"),
+)
 async def get_reader_human_audiobook_audio(
     edition_id: int,
     track_id: int,
@@ -481,7 +496,11 @@ async def get_reader_human_audiobook_audio(
     return await audiobook_router.get_imported_track_audio(edition_id, track_id, db)
 
 
-@router.get("/reader/human-audiobooks/{edition_id}/tracks/{track_id}/smil")
+@router.get(
+    "/reader/human-audiobooks/{edition_id}/tracks/{track_id}/smil",
+    response_class=Response,
+    responses=contracts.media_responses("application/smil+xml", binary=False),
+)
 async def get_reader_human_audiobook_smil(
     edition_id: int,
     track_id: int,
@@ -602,7 +621,11 @@ async def reader_audiobook_manifest(
     )
 
 
-@router.get("/reader/books/{book_id}/audiobook/text")
+@router.get(
+    "/reader/books/{book_id}/audiobook/text",
+    response_class=Response,
+    responses=contracts.media_responses("application/epub+zip"),
+)
 async def reader_audiobook_text(
     book_id: int,
     request: Request,
@@ -661,7 +684,11 @@ def _iter_file_range(path: Path, start: int, length: int) -> Iterator[bytes]:
             yield chunk
 
 
-@router.get("/reader/books/{book_id}/audiobook/chapters/{chapter_key}/audio")
+@router.get(
+    "/reader/books/{book_id}/audiobook/chapters/{chapter_key}/audio",
+    response_class=Response,
+    responses=contracts.media_responses("audio/mpeg"),
+)
 async def reader_audiobook_chapter_audio(
     book_id: int,
     chapter_key: str,
@@ -715,7 +742,11 @@ async def reader_audiobook_chapter_audio(
     )
 
 
-@router.get("/reader/books/{book_id}/audiobook/chapters/{chapter_key}/smil")
+@router.get(
+    "/reader/books/{book_id}/audiobook/chapters/{chapter_key}/smil",
+    response_class=Response,
+    responses=contracts.media_responses("application/smil+xml", binary=False),
+)
 async def reader_audiobook_chapter_smil(
     book_id: int,
     chapter_key: str,
@@ -740,7 +771,9 @@ async def reader_audiobook_chapter_smil(
     )
 
 
-@router.get("/reader/books/{book_id}/download")
+@router.get(
+    "/reader/books/{book_id}/download", response_class=Response, responses=contracts.media_responses("application/epub+zip")
+)
 async def reader_download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     book = await crud.get_reader_book(db, book_id)
     if not book.current_path:
@@ -765,7 +798,7 @@ async def reader_download_book(book_id: int, db: AsyncSession = Depends(get_db))
     )
 
 
-@router.get("/reader/covers/{book_id}")
+@router.get("/reader/covers/{book_id}", response_class=Response, responses=contracts.media_responses("image/*"))
 async def reader_cover(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
     book = await crud.get_reader_book(db, book_id)
     if not book.cover_path:

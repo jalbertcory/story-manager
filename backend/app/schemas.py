@@ -1,4 +1,5 @@
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from .api_model import APIModel as BaseModel
+from pydantic import ConfigDict, Field, HttpUrl, field_validator
 from datetime import datetime
 from typing import Any, Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -109,6 +110,7 @@ class BookCatalogEntry(BaseModel):
     effective_genre_tags: Optional[List[str]] = Field(default_factory=list)
     effective_series_genre_tags: Optional[List[str]] = Field(default_factory=list)
     source_type: SourceType
+    source_url: Optional[str] = None
     cover_path: Optional[str] = None
     current_word_count: Optional[int] = None
     updated_at: Optional[datetime] = None

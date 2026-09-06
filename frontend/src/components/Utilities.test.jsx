@@ -154,7 +154,7 @@ describe("Utilities", () => {
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
         "/api/audiobook/imports/rebuild-all?force=false",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
     expect(
@@ -184,7 +184,7 @@ describe("Utilities", () => {
       if (String(url).startsWith("/api/processing/jobs?")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
-      if (url === "/api/backups" && !options) {
+      if (url === "/api/backups" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -217,14 +217,14 @@ describe("Utilities", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create backup" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/backups", { method: "POST" }),
+      expect(fetch).toHaveBeenCalledWith("/api/backups", expect.objectContaining({ method: "POST" })),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Verify now" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, {
+      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, expect.objectContaining({
         method: "POST",
-      }),
+      })),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -234,9 +234,9 @@ describe("Utilities", () => {
       within(dialog).getByRole("button", { name: "Delete backup" }),
     );
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, {
+      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, expect.objectContaining({
         method: "DELETE",
-      });
+      }));
     });
   });
 
@@ -545,11 +545,11 @@ describe("Utilities", () => {
     );
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/jobs", {
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/jobs", expect.objectContaining({
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: expect.objectContaining({ "content-type": "application/json" }),
         body: JSON.stringify({ book_ids: null, trigger: "manual" }),
-      });
+      }));
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Approve Match" }));
@@ -557,9 +557,9 @@ describe("Utilities", () => {
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         "/api/metadata/matches/8/approve",
-        {
+        expect.objectContaining({
           method: "POST",
-        },
+        }),
       );
     });
   });
@@ -774,9 +774,9 @@ describe("Utilities", () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", {
+      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", expect.objectContaining({
         method: "DELETE",
-      });
+      }));
     });
   });
 });

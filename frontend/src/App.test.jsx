@@ -45,11 +45,20 @@ const group = {
   audio_count: 0,
   cover_ids: [2, 1],
 };
+function expectRequest(expected) {
+  const target = new URL(expected, "http://localhost");
+  expect(fetch.mock.calls.some(([url]) => {
+    const actual = new URL(url, "http://localhost");
+    return actual.pathname === target.pathname &&
+      [...target.searchParams].every(([key, value]) => actual.searchParams.get(key) === value);
+  })).toBe(true);
+}
 function mockApi(resolve = () => undefined) {
   globalThis.fetch = vi.fn((url, options) => {
     let data = resolve(url, options);
     if (data === undefined) {
-      if (url.startsWith("/api/library/groups?")) data = [group];
+      if (url === "/api/auth/status") data = {mode: "disabled", authenticated: true};
+      else if (url.startsWith("/api/library/groups?")) data = [group];
       else if (url.startsWith("/api/books/catalog?"))
         data = [...saga].sort((a, b) => a.series_index - b.series_index);
       else if (url === "/api/series") data = ["Saga"];
@@ -68,6 +77,9 @@ function mockApi(resolve = () => undefined) {
           missing_covers: category,
         };
       } else data = [];
+    }
+    if (Array.isArray(data) && (url.startsWith("/api/books/catalog?") || url.startsWith("/api/library/groups?"))) {
+      data = {items: data, next_cursor: null, total_count: data.length, facets: {series: 1, standalone: 0, web: 0, genres: []}};
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   });
@@ -190,9 +202,7 @@ describe("App workspaces", () => {
       target: { value: "Author B" },
     });
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30",
-      ),
+      expectRequest("/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30"),
     );
     const filters = screen.getByRole("button", {
       name: "Filters",
@@ -205,9 +215,7 @@ describe("App workspaces", () => {
       target: { value: "web" },
     });
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30&source=web",
-      ),
+      expectRequest("/api/library/groups?group_by=series&q=Author+B&sort_by=title&sort_order=asc&limit=30&source=web"),
     );
     const activeFilters = screen.getByRole("button", { name: "Filters (1)" });
     expect(activeFilters).toHaveAttribute("aria-expanded", "true");
@@ -231,9 +239,7 @@ describe("App workspaces", () => {
     });
     fireEvent.click(await screen.findByText("Cosmere"));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/api/library/groups?group_by=series&q=&sort_by=title&sort_order=asc&limit=30&universe=7",
-      ),
+      expectRequest("/api/library/groups?group_by=series&q=&sort_by=title&sort_order=asc&limit=30&universe=7"),
     );
     fireEvent.click(await screen.findByText("Saga"));
     expect(await screen.findByText("Saga Book 1")).toBeInTheDocument();
@@ -261,11 +267,11 @@ describe("App workspaces", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/series/Saga/genres", {
+      expect(fetch).toHaveBeenCalledWith("/api/series/Saga/genres", expect.objectContaining({
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ user_genre_tags: ["Fantasy", "Epic Fantasy"] }),
-      }),
+      })),
     );
   });
 
@@ -285,11 +291,11 @@ describe("App workspaces", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/books/4", {
+      expect(fetch).toHaveBeenCalledWith("/api/books/4", expect.objectContaining({
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ series: "Saga" }),
-      }),
+      })),
     );
   });
 

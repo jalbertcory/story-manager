@@ -1,5 +1,7 @@
 """EPUB upload endpoints: single file, multi-file batch, and library-wide series detection."""
 
+from ..api_model import APIModel as BaseModel
+from .. import api_schemas as contracts
 import logging
 from io import BytesIO
 import zipfile
@@ -9,7 +11,7 @@ from typing import List, Optional
 
 from ebooklib import epub
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, ValidationError
+from pydantic import Field, HttpUrl, TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -663,7 +665,7 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
     return results
 
 
-@router.post("/api/books/detect-series", response_model=dict)
+@router.post("/api/books/detect-series", response_model=contracts.SeriesDetected)
 async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict[str, int | list[str]]:
     """
     Scans all books without an assigned series and auto-detects groupings

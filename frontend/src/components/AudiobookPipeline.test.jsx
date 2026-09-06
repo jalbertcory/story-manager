@@ -132,9 +132,9 @@ describe("AudiobookPipeline", () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/11/audiobook/step", {
+      expect(fetchMock).toHaveBeenCalledWith("/api/books/11/audiobook/step", expect.objectContaining({
         method: "POST",
-      });
+      }));
     });
   });
 
@@ -198,7 +198,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/audio/rebuild",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
 
@@ -217,7 +217,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/rebuild",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
   });
@@ -325,7 +325,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/imported-audiobooks/10/rematch",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
 
@@ -456,7 +456,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/run-batch",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
   });
@@ -513,7 +513,7 @@ describe("AudiobookPipeline", () => {
       }
       if (
         url ===
-        "/api/books/11/audiobook/sentences?page=1&limit=1000&chapter_id=9"
+        "/api/books/11/audiobook/sentences?page=1&limit=1000&chapter_id=9&review_only=false"
       ) {
         return Promise.resolve({
           ok: true,
@@ -550,7 +550,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/chapters/9/preview-audio",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
 
@@ -603,8 +603,8 @@ describe("AudiobookPipeline", () => {
         });
       }
       if (
-        url === "/api/books/11/audiobook/sentences?page=1&limit=50" ||
-        url === "/api/books/11/audiobook/sentences?page=1&limit=50&chapter_id=9"
+        url === "/api/books/11/audiobook/sentences?page=1&limit=50&review_only=false" ||
+        url === "/api/books/11/audiobook/sentences?page=1&limit=50&chapter_id=9&review_only=false"
       ) {
         return Promise.resolve({
           ok: true,
@@ -656,7 +656,7 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/sentences/31/generate-audio",
-        { method: "POST" },
+        expect.objectContaining({ method: "POST" }),
       );
     });
   });
@@ -719,11 +719,11 @@ describe("AudiobookPipeline", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/books/11/audiobook/tts-provider",
-        {
+        expect.objectContaining({
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: expect.objectContaining({ "content-type": "application/json" }),
           body: JSON.stringify({ provider: "omnivoice" }),
-        },
+        }),
       );
     });
   });
