@@ -47,20 +47,20 @@ async def test_priority_endpoint_falls_back_and_is_skipped_during_cooldown(monke
 
     first = await endpoint_pool.route_request(settings, "llm", attempt)
     assert first.value == "qwen3.5:9b"
-    assert first.endpoint["id"] == "mini-pc"
+    assert first.endpoint.id == "mini-pc"
     assert calls == ["http://gaming:11434", "http://mini:11434"]
 
     gaming_online = True
     calls.clear()
     second = await endpoint_pool.route_request(settings, "llm", attempt)
-    assert second.endpoint["id"] == "mini-pc"
+    assert second.endpoint.id == "mini-pc"
     assert calls == ["http://mini:11434"]
 
     now += 61
     calls.clear()
     third = await endpoint_pool.route_request(settings, "llm", attempt)
     assert third.value == "qwen3.5:27b"
-    assert third.endpoint["id"] == "gaming-pc"
+    assert third.endpoint.id == "gaming-pc"
     assert calls == ["http://gaming:11434"]
 
 
@@ -116,7 +116,7 @@ async def test_pool_probe_tests_every_endpoint_and_ignores_cooldown(monkeypatch)
     results = await endpoint_pool.probe_endpoints(settings, "tts", attempt)
 
     assert calls == ["http://qwen", "http://omni"]
-    assert [(result.endpoint["id"], result.success) for result in results] == [
+    assert [(result.endpoint.id, result.success) for result in results] == [
         ("qwen", False),
         ("omni", True),
     ]
@@ -158,7 +158,7 @@ async def test_provider_restricted_settings_never_fall_through_to_another_tts_en
     routed = await endpoint_pool.route_request(restricted, "tts", attempt)
 
     assert routed.value == "qwen3"
-    assert routed.endpoint["id"] == "qwen-backup"
+    assert routed.endpoint.id == "qwen-backup"
     assert calls == ["http://qwen-gaming", "http://qwen-backup"]
 
 
@@ -233,21 +233,21 @@ async def test_endpoint_summaries_include_latency_percentiles_and_buckets(db):
 
     summaries = await endpoint_metrics.endpoint_summaries(db, settings, "llm")
 
-    assert summaries[0]["requests"] == 5
-    assert summaries[0]["answered"] == 4
-    assert summaries[0]["failed"] == 1
-    assert summaries[0]["success_rate"] == 80.0
-    assert summaries[0]["average_ms"] == 25_250.0
-    assert summaries[0]["p50_ms"] == 15_000.0
-    assert summaries[0]["p95_ms"] == 62_500.0
-    assert summaries[0]["speed_buckets"] == {
+    assert summaries[0].requests == 5
+    assert summaries[0].answered == 4
+    assert summaries[0].failed == 1
+    assert summaries[0].success_rate == 80.0
+    assert summaries[0].average_ms == 25_250.0
+    assert summaries[0].p50_ms == 15_000.0
+    assert summaries[0].p95_ms == 62_500.0
+    assert summaries[0].speed_buckets.model_dump() == {
         "under_5s": 1,
         "from_5s_to_15s": 1,
         "from_15s_to_60s": 1,
         "over_60s": 1,
     }
-    assert summaries[1]["requests"] == 0
-    assert summaries[1]["average_ms"] is None
+    assert summaries[1].requests == 0
+    assert summaries[1].average_ms is None
 
 
 @pytest.mark.asyncio

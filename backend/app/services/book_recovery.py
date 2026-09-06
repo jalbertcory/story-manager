@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from pydantic import JsonValue
+from ..book_snapshots import BookSnapshot
 
 from sqlalchemy import desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,35 +11,9 @@ from sqlalchemy.future import select
 
 from .. import models
 
-REVISION_FIELDS = (
-    "title",
-    "author",
-    "series",
-    "series_index",
-    "genre_tags",
-    "source_tags",
-    "user_genre_tags",
-    "metadata_remote_ids",
-    "metadata_details",
-    "metadata_sync_source",
-    "metadata_synced_at",
-    "notes",
-    "removed_chapters",
-    "content_selectors",
-    "audiobook_enabled",
-)
 
-
-def snapshot_book(book: models.Book) -> dict[str, Any]:
-    snapshot: dict[str, Any] = {}
-    for field in REVISION_FIELDS:
-        value = getattr(book, field)
-        if isinstance(value, datetime):
-            value = value.isoformat()
-        elif field == "series_index" and value is not None:
-            value = float(value)
-        snapshot[field] = value
-    return snapshot
+def snapshot_book(book: models.Book) -> dict[str, JsonValue]:
+    return BookSnapshot.model_validate(book).model_dump(mode="json")
 
 
 def add_book_revision(
@@ -48,13 +22,17 @@ def add_book_revision(
     *,
     action: str,
     summary: str,
-    snapshot: dict[str, Any] | None = None,
+    snapshot: dict[str, JsonValue] | None = None,
 ) -> models.BookRevision:
     revision = models.BookRevision(
         book_id=book.id,
         action=action,
         summary=summary,
-        snapshot=snapshot if snapshot is not None else snapshot_book(book),
+        snapshot=(
+            BookSnapshot.model_validate(snapshot).model_dump(mode="json", exclude_unset=True)
+            if snapshot is not None
+            else snapshot_book(book)
+        ),
     )
     db.add(revision)
     return revision
@@ -79,11 +57,37 @@ async def get_book_revision(db: AsyncSession, book_id: int, revision_id: int) ->
     return result.scalars().first()
 
 
-def restore_snapshot(book: models.Book, snapshot: dict[str, Any]) -> None:
-    for field in REVISION_FIELDS:
-        if field not in snapshot:
-            continue
-        value = snapshot[field]
-        if field == "metadata_synced_at" and isinstance(value, str):
-            value = datetime.fromisoformat(value)
-        setattr(book, field, value)
+def restore_snapshot(book: models.Book, snapshot: object) -> None:
+    # Validate every field before touching the ORM object; even a late invalid
+    # timestamp or boolean must leave the entire book unchanged.
+    validated = BookSnapshot.model_validate(snapshot)
+    if "title" in validated.model_fields_set:
+        book.title = validated.title
+    if "author" in validated.model_fields_set:
+        book.author = validated.author
+    if "series" in validated.model_fields_set:
+        book.series = validated.series
+    if "series_index" in validated.model_fields_set:
+        book.series_index = validated.series_index
+    if "genre_tags" in validated.model_fields_set:
+        book.genre_tags = validated.genre_tags
+    if "source_tags" in validated.model_fields_set:
+        book.source_tags = validated.source_tags
+    if "user_genre_tags" in validated.model_fields_set:
+        book.user_genre_tags = validated.user_genre_tags
+    if "metadata_remote_ids" in validated.model_fields_set:
+        book.metadata_remote_ids = validated.metadata_remote_ids
+    if "metadata_details" in validated.model_fields_set:
+        book.metadata_details = validated.metadata_details
+    if "metadata_sync_source" in validated.model_fields_set:
+        book.metadata_sync_source = validated.metadata_sync_source
+    if "metadata_synced_at" in validated.model_fields_set:
+        book.metadata_synced_at = validated.metadata_synced_at
+    if "notes" in validated.model_fields_set:
+        book.notes = validated.notes
+    if "removed_chapters" in validated.model_fields_set:
+        book.removed_chapters = validated.removed_chapters
+    if "content_selectors" in validated.model_fields_set:
+        book.content_selectors = validated.content_selectors
+    if "audiobook_enabled" in validated.model_fields_set:
+        book.audiobook_enabled = validated.audiobook_enabled

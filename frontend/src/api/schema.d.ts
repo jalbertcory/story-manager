@@ -3402,7 +3402,7 @@ export interface components {
             id: number;
             /** Snapshot */
             snapshot: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             };
             /** Summary */
             summary: string;

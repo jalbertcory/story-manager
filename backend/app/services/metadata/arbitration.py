@@ -43,10 +43,10 @@ SEARCH_REFINEMENT_SCHEMA = {
 
 def _llm_available(settings: AudiobookSettings | None) -> bool:
     for endpoint in configured_endpoints(settings, "llm"):
-        provider = str(endpoint.get("provider") or "").casefold()
+        provider = str(endpoint.provider or "").casefold()
         if provider == "ollama":
             return True
-        if provider not in {"", "none", "stub"} and (endpoint.get("api_key") or endpoint.get("base_url")):
+        if provider not in {"", "none", "stub"} and (endpoint.api_key or endpoint.base_url):
             return True
     return False
 

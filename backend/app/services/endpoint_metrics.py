@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import SessionLocal
+from ..endpoint_types import EndpointConfig, EndpointStats, EndpointSpeedBuckets
 from ..models import AiEndpointRequestMetric, AudiobookSettings
 from .endpoint_pool import configured_endpoints
 
@@ -17,7 +17,7 @@ from .endpoint_pool import configured_endpoints
 async def record_attempt(
     settings_id: int,
     capability: str,
-    endpoint: dict[str, Any],
+    endpoint: EndpointConfig,
     *,
     success: bool,
     duration_ms: float,
@@ -29,10 +29,10 @@ async def record_attempt(
             AiEndpointRequestMetric(
                 settings_id=settings_id,
                 capability=capability,
-                endpoint_id=str(endpoint.get("id") or "unknown"),
-                endpoint_name=str(endpoint.get("name") or "Unnamed endpoint"),
-                provider=str(endpoint.get("provider") or "unknown"),
-                model=str(endpoint["model"]) if endpoint.get("model") else None,
+                endpoint_id=str(endpoint.id or "unknown"),
+                endpoint_name=str(endpoint.name or "Unnamed endpoint"),
+                provider=str(endpoint.provider or "unknown"),
+                model=str(endpoint.model) if endpoint.model else None,
                 success=success,
                 duration_ms=max(0.0, duration_ms),
                 error_type=error_type,
@@ -59,7 +59,7 @@ async def endpoint_summaries(
     db: AsyncSession,
     settings: AudiobookSettings | None,
     capability: str,
-) -> list[dict[str, Any]]:
+) -> list[EndpointStats]:
     """Return all-time and recent comparison metrics for configured endpoints."""
     endpoints = configured_endpoints(settings, capability) if settings is not None else []
     rows: list[AiEndpointRequestMetric] = []
@@ -83,9 +83,9 @@ async def endpoint_summaries(
 
     now = datetime.now(timezone.utc)
     recent_cutoff = now - timedelta(hours=24)
-    summaries = []
+    summaries: list[EndpointStats] = []
     for index, endpoint in enumerate(endpoints):
-        endpoint_id = str(endpoint.get("id") or f"{capability}-{index + 1}")
+        endpoint_id = str(endpoint.id or f"{capability}-{index + 1}")
         attempts = by_endpoint.get(endpoint_id, [])
         answered = [row for row in attempts if row.success]
         durations = sorted(float(row.duration_ms) for row in answered)
@@ -97,29 +97,29 @@ async def endpoint_summaries(
         ]
         recent_durations = [float(row.duration_ms) for row in recent]
         summaries.append(
-            {
-                "endpoint_id": endpoint_id,
-                "name": str(endpoint.get("name") or f"Endpoint {index + 1}"),
-                "provider": str(endpoint.get("provider") or "unknown"),
-                "model": endpoint.get("model"),
-                "requests": len(attempts),
-                "answered": len(answered),
-                "failed": len(attempts) - len(answered),
-                "success_rate": _rounded(100 * len(answered) / len(attempts)) if attempts else None,
-                "average_ms": _rounded(sum(durations) / len(durations)) if durations else None,
-                "p50_ms": _rounded(_percentile(durations, 0.50)),
-                "p95_ms": _rounded(_percentile(durations, 0.95)),
-                "fastest_ms": _rounded(durations[0]) if durations else None,
-                "slowest_ms": _rounded(durations[-1]) if durations else None,
-                "answered_24h": len(recent),
-                "average_24h_ms": _rounded(sum(recent_durations) / len(recent_durations)) if recent_durations else None,
-                "speed_buckets": {
-                    "under_5s": sum(duration < 5_000 for duration in durations),
-                    "from_5s_to_15s": sum(5_000 <= duration < 15_000 for duration in durations),
-                    "from_15s_to_60s": sum(15_000 <= duration < 60_000 for duration in durations),
-                    "over_60s": sum(duration >= 60_000 for duration in durations),
-                },
-                "last_answered_at": answered[-1].created_at if answered else None,
-            }
+            EndpointStats(
+                endpoint_id=endpoint_id,
+                name=str(endpoint.name or f"Endpoint {index + 1}"),
+                provider=str(endpoint.provider or "unknown"),
+                model=endpoint.model,
+                requests=len(attempts),
+                answered=len(answered),
+                failed=len(attempts) - len(answered),
+                success_rate=_rounded(100 * len(answered) / len(attempts)) if attempts else None,
+                average_ms=_rounded(sum(durations) / len(durations)) if durations else None,
+                p50_ms=_rounded(_percentile(durations, 0.50)),
+                p95_ms=_rounded(_percentile(durations, 0.95)),
+                fastest_ms=_rounded(durations[0]) if durations else None,
+                slowest_ms=_rounded(durations[-1]) if durations else None,
+                answered_24h=len(recent),
+                average_24h_ms=_rounded(sum(recent_durations) / len(recent_durations)) if recent_durations else None,
+                speed_buckets=EndpointSpeedBuckets(
+                    under_5s=sum(duration < 5_000 for duration in durations),
+                    from_5s_to_15s=sum(5_000 <= duration < 15_000 for duration in durations),
+                    from_15s_to_60s=sum(15_000 <= duration < 60_000 for duration in durations),
+                    over_60s=sum(duration >= 60_000 for duration in durations),
+                ),
+                last_answered_at=answered[-1].created_at if answered else None,
+            )
         )
     return summaries

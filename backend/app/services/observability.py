@@ -115,9 +115,7 @@ async def provider_health(db: AsyncSession) -> list[dict[str, Any]]:
     for capability in ("llm", "tts", "transcription"):
         endpoints = configured_endpoints(settings, capability) if settings else []
         enabled = [
-            endpoint
-            for endpoint in endpoints
-            if str(endpoint.get("provider") or "").strip().lower() not in {"", "disabled", "none"}
+            endpoint for endpoint in endpoints if str(endpoint.provider or "").strip().lower() not in {"", "disabled", "none"}
         ]
         providers.append(
             {

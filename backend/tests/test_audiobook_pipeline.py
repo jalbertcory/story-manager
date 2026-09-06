@@ -2694,7 +2694,7 @@ async def test_book_generation_uses_only_the_locked_tts_provider(db, monkeypatch
     captured = {}
 
     async def fake_generate(settings, _book_id, _sentences, _db):
-        captured["providers"] = [endpoint["provider"] for endpoint in settings.tts_endpoints]
+        captured["providers"] = [endpoint.provider for endpoint in settings.tts_endpoints]
         captured["base_url"] = settings.tts_base_url
         return {}
 

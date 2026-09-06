@@ -1,5 +1,7 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
+from pydantic import ValidationError
+from ..book_snapshots import BookSnapshot
 from .. import api_schemas as contracts
 import logging
 import shutil
@@ -381,9 +383,16 @@ async def restore_book_revision(
     if book is None or revision is None:
         raise HTTPException(status_code=404, detail="Book revision not found")
 
+    try:
+        snapshot = BookSnapshot.model_validate(revision.snapshot)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail="This revision contains invalid book data and cannot be restored."
+        ) from exc
+
     previous_rules = (list(book.removed_chapters or []), list(book.content_selectors or []))
     add_book_revision(db, book, action="revision_restored", summary=f"Restored revision {revision.id}: {revision.summary}")
-    restore_snapshot(book, revision.snapshot)
+    restore_snapshot(book, snapshot)
     await db.commit()
     await db.refresh(book)
 

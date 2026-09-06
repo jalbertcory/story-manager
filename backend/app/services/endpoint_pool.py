@@ -5,38 +5,46 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from types import SimpleNamespace
+from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationInfo
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
 from ..models import AudiobookSettings
+from ..endpoint_types import EndpointConfig
 
 
-class EndpointSettings(SimpleNamespace):
-    """Typed projection of persisted settings for one provider or endpoint."""
+class EndpointSettings(BaseModel):
+    """Validated projection of persisted settings for one provider or endpoint."""
 
-    id: int
-    llm_provider: str | None
-    llm_api_key: str | None
-    llm_base_url: str | None
-    llm_model: str | None
-    tts_provider: str | None
-    tts_api_key: str | None
-    tts_base_url: str | None
-    tts_model: str | None
-    tts_default_voice: str | None
-    tts_max_block_chars: int
-    tts_voice_similarity_threshold: float
-    tts_quality_attempts: int
-    transcription_provider: str | None
-    transcription_api_key: str | None
-    transcription_base_url: str | None
-    transcription_model: str | None
-    transcription_language: str | None
-    llm_endpoints: list[dict[str, Any]] | None
-    tts_endpoints: list[dict[str, Any]] | None
-    transcription_endpoints: list[dict[str, Any]] | None
-    roster_prompt_template: str | None
-    diarization_prompt_template: str | None
+    model_config = ConfigDict(from_attributes=True, hide_input_in_errors=True)
+
+    id: int | None = None
+    llm_provider: str | None = None
+    llm_api_key: str | None = Field(default=None, repr=False)
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    tts_provider: str | None = None
+    tts_api_key: str | None = Field(default=None, repr=False)
+    tts_base_url: str | None = None
+    tts_model: str | None = None
+    tts_default_voice: str | None = None
+    tts_max_block_chars: int = 500
+    tts_voice_similarity_threshold: float = 0.45
+    tts_quality_attempts: int = 3
+    transcription_provider: str | None = None
+    transcription_api_key: str | None = Field(default=None, repr=False)
+    transcription_base_url: str | None = None
+    transcription_model: str | None = None
+    transcription_language: str | None = None
+    llm_endpoints: list[EndpointConfig] | None = None
+    tts_endpoints: list[EndpointConfig] | None = None
+    transcription_endpoints: list[EndpointConfig] | None = None
+    roster_prompt_template: str | None = None
+    diarization_prompt_template: str | None = None
+
+    @field_validator("tts_max_block_chars", "tts_voice_similarity_threshold", "tts_quality_attempts", mode="before")
+    @classmethod
+    def legacy_numeric_defaults(cls, value: object, info: ValidationInfo) -> object:
+        return cls.model_fields[info.field_name].default if value is None and info.field_name else value
 
 
 ProviderSettings = AudiobookSettings | EndpointSettings
@@ -52,14 +60,14 @@ T = TypeVar("T")
 @dataclass(frozen=True)
 class RoutedResult(Generic[T]):
     value: T
-    endpoint: dict[str, Any]
+    endpoint: EndpointConfig
 
 
 @dataclass(frozen=True)
 class EndpointProbeResult(Generic[T]):
     """The outcome of directly testing one configured endpoint."""
 
-    endpoint: dict[str, Any]
+    endpoint: EndpointConfig
     success: bool
     duration_ms: float
     value: T | None = None
@@ -69,109 +77,109 @@ class EndpointProbeResult(Generic[T]):
 _cooldowns: dict[tuple[str, str], float] = {}
 
 
-def _legacy_endpoint(settings: ProviderSettings, capability: str) -> dict[str, Any]:
-    prefix = "transcription" if capability == "transcription" else capability
-    provider_default = {"llm": "stub", "tts": "stub", "transcription": "none"}[capability]
-    endpoint: dict[str, Any] = {
-        "id": f"legacy-{capability}",
-        "name": "Primary",
-        "provider": getattr(settings, f"{prefix}_provider", None) or provider_default,
-        "api_key": getattr(settings, f"{prefix}_api_key", None),
-        "base_url": getattr(settings, f"{prefix}_base_url", None),
-        "model": getattr(settings, f"{prefix}_model", None),
-    }
+def _legacy_endpoint(settings: EndpointSettings, capability: str) -> EndpointConfig:
+    if capability == "llm":
+        return EndpointConfig(
+            id="legacy-llm",
+            name="Primary",
+            provider=settings.llm_provider or "stub",
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
     if capability == "tts":
-        endpoint["default_voice"] = settings.tts_default_voice
+        return EndpointConfig(
+            id="legacy-tts",
+            name="Primary",
+            provider=settings.tts_provider or "stub",
+            api_key=settings.tts_api_key,
+            base_url=settings.tts_base_url,
+            model=settings.tts_model,
+            default_voice=settings.tts_default_voice,
+        )
     if capability == "transcription":
-        endpoint["language"] = settings.transcription_language
-    return endpoint
+        return EndpointConfig(
+            id="legacy-transcription",
+            name="Primary",
+            provider=settings.transcription_provider or "none",
+            api_key=settings.transcription_api_key,
+            base_url=settings.transcription_base_url,
+            model=settings.transcription_model,
+            language=settings.transcription_language,
+        )
+    raise ValueError(f"Unknown endpoint capability: {capability}")
 
 
-def configured_endpoints(settings: ProviderSettings | None, capability: str) -> list[dict[str, Any]]:
-    """Return endpoints in priority order, falling back to legacy columns."""
+def configured_endpoints(settings: ProviderSettings | None, capability: str) -> list[EndpointConfig]:
+    """Validate stored pools and fall back to primary columns for legacy records."""
     if settings is None:
         return []
-    field = f"{capability}_endpoints"
-    stored = getattr(settings, field, None)
-    if stored is None:
-        return [_legacy_endpoint(settings, capability)]
-    return [dict(endpoint) for endpoint in stored if isinstance(endpoint, dict)]
+    projection = EndpointSettings.model_validate(settings)
+    if capability == "llm":
+        stored = projection.llm_endpoints
+    elif capability == "tts":
+        stored = projection.tts_endpoints
+    elif capability == "transcription":
+        stored = projection.transcription_endpoints
+    else:
+        raise ValueError(f"Unknown endpoint capability: {capability}")
+    return stored if stored is not None else [_legacy_endpoint(projection, capability)]
 
 
 def configured_providers(settings: ProviderSettings | None, capability: str) -> list[str]:
-    """Return unique configured providers in endpoint priority order."""
     return list(
-        dict.fromkeys(
-            str(endpoint.get("provider") or "").strip().lower()
-            for endpoint in configured_endpoints(settings, capability)
-            if str(endpoint.get("provider") or "").strip()
-        )
+        dict.fromkeys(endpoint.provider for endpoint in configured_endpoints(settings, capability) if endpoint.provider)
     )
 
 
-def settings_for_provider(
-    settings: AudiobookSettings,
-    capability: str,
-    provider: str,
-) -> EndpointSettings:
-    """Restrict routing to endpoints owned by one persisted provider."""
+def settings_for_provider(settings: AudiobookSettings, capability: str, provider: str) -> EndpointSettings:
     normalized = provider.strip().lower()
-    endpoints = [
-        endpoint
-        for endpoint in configured_endpoints(settings, capability)
-        if str(endpoint.get("provider") or "").strip().lower() == normalized
-    ]
+    endpoints = [endpoint for endpoint in configured_endpoints(settings, capability) if endpoint.provider == normalized]
     if not endpoints:
         raise RuntimeError(
             f"This audiobook is locked to {normalized}, but no {normalized} {capability.upper()} endpoint is configured."
         )
-    values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
-    values[f"{capability}_endpoints"] = endpoints
-    prefix = "transcription" if capability == "transcription" else capability
-    primary = endpoints[0]
-    for field in ("provider", "api_key", "base_url", "model"):
-        values[f"{prefix}_{field}"] = primary.get(field)
-    if capability == "tts":
-        values["tts_default_voice"] = primary.get("default_voice")
+    result = _endpoint_settings(settings, capability, endpoints[0])
+    if capability == "llm":
+        result.llm_endpoints = endpoints
+    elif capability == "tts":
+        result.tts_endpoints = endpoints
     elif capability == "transcription":
-        values["transcription_language"] = primary.get("language")
-    return EndpointSettings(**values)
+        result.transcription_endpoints = endpoints
+    return result
 
 
 def primary_provider(settings: ProviderSettings | None, capability: str, default: str) -> str:
     endpoints = configured_endpoints(settings, capability)
-    provider = endpoints[0].get("provider") if endpoints else default
-    return str(provider or default).strip().lower()
+    return (endpoints[0].provider if endpoints else default) or default
 
 
-def _endpoint_key(capability: str, endpoint: dict[str, Any]) -> tuple[str, str]:
-    identity = endpoint.get("id") or "|".join(
-        str(endpoint.get(field) or "") for field in ("name", "provider", "base_url", "model")
+def _endpoint_key(capability: str, endpoint: EndpointConfig) -> tuple[str, str]:
+    identity = endpoint.id or "|".join(
+        value or "" for value in (endpoint.name, endpoint.provider, endpoint.base_url, endpoint.model)
     )
-    return capability, str(identity)
+    return capability, identity
 
 
-def _endpoint_settings(
-    settings: ProviderSettings,
-    capability: str,
-    endpoint: dict[str, Any],
-) -> EndpointSettings:
-    """Expose one generic endpoint through the legacy provider field names."""
-    if hasattr(settings, "__table__"):
-        values = {column.name: getattr(settings, column.name) for column in settings.__table__.columns}
-    else:
-        values = dict(vars(settings))
-    prefix = "transcription" if capability == "transcription" else capability
-    for field in ("provider", "api_key", "base_url", "model"):
-        values[f"{prefix}_{field}"] = endpoint.get(field)
-    if capability == "tts":
-        values["tts_default_voice"] = endpoint.get("default_voice")
+def _endpoint_settings(settings: ProviderSettings, capability: str, endpoint: EndpointConfig) -> EndpointSettings:
+    result = EndpointSettings.model_validate(settings).model_copy(deep=True)
+    if capability == "llm":
+        result.llm_provider, result.llm_api_key = endpoint.provider, endpoint.api_key
+        result.llm_base_url, result.llm_model = endpoint.base_url, endpoint.model
+    elif capability == "tts":
+        result.tts_provider, result.tts_api_key = endpoint.provider, endpoint.api_key
+        result.tts_base_url, result.tts_model = endpoint.base_url, endpoint.model
+        result.tts_default_voice = endpoint.default_voice
     elif capability == "transcription":
-        values["transcription_language"] = endpoint.get("language")
-    return EndpointSettings(**values)
+        result.transcription_provider, result.transcription_api_key = endpoint.provider, endpoint.api_key
+        result.transcription_base_url, result.transcription_model = endpoint.base_url, endpoint.model
+        result.transcription_language = endpoint.language
+    else:
+        raise ValueError(f"Unknown endpoint capability: {capability}")
+    return result
 
 
-def cooldown_remaining(capability: str, endpoint: dict[str, Any]) -> float:
+def cooldown_remaining(capability: str, endpoint: EndpointConfig) -> float:
     remaining = _cooldowns.get(_endpoint_key(capability, endpoint), 0.0) - time.monotonic()
     return max(0.0, remaining)
 
@@ -290,7 +298,7 @@ async def route_request(
             logger.warning(
                 "%s endpoint %r failed and will cool down for %.0f seconds: %s",
                 capability.upper(),
-                endpoint.get("name") or endpoint.get("base_url") or endpoint.get("id"),
+                endpoint.name or endpoint.base_url or endpoint.id,
                 COOLDOWN_SECONDS,
                 exc,
             )
@@ -313,8 +321,11 @@ async def route_request(
 async def _record_endpoint_attempt(
     settings: ProviderSettings,
     capability: str,
-    endpoint: dict[str, Any],
-    **measurement: Any,
+    endpoint: EndpointConfig,
+    *,
+    success: bool,
+    duration_ms: float,
+    error_type: str | None = None,
 ) -> None:
     """Keep observability failures from affecting the routed AI request."""
     if settings.id is None:
@@ -322,7 +333,9 @@ async def _record_endpoint_attempt(
     try:
         from .endpoint_metrics import record_attempt
 
-        await record_attempt(settings.id, capability, endpoint, **measurement)
+        await record_attempt(
+            settings.id, capability, endpoint, success=success, duration_ms=duration_ms, error_type=error_type
+        )
     except Exception:
         logger.exception("Failed to record %s endpoint request metric", capability.upper())
 

@@ -488,10 +488,10 @@ def _transcription_cache_config(settings: ProviderSettings) -> tuple[str, str | 
     signature = json.dumps(
         [
             {
-                "provider": endpoint.get("provider"),
-                "base_url": endpoint.get("base_url"),
-                "model": endpoint.get("model"),
-                "language": endpoint.get("language"),
+                "provider": endpoint.provider,
+                "base_url": endpoint.base_url,
+                "model": endpoint.model,
+                "language": endpoint.language,
             }
             for endpoint in configured_endpoints(settings, "transcription")
         ],

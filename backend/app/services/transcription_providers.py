@@ -93,10 +93,10 @@ async def transcription_service_health(settings: ProviderSettings) -> dict[str, 
     routed = await route_request(settings, "transcription", _transcription_service_health_endpoint)
     payload = dict(routed.value)
     payload["endpoint"] = {
-        "id": routed.endpoint.get("id"),
-        "name": routed.endpoint.get("name"),
-        "provider": routed.endpoint.get("provider"),
-        "model": routed.endpoint.get("model"),
+        "id": routed.endpoint.id,
+        "name": routed.endpoint.name,
+        "provider": routed.endpoint.provider,
+        "model": routed.endpoint.model,
     }
     return payload
 
