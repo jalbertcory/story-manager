@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Iterable, Literal, Mapping, Protocol, overload, runtime_checkable
+
+if TYPE_CHECKING:
+    from .api_schemas import LifecycleDefinition
 
 State = str | None
 
@@ -147,7 +150,7 @@ class StateMachine:
             )
         return target_value
 
-    def manifest(self) -> dict[str, Any]:
+    def manifest(self) -> LifecycleDefinition:
         ordered = self.ordered_states or tuple(sorted(self.states, key=lambda value: (value is not None, str(value))))
 
         def ordered_subset(values: Iterable[State]) -> list[State]:
@@ -584,21 +587,192 @@ LIFECYCLES: Mapping[str, StateMachine] = {
 }
 
 
+@runtime_checkable
+class HasDownloadStatus(Protocol):
+    download_status: str | None
+
+
+@runtime_checkable
+class HasRefreshStatus(Protocol):
+    refresh_status: str | None
+
+
+@runtime_checkable
+class HasAudiobookPipelineStatus(Protocol):
+    audiobook_pipeline_status: str | None
+
+
+@runtime_checkable
+class HasAudiobookPublicationState(Protocol):
+    audiobook_publication_state: str | None
+
+
+@runtime_checkable
+class HasPreviewStatus(Protocol):
+    preview_status: str | None
+
+
+@runtime_checkable
+class HasGenerationState(Protocol):
+    generation_state: str
+
+
+@runtime_checkable
+class HasAlignmentMethod(Protocol):
+    alignment_method: str | None
+
+
+@runtime_checkable
+class HasStatus(Protocol):
+    status: str
+
+
+@overload
 def transition_state(
-    record: Any,
+    record: HasDownloadStatus,
+    attribute: Literal["download_status"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasRefreshStatus,
+    attribute: Literal["refresh_status"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasAudiobookPipelineStatus,
+    attribute: Literal["audiobook_pipeline_status"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasAudiobookPublicationState,
+    attribute: Literal["audiobook_publication_state"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasPreviewStatus,
+    attribute: Literal["preview_status"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasGenerationState,
+    attribute: Literal["generation_state"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasAlignmentMethod,
+    attribute: Literal["alignment_method"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+@overload
+def transition_state(
+    record: HasStatus,
+    attribute: Literal["status"],
+    machine: StateMachine,
+    target: State | StrEnum,
+    *,
+    context: str | None = None,
+) -> State: ...
+
+
+def transition_state(
+    record: object,
     attribute: str,
     machine: StateMachine,
     target: State | StrEnum,
     *,
     context: str | None = None,
 ) -> State:
-    """Validate and assign one ORM-backed lifecycle field."""
-    current = getattr(record, attribute)
-    value = machine.transition(current, target, context=context or f"{type(record).__name__}.{attribute}")
-    setattr(record, attribute, value)
-    return value
+    """Validate lifecycle changes through statically checked record/field pairs."""
+    location = context or f"{type(record).__name__}.{attribute}"
+
+    if attribute == "download_status" and isinstance(record, HasDownloadStatus):
+        value = machine.transition(record.download_status, target, context=location)
+        record.download_status = value
+        return value
+
+    if attribute == "refresh_status" and isinstance(record, HasRefreshStatus):
+        value = machine.transition(record.refresh_status, target, context=location)
+        record.refresh_status = value
+        return value
+
+    if attribute == "audiobook_pipeline_status" and isinstance(record, HasAudiobookPipelineStatus):
+        value = machine.transition(record.audiobook_pipeline_status, target, context=location)
+        record.audiobook_pipeline_status = value
+        return value
+
+    if attribute == "audiobook_publication_state" and isinstance(record, HasAudiobookPublicationState):
+        value = machine.transition(record.audiobook_publication_state, target, context=location)
+        record.audiobook_publication_state = value
+        return value
+
+    if attribute == "preview_status" and isinstance(record, HasPreviewStatus):
+        value = machine.transition(record.preview_status, target, context=location)
+        record.preview_status = value
+        return value
+
+    if attribute == "generation_state" and isinstance(record, HasGenerationState):
+        value = machine.transition(record.generation_state, target, context=location)
+        if value is None:
+            raise InvalidStateTransition(f"{location} cannot be null.")
+        record.generation_state = value
+        return value
+
+    if attribute == "alignment_method" and isinstance(record, HasAlignmentMethod):
+        value = machine.transition(record.alignment_method, target, context=location)
+        record.alignment_method = value
+        return value
+
+    if attribute == "status" and isinstance(record, HasStatus):
+        value = machine.transition(record.status, target, context=location)
+        if value is None:
+            raise InvalidStateTransition(f"{location} cannot be null.")
+        record.status = value
+        return value
+
+    raise TypeError(f"Unsupported lifecycle field {location}.")
 
 
-def lifecycle_manifest() -> dict[str, dict[str, Any]]:
+def lifecycle_manifest() -> dict[str, LifecycleDefinition]:
     """Return the documented vocabulary consumed by frontend labels/groupings."""
     return {name: machine.manifest() for name, machine in LIFECYCLES.items()}

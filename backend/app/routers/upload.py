@@ -164,7 +164,11 @@ async def _attach_epub_to_audio_book(
     book.metadata_remote_ids = {**identifiers, **(book.metadata_remote_ids or {})}
     book.metadata_details = {
         **(book.metadata_details or {}),
-        "epub_attachment": {"title": title, "author": author, "identifiers": identifiers},
+        "epub_attachment": {
+            "title": title,
+            "author": author,
+            "identifiers": {key: value for key, value in identifiers.items()},
+        },
     }
     if not book.cover_path or not (LIBRARY_PATH.parent / book.cover_path).is_file():
         cover = get_and_save_epub_cover(epub_path=immutable_path, book_id=book.id)
@@ -666,7 +670,7 @@ async def upload_epubs(files: List[UploadFile] = File(...), db: AsyncSession = D
 
 
 @router.post("/api/books/detect-series", response_model=contracts.SeriesDetected)
-async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> dict[str, int | list[str]]:
+async def detect_series_in_library(db: AsyncSession = Depends(get_db)) -> contracts.SeriesDetected:
     """
     Scans all books without an assigned series and auto-detects groupings
     using title patterns like "<series> <number> [- <subtitle>]".

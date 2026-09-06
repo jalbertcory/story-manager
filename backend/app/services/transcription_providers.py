@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from pydantic import JsonValue, ValidationError
 
 import httpx
+
+from .media_responses import TranscriptionResponse, TranscriptionHealth
 
 from .endpoint_pool import ProviderSettings, primary_provider, route_request
 
@@ -67,7 +69,7 @@ def _raise_for_status(response: httpx.Response, action: str) -> None:
         raise
 
 
-async def _transcription_service_health_endpoint(settings: ProviderSettings) -> dict[str, Any]:
+async def _transcription_service_health_endpoint(settings: ProviderSettings) -> dict[str, JsonValue]:
     if transcription_provider_name(settings) == "none":
         raise RuntimeError("Configure a transcription provider first.")
     timeout = httpx.Timeout(30.0, connect=10.0)
@@ -75,21 +77,23 @@ async def _transcription_service_health_endpoint(settings: ProviderSettings) -> 
         response = await client.get(f"{_service_root(settings)}/health", headers=_headers(settings))
         _raise_for_status(response, "health check")
         payload = response.json()
-    if not isinstance(payload, dict):
-        raise RuntimeError("Transcription health response is not an object")
-    if payload.get("status") != "ready":
-        raise RuntimeError(f"Transcription service is not ready: {payload.get('status', 'unknown')}.")
+    try:
+        health = TranscriptionHealth.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError("Transcription service returned an invalid health response.") from exc
+    if health.status != "ready":
+        raise RuntimeError(f"Transcription service is not ready: {health.status}.")
     configured_model = settings.transcription_model
-    loaded_model = payload.get("model")
+    loaded_model = health.model
     if configured_model and loaded_model and configured_model != loaded_model:
         raise RuntimeError(
             f"Transcription model mismatch: the service has {loaded_model!r} loaded, "
             f"but Audio Settings request {configured_model!r}."
         )
-    return payload
+    return health.model_dump(mode="json", exclude_unset=True)
 
 
-async def transcription_service_health(settings: ProviderSettings) -> dict[str, Any]:
+async def transcription_service_health(settings: ProviderSettings) -> dict[str, JsonValue]:
     routed = await route_request(settings, "transcription", _transcription_service_health_endpoint)
     payload = dict(routed.value)
     payload["endpoint"] = {
@@ -125,33 +129,24 @@ async def _transcribe_file_endpoint(settings: ProviderSettings, audio_path: Path
             _raise_for_status(response, "request")
             payload = response.json()
 
-    raw_words = payload.get("words")
-    if not isinstance(raw_words, list):
-        raise RuntimeError("Transcription service response has no word timestamps.")
+    try:
+        transcript = TranscriptionResponse.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError("Transcription service returned an invalid transcript or word timestamp.") from exc
     words = []
-    for raw in raw_words:
-        try:
-            text = str(raw["word"]).strip()
-            start_ms = round(float(raw["start"]) * 1000)
-            end_ms = round(float(raw["end"]) * 1000)
-            score = float(raw.get("score", 1.0))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Transcription service returned an invalid word timestamp.") from exc
-        if text and end_ms > start_ms >= 0:
-            words.append(
-                TranscriptWord(
-                    text=text,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    score=max(0.0, min(1.0, score)),
-                )
-            )
+    for raw in transcript.words:
+        text = raw.word.strip()
+        start_ms = round(raw.start * 1000)
+        end_ms = round(raw.end * 1000)
+        if text and end_ms > start_ms:
+            words.append(TranscriptWord(text=text, start_ms=start_ms, end_ms=end_ms, score=raw.score))
     if not words:
         raise RuntimeError("Transcription service returned no timestamped words.")
-    duration_ms = round(float(payload.get("duration") or words[-1].end_ms / 1000) * 1000)
+    last_end_ms = max(word.end_ms for word in words)
+    duration_ms = round(transcript.duration * 1000) if transcript.duration is not None else last_end_ms
     return TranscriptResult(
-        language=payload.get("language"),
-        duration_ms=max(duration_ms, words[-1].end_ms),
+        language=transcript.language,
+        duration_ms=max(duration_ms, last_end_ms),
         words=words,
     )
 

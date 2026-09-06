@@ -3132,11 +3132,11 @@ export interface components {
             master_word_count: number | null;
             /** Metadata Details */
             metadata_details: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Metadata Remote Ids */
             metadata_remote_ids: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Metadata Sync Source */
             metadata_sync_source: string | null;
@@ -3424,7 +3424,7 @@ export interface components {
             genre_tags?: string[] | null;
             /** Metadata Remote Ids */
             metadata_remote_ids?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Notes */
             notes?: string | null;
@@ -4383,11 +4383,11 @@ export interface components {
             remote_author: string | null;
             /** Remote Ids */
             remote_ids: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Remote Metadata */
             remote_metadata: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Remote Title */
             remote_title: string | null;
@@ -4470,7 +4470,7 @@ export interface components {
             matched: boolean;
             /** Metadata Details */
             metadata_details: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** New Genre Tags */
             new_genre_tags: string[];
@@ -4482,7 +4482,7 @@ export interface components {
             remote_author: string | null;
             /** Remote Ids */
             remote_ids: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Remote Title */
             remote_title: string | null;
@@ -4900,11 +4900,11 @@ export interface components {
             master_word_count: number | null;
             /** Metadata Details */
             metadata_details: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Metadata Remote Ids */
             metadata_remote_ids: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["JsonValue"];
             } | null;
             /** Metadata Sync Source */
             metadata_sync_source: string | null;

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from docker import DockerClient
@@ -25,8 +27,27 @@ class ContainerSnapshot:
     order: int
     image: str
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+
+class _Health(BaseModel):
+    model_config = ConfigDict(strict=True)
+    Status: str | None = None
+
+
+class _State(BaseModel):
+    model_config = ConfigDict(strict=True)
+    Status: str | None = None
+    Health: _Health | None = None
+
+
+class _Config(BaseModel):
+    model_config = ConfigDict(strict=True)
+    Image: str = "unknown"
+
+
+class _Attributes(BaseModel):
+    model_config = ConfigDict(strict=True)
+    State: _State | None = None
+    config: _Config = Field(default_factory=_Config, alias="Config")
 
 
 class DockerController:
@@ -67,8 +88,9 @@ class DockerController:
     @classmethod
     def _snapshot(cls, container: Container) -> ContainerSnapshot:
         container.reload()
-        state = container.attrs.get("State") or {}
-        health = (state.get("Health") or {}).get("Status")
+        attrs = _Attributes.model_validate(container.attrs)
+        state = attrs.State or _State()
+        health = state.Health.Status if state.Health else None
         tags = container.image.tags if container.image is not None else []
         identifier = container.id
         if identifier is None:
@@ -76,16 +98,16 @@ class DockerController:
         return ContainerSnapshot(
             id=identifier[:12],
             name=cls._name(container),
-            status=state.get("Status") or container.status,
+            status=state.Status or container.status,
             health=health,
             order=cls._order(container),
-            image=tags[0] if tags else container.attrs.get("Config", {}).get("Image", "unknown"),
+            image=tags[0] if tags else attrs.config.Image,
         )
 
-    def inspect(self) -> list[dict[str, Any]]:
-        return [self._snapshot(container).to_dict() for container in self._managed_containers()]
+    def inspect(self) -> list[ContainerSnapshot]:
+        return [self._snapshot(container) for container in self._managed_containers()]
 
-    def reconcile(self, available: bool | None, stop_timeout_seconds: int) -> tuple[list[dict[str, Any]], list[str]]:
+    def reconcile(self, available: bool | None, stop_timeout_seconds: int) -> tuple[list[ContainerSnapshot], list[str]]:
         containers = self._managed_containers()
         actions: list[str] = []
 
@@ -105,4 +127,4 @@ class DockerController:
                     container.stop(timeout=stop_timeout_seconds)
                     actions.append(f"Stopped {container.name}")
 
-        return [self._snapshot(container).to_dict() for container in containers], actions
+        return [self._snapshot(container) for container in containers], actions

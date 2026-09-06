@@ -12,7 +12,7 @@ from .. import crud
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..logging_config import is_quiet_successful_access_entry, read_persisted_logs
-from ..services.library_health import inspect_library_files, is_failed_web_import_placeholder
+from ..services.library_health import LibraryFileIssue, inspect_library_files, is_failed_web_import_placeholder
 
 logger = logging.getLogger(__name__)
 _ui_logger = logging.getLogger("frontend")
@@ -32,7 +32,7 @@ class ClientLogEntry(BaseModel):
 
 
 @router.post("/api/logs/client", response_model=contracts.OkResponse)
-async def post_client_log(entry: ClientLogEntry) -> dict[str, bool]:
+async def post_client_log(entry: ClientLogEntry) -> contracts.OkResponse:
     """Receive log entries from the frontend UI."""
     msg = entry.message
     if entry.source:
@@ -49,7 +49,7 @@ async def get_logs(
     request_id: Optional[str] = None,
     job_id: Optional[int] = None,
     include_polling: bool = False,
-) -> list[dict[str, object]]:
+) -> list[contracts.LogEntry]:
     entries = read_persisted_logs(limit=1000, level=level)
     if not include_polling:
         entries = [entry for entry in entries if not is_quiet_successful_access_entry(entry)]
@@ -61,7 +61,7 @@ async def get_logs(
 
 
 @router.get("/api/library/validate", response_model=contracts.LibraryValidation)
-async def validate_library(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def validate_library(db: AsyncSession = Depends(get_db)) -> contracts.LibraryValidation:
     """
     Check every book record for missing or broken file paths.
     Returns a list of issues found (empty list means everything is healthy).
@@ -75,7 +75,7 @@ async def validate_library(db: AsyncSession = Depends(get_db)) -> dict[str, obje
 
 
 @router.post("/api/storage/cleanup", response_model=contracts.StorageCleanup)
-async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_db)) -> contracts.StorageCleanup:
     """
     Scans the library directory for files not referenced by any book record and
     failed web-import placeholder books that never produced EPUB files.
@@ -87,12 +87,12 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
 
     active_books = await crud.get_books(db, limit=100000)
     books = await crud.get_all_books_including_deleted(db)
-    failed_import_books = [
+    failed_import_books: list[LibraryFileIssue] = [
         {
             "book_id": book.id,
             "title": book.title,
             "author": book.author,
-            "source_url": book.source_url,
+            "source_url": book.source_url or "",
             "issue": "failed_web_import",
         }
         for book in active_books

@@ -7,17 +7,18 @@ from collections import deque
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .docker_control import DockerController, MANAGED_LABEL
+from .docker_control import ContainerSnapshot, DockerController, MANAGED_LABEL
 from .domain import OverrideRequest, SchedulerConfig, effective_availability, next_policy_transition
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,29 @@ logger = logging.getLogger(__name__)
 DATA_PATH = Path(os.getenv("SCHEDULER_DATA_PATH", "/data/config.json"))
 RECONCILE_SECONDS = max(5, int(os.getenv("SCHEDULER_RECONCILE_SECONDS", "15")))
 STATIC_DIR = Path(__file__).with_name("static")
+
+
+class ActionResponse(BaseModel):
+    at: str
+    message: str
+
+
+class StateResponse(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+    config: SchedulerConfig
+    desired_available: bool | None
+    policy_source: str
+    next_transition: str | None
+    containers: list[ContainerSnapshot]
+    managed_label: str
+    last_error: str | None
+    last_reconciled_at: str | None
+    recent_actions: list[ActionResponse]
+
+
+class HealthResponse(BaseModel):
+    status: Literal["running"]
+    docker_connected: bool
 
 
 class ConfigStore:
@@ -58,10 +82,10 @@ class AvailabilityManager:
     def __init__(self, store: ConfigStore, controller: DockerController) -> None:
         self.store = store
         self.controller = controller
-        self.containers: list[dict[str, Any]] = []
+        self.containers: list[ContainerSnapshot] = []
         self.last_error: str | None = None
         self.last_reconciled_at: datetime | None = None
-        self.actions: deque[dict[str, str]] = deque(maxlen=20)
+        self.actions: deque[ActionResponse] = deque(maxlen=20)
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
 
@@ -89,7 +113,7 @@ class AvailabilityManager:
                 self.containers = containers
                 self.last_error = None
                 for action in actions:
-                    self.actions.appendleft({"at": now.isoformat(), "message": action})
+                    self.actions.appendleft(ActionResponse(at=now.isoformat(), message=action))
             except Exception as exc:
                 logger.warning("GPU container reconciliation failed: %s", exc)
                 self.last_error = str(exc)
@@ -104,22 +128,22 @@ class AvailabilityManager:
             except TimeoutError:
                 pass
 
-    def state(self) -> dict[str, Any]:
+    def state(self) -> StateResponse:
         now = datetime.now(timezone.utc)
         config = self.store.config
         desired, source = effective_availability(config, now)
         transition = next_policy_transition(config, now)
-        return {
-            "config": json.loads(config.model_dump_json()),
-            "desired_available": desired,
-            "policy_source": source,
-            "next_transition": transition.isoformat() if transition else None,
-            "containers": self.containers,
-            "managed_label": f"{MANAGED_LABEL}=true",
-            "last_error": self.last_error,
-            "last_reconciled_at": self.last_reconciled_at.isoformat() if self.last_reconciled_at else None,
-            "recent_actions": list(self.actions),
-        }
+        return StateResponse(
+            config=config,
+            desired_available=desired,
+            policy_source=source,
+            next_transition=transition.isoformat() if transition else None,
+            containers=self.containers,
+            managed_label=f"{MANAGED_LABEL}=true",
+            last_error=self.last_error,
+            last_reconciled_at=self.last_reconciled_at.isoformat() if self.last_reconciled_at else None,
+            recent_actions=list(self.actions),
+        )
 
 
 store = ConfigStore(DATA_PATH)
@@ -143,17 +167,17 @@ app = FastAPI(title="Story Manager GPU Availability", docs_url=None, redoc_url=N
 
 
 @app.get("/health")
-async def health() -> dict[str, Any]:
-    return {"status": "running", "docker_connected": manager.last_error is None}
+async def health() -> HealthResponse:
+    return HealthResponse(status="running", docker_connected=manager.last_error is None)
 
 
 @app.get("/api/state")
-async def state() -> dict[str, Any]:
+async def state() -> StateResponse:
     return manager.state()
 
 
 @app.put("/api/config")
-async def update_config(config: SchedulerConfig) -> dict[str, Any]:
+async def update_config(config: SchedulerConfig) -> StateResponse:
     current = store.config
     config.override_mode = current.override_mode
     config.override_until = current.override_until
@@ -164,7 +188,7 @@ async def update_config(config: SchedulerConfig) -> dict[str, Any]:
 
 
 @app.post("/api/override")
-async def update_override(request: OverrideRequest) -> dict[str, Any]:
+async def update_override(request: OverrideRequest) -> StateResponse:
     config = store.config
     config.override_mode = request.mode
     if request.mode == "automatic":
@@ -180,7 +204,7 @@ async def update_override(request: OverrideRequest) -> dict[str, Any]:
 
 
 @app.post("/api/reconcile")
-async def reconcile() -> dict[str, Any]:
+async def reconcile() -> StateResponse:
     await manager.reconcile()
     return manager.state()
 

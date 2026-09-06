@@ -259,3 +259,54 @@ def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch)
     config_paths = fanficfare_config.get_fff_config_paths()
 
     assert config_paths == [app_dir / "personal.ini", local_user_ini]
+
+
+@pytest.mark.parametrize("opaque_id", [None, 0, ("edition", 3)])
+def test_realign_preserves_opaque_adapter_keys(opaque_id):
+    from types import SimpleNamespace
+
+    adapter = SimpleNamespace(chapterURLIndex={opaque_id: 0}, normalize_chapterurl=lambda url: url)
+    remote = [{"url": "https://example.com/current"}]
+    web_novel._realign_adapter_chapter_index(adapter, remote, [{"url": "https://example.com/history"}, *remote])
+    assert adapter.chapterURLIndex == {opaque_id: 1}
+
+
+def test_merge_keeps_unknown_adapter_metadata_and_detaches_mutable_values():
+    url = "https://example.com/chapter"
+    remote = [{"url": url, "title": "Current", "adapter_metadata": {"edition": [1, 2]}}]
+    merge = web_novel._build_lossless_chapter_merge([url], {}, remote, lambda value: value)
+    assert merge.chapters == remote
+    merge.chapters[0]["adapter_metadata"]["edition"].append(3)
+    assert remote[0]["adapter_metadata"] == {"edition": [1, 2]}
+
+
+@pytest.mark.parametrize("chapter", [{"url": 12}, {"url": "https://example.com", "title": []}])
+def test_merge_rejects_malformed_chapter_identity_without_mutating_source(chapter):
+    import copy
+
+    before = copy.deepcopy(chapter)
+    with pytest.raises(web_novel.LosslessChapterUpdateError):
+        web_novel._build_lossless_chapter_merge([], {}, [chapter], lambda value: value)
+    assert chapter == before
+
+
+@pytest.mark.parametrize("field,value", [("title", []), ("creator", 12), ("series", {})])
+def test_epub_metadata_rejects_nontext_fields(mocker, field, value):
+    values = {"title": "Title", "creator": "Author", "series": "Series", field: value}
+    book = mocker.Mock()
+    book.get_metadata.side_effect = lambda namespace, name: [(values[name], {})]
+    mocker.patch.object(web_novel.epub, "read_epub", return_value=book)
+    with pytest.raises(ValueError, match="must be text"):
+        web_novel._read_epub_metadata(Path("unused.epub"))
+
+
+def test_epub_metadata_preserves_text_and_optional_tags(tmp_path, mocker):
+    path = tmp_path / "metadata.epub"
+    create_dummy_epub(path, "A title", "An author")
+    mocker.patch.object(web_novel, "get_epub_tag_metadata", return_value={"genre_tags": ["Fantasy"], "source_tags": []})
+    assert web_novel._read_epub_metadata(path) == {
+        "title": "A title",
+        "author": "An author",
+        "series": None,
+        "genre_tags": ["Fantasy"],
+    }

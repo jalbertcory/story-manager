@@ -5,7 +5,12 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 import re
 import unicodedata
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
+from collections.abc import Mapping
+from decimal import Decimal
+import math
+
+from ...metadata_types import searchable_identifiers
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _SEPARATOR_RE = re.compile(r"[\s\-:,_]+")
@@ -78,7 +83,7 @@ def normalize_series(value: str) -> str:
     return _SEPARATOR_RE.sub(" ", normalize_text(value)).strip()
 
 
-def clean_isbn(value: Any) -> str:
+def clean_isbn(value: object) -> str:
     if value is None:
         return ""
     cleaned = _ISBN_RE.sub("", str(value)).upper()
@@ -89,7 +94,7 @@ def clean_isbn(value: Any) -> str:
     return ""
 
 
-def canonical_isbn(value: Any) -> str:
+def canonical_isbn(value: object) -> str:
     isbn = clean_isbn(value)
     if len(isbn) != 10:
         return isbn
@@ -98,16 +103,18 @@ def canonical_isbn(value: Any) -> str:
     return body + str(checksum)
 
 
-def _isbn_set(remote_ids: dict[str, Any]) -> set[str]:
+def _isbn_set(remote_ids: Mapping[str, object]) -> set[str]:
     return {canonical for key in ("isbn_13", "isbn_10") if (canonical := canonical_isbn(remote_ids.get(key)))}
 
 
-def _safe_series_index(value: Any) -> Optional[float]:
+def _safe_series_index(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed > 0 else None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
 def _roman_to_int(value: str) -> Optional[int]:
@@ -124,7 +131,7 @@ def _roman_to_int(value: str) -> Optional[int]:
     return total or None
 
 
-def _parse_series_index(value: Any) -> Optional[float]:
+def _parse_series_index(value: object) -> Optional[float]:
     parsed = _safe_series_index(value)
     if parsed is not None:
         return parsed
@@ -277,10 +284,10 @@ def series_match_issues(
     *,
     local_title: str,
     local_series: str = "",
-    local_series_index: Any = None,
+    local_series_index: object = None,
     remote_title: str,
     remote_series: str = "",
-    remote_series_index: Any = None,
+    remote_series_index: object = None,
 ) -> list[str]:
     """Explain series contradictions that should require human review."""
 
@@ -408,12 +415,12 @@ def score_metadata_candidate(
     local_author: str,
     remote_title: str,
     remote_authors: Iterable[str],
-    local_ids: dict[str, Any] | None = None,
-    remote_ids: dict[str, Any] | None = None,
+    local_ids: Mapping[str, object] | None = None,
+    remote_ids: Mapping[str, object] | None = None,
     local_series: str = "",
-    local_series_index: Any = None,
+    local_series_index: object = None,
     remote_series: str = "",
-    remote_series_index: Any = None,
+    remote_series_index: object = None,
 ) -> float:
     """Score a candidate consistently regardless of which provider returned it."""
 
@@ -435,8 +442,8 @@ def score_metadata_candidate(
     if author_score >= 0.97:
         score += 0.04
 
-    local_ids = local_ids or {}
-    remote_ids = remote_ids or {}
+    local_ids = searchable_identifiers(dict(local_ids or {}))
+    remote_ids = searchable_identifiers(dict(remote_ids or {}))
     local_isbns = _isbn_set(local_ids)
     remote_isbns = _isbn_set(remote_ids)
     exact_identifier = bool(local_isbns & remote_isbns)

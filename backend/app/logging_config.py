@@ -11,13 +11,17 @@ import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TextIO
+from pydantic import TypeAdapter, ValidationError
+from .log_types import LogEntry
 from types import TracebackType
 
 from .config import LOG_BACKUP_COUNT, LOG_DIR, LOG_MAX_BYTES
 from .observability_context import job_id_var, request_id_var
 
-_LOG_BUFFER: collections.deque[dict[str, Any]] = collections.deque(maxlen=1000)
+_LOG_BUFFER: collections.deque[LogEntry] = collections.deque(maxlen=1000)
+_LOG_ENTRY = TypeAdapter(LogEntry)
+_LOG_OBJECT = TypeAdapter(dict[str, object])
 _LOG_FILE = LOG_DIR / "story-manager.jsonl"
 QUIET_SUCCESS_PATHS = frozenset(
     {
@@ -57,7 +61,7 @@ def redact_text(value: str) -> str:
     return redacted
 
 
-def redact_value(value: Any) -> Any:
+def redact_value(value: object) -> object:
     """Recursively redact mappings without changing their diagnostic shape."""
     if isinstance(value, dict):
         return {
@@ -80,7 +84,14 @@ def redact_value(value: Any) -> Any:
     return value
 
 
-def is_quiet_successful_access_entry(entry: dict[str, Any]) -> bool:
+def _validated_log_entry(value: object) -> LogEntry:
+    record = _LOG_OBJECT.validate_python(value, strict=True)
+    # Early log files predate the logger field; preserve that history.
+    record.setdefault("logger", "unknown")
+    return _LOG_ENTRY.validate_python(record)
+
+
+def is_quiet_successful_access_entry(entry: LogEntry) -> bool:
     """Identify historical successful polling access records for UI filtering."""
     if entry.get("logger") != "story_manager.access":
         return False
@@ -97,8 +108,8 @@ class _CorrelationFilter(logging.Filter):
         return True
 
 
-def _record_entry(record: logging.LogRecord, formatter: logging.Formatter) -> dict[str, Any]:
-    entry: dict[str, Any] = {
+def _record_entry(record: logging.LogRecord, formatter: logging.Formatter) -> LogEntry:
+    entry: LogEntry = {
         "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
         "level": record.levelname,
         "logger": record.name,
@@ -106,9 +117,11 @@ def _record_entry(record: logging.LogRecord, formatter: logging.Formatter) -> di
     }
     if record.exc_info and record.exc_info[1]:
         entry["exception"] = redact_text(formatter.formatException(record.exc_info))
-    if request_id := getattr(record, "request_id", None):
-        entry["request_id"] = request_id
-    if (job_id := getattr(record, "job_id", None)) is not None:
+    request_id: object = getattr(record, "request_id", None)
+    if isinstance(request_id, str) and request_id:
+        entry["request_id"] = redact_text(request_id)
+    job_id: object = getattr(record, "job_id", None)
+    if isinstance(job_id, int) and not isinstance(job_id, bool):
         entry["job_id"] = job_id
     return entry
 
@@ -181,12 +194,12 @@ def setup_logging() -> tuple[logging.StreamHandler[TextIO], _MemoryLogHandler, R
     return console_handler, mem_handler, file_handler
 
 
-def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file: Path | None = None) -> list[dict[str, Any]]:
+def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file: Path | None = None) -> list[LogEntry]:
     """Read the newest structured entries across the bounded rotated files."""
     target = log_file or _LOG_FILE
     candidates = [target.with_name(f"{target.name}.{index}") for index in range(LOG_BACKUP_COUNT, 0, -1)]
     candidates.append(target)
-    entries: collections.deque[dict[str, Any]] = collections.deque(maxlen=max(1, limit))
+    entries: collections.deque[LogEntry] = collections.deque(maxlen=max(1, limit))
     for candidate in candidates:
         if not candidate.is_file():
             continue
@@ -194,8 +207,8 @@ def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file:
             with candidate.open("r", encoding="utf-8", errors="replace") as handle:
                 for line in handle:
                     try:
-                        entry = redact_value(json.loads(line))
-                    except (json.JSONDecodeError, TypeError):
+                        entry = _validated_log_entry(redact_value(json.loads(line)))
+                    except (json.JSONDecodeError, TypeError, ValidationError):
                         continue
                     if level and entry.get("level") != level.upper():
                         continue
@@ -204,7 +217,7 @@ def read_persisted_logs(*, limit: int = 500, level: str | None = None, log_file:
             continue
     if entries:
         return list(entries)
-    memory = [redact_value(entry) for entry in _LOG_BUFFER]
+    memory = [_validated_log_entry(redact_value(entry)) for entry in _LOG_BUFFER]
     if level:
         memory = [entry for entry in memory if entry.get("level") == level.upper()]
     return memory[-limit:]

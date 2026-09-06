@@ -1,7 +1,6 @@
 from pydantic import JsonValue
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -89,8 +88,8 @@ class Book(Base):
     # Denormalized searchable text avoids repeatedly casting JSON tag arrays in
     # every catalog query. A mapper hook below keeps it in sync.
     catalog_search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_remote_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    metadata_details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    metadata_remote_ids: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
+    metadata_details: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
     metadata_sync_source: Mapped[str | None] = mapped_column(String, nullable=True)
     metadata_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
@@ -305,7 +304,7 @@ class MetadataSyncJob(Base):
     matched_books: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     proposed_books: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     applied_books: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    scope: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    scope: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -323,8 +322,8 @@ class BookMetadataMatch(Base):
     remote_title: Mapped[str | None] = mapped_column(String, nullable=True)
     remote_author: Mapped[str | None] = mapped_column(String, nullable=True)
     remote_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    remote_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    remote_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    remote_ids: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
+    remote_metadata: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON, nullable=True)
     proposed_genre_tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     possible_missing_series_books: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     match_issues: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)

@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.engine import CursorResult
 
+from ..orm_updates import SettingsPatch, CharacterPatch, apply_settings_patch, apply_character_patch
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..lifecycle import (
     AUDIOBOOK_PIPELINE,
@@ -64,14 +65,15 @@ async def get_audiobook_settings(db: AsyncSession) -> Optional[AudiobookSettings
     return result.scalar_one_or_none()
 
 
-async def upsert_audiobook_settings(db: AsyncSession, data: Mapping[str, object]) -> AudiobookSettings:
+async def upsert_audiobook_settings(db: AsyncSession, data: SettingsPatch) -> AudiobookSettings:
+    patch = SettingsPatch.model_validate(data)
     settings = await get_audiobook_settings(db)
     if settings is None:
-        settings = AudiobookSettings(**data)
+        settings = AudiobookSettings()
+        apply_settings_patch(settings, patch)
         db.add(settings)
     else:
-        for key, value in data.items():
-            setattr(settings, key, value)
+        apply_settings_patch(settings, patch)
     await db.commit()
     await db.refresh(settings)
     return settings
@@ -558,12 +560,11 @@ async def get_character(db: AsyncSession, char_id: int) -> Optional[AudiobookCha
     return await db.get(AudiobookCharacter, char_id)
 
 
-async def update_character(db: AsyncSession, char_id: int, data: Mapping[str, object]) -> Optional[AudiobookCharacter]:
+async def update_character(db: AsyncSession, char_id: int, data: CharacterPatch) -> Optional[AudiobookCharacter]:
     char = await db.get(AudiobookCharacter, char_id)
     if char is None:
         return None
-    for key, value in data.items():
-        setattr(char, key, value)
+    apply_character_patch(char, data)
     await db.commit()
     await db.refresh(char)
     return char

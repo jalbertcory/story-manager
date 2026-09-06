@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, TypedDict, TypeVar
+from typing import Awaitable, Callable, TypedDict, TypeVar
 from collections.abc import Mapping
 from fastapi import UploadFile
 from uuid import uuid4
@@ -40,6 +40,7 @@ from ..models import (
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
 )
+from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
@@ -687,7 +688,7 @@ def _prepare_sources(edition_dir: Path) -> tuple[list[Path], list[Path]]:
     return audio_paths, cue_paths
 
 
-async def _probe_audio(path: Path) -> tuple[int, list[dict[str, Any]]]:
+async def _probe_audio(path: Path) -> tuple[int, list[ProbeChapter]]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         raise RuntimeError("ffprobe is required to import audiobooks.")
@@ -707,11 +708,11 @@ async def _probe_audio(path: Path) -> tuple[int, list[dict[str, Any]]]:
     if process.returncode:
         message = stderr.decode("utf-8", errors="replace")[:500]
         raise ValueError(f"Could not inspect {path.name}: {message}")
-    payload = json.loads(stdout)
-    duration_ms = round(float(payload.get("format", {}).get("duration") or 0) * 1000)
+    payload = AudioProbe.model_validate_json(stdout)
+    duration_ms = round((payload.format.duration or 0) * 1000)
     if duration_ms <= 0:
         raise ValueError(f"Could not determine the duration of {path.name}.")
-    return duration_ms, payload.get("chapters") or []
+    return duration_ms, payload.chapters
 
 
 def _read_cue_text(path: Path) -> str:
@@ -766,7 +767,7 @@ def _media_type(path: Path) -> str:
 
 
 async def _track_specs(audio_paths: list[Path], cue_paths: list[Path]) -> tuple[list[TrackSpec], int]:
-    probes: dict[Path, tuple[int, list[dict[str, Any]]]] = {}
+    probes: dict[Path, tuple[int, list[ProbeChapter]]] = {}
     for path in audio_paths:
         probes[path] = await _probe_audio(path)
     total_duration_ms = sum(duration for duration, _chapters in probes.values())
@@ -786,9 +787,9 @@ async def _track_specs(audio_paths: list[Path], cue_paths: list[Path]) -> tuple[
         audio_path = audio_paths[0]
         embedded: list[TrackSpec] = []
         for index, chapter in enumerate(probes[audio_path][1], start=1):
-            start_ms = round(float(chapter.get("start_time") or 0) * 1000)
-            end_ms = round(float(chapter.get("end_time") or 0) * 1000)
-            tags = chapter.get("tags") or {}
+            start_ms = round(chapter.start_time * 1000)
+            end_ms = round(chapter.end_time * 1000)
+            tags = chapter.tags
             if end_ms > start_ms:
                 embedded.append(
                     TrackSpec(

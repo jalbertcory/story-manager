@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path, PurePosixPath
-from typing import Any, TypedDict, cast
+from typing import TypedDict, cast
 from decimal import Decimal
 import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .media_responses import AudioProbe
+
+from ..metadata_types import metadata_json
 from ..models import Book, ImportedAudiobook, SourceType
 
 logger = logging.getLogger(__name__)
@@ -71,8 +73,9 @@ def cue_metadata(path: Path) -> AudioMetadata:
     return result
 
 
-def tag_metadata(payload: dict[str, Any], *, single_file: bool) -> AudioMetadata:
-    tags = {str(key).casefold(): str(value).strip() for key, value in payload.get("format", {}).get("tags", {}).items()}
+def tag_metadata(payload: object, *, single_file: bool) -> AudioMetadata:
+    probe = AudioProbe.model_validate(payload)
+    tags = {key.casefold(): value.strip() for key, value in probe.format.tags.items()}
 
     def value(*keys: str) -> str | None:
         return next((tags[key][:2000] for key in keys if tags.get(key)), None)
@@ -125,16 +128,14 @@ async def enrich_audio_only_book(
             logger.warning("Could not read audiobook CUE metadata for edition %s", edition.id, exc_info=True)
     cover_path = None
     try:
-        payload = json.loads(
+        payload = AudioProbe.model_validate_json(
             await _run("ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(audio_paths[0]))
         )
         tags = tag_metadata(payload, single_file=len(audio_paths) == 1)
         metadata.update(tags)
         if tags:
             sources.append("audio_tags")
-        cover_stream = next(
-            (stream for stream in payload.get("streams", []) if stream.get("disposition", {}).get("attached_pic")), None
-        )
+        cover_stream = next((stream for stream in payload.streams if stream.disposition.attached_pic), None)
         if not book.cover_path and cover_stream:
             destination = audio_paths[0].parent.parent / "cover.jpg"
             try:
@@ -145,7 +146,7 @@ async def enrich_audio_only_book(
                     "-i",
                     str(audio_paths[0]),
                     "-map",
-                    f"0:{cover_stream['index']}",
+                    f"0:{cover_stream.index}",
                     "-frames:v",
                     "1",
                     "-vf",
@@ -165,7 +166,8 @@ async def enrich_audio_only_book(
     # Reload after probing so edits made while an import is running take precedence.
     await db.refresh(book)
     details = dict(book.metadata_details or {})
-    previous = dict(details.get("audiobook_import") or {})
+    raw_import = details.get("audiobook_import")
+    previous = dict(raw_import) if isinstance(raw_import, dict) else {}
     if previous.get("inferred_title") == book.title and metadata.get("title"):
         book.title = metadata["title"]
         previous["inferred_title"] = book.title
@@ -185,7 +187,7 @@ async def enrich_audio_only_book(
         identifiers.setdefault("asin", metadata.get("asin") or edition.asin)
         edition.asin = edition.asin or metadata.get("asin")
     book.metadata_remote_ids = identifiers or None
-    details["audiobook_import"] = {**previous, "sources": sources, "metadata": metadata}
+    details["audiobook_import"] = metadata_json({**previous, "sources": sources, "metadata": metadata})
     book.metadata_details = details
     await db.commit()
 
@@ -195,7 +197,8 @@ async def queue_audio_metadata_lookup(book: Book, db: AsyncSession) -> None:
     if book.source_type != SourceType.audiobook:
         return
     details = dict(book.metadata_details or {})
-    imported = dict(details.get("audiobook_import") or {})
+    raw_import = details.get("audiobook_import")
+    imported = dict(raw_import) if isinstance(raw_import, dict) else {}
     if imported.get("lookup_queued"):
         return
     from .metadata_jobs import queue_metadata_sync_job

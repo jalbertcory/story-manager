@@ -6,6 +6,7 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models, schemas
+from ..orm_updates import apply_cleaning_patch
 
 
 async def create_cleaning_config(db: AsyncSession, config: schemas.CleaningConfigCreate) -> models.CleaningConfig:
@@ -43,9 +44,7 @@ async def get_cleaning_config(db: AsyncSession, config_id: int) -> Optional[mode
 async def update_cleaning_config(
     db: AsyncSession, config: models.CleaningConfig, update: schemas.CleaningConfigUpdate
 ) -> models.CleaningConfig:
-    update_data = update.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(config, key, value)
+    apply_cleaning_patch(config, update)
     await db.commit()
     await db.refresh(config)
     return config

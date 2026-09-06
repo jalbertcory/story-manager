@@ -8,8 +8,11 @@ from datetime import datetime
 from typing import Any, Literal
 from typing_extensions import NotRequired, TypedDict
 
+from . import log_types
 from .services.library_health import LibraryFileIssue
 from .services.processing_queue import WorkerHealth
+
+LogEntry = log_types.LogEntry
 
 
 class StatusResponse(TypedDict):
@@ -88,16 +91,6 @@ class SchedulerTriggered(MessageResponse):
 
 class OkResponse(TypedDict):
     ok: bool
-
-
-class LogEntry(TypedDict):
-    timestamp: str
-    level: str
-    logger: str
-    message: str
-    exception: NotRequired[str]
-    request_id: NotRequired[str]
-    job_id: NotRequired[int]
 
 
 class FileSize(TypedDict):
@@ -180,7 +173,14 @@ class RosterShared(TypedDict):
     books_updated: int
 
 
-class EndpointProbe(TypedDict):
+class EndpointProbeDetails(TypedDict, total=False):
+    audio_bytes: int
+    service_status: str | None
+    device: str | None
+    loaded_model: str | None
+
+
+class EndpointProbe(EndpointProbeDetails):
     endpoint_id: str | None
     endpoint: str | None
     priority: int
@@ -191,10 +191,6 @@ class EndpointProbe(TypedDict):
     error: str | None
     # Upstream health/model JSON is intentionally extensible.
     response: NotRequired[dict[str, Any]]
-    audio_bytes: NotRequired[int]
-    service_status: NotRequired[str | None]
-    device: NotRequired[str | None]
-    loaded_model: NotRequired[str | None]
 
 
 class EndpointTest(TypedDict):

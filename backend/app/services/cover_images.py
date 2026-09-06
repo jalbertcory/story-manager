@@ -7,8 +7,10 @@ import logging
 import os
 from pathlib import Path
 import socket
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urljoin, urlparse
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 import requests as http_requests
 from bs4 import BeautifulSoup
@@ -20,6 +22,39 @@ from .fanficfare_config import is_enabled_config_value
 logger = logging.getLogger(__name__)
 
 MAX_REDIRECTS = 5
+
+
+class FlareSolverrCookie(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str
+    value: str
+    domain: str | None = None
+
+
+class FlareSolverrSolution(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status: int
+    response: str | bytes | None = None
+    headers: dict[str, str] | None = None
+    cookies: list[FlareSolverrCookie] | None = None
+    userAgent: str | None = None
+
+    @field_validator("response", mode="before")
+    @classmethod
+    def byte_array(cls, value: object) -> object:
+        # Some proxy-compatible download implementations return JSON byte arrays.
+        if isinstance(value, list):
+            if not all(type(item) is int and 0 <= item <= 255 for item in value):
+                raise ValueError("FlareSolverr byte arrays must contain integers from 0 to 255")
+            return bytes(value)
+        return value
+
+
+class FlareSolverrResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status: str
+    message: str | None = None
+    solution: FlareSolverrSolution | None = None
 
 
 def _private_cover_urls_enabled() -> bool:
@@ -82,7 +117,7 @@ def fetch_page_direct(url: str) -> str:
     return response.text
 
 
-def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download: bool = False) -> dict[str, Any]:
+def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download: bool = False) -> FlareSolverrSolution:
     validate_remote_cover_url(url)
     proxy_url = (
         f"{site_config.get('flaresolverr_proxy_protocol', 'http')}://"
@@ -103,23 +138,26 @@ def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download:
         json=payload,
     )
     response.raise_for_status()
-    data = response.json()
-    solution = data.get("solution") or {}
-    if data.get("status") != "ok" or solution.get("status") != 200:
-        raise ValueError(data.get("message") or f"FlareSolverr failed with status {solution.get('status')}")
+    data = FlareSolverrResponse.model_validate(response.json())
+    solution = data.solution
+    if data.status != "ok" or solution is None or solution.status != 200:
+        raise ValueError(data.message or f"FlareSolverr failed with status {solution.status if solution else None}")
     return solution
 
 
 def fetch_page_via_flaresolverr(url: str, site_config: dict[str, str]) -> str:
     solution = request_via_flaresolverr(url, site_config)
-    return solution.get("response") or ""
+    body = solution.response or ""
+    if not isinstance(body, str):
+        raise ValueError("FlareSolverr page response must be text")
+    return body
 
 
 def fetch_binary_via_flaresolverr(url: str, site_config: dict[str, str]) -> tuple[str, bytes]:
     solution = request_via_flaresolverr(url, site_config, download=True)
-    headers = solution.get("headers") or {}
+    headers = solution.headers or {}
     content_type = headers.get("content-type") or headers.get("Content-Type") or ""
-    response_body = solution.get("response") or ""
+    response_body = solution.response or ""
     if isinstance(response_body, str):
         try:
             image_bytes = base64.b64decode(response_body, validate=True)
@@ -144,15 +182,15 @@ def looks_like_image(content_type: str | None, data: bytes) -> bool:
     return detect_image_extension(data.lstrip()) is not None
 
 
-def cookie_header_from_solution(solution: dict[str, Any], target_url: str) -> str | None:
+def cookie_header_from_solution(solution: FlareSolverrSolution, target_url: str) -> str | None:
     target_host = urlparse(target_url).hostname or ""
     pairs = []
-    for cookie in solution.get("cookies") or []:
-        domain = (cookie.get("domain") or "").lstrip(".")
+    for cookie in solution.cookies or []:
+        domain = (cookie.domain or "").lstrip(".")
         if domain and target_host != domain and not target_host.endswith(f".{domain}"):
             continue
-        name = cookie.get("name")
-        value = cookie.get("value")
+        name = cookie.name
+        value = cookie.value
         if name and value is not None:
             pairs.append(f"{name}={value}")
     return "; ".join(pairs) if pairs else None
@@ -161,7 +199,7 @@ def cookie_header_from_solution(solution: dict[str, Any], target_url: str) -> st
 def fetch_image_from_flaresolverr_context(
     original_url: str,
     response_text: str,
-    solution: dict[str, Any],
+    solution: FlareSolverrSolution,
 ) -> tuple[str, bytes] | None:
     soup = BeautifulSoup(response_text, "html.parser")
     image = soup.select_one("img[src]")
@@ -171,7 +209,7 @@ def fetch_image_from_flaresolverr_context(
 
     image_url = urljoin(original_url, src)
     headers = {
-        "User-Agent": solution.get("userAgent") or "Mozilla/5.0",
+        "User-Agent": solution.userAgent or "Mozilla/5.0",
         "Referer": original_url,
     }
     cookie_header = cookie_header_from_solution(solution, image_url)
