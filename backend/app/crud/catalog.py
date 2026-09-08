@@ -38,9 +38,11 @@ def build_catalog_filter_conditions(
     if q and q.strip():
         from ..services.library import universe_expression
 
-        pattern = f"%{q.strip().casefold()}%"
-        matching_universe = select(models.Universe.id).where(models.Universe.name_key.ilike(pattern))
-        conditions.append(or_(models.Book.catalog_search_text.ilike(pattern), universe_expression().in_(matching_universe)))
+        term = q.strip().casefold()
+        matching_universe = select(models.Universe.id).where(models.Universe.name_key.icontains(term, autoescape=True))
+        conditions.append(
+            or_(models.Book.catalog_search_text.icontains(term, autoescape=True), universe_expression().in_(matching_universe))
+        )
 
     if series is not None:
         conditions.append(func.lower(models.Book.series) == series.lower() if series else models.Book.series.is_(None))
@@ -81,7 +83,7 @@ def build_catalog_filter_conditions(
         # Facet values originate from these arrays, so an exact, normalized
         # token match is sufficient without casting JSON in the search path.
         token = genre.strip().casefold()
-        conditions.append(models.Book.catalog_search_text.like(f"%tag:{token}\n%"))
+        conditions.append(models.Book.catalog_search_text.contains(f"tag:{token}\n", autoescape=True))
 
     if view == "series":
         conditions.extend([models.Book.series.is_not(None), models.Book.download_status.is_(None)])
