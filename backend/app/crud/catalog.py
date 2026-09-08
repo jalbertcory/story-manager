@@ -278,7 +278,9 @@ async def get_catalog_facets(
         )
     tags = union(*tag_selects).subquery()
     genre_rows = await db.execute(
-        select(func.min(tags.c.display), func.count()).group_by(tags.c.folded).order_by(tags.c.folded)
+        select(func.min(tags.c.display), func.count(func.distinct(tags.c.book_id)))
+        .group_by(tags.c.folded)
+        .order_by(tags.c.folded)
     )
 
     return {
