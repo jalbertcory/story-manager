@@ -204,6 +204,18 @@ async def test_series_order_pages_handle_ties_and_unindexed_books(db, sort_order
 
 
 @pytest.mark.asyncio
+async def test_series_groups_can_continue_pages_with_series_index_sort(db):
+    for name in ["Alpha", "Beta"]:
+        db.add(models.Book(title=name, author="Writer", series=name, source_type=models.SourceType.epub))
+    await db.commit()
+    first = await build_book_catalog_page(db, view="series", sort_by="series_index", limit=1)
+    assert first.next_cursor is not None
+    second = await build_book_catalog_page(db, view="series", sort_by="series_index", limit=1, cursor=first.next_cursor)
+    assert [item.series for item in first.items + second.items] == ["Alpha", "Beta"]
+    assert second.next_cursor is None
+
+
+@pytest.mark.asyncio
 async def test_playable_filter_matches_group_and_book_results(db, app_client):
     books = [
         models.Book(title=str(i), author="A", series="Saga", source_type=models.SourceType.epub, audiobook_enabled=True)
