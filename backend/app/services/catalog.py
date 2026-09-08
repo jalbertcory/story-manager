@@ -100,7 +100,9 @@ async def build_book_catalog_page(
     }
     signature = cursor_signature(cursor_params)
     if cursor:
-        snapshot_max_id, position = decode_cursor(cursor, signature=signature, sort_by=sort_by)
+        # Series groups use their names when an individual book index is requested.
+        cursor_sort_by = "title" if view == "series" and sort_by == "series_index" else sort_by
+        snapshot_max_id, position = decode_cursor(cursor, signature=signature, sort_by=cursor_sort_by)
     else:
         snapshot_max_id = await crud.get_catalog_snapshot_max_id(db)
         position = None
