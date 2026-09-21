@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Deletions and pushes with nothing to update do not need validation.
+check_required=false
+head=$(git rev-parse HEAD)
+while read -r local_ref local_oid remote_ref remote_oid; do
+    case "$local_oid" in
+        *[!0]*) ;;
+        *) continue ;;
+    esac
+    if [ "$(git rev-parse "$local_oid^{commit}")" != "$head" ]; then
+        echo "pre-push: Check out $local_ref and push it separately so its code can be tested." >&2
+        exit 1
+    fi
+    check_required=true
+done
+
+if [ "$check_required" = false ]; then
+    exit 0
+fi
+
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+    echo "pre-push: Commit or stash changes (including untracked files) so checks test the commit being pushed." >&2
+    exit 1
+fi
+
+echo "pre-push: Running local checks. Docker must be running and Playwright Chromium installed."
+exec make local-check </dev/null

@@ -1,7 +1,9 @@
 name: preview-image
 
 on:
-  pull_request:
+  # Automatic runs paused to conserve Actions minutes; checks run in pre-push.
+  workflow_dispatch:
+  # pull_request:
 
 env:
   REGISTRY: ghcr.io

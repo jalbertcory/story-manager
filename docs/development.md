@@ -17,7 +17,9 @@ uv pip install -e ".[dev]"
 
 cd frontend
 npm ci
+npx playwright install chromium
 cd ..
+make install-hooks
 ```
 
 Create a root `.env` file for the local database:
@@ -118,6 +120,45 @@ Use Alembic migrations for database changes. Do not put one-time schema or data 
 
 ## Tests
 
+Automatic CI, E2E, PR preview images, and service-image PR builds are temporarily
+paused to conserve GitHub Actions minutes. The original triggers are commented
+out in `.github/workflows`; CI, E2E, and preview images can still be run manually
+with `workflow_dispatch`. To restore automatic runs, uncomment those triggers.
+Production container publishing still runs on pushes/merges to `main`, including
+the service images when their existing path filters match.
+
+Enable the versioned pre-push hook once in each existing clone:
+
+```bash
+make install-hooks
+```
+
+`make setup` also installs this hook. Installation sets this repository's
+`core.hooksPath` to `.githooks`; if you already use custom hooks, integrate them
+there before installing. Git does not activate hooks automatically on clone.
+
+Every push that updates a ref runs `make local-check`: `make pr-check`, Python
+dependency auditing, backend/frontend unit tests, GPU scheduler tests, PostgreSQL
+migration tests, and Playwright E2E tests. Any failure blocks the push. Commit or
+stash pending changes (including untracked files) first, and push only refs pointing
+at the checked-out commit so the hook tests the code being pushed. Deletion-only
+pushes skip validation.
+
+The full suite requires the development dependencies, network access for audits,
+Docker running, and Playwright Chromium (`cd frontend && npx playwright install chromium`).
+Migration and E2E tests use throwaway databases on ports `5433` and `5434`; E2E
+also uses ports `18000` and `15173`. Keep those application ports free so Playwright
+starts the servers against the test database. Run the suite directly at any time:
+
+```bash
+make local-check
+```
+
+Hooks run on this machine and can be bypassed with Git's `--no-verify`; they do
+not produce GitHub status checks. If branch protection requires the paused checks,
+remove those required checks in the repository settings while this pause is in
+effect, then restore them when re-enabling Actions.
+
 Run the checks required before publishing a PR:
 
 ```bash
@@ -126,7 +167,9 @@ make pr-check
 
 This validates the frontend lockfile with a dry-run clean install, then runs Python
 formatting/linting, Python and frontend type checking, frontend linting, generated
-API contract drift checks, and frontend dependency audits. CI also audits Python dependencies.
+API contract drift checks, and frontend dependency audits. `make audit-python`
+audits the active project virtual environment's Python dependencies and is included
+in the full pre-push suite.
 
 Run Python type checking on its own:
 
@@ -171,7 +214,7 @@ Commit `frontend/src/api/schema.d.ts` with the backend changes. Generation impor
 FastAPI without running its lifespan, connecting to the database, or starting
 services. It excludes conditional SPA/static routes so local build artifacts do
 not affect the contract. Request defaults stay optional, while response schemas
-include serialized defaults and preserve nullability. CI rejects stale generated
+include serialized defaults and preserve nullability. The pre-push hook rejects stale generated
 contracts. Compile-time contract tests also prove wrong requests and response
 fields are rejected; existing JavaScript UI tests continue to run in Vitest.
 
