@@ -39,21 +39,33 @@ def encode_cursor(*, snapshot_max_id: int, position: Sequence[CursorValue], sign
 
 def decode_cursor(cursor: str, *, signature: str, sort_by: str) -> tuple[int, list[CursorValue]]:
     try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError
-        if payload.get("v") != 1 or payload.get("signature") != signature:
+        if type(payload.get("v")) is not int or payload["v"] != 1 or payload.get("signature") != signature:
             raise ValueError
-        snapshot_max_id = int(payload["snapshot_max_id"])
+        snapshot_max_id = payload["snapshot_max_id"]
+        if type(snapshot_max_id) is not int or not 0 <= snapshot_max_id <= 2**63 - 1:
+            raise ValueError
         raw_position = payload["position"]
         if not isinstance(raw_position, list) or len(raw_position) != 3:
             raise ValueError
         position: list[CursorValue] = []
         for value in raw_position:
-            if value is not None and not isinstance(value, (str, int, float)):
+            if type(value) not in (str, int, float):
                 raise ValueError
             position.append(value)
+        primary, title, identifier = position
+        if not isinstance(title, str) or type(identifier) is not int or not 1 <= identifier <= snapshot_max_id:
+            raise ValueError
+        if sort_by in {"title", "author"} and not isinstance(primary, str):
+            raise ValueError
+        if sort_by in {"word_count", "audiobook_enabled"}:
+            if type(primary) is not int or not -(2**63) <= primary <= 2**63 - 1:
+                raise ValueError
+            if sort_by == "audiobook_enabled" and primary not in (0, 1):
+                raise ValueError
         if sort_by == "series_index":
             series_index = Decimal(str(position[0]))
             if not series_index.is_finite():
