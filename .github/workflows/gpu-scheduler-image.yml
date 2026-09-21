@@ -8,13 +8,14 @@ on:
       - services/gpu_scheduler/**
       - services/__init__.py
       - .github/workflows/gpu-scheduler-image.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - services/gpu_scheduler/**
-      - services/__init__.py
-      - .github/workflows/gpu-scheduler-image.yml
+  # PR builds paused to conserve Actions minutes; main publishing stays enabled.
+  # pull_request:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - services/gpu_scheduler/**
+  #     - services/__init__.py
+  #     - .github/workflows/gpu-scheduler-image.yml
 
 env:
   REGISTRY: ghcr.io

@@ -15,7 +15,15 @@ Before creating a pull request or pushing an update to an existing pull request,
 make pr-check
 ```
 
-Do not publish the PR update until this command passes. The target mirrors the formatting, unused-import, Python lint/type checks, frontend lint/type checks, API contract drift, and frontend dependency audits enforced by CI. CI also runs a Python dependency audit.
+Do not publish the PR update until this command passes. The target covers formatting, unused-import, Python lint/type checks, frontend lint/type checks, API contract drift, and frontend dependency audits.
+
+Automatic CI/E2E and PR image builds are temporarily paused to save Actions minutes;
+production images still publish on pushes to `main`. Run `make install-hooks` once
+per clone (also included in `make setup`). The pre-push hook requires a clean working
+tree and refs pointing at the checked-out commit, then runs `make local-check`,
+which includes `make pr-check`, Python dependency auditing, unit tests, GPU scheduler
+tests, PostgreSQL migration tests, and Playwright E2E tests. Docker and Playwright
+Chromium must be available. Do not bypass the hook to publish failing checks.
 
 `make typecheck` runs mypy in strict mode across `backend/app` and production Python in `services`.
 Keep application modules included; fix types and nullable-value handling rather

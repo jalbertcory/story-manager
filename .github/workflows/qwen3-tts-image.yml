@@ -11,16 +11,17 @@ on:
       - services/tts_consistency.py
       - services/__init__.py
       - .github/workflows/qwen3-tts-image.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - services/qwen3_tts/**
-      - services/omnivoice/audio_quality.py
-      - services/speaker_similarity.py
-      - services/tts_consistency.py
-      - services/__init__.py
-      - .github/workflows/qwen3-tts-image.yml
+  # PR builds paused to conserve Actions minutes; main publishing stays enabled.
+  # pull_request:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - services/qwen3_tts/**
+  #     - services/omnivoice/audio_quality.py
+  #     - services/speaker_similarity.py
+  #     - services/tts_consistency.py
+  #     - services/__init__.py
+  #     - .github/workflows/qwen3-tts-image.yml
 
 env:
   REGISTRY: ghcr.io

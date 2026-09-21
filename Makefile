@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui pr-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui audit-python pr-check install-hooks local-check test test-migrations e2e e2e-debug
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -17,7 +17,7 @@ help:
 	@echo "Story Manager commands:"
 	@echo "  make start            Start all missing local services"
 	@echo "  make services-status  Show local service health"
-	@echo "  make setup            Install project dependencies"
+	@echo "  make setup            Install project dependencies and Git hooks"
 	@echo "  make ensure-db        Create or start the local PostgreSQL container"
 	@echo "  make migrate          Run Alembic migrations"
 	@echo "  make run-api          Run the FastAPI backend"
@@ -34,6 +34,8 @@ help:
 	@echo "  make gpu-services-status Show scheduler and managed-container state"
 	@echo "  make test-gpu-scheduler Run scheduler unit tests"
 	@echo "  make typecheck        Check backend and service Python types"
+	@echo "  make install-hooks    Enable the local pre-push checks in this clone"
+	@echo "  make local-check      Run all checks locally (requires Docker and Playwright)"
 	@echo "  make pr-check         Run lint, type checks, API contract checks, and frontend dependency audits"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
@@ -53,6 +55,10 @@ setup:
 	uv venv
 	uv pip install -e ".[dev]"
 	cd frontend && npm ci
+	$(MAKE) install-hooks
+
+install-hooks:
+	git config --local core.hooksPath .githooks
 
 setup-omnivoice:
 	uv sync --project services/omnivoice --python 3.13
@@ -179,6 +185,10 @@ audit-ui:
 	cd frontend && npm audit --omit=dev --audit-level=moderate
 	cd frontend && npm audit --audit-level=high
 
+audit-python:
+	@set -e; site_packages="$$(.venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
+	uvx pip-audit --path "$$site_packages"
+
 typecheck:
 	.venv/bin/python3 -m mypy
 
@@ -196,6 +206,15 @@ check-ui-install:
 
 pr-check: check-ui-install lint typecheck typecheck-ui api-check audit-ui
 
+# Keep these sequential, even under make -j: migrations and E2E own test databases.
+local-check:
+	$(MAKE) pr-check
+	$(MAKE) audit-python
+	$(MAKE) test
+	$(MAKE) test-gpu-scheduler
+	$(MAKE) test-migrations
+	$(MAKE) e2e
+
 test:
 	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
 	cd frontend && npm test -- --run
@@ -207,7 +226,7 @@ test-migrations:
 	  -e POSTGRES_DB=story_manager \
 	  -p 5433:5432 \
 	  -d postgres:17 >/dev/null
-	@trap 'docker rm -f story-manager-migration-test >/dev/null 2>&1 || true' EXIT; \
+	@set -e; trap 'docker rm -f story-manager-migration-test >/dev/null 2>&1 || true' EXIT; \
 	until docker exec story-manager-migration-test pg_isready -U postgres -d story_manager >/dev/null 2>&1; do \
 		printf "."; \
 		sleep 1; \

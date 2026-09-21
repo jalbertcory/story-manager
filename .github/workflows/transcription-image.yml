@@ -8,13 +8,14 @@ on:
       - services/transcription/**
       - services/__init__.py
       - .github/workflows/transcription-image.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - services/transcription/**
-      - services/__init__.py
-      - .github/workflows/transcription-image.yml
+  # PR builds paused to conserve Actions minutes; main publishing stays enabled.
+  # pull_request:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - services/transcription/**
+  #     - services/__init__.py
+  #     - .github/workflows/transcription-image.yml
 
 env:
   REGISTRY: ghcr.io
