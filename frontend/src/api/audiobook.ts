@@ -1,5 +1,5 @@
 import { api, apiUrl, unwrap, unwrapEmpty, multipart } from "./client";
-import type { Body } from "./client";
+import type { Body, Schemas } from "./client";
 
 // Pipeline control
 export function getAudiobookStatus(bookId: number) {
@@ -180,6 +180,20 @@ export function getSentences(
     }),
     "Failed to fetch sentences",
   );
+}
+
+// The sentence endpoint caps a page at 1000 rows; long chapters exceed that.
+export async function getAllChapterSentences(
+  bookId: number,
+  chapterId: number,
+) {
+  const limit = 1000;
+  const items: Schemas["SentenceResponse"][] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await getSentences(bookId, { chapterId, page, limit });
+    items.push(...result.items);
+    if (!result.items.length || items.length >= result.total) return items;
+  }
 }
 
 export function updateSentence(

@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   getChapterAudioUrl,
   getImportedTrackCues,
-  getSentences,
+  getAllChapterSentences,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
 
@@ -315,17 +315,17 @@ function GeneratedEditionReader({
     (chapter) => chapter.id === chapterId,
   );
   const selected = selectedIndex >= 0 ? playable[selectedIndex] : null;
-  const { data, isLoading } = useQuery({
+  const { data: sentences, isLoading } = useQuery({
     queryKey: ["audiobook-reader-sentences", bookId, chapterId],
     queryFn: () => {
       if (chapterId == null) throw new Error("Choose a chapter first.");
-      return getSentences(bookId, { chapterId, limit: 1000 });
+      return getAllChapterSentences(bookId, chapterId);
     },
     enabled: chapterId != null,
   });
   const cues = useMemo(() => {
     let currentMs = 0;
-    return (data?.items || []).map((sentence) => {
+    return (sentences || []).map((sentence) => {
       const begin = currentMs;
       currentMs += sentence.audio_duration_ms || 0;
       return {
@@ -337,11 +337,21 @@ function GeneratedEditionReader({
         reading_block_type: sentence.reading_block_type,
       };
     });
-  }, [data]);
+  }, [sentences]);
   const characterNames = useMemo(
     () =>
       new Map(characters.map((character) => [character.id, character.name])),
     [characters],
+  );
+  const speakerBySentence = useMemo(
+    () =>
+      new Map(
+        (sentences || []).map((sentence) => [
+          sentence.id,
+          characterNames.get(sentence.character_id ?? -1) || "Unassigned",
+        ]),
+      ),
+    [sentences, characterNames],
   );
   const seek = (timeMs: number) => {
     if (audioRef.current) audioRef.current.currentTime = timeMs / 1000;
@@ -444,14 +454,9 @@ function GeneratedEditionReader({
             cues={cues}
             activeSentenceId={activeSentenceId}
             onSeek={seek}
-            titleForCue={(cue) => {
-              const sentence = data?.items.find(
-                (item) => item.id === cue.sentence_id,
-              );
-              return (
-                characterNames.get(sentence?.character_id ?? -1) || "Unassigned"
-              );
-            }}
+            titleForCue={(cue) =>
+              speakerBySentence.get(cue.sentence_id) || "Unassigned"
+            }
           />
         )}
       </main>

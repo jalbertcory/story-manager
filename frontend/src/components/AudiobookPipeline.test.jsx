@@ -531,6 +531,7 @@ describe("AudiobookPipeline", () => {
                   character_id: null,
                 },
               ],
+              total: 2,
             }),
         });
       }
