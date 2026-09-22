@@ -1,4 +1,4 @@
-import { api, unwrap, unwrapEmpty, unwrapOptional } from "./client";
+import { api, unwrap, unwrapEmpty, unwrapUnlessNotFound } from "./client";
 import type { Body, Query, Schemas } from "./client";
 
 type CatalogQuery = Query<"/api/books/catalog">;
@@ -101,8 +101,9 @@ export async function getAllBookCatalog(params: BookCatalogParams = {}) {
 }
 
 export function getBook(bookId: number) {
-  return unwrapOptional(
+  return unwrapUnlessNotFound(
     api.GET("/api/books/{book_id}", { params: { path: { book_id: bookId } } }),
+    "Could not load the book.",
   );
 }
 

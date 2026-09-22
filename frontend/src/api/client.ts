@@ -79,6 +79,18 @@ export async function unwrapOptional<T>(
   return result.response.ok ? (result.data ?? null) : null;
 }
 
+// Like unwrap, but a 404 resolves to null. Any other failure (a 5xx while the
+// server restarts, an expired session) still throws, so callers can keep their
+// last good data and retry instead of treating the resource as gone.
+export async function unwrapUnlessNotFound<T>(
+  request: Promise<Result<T>>,
+  fallbackMessage = "Request failed",
+): Promise<T | null> {
+  const result = await request;
+  if (result.response.status === 404) return null;
+  return unwrap(Promise.resolve(result), fallbackMessage);
+}
+
 export async function unwrapEmpty(
   request: Promise<Result<unknown>>,
   fallbackMessage = "Request failed",
