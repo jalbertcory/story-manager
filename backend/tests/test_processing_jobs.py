@@ -568,3 +568,110 @@ async def test_progress_mirror_updates_the_durable_job(monkeypatch, sqlite_sessi
         assert job.progress_current == 2
         assert job.progress_total == 5
         assert job.progress_detail == "Checked 2 of 5 books"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_tolerates_transient_database_errors(monkeypatch):
+    queue = ProcessingQueue()
+    queue._heartbeat_seconds = 0
+    queue._lease_seconds = 60
+    calls = {"count": 0}
+
+    class FlakySession:
+        async def __aenter__(self):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("database restarting")
+            return object()
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", FlakySession)
+    monkeypatch.setattr(processing_queue_module.crud, "is_processing_job_cancel_requested", AsyncMock(return_value=False))
+    monkeypatch.setattr(processing_queue_module.crud, "heartbeat_processing_job", AsyncMock(side_effect=[True, False]))
+
+    assert await queue._heartbeat(1, "owner") == "lost"
+    assert calls["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_operation_is_cancelled_when_heartbeat_raises(monkeypatch):
+    queue = ProcessingQueue()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def execute(_job):
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return "done"
+
+    async def heartbeat(_job_id, _owner):
+        await started.wait()
+        raise RuntimeError("heartbeat exploded")
+
+    monkeypatch.setattr(queue, "_execute", execute)
+    monkeypatch.setattr(queue, "_heartbeat", heartbeat)
+
+    with pytest.raises(RuntimeError, match="heartbeat exploded"):
+        await queue._execute_with_heartbeat(SimpleNamespace(id=1), "owner")
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_database_error_while_recording_failure(sqlite_sessionmaker, monkeypatch):
+    async with sqlite_sessionmaker() as db:
+        await crud.create_processing_job(db, job_type="clean_book", resource_lane="cpu")
+
+    barrier = SimpleNamespace(
+        backup_active=False,
+        # Poll once, then stop the worker on its next iteration.
+        wait_until_writes_allowed=AsyncMock(side_effect=[None, asyncio.CancelledError]),
+    )
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "backup_barrier", barrier)
+    fail = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(processing_queue_module.crud, "fail_processing_job", fail)
+    queue = ProcessingQueue()
+    queue._poll_seconds = 0
+    monkeypatch.setattr(queue, "_execute_with_heartbeat", AsyncMock(side_effect=ValueError("job failed")))
+
+    # The worker keeps looping (and reaches the next barrier wait) instead of dying.
+    with pytest.raises(asyncio.CancelledError):
+        await queue._run("cpu", 1)
+    assert fail.await_count == processing_queue_module._BOOKKEEPING_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_completed_job_is_not_failed_when_completion_commit_is_retried(sqlite_sessionmaker, monkeypatch):
+    async with sqlite_sessionmaker() as db:
+        job, _created = await crud.create_processing_job(db, job_type="clean_book", resource_lane="cpu")
+        job_id = job.id
+        claimed = await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="owner", lease_seconds=60)
+        assert claimed is not None and claimed.id == job_id
+
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    real_complete = processing_queue_module.crud.complete_processing_job
+    complete = AsyncMock(side_effect=[RuntimeError("commit failed"), None])
+
+    async def flaky_complete(*args, **kwargs):
+        await complete(*args, **kwargs)
+        return await real_complete(*args, **kwargs)
+
+    monkeypatch.setattr(processing_queue_module.crud, "complete_processing_job", flaky_complete)
+    fail = AsyncMock()
+    monkeypatch.setattr(processing_queue_module.crud, "fail_processing_job", fail)
+    queue = ProcessingQueue()
+    queue._poll_seconds = 0
+    monkeypatch.setattr(queue, "_execute_with_heartbeat", AsyncMock(return_value="Cleaned"))
+
+    await queue._process_claimed_job(claimed, "owner")
+
+    fail.assert_not_awaited()
+    async with sqlite_sessionmaker() as db:
+        finished = await db.get(ProcessingJob, job_id)
+        assert finished.status == "completed"
