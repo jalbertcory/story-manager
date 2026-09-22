@@ -14,6 +14,7 @@ from .books import (  # noqa: F401
     get_book_by_title_and_author as get_book_by_title_and_author,
     get_book_catalog as get_book_catalog,
     get_books as get_books,
+    get_books_for_file_health as get_books_for_file_health,
     get_books_by_author as get_books_by_author,
     get_books_by_ids as get_books_by_ids,
     get_books_without_series as get_books_without_series,
