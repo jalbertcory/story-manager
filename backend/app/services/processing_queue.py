@@ -251,7 +251,7 @@ class ProcessingQueue:
             logger.exception("Processing job %s (%s) failed.", job.id, job.job_type)
             error = redact_text(str(exc))
 
-            async def record_failure() -> str:
+            async def record_failure() -> str | None:
                 async with SessionLocal() as db:
                     return await crud.fail_processing_job(
                         db,
