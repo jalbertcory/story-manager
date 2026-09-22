@@ -9,7 +9,7 @@ import hmac
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Query, Request, status
@@ -33,6 +33,9 @@ ADMIN_COOKIE_SECURE_AUTO = "auto"
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+LAST_USED_UPDATE_INTERVAL = timedelta(minutes=5)
 
 
 def hash_token(token: str) -> str:
@@ -153,9 +156,15 @@ async def _get_key_by_token(db: AsyncSession, token: str) -> Optional[models.Api
     if not hmac.compare_digest(api_key.token_hash, hash_token(token)):
         return None
 
-    api_key.last_used_at = _now_utc()
-    await db.commit()
-    await db.refresh(api_key)
+    # Audio players and OPDS clients make many requests per minute; record usage
+    # at a coarse granularity instead of committing a write on every request.
+    now = _now_utc()
+    last_used = api_key.last_used_at
+    if last_used is not None and last_used.tzinfo is None:
+        last_used = last_used.replace(tzinfo=timezone.utc)
+    if last_used is None or now - last_used >= LAST_USED_UPDATE_INTERVAL:
+        api_key.last_used_at = now
+        await db.commit()
     return api_key
 
 
