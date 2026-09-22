@@ -4,6 +4,42 @@ import type { components } from "../../api/schema";
 import type { previewCleaning } from "../../api/cleaning";
 import { useEffect, useState } from "react";
 
+type EditableValues = ReturnType<typeof editableValues>;
+
+// The server-backed fields the form edits, in their form representation.
+function editableValues(book: Book) {
+  return {
+    title: book.title || "",
+    author: book.author || "",
+    series: book.series || "",
+    seriesIndex: book.series_index != null ? String(book.series_index) : "",
+    notes: book.notes || "",
+    isbn10: stringValue(book.metadata_remote_ids?.isbn_10),
+    isbn13: stringValue(book.metadata_remote_ids?.isbn_13),
+    asin: stringValue(book.metadata_remote_ids?.asin),
+    googleBooksVolumeId: stringValue(
+      book.metadata_remote_ids?.google_books_volume_id,
+    ),
+    openLibraryWorkKey: stringValue(
+      book.metadata_remote_ids?.open_library_work_key,
+    ),
+    openLibraryEditionKey: stringValue(
+      book.metadata_remote_ids?.open_library_edition_key,
+    ),
+    openLibraryAuthorKey: stringValue(
+      book.metadata_remote_ids?.open_library_author_key,
+    ),
+    otherRemoteIdsJson: splitRemoteIds(book.metadata_remote_ids).extrasJson,
+    userGenreTags: (book.user_genre_tags || []).join(", "),
+    removedChapters: book.removed_chapters || [],
+    contentSelectors: book.content_selectors || [],
+  };
+}
+
+function sameValues(left: EditableValues, right: EditableValues): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 import { splitRemoteIds } from "./remoteIds";
 
 export function useBookSettingsForm(initialBook: Book) {
@@ -56,42 +92,61 @@ export function useBookSettingsForm(initialBook: Book) {
   const [chapterPreviewMode, setChapterPreviewMode] = useState("original");
   const [identifiersExpanded, setIdentifiersExpanded] = useState(false);
 
-  useEffect(() => {
-    setTitle(initialBook.title || "");
-    setAuthor(initialBook.author || "");
-    setSeries(initialBook.series || "");
-    setSeriesIndex(
-      initialBook.series_index != null ? String(initialBook.series_index) : "",
-    );
-    setNotes(initialBook.notes || "");
-    setIsbn10(stringValue(initialBook.metadata_remote_ids?.isbn_10));
-    setIsbn13(stringValue(initialBook.metadata_remote_ids?.isbn_13));
-    setAsin(stringValue(initialBook.metadata_remote_ids?.asin));
-    setGoogleBooksVolumeId(
-      stringValue(initialBook.metadata_remote_ids?.google_books_volume_id),
-    );
-    setOpenLibraryWorkKey(
-      stringValue(initialBook.metadata_remote_ids?.open_library_work_key),
-    );
-    setOpenLibraryEditionKey(
-      stringValue(initialBook.metadata_remote_ids?.open_library_edition_key),
-    );
-    setOpenLibraryAuthorKey(
-      stringValue(initialBook.metadata_remote_ids?.open_library_author_key),
-    );
-    setOtherRemoteIdsJson(
-      splitRemoteIds(initialBook.metadata_remote_ids).extrasJson,
-    );
-    setIdentifierError("");
-    setUserGenreTags((initialBook.user_genre_tags || []).join(", "));
-    setRemovedChapters(initialBook.removed_chapters || []);
-    setContentSelectors(initialBook.content_selectors || []);
-    setPreviewResult(null);
-    setChapterSearch("");
-    setChaptersExpanded(false);
-    setChapterPreviewMode("original");
-    setIdentifiersExpanded(false);
-  }, [initialBook]);
+  const currentValues: EditableValues = {
+    title,
+    author,
+    series,
+    seriesIndex,
+    notes,
+    isbn10,
+    isbn13,
+    asin,
+    googleBooksVolumeId,
+    openLibraryWorkKey,
+    openLibraryEditionKey,
+    openLibraryAuthorKey,
+    otherRemoteIdsJson,
+    userGenreTags,
+    removedChapters,
+    contentSelectors,
+  };
+  // The book the form was last synchronized with. Background refetches (refresh
+  // polling, cover changes) replace the book object; they must not discard
+  // edits the user has not saved yet.
+  const [seededBook, setSeededBook] = useState(initialBook);
+  const isDirty = !sameValues(currentValues, editableValues(seededBook));
+
+  if (initialBook !== seededBook) {
+    const differentBook = initialBook.id !== seededBook.id;
+    setSeededBook(initialBook);
+    if (differentBook || !isDirty) {
+      const next = editableValues(initialBook);
+      setTitle(next.title);
+      setAuthor(next.author);
+      setSeries(next.series);
+      setSeriesIndex(next.seriesIndex);
+      setNotes(next.notes);
+      setIsbn10(next.isbn10);
+      setIsbn13(next.isbn13);
+      setAsin(next.asin);
+      setGoogleBooksVolumeId(next.googleBooksVolumeId);
+      setOpenLibraryWorkKey(next.openLibraryWorkKey);
+      setOpenLibraryEditionKey(next.openLibraryEditionKey);
+      setOpenLibraryAuthorKey(next.openLibraryAuthorKey);
+      setOtherRemoteIdsJson(next.otherRemoteIdsJson);
+      setUserGenreTags(next.userGenreTags);
+      setRemovedChapters(next.removedChapters);
+      setContentSelectors(next.contentSelectors);
+    }
+    if (differentBook) {
+      setIdentifierError("");
+      setPreviewResult(null);
+      setChapterSearch("");
+      setChaptersExpanded(false);
+      setChapterPreviewMode("original");
+      setIdentifiersExpanded(false);
+    }
+  }
 
   useEffect(() => {
     setPreviewResult(null);
@@ -197,5 +252,6 @@ export function useBookSettingsForm(initialBook: Book) {
     identifiersExpanded,
     setIdentifiersExpanded,
     getUpdatedFields,
+    isDirty,
   };
 }
