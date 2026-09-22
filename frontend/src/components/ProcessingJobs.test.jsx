@@ -1,4 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProcessingJobs from "./ProcessingJobs";
@@ -105,5 +111,55 @@ describe("ProcessingJobs", () => {
     expect(panel).not.toHaveAttribute("open");
     fireEvent.click(summary.closest("summary"));
     expect(panel).toHaveAttribute("open");
+  });
+
+  it("confirms library-wide jobs before queueing them", async () => {
+    const posts = [];
+    const listFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, options) => {
+      if (options?.method === "POST") {
+        posts.push(JSON.parse(options.body));
+        return Response.json({ jobs: [] });
+      }
+      return listFetch(url, options);
+    });
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clean entire library" }),
+    );
+    const cleanDialog = screen.getByRole("dialog", {
+      name: "Clean the entire library?",
+    });
+    expect(posts).toEqual([]);
+
+    fireEvent.click(
+      within(cleanDialog).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(posts).toEqual([]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh all web books" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Refresh all web books?",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Refresh all web books" }),
+    );
+
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          job_type: "refresh_all",
+          book_ids: [],
+          payload: { trigger: "manual" },
+        },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
   });
 });
