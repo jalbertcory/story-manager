@@ -1,7 +1,7 @@
 import { displayValue, stringValue } from "../lib/errors";
 import type { Book, BookSectionChange } from "../types";
 import type { components } from "../api/schema";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AudiobookPipeline from "./AudiobookPipeline";
 
@@ -194,7 +194,25 @@ function BookSettings({
     identifiersExpanded,
     setIdentifiersExpanded,
     getUpdatedFields,
+    isDirty,
   } = useBookSettingsForm(initialBook);
+
+  // Warn before a reload or tab close discards unsaved edits.
+  useEffect(() => {
+    if (!isDirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isDirty]);
+
+  const leaveSettings = () => {
+    if (
+      isDirty &&
+      !window.confirm("You have unsaved changes to this book. Discard them?")
+    )
+      return;
+    onBack();
+  };
   const [previewedChapter, setPreviewedChapter] = useState<string | null>(null);
   const [internalBookTab, setInternalBookTab] = useState("details");
   const bookTab = bookSection
@@ -507,7 +525,7 @@ function BookSettings({
       <div className="settings-header">
         <button
           className="btn-text"
-          onClick={onBack}
+          onClick={leaveSettings}
           disabled={
             saveMutation.isPending ||
             processMutation.isPending ||

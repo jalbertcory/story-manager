@@ -229,12 +229,25 @@ export default function App() {
   const renderContent = () => {
     if (isBook) {
       if (bookQuery.isLoading) return <p role="status">Loading book…</p>;
-      if (bookQuery.error || !bookQuery.data)
+      // A failed background refetch keeps the last good data on screen; only a
+      // missing book or a failed first load replaces the page.
+      if (!bookQuery.data) {
+        if (bookQuery.error)
+          return (
+            <p role="alert">
+              This book could not be loaded: {bookQuery.error.message}{" "}
+              <button type="button" onClick={() => void bookQuery.refetch()}>
+                Try again
+              </button>{" "}
+              <a href="/">Return to library</a>
+            </p>
+          );
         return (
           <p role="alert">
-            This book could not be loaded. <a href="/">Return to library</a>
+            This book no longer exists. <a href="/">Return to library</a>
           </p>
         );
+      }
       const book = bookQuery.data;
       if (route.bookSection === "overview")
         return (

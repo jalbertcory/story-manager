@@ -12,6 +12,24 @@ import {
 } from "../api/processing";
 
 import { JOB_LABELS } from "../lib/processing";
+import ConfirmActionDialog from "./ConfirmActionDialog";
+
+// Library-wide jobs touch every book, so they are confirmed before queueing.
+const LIBRARY_ACTIONS = {
+  clean_all: {
+    label: "Clean entire library",
+    title: "Clean the entire library?",
+    description:
+      "Every book with cleaning rules is rebuilt from its original EPUB using the current rules. This can take a long time on a large library.",
+  },
+  refresh_all: {
+    label: "Refresh all web books",
+    title: "Refresh all web books?",
+    description:
+      "Every web book is checked against its source site for new chapters. This sends requests to each source and can take a long time.",
+  },
+} as const;
+type LibraryAction = keyof typeof LIBRARY_ACTIONS;
 
 const QUEUE_OPERATIONS = [
   { value: "clean_book", label: "Clean selected books" },
@@ -91,6 +109,8 @@ function ProcessingJobs() {
   const debouncedBookSearch = useDebouncedValue(bookSearch.trim(), 250);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [queueNotice, setQueueNotice] = useState("");
+  const [pendingLibraryAction, setPendingLibraryAction] =
+    useState<LibraryAction | null>(null);
   const statuses =
     statusFilter === "active"
       ? (processingLifecycle?.active_states ?? []).join(",")
@@ -151,6 +171,7 @@ function ProcessingJobs() {
         `${count} processing job${count === 1 ? "" : "s"} queued.`,
       );
       setSelectedIds([]);
+      setPendingLibraryAction(null);
       refresh();
     },
   });
@@ -206,31 +227,56 @@ function ProcessingJobs() {
           </span>
         </summary>
         <div className="processing-quick-actions">
-          <button
-            onClick={() =>
-              queueMutation.mutate({
-                job_type: "clean_all",
-                book_ids: [],
-                payload: {},
-              })
-            }
-            disabled={queueMutation.isPending}
-          >
-            Clean entire library
-          </button>
-          <button
-            onClick={() =>
-              queueMutation.mutate({
-                job_type: "refresh_all",
-                book_ids: [],
-                payload: { trigger: "manual" },
-              })
-            }
-            disabled={queueMutation.isPending}
-          >
-            Refresh all web books
-          </button>
+          {(Object.keys(LIBRARY_ACTIONS) as LibraryAction[]).map((action) => (
+            <button
+              key={action}
+              onClick={() => {
+                queueMutation.reset();
+                setPendingLibraryAction(action);
+              }}
+              disabled={queueMutation.isPending}
+            >
+              {LIBRARY_ACTIONS[action].label}
+            </button>
+          ))}
         </div>
+        <ConfirmActionDialog
+          open={pendingLibraryAction !== null}
+          title={
+            pendingLibraryAction
+              ? LIBRARY_ACTIONS[pendingLibraryAction].title
+              : ""
+          }
+          confirmLabel={
+            pendingLibraryAction
+              ? LIBRARY_ACTIONS[pendingLibraryAction].label
+              : ""
+          }
+          busyLabel="Queueing…"
+          isPending={queueMutation.isPending}
+          onCancel={() => setPendingLibraryAction(null)}
+          onConfirm={() => {
+            if (!pendingLibraryAction) return;
+            queueMutation.mutate(
+              pendingLibraryAction === "refresh_all"
+                ? {
+                    job_type: "refresh_all",
+                    book_ids: [],
+                    payload: { trigger: "manual" },
+                  }
+                : { job_type: "clean_all", book_ids: [], payload: {} },
+            );
+          }}
+        >
+          {pendingLibraryAction && (
+            <p>{LIBRARY_ACTIONS[pendingLibraryAction].description}</p>
+          )}
+          {queueMutation.error && (
+            <p className="error" role="alert">
+              {queueMutation.error.message}
+            </p>
+          )}
+        </ConfirmActionDialog>
         <div className="processing-book-picker">
           <label>
             Action

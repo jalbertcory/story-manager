@@ -933,6 +933,7 @@ async def upload_imported_audiobook(
     edition_dir = imported_audiobook_dir(book_id, edition.id)
     incoming_dir = edition_dir / "incoming"
     remaining = MAX_AUDIOBOOK_UPLOAD_BYTES
+    upload_complete = False
     try:
         for upload in files:
             destination = incoming_dir / safe_import_filename(upload.filename or "audiobook")
@@ -940,6 +941,7 @@ async def upload_imported_audiobook(
                 destination = incoming_dir / f"{destination.stem}-{len(list(incoming_dir.glob('*'))) + 1}{destination.suffix}"
             written = await stream_upload_to_path(upload, destination, remaining)
             remaining -= written
+        upload_complete = True
         edition.progress_detail = "Queued for import"
         await db.commit()
         await queue_processing_job(
@@ -963,6 +965,11 @@ async def upload_imported_audiobook(
         )
         edition.error = str(exc)
         edition.progress_detail = "Upload failed"
+        if not upload_complete:
+            # Discard files from an interrupted multi-file upload so a retry
+            # cannot import an incomplete set of tracks as the whole book.
+            shutil.rmtree(incoming_dir, ignore_errors=True)
+            incoming_dir.mkdir(parents=True, exist_ok=True)
         await db.commit()
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     return await _imported_audiobook_response(edition, db)

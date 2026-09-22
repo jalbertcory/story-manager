@@ -131,6 +131,17 @@ describe("OpenAPI HTTP transport", () => {
     await expect(getBook(12)).resolves.toBeNull();
   });
 
+  it("surfaces book load failures other than not-found", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ detail: "Bad gateway" }, { status: 502 }),
+      ),
+    );
+
+    await expect(getBook(12)).rejects.toThrow("Bad gateway");
+  });
+
   it("reports structured API validation errors", async () => {
     vi.stubGlobal(
       "fetch",

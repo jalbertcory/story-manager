@@ -584,15 +584,24 @@ async def stream_upload_to_path(upload: UploadFile, destination: Path, remaining
     """Stream an UploadFile to disk without retaining a multi-GB book in memory."""
     written = 0
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("wb") as handle:
-        while True:
-            chunk = await upload.read(UPLOAD_CHUNK_BYTES)
-            if not chunk:
-                return written
-            written += len(chunk)
-            if written > remaining_bytes:
-                raise ValueError("Audiobook upload exceeds the 8 GB per-import limit.")
-            handle.write(chunk)
+    # Stream to a ".part" name (never picked up as source audio) and publish only
+    # a complete file, so a failed upload cannot be imported as truncated audio.
+    partial = destination.with_name(f"{destination.name}.part")
+    try:
+        with partial.open("wb") as handle:
+            while True:
+                chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > remaining_bytes:
+                    raise ValueError("Audiobook upload exceeds the 8 GB per-import limit.")
+                handle.write(chunk)
+        partial.replace(destination)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return written
 
 
 def _safe_zip_entries(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
@@ -634,17 +643,32 @@ def _extract_archive_sources(archive_path: Path, source_dir: Path) -> tuple[list
             raise ValueError(f"{archive_path.name} contains no supported audio files.")
 
         selected_audio = _preferred_audio_files(audio_entries, lambda entry: Path(entry.filename))
-        audio_paths: list[Path] = []
-        cue_paths: list[Path] = []
+        # Extract into a staging directory first. Retries reuse whatever audio is
+        # already in source_dir, so a partially extracted archive must never land
+        # there: it would silently become the immutable source.
+        staging_dir = source_dir / ".extracting"
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True)
+        staged_audio: list[Path] = []
+        staged_cues: list[Path] = []
         for entry in selected_audio:
-            destination = _unique_destination(source_dir, entry.filename)
+            destination = _unique_destination(staging_dir, entry.filename)
             _copy_zip_entry(archive, entry, destination)
-            audio_paths.append(destination)
+            staged_audio.append(destination)
         for entry in cue_entries:
-            destination = _unique_destination(source_dir, entry.filename)
+            destination = _unique_destination(staging_dir, entry.filename)
             _copy_zip_entry(archive, entry, destination)
-            cue_paths.append(destination)
-        return audio_paths, cue_paths
+            staged_cues.append(destination)
+
+    def publish(staged: Path) -> Path:
+        destination = _unique_destination(source_dir, staged.name)
+        staged.replace(destination)
+        return destination
+
+    audio_paths = [publish(path) for path in staged_audio]
+    cue_paths = [publish(path) for path in staged_cues]
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    return audio_paths, cue_paths
 
 
 T = TypeVar("T")
