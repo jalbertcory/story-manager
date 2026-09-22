@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationInfo
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
@@ -55,6 +57,28 @@ COOLDOWN_SECONDS = 60.0
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+class EndpointsCoolingDown(RuntimeError):
+    """Every configured endpoint is cooling down; callers may wait and retry."""
+
+    def __init__(self, capability: str, retry_after: float) -> None:
+        self.retry_after = max(1.0, retry_after)
+        super().__init__(
+            f"All {capability} endpoints are cooling down after failures; " f"retry in {round(self.retry_after)} seconds."
+        )
+
+
+def _indicates_unhealthy_endpoint(exc: Exception) -> bool:
+    """Treat every failure except a client-side HTTP rejection as an unhealthy host.
+
+    A 4xx response (for example one malformed sentence) is a problem with the
+    request, and cooling the endpoint would fail unrelated work that follows.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        return status_code >= 500 or status_code == 429
+    return True
 
 
 @dataclass(frozen=True)
@@ -275,9 +299,7 @@ async def route_request(
     available = [endpoint for endpoint in endpoints if cooldown_remaining(capability, endpoint) <= 0]
     if not available:
         wait_seconds = min(cooldown_remaining(capability, endpoint) for endpoint in endpoints)
-        raise RuntimeError(
-            f"All {capability} endpoints are cooling down after failures; retry in {max(1, round(wait_seconds))} seconds."
-        )
+        raise EndpointsCoolingDown(capability, wait_seconds)
 
     last_error: Exception | None = None
     for endpoint in available:
@@ -294,14 +316,22 @@ async def route_request(
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 error_type=type(exc).__name__,
             )
-            _cooldowns[key] = time.monotonic() + COOLDOWN_SECONDS
-            logger.warning(
-                "%s endpoint %r failed and will cool down for %.0f seconds: %s",
-                capability.upper(),
-                endpoint.name or endpoint.base_url or endpoint.id,
-                COOLDOWN_SECONDS,
-                exc,
-            )
+            if _indicates_unhealthy_endpoint(exc):
+                _cooldowns[key] = time.monotonic() + COOLDOWN_SECONDS
+                logger.warning(
+                    "%s endpoint %r failed and will cool down for %.0f seconds: %s",
+                    capability.upper(),
+                    endpoint.name or endpoint.base_url or endpoint.id,
+                    COOLDOWN_SECONDS,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "%s endpoint %r rejected the request: %s",
+                    capability.upper(),
+                    endpoint.name or endpoint.base_url or endpoint.id,
+                    exc,
+                )
             last_error = exc
             continue
         await _record_endpoint_attempt(

@@ -80,7 +80,7 @@ async def test_all_cooling_endpoints_fail_fast(monkeypatch):
 
     with pytest.raises(RuntimeError, match="offline"):
         await endpoint_pool.route_request(settings, "tts", fail)
-    with pytest.raises(RuntimeError, match="All tts endpoints are cooling down"):
+    with pytest.raises(endpoint_pool.EndpointsCoolingDown, match="All tts endpoints are cooling down"):
         await endpoint_pool.route_request(settings, "tts", fail)
 
 
@@ -368,3 +368,53 @@ async def test_tts_pool_test_api_returns_each_endpoint_result(
             "audio_bytes": 3,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_client_errors_do_not_cool_down_the_endpoint(monkeypatch):
+    now = 3000.0
+    monkeypatch.setattr(endpoint_pool.time, "monotonic", lambda: now)
+    settings = models.AudiobookSettings(
+        tts_endpoints=[{"id": "one", "name": "One", "provider": "omnivoice", "base_url": "http://one"}]
+    )
+    request = httpx.Request("POST", "http://one/tts")
+
+    async def reject(_endpoint_settings):
+        raise httpx.HTTPStatusError("bad sentence", request=request, response=httpx.Response(422, request=request))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await endpoint_pool.route_request(settings, "tts", reject)
+    assert endpoint_pool.cooldown_remaining("tts", endpoint_pool.configured_endpoints(settings, "tts")[0]) == 0
+
+    async def unavailable(_endpoint_settings):
+        raise httpx.HTTPStatusError("busy", request=request, response=httpx.Response(503, request=request))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await endpoint_pool.route_request(settings, "tts", unavailable)
+    with pytest.raises(endpoint_pool.EndpointsCoolingDown) as cooling:
+        await endpoint_pool.route_request(settings, "tts", unavailable)
+    assert cooling.value.retry_after == endpoint_pool.COOLDOWN_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_tts_retries_wait_out_endpoint_cooldown(monkeypatch):
+    from backend.app.services import audiobook_tts
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    outcomes = [endpoint_pool.EndpointsCoolingDown("tts", 42), "audio"]
+
+    async def synthesize(_settings, _request):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(audiobook_tts.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(audiobook_tts, "synthesize_speech_result", synthesize)
+
+    assert await audiobook_tts._synthesize_with_retries(None, 1, object()) == "audio"
+    assert sleeps == [42]
