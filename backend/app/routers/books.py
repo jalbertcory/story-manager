@@ -1,5 +1,6 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
+import asyncio
 from pydantic import ValidationError
 from ..book_snapshots import BookSnapshot
 from .. import api_schemas as contracts
@@ -447,8 +448,8 @@ async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)
     book.removed_chapters = []
     book.content_selectors = []
     current_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(immutable_path, current_path)
-    book.current_word_count = epub_editor.get_word_count(str(current_path))
+    await asyncio.to_thread(shutil.copy2, immutable_path, current_path)
+    book.current_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(current_path))
     await crud.touch_book_content(db, book)
     await db.commit()
     await db.refresh(book)
@@ -467,7 +468,7 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)) ->
     if not epub_path.exists():
         raise HTTPException(status_code=404, detail="EPUB file not found")
 
-    return epub_editor.get_chapters(str(epub_path))
+    return await asyncio.to_thread(epub_editor.get_chapters, str(epub_path))
 
 
 @router.get("/api/books/{book_id}/cleaned-chapters", response_model=list[epub_editor.EpubChapter])
@@ -482,7 +483,7 @@ async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get
     if not epub_path.exists():
         raise HTTPException(status_code=404, detail="Cleaned EPUB file not found")
 
-    return epub_editor.get_chapters(str(epub_path))
+    return await asyncio.to_thread(epub_editor.get_chapters, str(epub_path))
 
 
 @router.get(
