@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from typing import Awaitable, Callable, TypeVar, TypedDict
 from uuid import uuid4
 
@@ -69,6 +70,7 @@ class WorkerHealth(TypedDict):
 
 
 logger = logging.getLogger(__name__)
+_BOOKKEEPING_ATTEMPTS = 3
 
 _Result = TypeVar("_Result")
 
@@ -222,35 +224,75 @@ class ProcessingQueue:
                     pass
                 continue
 
-            if backup_barrier.backup_active and job.job_type != "create_backup":
-                async with SessionLocal() as db:
-                    await crud.defer_processing_job_for_backup(db, job.id, lease_owner=lease_owner)
-                await backup_barrier.wait_until_writes_allowed()
-                self._wake.set()
-                continue
+            try:
+                if backup_barrier.backup_active and job.job_type != "create_backup":
+                    async with SessionLocal() as db:
+                        await crud.defer_processing_job_for_backup(db, job.id, lease_owner=lease_owner)
+                    await backup_barrier.wait_until_writes_allowed()
+                    self._wake.set()
+                    continue
 
-            with correlation_context(request_id=job.request_id, job_id=job.id):
-                try:
-                    detail = await self._execute_with_heartbeat(job, lease_owner)
-                    async with SessionLocal() as db:
-                        if await crud.is_processing_job_cancel_requested(db, job.id):
-                            await crud.mark_processing_job_canceled(db, job.id)
-                        else:
-                            await crud.complete_processing_job(db, job.id, detail, lease_owner=lease_owner)
-                except asyncio.CancelledError:
+                with correlation_context(request_id=job.request_id, job_id=job.id):
+                    await self._process_claimed_job(job, lease_owner)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Bookkeeping failures (usually a database outage) must never end
+                # the worker: the lease expires and recovery reclaims the job.
+                logger.exception("Processing %s worker could not record the outcome of job %s.", lane, job.id)
+                await asyncio.sleep(self._poll_seconds)
+
+    async def _process_claimed_job(self, job: ProcessingJob, lease_owner: str) -> None:
+        try:
+            detail = await self._execute_with_heartbeat(job, lease_owner)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Processing job %s (%s) failed.", job.id, job.job_type)
+            error = redact_text(str(exc))
+
+            async def record_failure() -> str | None:
+                async with SessionLocal() as db:
+                    return await crud.fail_processing_job(
+                        db,
+                        job.id,
+                        error,
+                        lease_owner=lease_owner,
+                        retry_backoff_seconds=self._retry_backoff_seconds,
+                    )
+
+            if await self._retry_bookkeeping(record_failure) == "queued":
+                self._wake.set()
+            return
+
+        async def record_completion() -> None:
+            async with SessionLocal() as db:
+                if await crud.is_processing_job_cancel_requested(db, job.id):
+                    await crud.mark_processing_job_canceled(db, job.id)
+                else:
+                    await crud.complete_processing_job(db, job.id, detail, lease_owner=lease_owner)
+
+        # A finished job must not be recorded as failed (and re-run) just
+        # because the database was briefly unavailable when it completed.
+        await self._retry_bookkeeping(record_completion)
+
+    async def _retry_bookkeeping(self, operation: Callable[[], Awaitable[_Result]]) -> _Result:
+        for attempt in range(1, _BOOKKEEPING_ATTEMPTS + 1):
+            try:
+                return await operation()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if attempt == _BOOKKEEPING_ATTEMPTS:
                     raise
-                except Exception as exc:
-                    logger.exception("Processing job %s (%s) failed.", job.id, job.job_type)
-                    async with SessionLocal() as db:
-                        status = await crud.fail_processing_job(
-                            db,
-                            job.id,
-                            redact_text(str(exc)),
-                            lease_owner=lease_owner,
-                            retry_backoff_seconds=self._retry_backoff_seconds,
-                        )
-                    if status == "queued":
-                        self._wake.set()
+                logger.warning(
+                    "Recording a processing job outcome failed; retrying (%d/%d).",
+                    attempt + 1,
+                    _BOOKKEEPING_ATTEMPTS,
+                    exc_info=True,
+                )
+                await asyncio.sleep(self._poll_seconds * attempt)
+        raise AssertionError("unreachable")
 
     async def _execute_with_heartbeat(self, job: ProcessingJob, lease_owner: str) -> str:
         operation = asyncio.create_task(self._execute(job), name=f"processing-operation-{job.id}")
@@ -268,28 +310,42 @@ class ProcessingQueue:
             if reason == "canceled":
                 raise RuntimeError("Processing job was canceled.")
             raise RuntimeError("Processing job lease ownership was lost.")
-        except asyncio.CancelledError:
-            operation.cancel()
-            await asyncio.gather(operation, return_exceptions=True)
-            raise
         finally:
+            # Never leave the operation running once this method exits, whatever
+            # the reason; otherwise a retry would run a second copy concurrently.
+            if not operation.done():
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
 
     async def _heartbeat(self, job_id: int, lease_owner: str) -> str:
+        last_renewed = time.monotonic()
         while True:
             await asyncio.sleep(self._heartbeat_seconds)
-            async with SessionLocal() as db:
-                if await crud.is_processing_job_cancel_requested(db, job_id):
-                    return "canceled"
-                renewed = await crud.heartbeat_processing_job(
-                    db,
-                    job_id,
-                    lease_owner=lease_owner,
-                    lease_seconds=self._lease_seconds,
-                )
+            try:
+                async with SessionLocal() as db:
+                    if await crud.is_processing_job_cancel_requested(db, job_id):
+                        return "canceled"
+                    renewed = await crud.heartbeat_processing_job(
+                        db,
+                        job_id,
+                        lease_owner=lease_owner,
+                        lease_seconds=self._lease_seconds,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Tolerate transient database errors until the lease could have
+                # expired; after that another worker may already own the job.
+                if time.monotonic() - last_renewed >= self._lease_seconds:
+                    logger.exception("Processing job %s heartbeat failed until its lease expired.", job_id)
+                    return "lost"
+                logger.warning("Processing job %s heartbeat failed; retrying.", job_id, exc_info=True)
+                continue
             if not renewed:
                 return "lost"
+            last_renewed = time.monotonic()
 
     async def _execute(self, job: ProcessingJob) -> str:
         validate_job_payload(job.job_type, job.payload)
@@ -678,23 +734,29 @@ class ProcessingQueue:
                 try:
                     await asyncio.wait_for(asyncio.shield(pipeline_task), timeout=1)
                 except asyncio.TimeoutError:
-                    async with SessionLocal() as db:
-                        book = await db.get(Book, job.book_id)
-                        if book is not None:
-                            await crud.update_processing_job_progress(
-                                db,
-                                job.id,
-                                current=book.audiobook_progress_current or 0,
-                                total=book.audiobook_progress_total or 0,
-                                detail=book.audiobook_progress_detail or f"Audiobook phase: {book.audiobook_pipeline_status}",
-                            )
-                        if await crud.is_processing_job_cancel_requested(db, job.id):
-                            await crud.audiobook.request_book_pipeline_pause(db, book_id)
+                    try:
+                        async with SessionLocal() as db:
+                            book = await db.get(Book, job.book_id)
+                            if book is not None:
+                                await crud.update_processing_job_progress(
+                                    db,
+                                    job.id,
+                                    current=book.audiobook_progress_current or 0,
+                                    total=book.audiobook_progress_total or 0,
+                                    detail=book.audiobook_progress_detail
+                                    or f"Audiobook phase: {book.audiobook_pipeline_status}",
+                                )
+                            if await crud.is_processing_job_cancel_requested(db, job.id):
+                                await crud.audiobook.request_book_pipeline_pause(db, book_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.warning("Could not mirror audiobook progress for job %s.", job.id, exc_info=True)
             await pipeline_task
-        except asyncio.CancelledError:
-            pipeline_task.cancel()
-            await asyncio.gather(pipeline_task, return_exceptions=True)
-            raise
+        finally:
+            if not pipeline_task.done():
+                pipeline_task.cancel()
+                await asyncio.gather(pipeline_task, return_exceptions=True)
         async with SessionLocal() as db:
             book = await db.get(Book, job.book_id)
             if book is not None and book.audiobook_pipeline_status == "error":
@@ -716,16 +778,29 @@ class ProcessingQueue:
                 try:
                     await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
                 except asyncio.TimeoutError:
-                    current, total, detail = await snapshot()
-                    await self._update_progress(job_id, current, total, detail)
+                    await self._mirror_progress(job_id, snapshot)
             result = await task
+            await self._mirror_progress(job_id, snapshot)
+            return result
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _mirror_progress(
+        self,
+        job_id: int,
+        snapshot: Callable[[], Awaitable[tuple[int, int, str | None]]],
+    ) -> None:
+        # Progress is informational; a transient database error must not fail
+        # (or orphan) the operation it describes.
+        try:
             current, total, detail = await snapshot()
             await self._update_progress(job_id, current, total, detail)
-            return result
         except asyncio.CancelledError:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
             raise
+        except Exception:
+            logger.warning("Could not mirror progress for processing job %s.", job_id, exc_info=True)
 
     async def _update_progress(
         self,

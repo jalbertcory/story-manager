@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import filecmp
 from pathlib import Path
@@ -329,11 +330,12 @@ async def apply_book_cleaning(
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path
 
-    if not has_rules and _files_match(immutable_path, current_path):
+    if not has_rules and await asyncio.to_thread(_files_match, immutable_path, current_path):
         return False
 
     try:
-        word_count = process_epub(
+        word_count = await asyncio.to_thread(
+            process_epub,
             str(immutable_path),
             str(current_path),
             removed_chapters,

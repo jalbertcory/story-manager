@@ -21,7 +21,7 @@ from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
 from .audiobook_text import split_speech_segments
-from .endpoint_pool import ProviderSettings, settings_for_provider
+from .endpoint_pool import EndpointsCoolingDown, ProviderSettings, settings_for_provider
 from .tts_providers import (
     DEFAULT_VOICE_PROMPT,
     TTSRequest,
@@ -437,6 +437,12 @@ async def _synthesize_with_retries(
                 status_code or "unknown",
                 attempt + 1,
             )
+        except EndpointsCoolingDown as exc:
+            if attempt == 3:
+                raise
+            logger.warning("%s; waiting before retry (%d/3).", exc, attempt + 1)
+            await asyncio.sleep(exc.retry_after)
+            continue
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             if attempt == 3:
                 raise
@@ -472,6 +478,12 @@ async def _synthesize_batch_with_retries(
                 status_code or "unknown",
                 attempt + 1,
             )
+        except EndpointsCoolingDown as exc:
+            if attempt == 3:
+                raise
+            logger.warning("%s; waiting before retry (%d/3).", exc, attempt + 1)
+            await asyncio.sleep(exc.retry_after)
+            continue
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             if attempt == 3:
                 raise

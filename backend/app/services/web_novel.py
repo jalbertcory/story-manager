@@ -591,10 +591,10 @@ async def download_web_novel(
             detail="FanFicFare ran but no new or updated EPUB file was found.",
         )
     new_epub_path = updated_epub_path or changed_epubs[0]
-    normalize_epub_prose_blocks(new_epub_path)
+    await asyncio.to_thread(normalize_epub_prose_blocks, new_epub_path)
 
     try:
-        return new_epub_path, _read_epub_metadata(new_epub_path)
+        return new_epub_path, await asyncio.to_thread(_read_epub_metadata, new_epub_path)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -631,10 +631,10 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
 
             immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
             new_epub_path.rename(immutable_path)
-            shutil.copyfile(immutable_path, current_path)
+            await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
 
-            master_word_count = epub_editor.get_word_count(str(immutable_path))
-            _, chapter_count = get_epub_word_and_chapter_count(current_path)
+            master_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(immutable_path))
+            _, chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
 
             db_book.title = metadata["title"]
             db_book.author = metadata["author"]
@@ -647,7 +647,7 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
             db_book.current_word_count = master_word_count
             await crud.touch_book_content(db, db_book)
 
-            cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+            cover_path = await asyncio.to_thread(get_and_save_epub_cover, epub_path=immutable_path, book_id=db_book.id)
             if cover_path is None:
                 cover_path = await collect_cover(source_url, db_book.id)
             if cover_path:
@@ -720,9 +720,9 @@ async def run_book_refresh(book_id: int) -> None:
 
                 immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
                 new_epub_path.rename(immutable_path)
-                shutil.copyfile(immutable_path, current_path)
+                await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
 
-                new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
+                new_word_count, new_chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
                 update_data = schemas.BookUpdate(**metadata)
                 updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
                 updated_book.removed_chapters = []
@@ -754,7 +754,7 @@ async def run_book_refresh(book_id: int) -> None:
             immutable_path = LIBRARY_PATH.parent / db_book.immutable_path
             current_path = LIBRARY_PATH.parent / db_book.current_path
 
-            old_word_count, old_chapter_count = get_epub_word_and_chapter_count(current_path)
+            old_word_count, old_chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
             result = await download_web_novel(db_book.source_url, overwrite=True, existing_epub_path=immutable_path)
             if result is None:
                 raise RuntimeError("FanFicFare did not update the existing EPUB during refresh.")
@@ -762,9 +762,9 @@ async def run_book_refresh(book_id: int) -> None:
 
             if new_epub_path != immutable_path:
                 new_epub_path.rename(immutable_path)
-            shutil.copyfile(immutable_path, current_path)
+            await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
 
-            new_word_count, new_chapter_count = get_epub_word_and_chapter_count(current_path)
+            new_word_count, new_chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
 
             if new_chapter_count > old_chapter_count:
                 logger.info(
@@ -849,7 +849,8 @@ async def update_web_novels() -> None:
                 immutable_path = LIBRARY_PATH.parent / book.immutable_path
                 current_path = LIBRARY_PATH.parent / book.current_path
 
-                old_word_count, old_chapter_count = get_epub_word_and_chapter_count(immutable_path)
+                old_counts = await asyncio.to_thread(get_epub_word_and_chapter_count, immutable_path)
+                old_word_count, old_chapter_count = old_counts
                 result = await download_web_novel(book.source_url, existing_epub_path=immutable_path)
 
                 if result is None:
@@ -867,9 +868,9 @@ async def update_web_novels() -> None:
                 new_epub_path, _ = result
                 if new_epub_path != immutable_path:
                     new_epub_path.rename(immutable_path)
-                shutil.copyfile(immutable_path, current_path)
+                await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
 
-                new_word_count, new_chapter_count = get_epub_word_and_chapter_count(immutable_path)
+                new_word_count, new_chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, immutable_path)
 
                 if new_chapter_count > old_chapter_count:
                     logger.info(f"Found {new_chapter_count - old_chapter_count} new chapters for {book.title}.")

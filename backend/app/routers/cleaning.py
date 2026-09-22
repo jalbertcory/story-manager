@@ -1,3 +1,4 @@
+import asyncio
 from ..job_payloads import CleanAllPayload
 
 """Cleaning configuration, preview, and durable processing endpoints."""
@@ -113,7 +114,9 @@ async def preview_cleaning(
         config_content_selectors += list(cfg.content_selectors or [])
     all_content_selectors = config_content_selectors + req.content_selectors
     immutable_path = LIBRARY_PATH.parent / db_book.immutable_path
-    return epub_editor.preview_epub(str(immutable_path), req.removed_chapters, all_content_selectors, chapter_selectors)
+    return await asyncio.to_thread(
+        epub_editor.preview_epub, str(immutable_path), req.removed_chapters, all_content_selectors, chapter_selectors
+    )
 
 
 @router.get("/api/books/{book_id}/matched-config", response_model=List[schemas.CleaningConfig])

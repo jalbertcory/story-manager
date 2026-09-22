@@ -1,5 +1,6 @@
 """EPUB upload endpoints: single file, multi-file batch, and library-wide series detection."""
 
+import asyncio
 from ..api_model import APIModel as BaseModel
 from .. import api_schemas as contracts
 import logging
@@ -8,6 +9,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from collections.abc import Iterator
 from typing import List, Optional
+from uuid import uuid4
 
 from ebooklib import epub
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -151,13 +153,13 @@ async def _attach_epub_to_audio_book(
     book.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
     book.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
     book.source_type = models.SourceType.epub
-    book.master_word_count = epub_editor.get_word_count(str(immutable_path))
+    book.master_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(immutable_path))
     book.current_word_count = book.master_word_count
     if not book.author or book.author == "Unknown author":
         book.author = author
     if not book.series:
         book.series = _first_epub_metadata(ebook, "calibre", "series")
-    tags = get_epub_tag_metadata(immutable_path)
+    tags = await asyncio.to_thread(get_epub_tag_metadata, immutable_path)
     book.genre_tags = sorted(set(book.genre_tags or []) | set(tags["genre_tags"]))
     book.source_tags = sorted(set(book.source_tags or []) | set(tags["source_tags"]))
     identifiers = epub_identifiers(ebook)
@@ -171,7 +173,7 @@ async def _attach_epub_to_audio_book(
         },
     }
     if not book.cover_path or not (LIBRARY_PATH.parent / book.cover_path).is_file():
-        cover = get_and_save_epub_cover(epub_path=immutable_path, book_id=book.id)
+        cover = await asyncio.to_thread(get_and_save_epub_cover, epub_path=immutable_path, book_id=book.id)
         if cover:
             book.cover_path = str(cover.relative_to(LIBRARY_PATH.parent))
     await crud.touch_book_content(db, book)
@@ -181,7 +183,7 @@ async def _attach_epub_to_audio_book(
     # Audio-only editions already have a matched_content_version. Always bump
     # the text version above and reconcile, even when no cleaning was needed.
     await queue_audio_reconciliation(book, db)
-    _, chapter_count = get_epub_word_and_chapter_count(current_path)
+    _, chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
     await crud.create_book_log(
         db,
         schemas.BookLogCreate(
@@ -200,21 +202,20 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     saves the cover, logs the addition, and applies cleaning.
     Raises HTTPException on duplicate or parse errors.
     """
-    payload = _fix_nested_epub(payload)
+    payload = await asyncio.to_thread(_fix_nested_epub, payload)
     # Strip any path components from the filename — some browsers (or the FileSystem API)
     # may send a relative path like "folder/book.epub" instead of just "book.epub".
     safe_filename = PurePosixPath(filename or "upload.epub").name or "upload.epub"
     LIBRARY_PATH.mkdir(exist_ok=True)
-    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{safe_filename}"
-    temp_current_path = LIBRARY_PATH / f"tmp_{safe_filename}"
-    with open(temp_immutable_path, "wb+") as f:
-        f.write(payload)
-
-    with open(temp_current_path, "wb+") as f:
-        f.write(payload)
+    # Unique temp names so concurrent uploads of the same filename cannot clobber each other.
+    temp_token = uuid4().hex[:12]
+    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{temp_token}_{safe_filename}"
+    temp_current_path = LIBRARY_PATH / f"tmp_{temp_token}_{safe_filename}"
+    await asyncio.to_thread(temp_immutable_path.write_bytes, payload)
+    await asyncio.to_thread(temp_current_path.write_bytes, payload)
 
     try:
-        epub_book = epub.read_epub(temp_immutable_path)
+        epub_book = await asyncio.to_thread(epub.read_epub, temp_immutable_path)
         title = epub_book.get_metadata("DC", "title")[0][0]
         author = epub_book.get_metadata("DC", "creator")[0][0]
     except Exception as e:
@@ -271,11 +272,11 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
         existing.immutable_path = str(immutable_path.relative_to(LIBRARY_PATH.parent))
         existing.current_path = str(current_path.relative_to(LIBRARY_PATH.parent))
-        existing.master_word_count = epub_editor.get_word_count(str(immutable_path))
+        existing.master_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(immutable_path))
         existing.current_word_count = existing.master_word_count
 
         if not existing.cover_path or not (LIBRARY_PATH.parent / existing.cover_path).exists():
-            cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=existing.id)
+            cover_path = await asyncio.to_thread(get_and_save_epub_cover, epub_path=immutable_path, book_id=existing.id)
             if cover_path:
                 existing.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
 
@@ -312,8 +313,8 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     except Exception as e:
         logger.warning(f"Failed to parse dc:source metadata: {e}")
 
-    master_word_count = epub_editor.get_word_count(str(immutable_path))
-    tag_metadata = get_epub_tag_metadata(immutable_path)
+    master_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(immutable_path))
+    tag_metadata = await asyncio.to_thread(get_epub_tag_metadata, immutable_path)
 
     book_to_create = schemas.BookCreate(
         title=title,
@@ -340,13 +341,13 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
             detail=f"A book with title '{title}' by '{author}' already exists at the target path",
         )
 
-    cover_path = get_and_save_epub_cover(epub_path=immutable_path, book_id=db_book.id)
+    cover_path = await asyncio.to_thread(get_and_save_epub_cover, epub_path=immutable_path, book_id=db_book.id)
     if cover_path:
         db_book.cover_path = str(cover_path.relative_to(LIBRARY_PATH.parent))
         await db.commit()
         await db.refresh(db_book)
 
-    _, chapter_count = get_epub_word_and_chapter_count(current_path)
+    _, chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
     log_entry = schemas.BookLogCreate(
         book_id=db_book.id,
         entry_type="added",
@@ -387,7 +388,7 @@ async def _preview_epub_bytes(
     seen_books: set[tuple[str, str]],
 ) -> ImportPreviewItem:
     try:
-        epub_book = epub.read_epub(BytesIO(_fix_nested_epub(payload)))
+        epub_book = await asyncio.to_thread(lambda: epub.read_epub(BytesIO(_fix_nested_epub(payload))))
         title = _first_epub_metadata(epub_book, "DC", "title")
         author = _first_epub_metadata(epub_book, "DC", "creator")
         series = _first_epub_metadata(epub_book, "calibre", "series")

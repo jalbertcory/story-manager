@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..models import AudiobookSettings, AudiobookChapter, AudiobookSentence, Book
 from .audiobook_text import AttributedSentence, SentenceText, quote_group_ids, quote_groups
-from .endpoint_pool import ProviderSettings, RoutedResult, route_request
+from .endpoint_pool import EndpointsCoolingDown, ProviderSettings, RoutedResult, route_request
 
 
 class LLMMessage(TypedDict):
@@ -1499,6 +1499,17 @@ async def diarize_sentences(
                             ),
                         )
                         break
+                    except EndpointsCoolingDown as exc:
+                        if request_attempt == 3:
+                            raise
+                        logger.warning(
+                            "LLM endpoints for book %s chapter %s are cooling down (%d/3): %s",
+                            book_id,
+                            chapter.chapter_number,
+                            request_attempt,
+                            exc,
+                        )
+                        await asyncio.sleep(exc.retry_after)
                     except httpx.HTTPError as exc:
                         status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else 0
                         if request_attempt == 3 or (status_code and status_code < 500 and status_code != 429):

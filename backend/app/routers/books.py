@@ -1,5 +1,6 @@
 """Book CRUD, search, chapter listing, and download endpoints."""
 
+import asyncio
 from pydantic import ValidationError
 from ..book_snapshots import BookSnapshot
 from .. import api_schemas as contracts
@@ -57,6 +58,18 @@ def _remove_book_files(book: models.Book) -> list[str]:
         shutil.rmtree(audiobook_dir)
 
     return removed_paths
+
+
+async def _permanently_delete_book(db: AsyncSession, book: models.Book) -> None:
+    """Delete the record before its files, so a failed commit never strands a row without files.
+
+    Files left behind by a failed unlink are orphans that storage cleanup removes.
+    """
+    await crud.delete_book(db, book=book)
+    try:
+        _remove_book_files(book)
+    except OSError:
+        logger.exception("Deleted book %s but could not remove all of its files.", book.id)
 
 
 def _book_cleanup_preview(book: models.Book, log_entries: int = 0) -> contracts.BookRemovalPreview:
@@ -435,8 +448,8 @@ async def restore_original_epub(book_id: int, db: AsyncSession = Depends(get_db)
     book.removed_chapters = []
     book.content_selectors = []
     current_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(immutable_path, current_path)
-    book.current_word_count = epub_editor.get_word_count(str(current_path))
+    await asyncio.to_thread(shutil.copy2, immutable_path, current_path)
+    book.current_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(current_path))
     await crud.touch_book_content(db, book)
     await db.commit()
     await db.refresh(book)
@@ -455,7 +468,7 @@ async def get_book_chapters(book_id: int, db: AsyncSession = Depends(get_db)) ->
     if not epub_path.exists():
         raise HTTPException(status_code=404, detail="EPUB file not found")
 
-    return epub_editor.get_chapters(str(epub_path))
+    return await asyncio.to_thread(epub_editor.get_chapters, str(epub_path))
 
 
 @router.get("/api/books/{book_id}/cleaned-chapters", response_model=list[epub_editor.EpubChapter])
@@ -470,7 +483,7 @@ async def get_book_cleaned_chapters(book_id: int, db: AsyncSession = Depends(get
     if not epub_path.exists():
         raise HTTPException(status_code=404, detail="Cleaned EPUB file not found")
 
-    return epub_editor.get_chapters(str(epub_path))
+    return await asyncio.to_thread(epub_editor.get_chapters, str(epub_path))
 
 
 @router.get(
@@ -565,8 +578,7 @@ async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depe
     book = await crud.get_book(db, book_id=book_id, include_deleted=True)
     if book is None or book.deleted_at is None:
         raise HTTPException(status_code=404, detail="Book not found in recycle bin")
-    _remove_book_files(book)
-    await crud.delete_book(db, book=book)
+    await _permanently_delete_book(db, book)
     await crud.cleanup_orphaned_series_metadata(db)
     return None
 
@@ -576,8 +588,7 @@ async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> co
     now = datetime.now(timezone.utc)
     expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]
     for book in expired:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
     if expired:
         await crud.cleanup_orphaned_series_metadata(db)
     return {"purged": len(expired)}
@@ -594,8 +605,7 @@ async def delete_book_by_title(
         return None
 
     if permanent:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
         await crud.cleanup_orphaned_series_metadata(db)
     else:
         await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)
@@ -613,8 +623,7 @@ async def delete_book_by_id(
         return None
 
     if permanent:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
         await crud.cleanup_orphaned_series_metadata(db)
     else:
         await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)

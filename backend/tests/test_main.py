@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import pytest_asyncio
 import zipfile
@@ -1424,6 +1425,46 @@ async def test_get_book_chapters(db_session):
 
 
 @pytest.mark.asyncio
+async def test_get_book_chapters_parses_off_the_event_loop(db_session, monkeypatch):
+    from backend.app.routers import books as books_router
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Threaded Book",
+                author="Test Author",
+                immutable_path="library/immutable_threaded.epub",
+                current_path="library/threaded.epub",
+                source_type=models.SourceType.epub,
+            ),
+        )
+
+    library_path = Path("./library").resolve()
+    library_path.mkdir(exist_ok=True)
+    immutable_filepath = library_path / "immutable_threaded.epub"
+    create_dummy_epub(immutable_filepath, "Threaded Book", "Test Author")
+    ran_on_event_loop = []
+
+    def get_chapters(epub_path):
+        try:
+            asyncio.get_running_loop()
+            ran_on_event_loop.append(True)
+        except RuntimeError:
+            ran_on_event_loop.append(False)
+        return []
+
+    monkeypatch.setattr(books_router.epub_editor, "get_chapters", get_chapters)
+    try:
+        response = client.get(f"/api/books/{book.id}/chapters")
+    finally:
+        immutable_filepath.unlink()
+
+    assert response.status_code == 200
+    assert ran_on_event_loop == [False]
+
+
+@pytest.mark.asyncio
 async def test_process_book(db_session):
     """
     Test processing a book to remove chapters and divs.
@@ -2054,6 +2095,34 @@ async def test_delete_book_preserves_audiobook_until_permanent_delete(db_session
 
     assert response.status_code == 204
     assert not audiobook_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_permanent_delete_keeps_files_when_database_delete_fails(db_session, tmp_path, monkeypatch):
+    from backend.app.routers import books as books_router
+
+    library_path = (tmp_path / "library").resolve()
+    monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    library_path.mkdir(parents=True)
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(title="Keep Files", author="Writer", source_type=models.SourceType.epub),
+        )
+
+    audio_path = library_path / "audiobooks" / str(book.id) / "chapter.mp3"
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"audio")
+
+    async def failing_delete(_db, book):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(books_router.crud, "delete_book", failing_delete)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        client.delete(f"/api/books/{book.id}?permanent=true")
+
+    assert audio_path.exists()
 
 
 @pytest.mark.asyncio

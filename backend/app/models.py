@@ -270,6 +270,7 @@ class SeriesMetadata(Base):
 
 class BookLog(Base):
     __tablename__ = "book_logs"
+    __table_args__ = (Index("ix_book_logs_book_id_timestamp", "book_id", "timestamp"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     book_id: Mapped[int] = mapped_column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
