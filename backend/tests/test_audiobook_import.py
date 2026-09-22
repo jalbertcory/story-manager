@@ -988,3 +988,95 @@ async def test_rematch_endpoint_queues_cue_recovery_without_reimporting_audio(
         ).scalar_one()
         assert edition.status == "stale"
         assert job.payload == {"realign": True}
+
+
+class _ChunkedUpload:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    async def read(self, _size: int) -> bytes:
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+@pytest.mark.asyncio
+async def test_oversized_upload_leaves_no_partial_source_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(audiobook_import, "UPLOAD_CHUNK_BYTES", 4)
+    destination = tmp_path / "incoming" / "book.m4b"
+
+    with pytest.raises(ValueError, match="exceeds"):
+        await audiobook_import.stream_upload_to_path(_ChunkedUpload([b"abcd", b"efgh"]), destination, 6)
+
+    assert list(destination.parent.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_completed_upload_is_published_under_its_final_name(tmp_path):
+    destination = tmp_path / "incoming" / "book.m4b"
+
+    written = await audiobook_import.stream_upload_to_path(_ChunkedUpload([b"abcd", b"ef"]), destination, 100)
+
+    assert written == 6
+    assert destination.read_bytes() == b"abcdef"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_interrupted_zip_extraction_is_not_reused_on_retry(tmp_path, monkeypatch):
+    edition_dir = tmp_path / "edition"
+    incoming_dir = edition_dir / "incoming"
+    incoming_dir.mkdir(parents=True)
+    with zipfile.ZipFile(incoming_dir / "book.zip", "w") as archive:
+        archive.writestr("Book/part-1.mp3", b"one")
+        archive.writestr("Book/part-2.mp3", b"two")
+
+    real_copy = audiobook_import._copy_zip_entry
+    calls = {"count": 0}
+
+    def crash_on_second_entry(archive, entry, destination):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("disk full")
+        real_copy(archive, entry, destination)
+
+    monkeypatch.setattr(audiobook_import, "_copy_zip_entry", crash_on_second_entry)
+    with pytest.raises(OSError, match="disk full"):
+        audiobook_import._prepare_sources(edition_dir)
+
+    monkeypatch.setattr(audiobook_import, "_copy_zip_entry", real_copy)
+    audio_paths, _cue_paths = audiobook_import._prepare_sources(edition_dir)
+
+    assert sorted(path.read_bytes() for path in audio_paths) == [b"one", b"two"]
+    assert not (edition_dir / "source" / ".extracting").exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_multi_file_upload_discards_already_received_tracks(
+    app_client,
+    sqlite_sessionmaker,
+    tmp_path,
+    monkeypatch,
+):
+    async with sqlite_sessionmaker() as db:
+        book, _chapter = await _seed_book_text(db)
+        book_id = book.id
+    monkeypatch.setattr(
+        audiobook_router,
+        "imported_audiobook_dir",
+        lambda selected_book_id, edition_id: tmp_path / str(selected_book_id) / str(edition_id),
+    )
+    monkeypatch.setattr(audiobook_router, "MAX_AUDIOBOOK_UPLOAD_BYTES", 8)
+
+    response = app_client.post(
+        f"/api/books/{book_id}/audiobook/imports",
+        files=[
+            ("files", ("part-1.mp3", b"12345", "audio/mpeg")),
+            ("files", ("part-2.mp3", b"67890", "audio/mpeg")),
+        ],
+    )
+
+    assert response.status_code == 413
+    async with sqlite_sessionmaker() as db:
+        edition = (await db.execute(select(ImportedAudiobook))).scalar_one()
+        assert edition.status == "error"
+        incoming_dir = tmp_path / str(book_id) / str(edition.id) / "incoming"
+    assert incoming_dir.is_dir()
+    assert list(incoming_dir.iterdir()) == []

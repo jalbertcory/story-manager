@@ -246,3 +246,37 @@ def test_restore_cli_requires_explicit_confirmation(capsys, tmp_path):
     result = backup_cli.main(["restore", str(tmp_path / "backup.story-manager.zip")])
     assert result == 2
     assert "--confirm-replace" in capsys.readouterr().err
+
+
+def test_restore_preserves_previous_library_when_rollback_fails(monkeypatch, tmp_path):
+    archive, source_library = _create_archive(monkeypatch, tmp_path)
+    source_library.rename(tmp_path / "source-library")
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "old.epub").write_bytes(b"old")
+
+    def fail_restore(*_args):
+        raise backups.BackupError("database restore failed")
+
+    real_rmtree = shutil.rmtree
+
+    def fail_rollback_rmtree(path, *args, **kwargs):
+        # Removing restored entries during rollback fails; staging cleanup must not run.
+        if "story-manager-restore" not in str(path):
+            raise PermissionError("cannot remove restored entry")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(backups, "_run_postgres_tool", fail_restore)
+    monkeypatch.setattr(backups.shutil, "rmtree", fail_rollback_rmtree)
+    with pytest.raises(backups.BackupError, match="could not be rolled back") as error:
+        backups.restore_backup_archive(
+            archive_path=archive,
+            database_url="postgresql+psycopg://storyuser:secret@localhost/story_manager",
+            library_path=library,
+            pg_restore_path=shutil.which("true"),
+        )
+
+    preserved = [path for path in library.iterdir() if path.name.startswith(".story-manager-restore-")]
+    assert len(preserved) == 1
+    assert (preserved[0] / "previous-library" / "old.epub").read_bytes() == b"old"
+    assert str(preserved[0] / "previous-library") in str(error.value)

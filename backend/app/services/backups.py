@@ -22,6 +22,7 @@ MANIFEST_NAME = "manifest.json"
 DATABASE_DUMP_NAME = "database.dump"
 BACKUP_SUFFIX = ".story-manager.zip"
 _COPY_CHUNK_SIZE = 1024 * 1024
+_RESTORE_STAGING_PREFIX = ".story-manager-restore-"
 
 
 class BackupFileEntry(TypedDict):
@@ -384,9 +385,12 @@ def restore_backup_archive(
     library_path.mkdir(parents=True, exist_ok=True)
 
     # The production library is a bind mount, so its mount point cannot be
-    # renamed. Stage and roll back entries inside that same filesystem.
-    with tempfile.TemporaryDirectory(prefix=".story-manager-restore-", dir=library_path) as temp_name:
-        temp_dir = Path(temp_name)
+    # renamed. Stage and roll back entries inside that same filesystem. The
+    # staging directory is managed by hand: if rolling back fails it holds the
+    # only copy of the previous library and must survive.
+    temp_dir = Path(tempfile.mkdtemp(prefix=_RESTORE_STAGING_PREFIX, dir=library_path))
+    keep_temp_dir = False
+    try:
         staged_library = temp_dir / "library"
         staged_library.mkdir()
         previous_library = temp_dir / "previous-library"
@@ -405,7 +409,9 @@ def restore_backup_archive(
                 with archive.open(name) as source, destination.open("wb") as output:
                     shutil.copyfileobj(source, output, length=_COPY_CHUNK_SIZE)
 
-        previous_entries = [entry for entry in library_path.iterdir() if entry != temp_dir]
+        # Leave staging directories from earlier failed restores in place;
+        # they may hold a preserved copy of an older library.
+        previous_entries = [entry for entry in library_path.iterdir() if not entry.name.startswith(_RESTORE_STAGING_PREFIX)]
         restored_entries: list[Path] = []
 
         def roll_back_library() -> None:
@@ -436,6 +442,16 @@ def restore_backup_archive(
                 str(database_dump),
             ]
             _run_postgres_tool(args, env, "Database restore")
-        except Exception:
-            roll_back_library()
+        except Exception as restore_error:
+            try:
+                roll_back_library()
+            except Exception as rollback_error:
+                keep_temp_dir = True
+                raise BackupError(
+                    f"Restore failed ({restore_error}) and the library could not be rolled back "
+                    f"({rollback_error}). The previous library is preserved in {previous_library}."
+                ) from restore_error
             raise
+    finally:
+        if not keep_temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
