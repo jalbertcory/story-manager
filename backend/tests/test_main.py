@@ -2057,6 +2057,34 @@ async def test_delete_book_preserves_audiobook_until_permanent_delete(db_session
 
 
 @pytest.mark.asyncio
+async def test_permanent_delete_keeps_files_when_database_delete_fails(db_session, tmp_path, monkeypatch):
+    from backend.app.routers import books as books_router
+
+    library_path = (tmp_path / "library").resolve()
+    monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    library_path.mkdir(parents=True)
+
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(title="Keep Files", author="Writer", source_type=models.SourceType.epub),
+        )
+
+    audio_path = library_path / "audiobooks" / str(book.id) / "chapter.mp3"
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"audio")
+
+    async def failing_delete(_db, book):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(books_router.crud, "delete_book", failing_delete)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        client.delete(f"/api/books/{book.id}?permanent=true")
+
+    assert audio_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_remove_all_books_preview_and_delete(db_session):
     library_path = Path("./library").resolve()
     author_one_dir = library_path / "Author One"

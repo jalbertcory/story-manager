@@ -59,6 +59,18 @@ def _remove_book_files(book: models.Book) -> list[str]:
     return removed_paths
 
 
+async def _permanently_delete_book(db: AsyncSession, book: models.Book) -> None:
+    """Delete the record before its files, so a failed commit never strands a row without files.
+
+    Files left behind by a failed unlink are orphans that storage cleanup removes.
+    """
+    await crud.delete_book(db, book=book)
+    try:
+        _remove_book_files(book)
+    except OSError:
+        logger.exception("Deleted book %s but could not remove all of its files.", book.id)
+
+
 def _book_cleanup_preview(book: models.Book, log_entries: int = 0) -> contracts.BookRemovalPreview:
     files: list[contracts.FileSize] = []
 
@@ -565,8 +577,7 @@ async def permanently_delete_recycled_book(book_id: int, db: AsyncSession = Depe
     book = await crud.get_book(db, book_id=book_id, include_deleted=True)
     if book is None or book.deleted_at is None:
         raise HTTPException(status_code=404, detail="Book not found in recycle bin")
-    _remove_book_files(book)
-    await crud.delete_book(db, book=book)
+    await _permanently_delete_book(db, book)
     await crud.cleanup_orphaned_series_metadata(db)
     return None
 
@@ -576,8 +587,7 @@ async def purge_expired_recycled_books(db: AsyncSession = Depends(get_db)) -> co
     now = datetime.now(timezone.utc)
     expired = [book for book in await crud.get_recycled_books(db) if book.purge_after and book.purge_after <= now]
     for book in expired:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
     if expired:
         await crud.cleanup_orphaned_series_metadata(db)
     return {"purged": len(expired)}
@@ -594,8 +604,7 @@ async def delete_book_by_title(
         return None
 
     if permanent:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
         await crud.cleanup_orphaned_series_metadata(db)
     else:
         await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)
@@ -613,8 +622,7 @@ async def delete_book_by_id(
         return None
 
     if permanent:
-        _remove_book_files(book)
-        await crud.delete_book(db, book=book)
+        await _permanently_delete_book(db, book)
         await crud.cleanup_orphaned_series_metadata(db)
     else:
         await crud.recycle_book(db, book, retention_days=RECYCLE_BIN_RETENTION_DAYS)
