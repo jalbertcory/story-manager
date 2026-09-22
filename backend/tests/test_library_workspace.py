@@ -39,6 +39,7 @@ async def test_universe_membership_groups_filters_and_rename(db, app_client):
     ids = {page.items[0].id}
     while page.next_cursor:
         page = await build_book_catalog_page(db, view="all", universe=uid, limit=1, cursor=page.next_cursor)
+        assert page.total_count is None and page.facets is None  # summaries come with the first page only
         ids.update(item.id for item in page.items)
     assert ids == {b.id for b in books[:3]}
     assert (await build_book_catalog_page(db, view="all", q="cosmere")).total_count == 3
@@ -177,7 +178,8 @@ async def test_group_pages_preserve_filters_counts_covers_and_snapshot(db, app_c
     await db.commit()
     second = app_client.get("/api/library/groups", params={**params, "cursor": first["next_cursor"]}).json()
     assert [g["name"] for g in second["items"]] == ["C", None]
-    assert second["next_cursor"] is None and second["total_count"] == 4
+    assert second["next_cursor"] is None
+    assert second["total_count"] is None and second["facets"] is None  # first page only
     assert (
         app_client.get("/api/library/groups", params={**params, "genre": "Other", "cursor": first["next_cursor"]}).status_code
         == 400

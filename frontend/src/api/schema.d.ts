@@ -3272,16 +3272,13 @@ export interface components {
         };
         /** BookCatalogPage */
         BookCatalogPage: {
-            facets: components["schemas"]["BookCatalogFacets"];
+            facets: components["schemas"]["BookCatalogFacets"] | null;
             /** Items */
             items: components["schemas"]["BookCatalogEntry"][];
             /** Next Cursor */
             next_cursor: string | null;
-            /**
-             * Total Count
-             * @default 0
-             */
-            total_count: number;
+            /** Total Count */
+            total_count: number | null;
         };
         /** BookChapterUpdateHistory */
         BookChapterUpdateHistory: {
@@ -4263,7 +4260,7 @@ export interface components {
         };
         /** LibraryGroupsPage */
         LibraryGroupsPage: {
-            facets: components["schemas"]["CatalogFacets"];
+            facets: components["schemas"]["CatalogFacets"] | null;
             /** Items */
             items: components["schemas"]["LibraryGroup"][];
             /** Next Cursor */

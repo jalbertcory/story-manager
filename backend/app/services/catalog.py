@@ -198,6 +198,10 @@ async def build_book_catalog_page(
             signature=signature,
         )
 
+    if cursor:
+        # Facets and totals are identical for every page of a traversal (the
+        # cursor pins its snapshot), so only the first page pays for them.
+        return schemas.BookCatalogPage(items=items, next_cursor=next_cursor)
     facets = await crud.get_catalog_facets(
         db,
         conditions=facet_conditions,

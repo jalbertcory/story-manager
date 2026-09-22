@@ -2077,14 +2077,22 @@ async def get_sentence_audio(sentence_id: int, db: AsyncSession = Depends(get_db
 # ---------------------------------------------------------------------------
 
 
+_NO_SENTENCES: crud.audiobook.ChapterSentenceCounts = {
+    "sentence_count": 0,
+    "processed_sentence_count": 0,
+    "audio_generated_count": 0,
+    "low_confidence_count": 0,
+}
+
+
 @router.get("/api/books/{book_id}/audiobook/chapters", response_model=list[ChapterResponse])
 async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> list[ChapterResponse]:
     await _get_book_or_404(book_id, db)
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
+    counts = await crud.audiobook.get_sentence_counts_for_book(db, book_id)
     response = []
     for chapter in chapters:
-        sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
-        processed = [sentence for sentence in sentences if sentence.status != "pending_diarization"]
+        chapter_counts = counts.get(chapter.id, _NO_SENTENCES)
         response.append(
             ChapterResponse(
                 id=chapter.id,
@@ -2099,14 +2107,10 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)) -> lis
                 summary_updated_at=chapter.summary_updated_at,
                 preview_status=chapter.preview_status,
                 preview_error=chapter.preview_error,
-                sentence_count=len(sentences),
-                processed_sentence_count=len(processed),
-                audio_generated_count=sum(1 for sentence in sentences if sentence.status == "audio_generated"),
-                low_confidence_count=sum(
-                    1
-                    for sentence in sentences
-                    if sentence.speaker_confidence is not None and sentence.speaker_confidence < 0.65
-                ),
+                sentence_count=chapter_counts["sentence_count"],
+                processed_sentence_count=chapter_counts["processed_sentence_count"],
+                audio_generated_count=chapter_counts["audio_generated_count"],
+                low_confidence_count=chapter_counts["low_confidence_count"],
             )
         )
     return response

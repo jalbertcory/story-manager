@@ -922,6 +922,38 @@ async def get_sentences_for_chapter(db: AsyncSession, chapter_id: int) -> list[A
     return list(result.scalars().all())
 
 
+class ChapterSentenceCounts(TypedDict):
+    sentence_count: int
+    processed_sentence_count: int
+    audio_generated_count: int
+    low_confidence_count: int
+
+
+async def get_sentence_counts_for_book(db: AsyncSession, book_id: int) -> dict[int, ChapterSentenceCounts]:
+    """Per-chapter sentence progress in one aggregate query, without loading sentence rows."""
+    result = await db.execute(
+        select(
+            AudiobookSentence.chapter_id,
+            func.count(),
+            func.count().filter(AudiobookSentence.status != "pending_diarization"),
+            func.count().filter(AudiobookSentence.status == "audio_generated"),
+            func.count().filter(AudiobookSentence.speaker_confidence < 0.65),
+        )
+        .join(AudiobookChapter, AudiobookChapter.id == AudiobookSentence.chapter_id)
+        .where(AudiobookChapter.book_id == book_id)
+        .group_by(AudiobookSentence.chapter_id)
+    )
+    return {
+        chapter_id: {
+            "sentence_count": total,
+            "processed_sentence_count": processed,
+            "audio_generated_count": generated,
+            "low_confidence_count": low_confidence,
+        }
+        for chapter_id, total, processed, generated, low_confidence in result.all()
+    }
+
+
 async def get_sentences_paginated(
     db: AsyncSession,
     book_id: int,
