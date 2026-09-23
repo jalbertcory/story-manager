@@ -32,6 +32,9 @@ _scheduler = AsyncIOScheduler(
     job_defaults={
         "coalesce": True,
         "max_instances": 1,
+        # APScheduler's default 1s grace silently drops a run (and with it the
+        # self-rescheduling chain) when the event loop is briefly busy.
+        "misfire_grace_time": None,
     },
     timezone=timezone.utc,
 )
@@ -175,11 +178,38 @@ async def queue_scheduled_web_novel_update() -> None:
     """Record scheduled refresh work in the durable processing ledger."""
     from .processing_queue import queue_processing_job
 
-    await queue_processing_job(
-        job_type="refresh_all",
-        payload=RefreshAllPayload(trigger="scheduled"),
-        dedupe_key="refresh_all",
-        progress_detail="Queued by the web novel schedule",
+    try:
+        await queue_processing_job(
+            job_type="refresh_all",
+            payload=RefreshAllPayload(trigger="scheduled"),
+            dedupe_key="refresh_all",
+            progress_detail="Queued by the web novel schedule",
+        )
+    finally:
+        # The run itself reschedules precisely when it finishes. Arm a fallback
+        # one full period out now, so the schedule survives if queueing fails or
+        # the queued job is canceled before it ever runs.
+        await _schedule_fallback_web_novel_update()
+
+
+async def _schedule_fallback_web_novel_update() -> None:
+    try:
+        async with SessionLocal() as db:
+            schedule_settings = await crud.get_scheduler_settings(db)
+        schedule = _daily_schedule(schedule_settings)
+        now = datetime.now(timezone.utc)
+        next_run_at = (
+            calculate_next_daily_run_time(*schedule, now=now) if schedule is not None else now + WEB_NOVEL_UPDATE_INTERVAL
+        )
+    except Exception:
+        logger.exception("Could not read scheduler settings; using the default interval for the fallback run.")
+        next_run_at = datetime.now(timezone.utc) + WEB_NOVEL_UPDATE_INTERVAL
+    _scheduler.add_job(
+        queue_scheduled_web_novel_update,
+        "date",
+        id=WEB_NOVEL_UPDATE_JOB_ID,
+        replace_existing=True,
+        run_date=next_run_at,
     )
 
 
