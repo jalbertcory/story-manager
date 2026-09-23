@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import BookSettings from "./BookSettings";
+import { allowNavigation } from "../lib/navigationGuard";
 import { renderWithClient } from "../test-utils";
 
 describe("BookSettings", () => {
@@ -100,9 +101,12 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/7/detach-source", expect.objectContaining({
-        method: "POST",
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/7/detach-source",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
     });
     await waitFor(() => {
       expect(onBack).toHaveBeenCalled();
@@ -199,9 +203,12 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove web source" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/8/detach-source", expect.objectContaining({
-        method: "POST",
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/8/detach-source",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
     });
     await waitFor(() => {
       expect(onBack).toHaveBeenCalled();
@@ -394,7 +401,10 @@ describe("BookSettings", () => {
     expect(screen.getByText(/8,000 words/)).toBeInTheDocument();
     expect(screen.getByText(/Initial sync/)).toBeInTheDocument();
     expect(screen.getByText(/Catch-up sync/)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/books/11/update-history", expect.objectContaining({method: "GET"}));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/books/11/update-history",
+      expect.objectContaining({ method: "GET" }),
+    );
   });
 
   it("saves manual metadata identifiers", async () => {
@@ -628,5 +638,43 @@ describe("BookSettings", () => {
     expect(
       await screen.findByRole("button", { name: "Audiobooks" }),
     ).toBeInTheDocument();
+  });
+
+  it("asks before in-app navigation discards unsaved edits", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderWithClient(
+      <BookSettings
+        book={{
+          id: 12,
+          title: "Draft Book",
+          author: "Author",
+          series: null,
+          series_index: null,
+          source_type: "epub",
+          source_url: null,
+          immutable_path: "library/original.epub",
+          current_path: "library/current.epub",
+          removed_chapters: [],
+          content_selectors: [],
+        }}
+        onBack={() => {}}
+      />,
+    );
+
+    expect(allowNavigation("/settings")).toBe(true);
+
+    fireEvent.change(await screen.findByDisplayValue("Draft Book"), {
+      target: { value: "Renamed Draft" },
+    });
+
+    // Moving between this book's settings sections keeps the form mounted.
+    expect(allowNavigation("/books/12/audiobooks?tab=sources")).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+
+    expect(allowNavigation("/settings")).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 });

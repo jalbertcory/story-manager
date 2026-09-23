@@ -1,6 +1,8 @@
 """Helpers for storing and cleaning library files."""
 
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from ..config import LIBRARY_PATH
@@ -48,3 +50,16 @@ def remove_empty_parent_dirs(path: Path) -> None:
         except OSError:
             break
         current = current.parent
+
+
+def write_file_atomically(path: Path, data: bytes) -> None:
+    """Replace ``path`` in one step so readers never see a truncated file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)

@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
 from backend.app.services.update_scheduler import (
     OVERDUE_RUN_DELAY,
     WEB_NOVEL_UPDATE_INTERVAL,
@@ -144,3 +146,34 @@ class TestDailyScheduleHelpers:
             web_novel_schedule_timezone="America/New_York",
         )
         assert get_schedule_label(settings) == "Daily at 6:30 AM (America/New_York)"
+
+
+@pytest.mark.asyncio
+async def test_schedule_survives_a_failed_scheduled_queue(sqlite_sessionmaker, monkeypatch):
+    from backend.app.services import processing_queue, update_scheduler
+
+    async def failing_queue(**_kwargs):
+        raise RuntimeError("database unavailable")
+
+    armed = {}
+
+    def add_job(func, trigger, *, id, replace_existing, run_date):
+        armed.update(func=func, id=id, run_date=run_date)
+
+    monkeypatch.setattr(update_scheduler, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue, "queue_processing_job", failing_queue)
+    monkeypatch.setattr(update_scheduler._scheduler, "add_job", add_job)
+    before = datetime.now(timezone.utc)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await update_scheduler.queue_scheduled_web_novel_update()
+
+    assert armed["func"] is update_scheduler.queue_scheduled_web_novel_update
+    assert armed["id"] == update_scheduler.WEB_NOVEL_UPDATE_JOB_ID
+    assert armed["run_date"] >= before + WEB_NOVEL_UPDATE_INTERVAL
+
+
+def test_scheduler_never_drops_late_runs():
+    from backend.app.services import update_scheduler
+
+    assert update_scheduler._scheduler._job_defaults["misfire_grace_time"] is None

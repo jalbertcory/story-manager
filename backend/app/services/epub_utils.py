@@ -15,6 +15,8 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from ebooklib import epub
 from lxml import etree
 
+from .library_paths import write_file_atomically
+
 logger = logging.getLogger(__name__)
 
 OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
@@ -487,8 +489,7 @@ def get_and_save_epub_cover(epub_path: Path, book_id: int) -> Optional[Path]:
             )
             save_path = covers_path / f"{book_id}{cover_extension}"
 
-            with open(save_path, "wb") as f:
-                f.write(cover_data)
+            write_file_atomically(save_path, cover_data)
             return save_path
     except Exception as e:
         logger.error(f"Error extracting cover from {epub_path}: {e}")

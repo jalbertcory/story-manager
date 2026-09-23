@@ -11,6 +11,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe
 
 from ..metadata_types import metadata_json
@@ -100,12 +101,7 @@ def tag_metadata(payload: object, *, single_file: bool) -> AudioMetadata:
 
 async def _run(*command: str) -> bytes:
     process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-    except (TimeoutError, asyncio.CancelledError):
-        process.kill()
-        await process.communicate()
-        raise
+    stdout, stderr = await communicate_bounded(process, description=command[0], timeout=30)
     if process.returncode:
         raise ValueError(stderr.decode("utf-8", errors="replace")[:500])
     return stdout

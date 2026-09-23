@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
+from .subprocesses import communicate_bounded
 from .audiobook_text import split_speech_segments
 from .endpoint_pool import EndpointsCoolingDown, ProviderSettings, settings_for_provider
 from .tts_providers import (
@@ -410,7 +411,7 @@ async def _concatenate_mp3_parts(parts: list[bytes], sentence_id: int) -> bytes:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await process.communicate()
+        _, stderr = await communicate_bounded(process, description="ffmpeg TTS concatenation")
         if process.returncode:
             message = stderr.decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"Unable to combine sentence {sentence_id} voice segments: {message}")
@@ -704,7 +705,7 @@ async def _split_block_audio(audio_bytes: bytes, texts: list[str], group_id: str
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await process.communicate()
+        _, stderr = await communicate_bounded(process, description="ffmpeg silence detection")
         silence_starts: list[float] = []
         silence_midpoints: list[int] = []
         for line in stderr.decode("utf-8", errors="replace").splitlines():
@@ -741,7 +742,7 @@ async def _split_block_audio(audio_bytes: bytes, texts: list[str], group_id: str
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, split_stderr = await process.communicate()
+            _, split_stderr = await communicate_bounded(process, description="ffmpeg TTS block split")
             if process.returncode:
                 message = split_stderr.decode("utf-8", errors="replace")[:500]
                 raise RuntimeError(f"Unable to split TTS block {group_id}: {message}")

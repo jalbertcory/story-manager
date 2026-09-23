@@ -40,6 +40,7 @@ from ..models import (
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
 )
+from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
@@ -144,7 +145,11 @@ async def _extract_chapter_audio(spec: TrackSpec, destination: Path) -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _stdout, stderr = await process.communicate()
+    try:
+        _stdout, stderr = await communicate_bounded(process, description=f"ffmpeg extraction of {destination.name}")
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     if process.returncode:
         temporary.unlink(missing_ok=True)
         message = stderr.decode("utf-8", errors="replace")[:500]
@@ -728,7 +733,7 @@ async def _probe_audio(path: Path) -> tuple[int, list[ProbeChapter]]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await process.communicate()
+    stdout, stderr = await communicate_bounded(process, description=f"ffprobe of {path.name}", timeout=300)
     if process.returncode:
         message = stderr.decode("utf-8", errors="replace")[:500]
         raise ValueError(f"Could not inspect {path.name}: {message}")
