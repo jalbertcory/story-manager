@@ -106,7 +106,8 @@ def test_database_dump_can_use_development_postgres_container(monkeypatch, tmp_p
     monkeypatch.setattr(backups, "_find_postgres_tool", lambda *_args: (_ for _ in ()).throw(backups.BackupError()))
     monkeypatch.setattr(backups.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
 
-    def run(args, *, stdout, stderr, check):
+    def run(args, *, stdout, stderr, check, timeout):
+        assert timeout == backups.POSTGRES_TOOL_TIMEOUT_SECONDS
         assert args[:5] == ["/usr/bin/docker", "exec", "-i", "story-manager-db", "pg_dump"]
         assert "secret" not in args
         stdout.write(b"PGDMP-container")

@@ -12,6 +12,7 @@ import shutil
 
 import httpx
 
+from .subprocesses import communicate_bounded
 from .tts_responses import BatchSpeechResponse, DesignedVoiceResponse
 from .endpoint_pool import ProviderSettings
 from .endpoint_pool import RoutedResult, primary_provider, route_request
@@ -171,7 +172,7 @@ async def _stub_speech(text: str) -> bytes:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await process.communicate()
+    stdout, stderr = await communicate_bounded(process, description="Local TTS harness", timeout=60)
     if process.returncode:
         message = stderr.decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"Local TTS harness failed: {message}")

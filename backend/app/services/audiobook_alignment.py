@@ -33,6 +33,7 @@ from ..models import (
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
 )
+from .subprocesses import communicate_bounded
 from .audiobook_import import imported_audiobook_dir, relative_library_path, sentences_for_logical_chapter
 from .endpoint_pool import configured_endpoints
 from .endpoint_pool import ProviderSettings
@@ -396,7 +397,7 @@ async def _extract_track_clip(track: ImportedAudiobookTrack, destination: Path) 
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _stdout, stderr = await process.communicate()
+    _stdout, stderr = await communicate_bounded(process, description=f"ffmpeg transcription clip for {track.title!r}")
     if process.returncode:
         message = stderr.decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"Could not prepare {track.title!r} for transcription: {message}")

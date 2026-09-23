@@ -22,6 +22,9 @@ MANIFEST_NAME = "manifest.json"
 DATABASE_DUMP_NAME = "database.dump"
 BACKUP_SUFFIX = ".story-manager.zip"
 _COPY_CHUNK_SIZE = 1024 * 1024
+# A stalled database connection must not hold the backup barrier (which pauses
+# all workers and API writes) forever.
+POSTGRES_TOOL_TIMEOUT_SECONDS = float(os.getenv("STORY_MANAGER_POSTGRES_TOOL_TIMEOUT_SECONDS", "7200"))
 _RESTORE_STAGING_PREFIX = ".story-manager-restore-"
 
 
@@ -101,7 +104,12 @@ def _connection_args(url: URL) -> list[str]:
 
 
 def _run_postgres_tool(args: list[str], env: dict[str, str], operation: str) -> None:
-    result = subprocess.run(args, env=env, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(
+            args, env=env, capture_output=True, text=True, check=False, timeout=POSTGRES_TOOL_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise BackupError(f"{operation} did not finish within {POSTGRES_TOOL_TIMEOUT_SECONDS:.0f} seconds.") from exc
     if result.returncode == 0:
         return
     detail = (result.stderr or result.stdout or "unknown PostgreSQL error").strip()
@@ -140,7 +148,14 @@ def _dump_database_from_container(url: URL, destination: Path, container: str) -
         args.extend(("--username", url.username))
     args.extend(("--dbname", url.database or ""))
     with destination.open("wb") as output:
-        result = subprocess.run(args, stdout=output, stderr=subprocess.PIPE, check=False)
+        try:
+            result = subprocess.run(
+                args, stdout=output, stderr=subprocess.PIPE, check=False, timeout=POSTGRES_TOOL_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired as exc:
+            output.close()
+            destination.unlink(missing_ok=True)
+            raise BackupError(f"Database backup did not finish within {POSTGRES_TOOL_TIMEOUT_SECONDS:.0f} seconds.") from exc
     if result.returncode != 0:
         destination.unlink(missing_ok=True)
         detail = (result.stderr or b"unknown PostgreSQL error").decode("utf-8", errors="replace").strip()

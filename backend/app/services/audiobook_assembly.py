@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from ..models import AudiobookChapter, AudiobookSentence
+from .subprocesses import communicate_bounded
 from .audiobook_publication import publish_reader_audiobook
 
 logger = logging.getLogger(__name__)
@@ -275,7 +276,7 @@ async def _assemble_chapter(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await process.communicate()
+        _, stderr = await communicate_bounded(process, description="ffmpeg chapter assembly")
         if process.returncode:
             message = stderr.decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
