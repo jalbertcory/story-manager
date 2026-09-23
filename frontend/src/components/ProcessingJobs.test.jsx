@@ -162,4 +162,24 @@ describe("ProcessingJobs", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
   });
+
+  it("shows why cancelling a job failed", async () => {
+    const listFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, options) => {
+      if (options?.method === "DELETE") {
+        return Response.json(
+          { detail: "Job already finished" },
+          { status: 409 },
+        );
+      }
+      return listFetch(url, options);
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Cancel failed: Job already finished",
+    );
+  });
 });

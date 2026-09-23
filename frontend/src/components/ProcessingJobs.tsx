@@ -443,6 +443,17 @@ function ProcessingJobs() {
                   </button>
                 )}
               </div>
+              {cancelMutation.isError &&
+                cancelMutation.variables === job.id && (
+                  <p className="error" role="alert">
+                    Cancel failed: {cancelMutation.error.message}
+                  </p>
+                )}
+              {retryMutation.isError && retryMutation.variables === job.id && (
+                <p className="error" role="alert">
+                  Retry failed: {retryMutation.error.message}
+                </p>
+              )}
             </article>
           ))}
         </div>
