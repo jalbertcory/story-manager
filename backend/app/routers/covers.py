@@ -12,6 +12,7 @@ from .. import crud, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.cover_images import save_cover_from_url
+from ..services.library_paths import write_file_atomically
 from ..services.processing_queue import queue_processing_job
 from ..upload_validation import MAX_IMAGE_BYTES, detect_image_extension, read_upload_limited, validate_image_upload
 
@@ -61,8 +62,7 @@ async def upload_book_cover(book_id: int, file: UploadFile = File(...), db: Asyn
     if ext is None:  # validate_image_upload already guards this path
         raise HTTPException(status_code=400, detail="Unsupported cover image format")
     save_path = covers_path / f"{book_id}{ext}"
-    with open(save_path, "wb") as f:
-        f.write(payload)
+    write_file_atomically(save_path, payload)
 
     db_book.cover_path = str(save_path.relative_to(LIBRARY_PATH.parent))
     await db.commit()

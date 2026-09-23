@@ -254,6 +254,10 @@ async def _assemble_chapter(
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg is required to assemble audiobook chapters.")
+    # Assemble into a temporary file and swap it in only on success: the live
+    # chapter MP3 is served to readers while a rebuild runs.
+    with tempfile.NamedTemporaryFile(dir=output_dir, prefix=f".{audio_filename}.", suffix=".mp3", delete=False) as handle:
+        partial_audio_path = Path(handle.name)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", dir=output_dir, encoding="utf-8") as manifest:
         for snippet_path in snippet_paths:
             escaped_path = str(snippet_path).replace("'", "'\\''")
@@ -272,21 +276,25 @@ async def _assemble_chapter(
             "-codec:a",
             "copy",
             "-y",
-            str(audio_path),
+            str(partial_audio_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await communicate_bounded(process, description="ffmpeg chapter assembly")
-        if process.returncode:
-            message = stderr.decode("utf-8", errors="replace")[:500]
-            raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
+        try:
+            _, stderr = await communicate_bounded(process, description="ffmpeg chapter assembly")
+            if process.returncode:
+                message = stderr.decode("utf-8", errors="replace")[:500]
+                raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
+            partial_audio_path.replace(audio_path)
+        finally:
+            partial_audio_path.unlink(missing_ok=True)
     total_duration_ms = sum(sentence.audio_duration_ms or 0 for sentence in sentences)
     logger.info("Assembled chapter audio: %s (%d ms)", audio_path, total_duration_ms)
 
     smil_xml = _build_smil(chapter, sentences, audio_filename)
     smil_filename = f"ch{chapter.chapter_number:04d}.smil"
     smil_path = output_dir / smil_filename
-    smil_path.write_text(smil_xml, encoding="utf-8")
+    _write_text_atomically(smil_path, smil_xml)
 
     await crud.audiobook.update_chapter_assembly(
         db,
@@ -294,6 +302,16 @@ async def _assemble_chapter(
         audio_file_path=_relative_path(audio_path),
         smil_file_path=_relative_path(smil_path),
     )
+
+
+def _write_text_atomically(path: Path, text: str) -> None:
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False, encoding="utf-8") as handle:
+        handle.write(text)
+        temporary = Path(handle.name)
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSession) -> None:

@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from ..config import LIBRARY_PATH
 from ..upload_validation import detect_image_extension
 from .fanficfare_config import is_enabled_config_value
+from .library_paths import write_file_atomically
 
 logger = logging.getLogger(__name__)
 
@@ -276,8 +277,7 @@ async def save_cover_from_url(
         if ext is None:
             raise ValueError("Downloaded cover payload was not a supported raster image")
         save_path = covers_path / f"{book_id}{ext}"
-        with open(save_path, "wb") as f:
-            f.write(image_bytes)
+        write_file_atomically(save_path, image_bytes)
         return save_path
     except Exception as e:
         logger.error(f"Failed to download cover from {url}: {e}")

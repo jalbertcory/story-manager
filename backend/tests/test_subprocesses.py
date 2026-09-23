@@ -1,4 +1,4 @@
-"""Tests for bounded external tool execution."""
+"""Tests for bounded external tool execution and atomic file writes."""
 
 import asyncio
 import sys
@@ -54,3 +54,21 @@ async def test_completed_process_output_is_returned():
     stdout, _stderr = await communicate_bounded(process, description="printer", timeout=30)
 
     assert stdout.strip() == b"ok"
+
+
+def test_atomic_write_replaces_the_file_and_cleans_up_on_failure(tmp_path):
+    from backend.app.services import library_paths
+
+    covers = tmp_path / "covers"
+    target = covers / "7.jpg"
+    library_paths.write_file_atomically(target, b"old cover")
+    library_paths.write_file_atomically(target, b"new cover")
+    assert target.read_bytes() == b"new cover"
+
+    # A directory cannot be replaced by a file, so the final rename fails.
+    blocked = covers / "8.jpg"
+    blocked.mkdir()
+    with pytest.raises(OSError):
+        library_paths.write_file_atomically(blocked, b"cover")
+
+    assert sorted(path.name for path in covers.iterdir()) == ["7.jpg", "8.jpg"]
