@@ -1,7 +1,14 @@
 import { errorMessage } from "./lib/errors";
 import type { MouseEvent } from "react";
 import type { NavigationState, OpenBook } from "./types";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import "./App.css";
 import "./Workspace.css";
@@ -10,19 +17,22 @@ import { getBook } from "./api/books";
 import { getProcessingJobs } from "./api/processing";
 import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin";
-import BookSettings from "./components/BookSettings";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
-import WebUpdates from "./components/WebUpdates";
-import SettingsHome from "./components/SettingsHome";
-import AddBook from "./components/AddBook";
-import AudiobookSettings from "./components/AudiobookSettings";
-import CleaningConfigs from "./components/CleaningConfigs";
-import SchedulerStatus from "./components/SchedulerStatus";
-import Logs from "./components/Logs";
-import Utilities from "./components/Utilities";
-import ProcessingJobs from "./components/ProcessingJobs";
 import AttentionDashboard from "./components/AttentionDashboard";
+
+// The library, book overview, and attention views load with the app; other
+// pages are fetched on first visit to keep the initial bundle small.
+const BookSettings = lazy(() => import("./components/BookSettings"));
+const WebUpdates = lazy(() => import("./components/WebUpdates"));
+const SettingsHome = lazy(() => import("./components/SettingsHome"));
+const AddBook = lazy(() => import("./components/AddBook"));
+const AudiobookSettings = lazy(() => import("./components/AudiobookSettings"));
+const CleaningConfigs = lazy(() => import("./components/CleaningConfigs"));
+const SchedulerStatus = lazy(() => import("./components/SchedulerStatus"));
+const Logs = lazy(() => import("./components/Logs"));
+const Utilities = lazy(() => import("./components/Utilities"));
+const ProcessingJobs = lazy(() => import("./components/ProcessingJobs"));
 import {
   buildBookPath,
   getPrimarySection,
@@ -429,7 +439,9 @@ export default function App() {
               </label>
             </div>
           )}
-          {renderContent()}
+          <Suspense fallback={<p role="status">Loading…</p>}>
+            {renderContent()}
+          </Suspense>
         </main>
       </div>
     </div>
