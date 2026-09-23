@@ -3,7 +3,9 @@
 ## API contract
 
 `GET /api/books/catalog` returns a page object with `items`, `next_cursor`,
-`total_count`, and `facets`. The catalog accepts these query parameters:
+`total_count`, and `facets`. `total_count` and `facets` describe the whole
+traversal, which the cursor pins, so they are returned on the first page only
+and are `null` on continuation pages. The catalog accepts these query parameters:
 
 - `view`: `series`, `standalone`, `web`, or `all`
 - `q`: case-insensitive title, author, series, and book-tag search
@@ -102,7 +104,8 @@ filters limit the series, so an incomplete selection cannot replace its full ord
 
 `GET /api/library/groups` accepts `genre`, `audiobook`, `review`, `sort_by`,
 `sort_order`, `limit`, and `cursor` alongside its existing parameters. Supplying
-`limit` returns `{items, next_cursor, total_count, facets}`; omitting it preserves
+`limit` returns `{items, next_cursor, total_count, facets}` (summaries on the first
+page only, as for the book catalog); omitting it preserves
 the original array response. Cursors bind to the filters and ordering and exclude
 books added after the first page. As with the book catalog, they are not a database
 snapshot: edits to existing sort keys or membership can change a traversal.

@@ -23,8 +23,9 @@ class LibraryGroup(TypedDict):
 class LibraryGroupsPage(TypedDict):
     items: list[LibraryGroup]
     next_cursor: str | None
+    # Only the first page of a traversal carries summaries; the cursor pins them.
     total_count: int | None
-    facets: CatalogFacets
+    facets: CatalogFacets | None
 
 
 class _CatalogFilters(TypedDict):
@@ -145,6 +146,8 @@ async def library_groups(
         )
     if limit is None:
         return result
+    if cursor:
+        return {"items": result, "next_cursor": next_cursor, "total_count": None, "facets": None}
     genre_filters: _CatalogFilters = {**filters, "genre": None}
     genre_conditions = build_catalog_filter_conditions(**genre_filters, snapshot_max_id=snapshot)
     return {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query
@@ -166,20 +167,35 @@ async def _metadata_proposals(db: AsyncSession, limit: int) -> schemas.Attention
     )
 
 
+def _scan_library_files(
+    books: list[models.Book],
+) -> tuple[list[LibraryFileIssue], list[LibraryFileIssue], set[int]]:
+    """Return broken EPUB paths, missing covers, and books whose EPUB can supply a cover."""
+    broken_files = [
+        issue
+        for issue in inspect_library_files(books, library_path=LIBRARY_PATH)
+        if issue["issue"]
+        in {"missing_immutable_path", "immutable_file_not_found", "missing_current_path", "current_file_not_found"}
+    ]
+    missing_covers = find_missing_covers(books, library_path=LIBRARY_PATH)
+    missing_cover_ids = {issue["book_id"] for issue in missing_covers}
+    cover_book_ids = {
+        book.id
+        for book in books
+        if book.id in missing_cover_ids and book.immutable_path and (LIBRARY_PATH.parent / book.immutable_path).is_file()
+    }
+    return broken_files, missing_covers, cover_book_ids
+
+
 @router.get("/api/dashboard/attention", response_model=schemas.AttentionDashboard)
 async def get_attention_dashboard(
     limit: int = Query(5, ge=1, le=25),
     db: AsyncSession = Depends(get_db),
 ) -> schemas.AttentionDashboard:
-    books = await crud.get_books(db, limit=100000)
-    file_issues = inspect_library_files(books, library_path=LIBRARY_PATH)
-    broken_files = [
-        issue
-        for issue in file_issues
-        if issue["issue"]
-        in {"missing_immutable_path", "immutable_file_not_found", "missing_current_path", "current_file_not_found"}
-    ]
-    missing_covers = find_missing_covers(books, library_path=LIBRARY_PATH)
+    books = await crud.get_books_for_file_health(db)
+    # Several stat calls per book (on NAS storage for many users) must not block
+    # the event loop that serves every other request.
+    broken_files, missing_covers, cover_book_ids = await asyncio.to_thread(_scan_library_files, books)
 
     failed_jobs = await _failed_jobs(db, limit)
     failed_refreshes = await _failed_refreshes(db, limit)
@@ -189,9 +205,6 @@ async def get_attention_dashboard(
         count=len(broken_files),
         items=[_file_item(issue) for issue in broken_files[:limit]],
     )
-    cover_book_ids = {
-        book.id for book in books if book.immutable_path and (LIBRARY_PATH.parent / book.immutable_path).is_file()
-    }
     cover_category = schemas.AttentionFileCategory(
         count=len(missing_covers),
         items=[_file_item(issue, can_retry_cover=issue["book_id"] in cover_book_ids) for issue in missing_covers[:limit]],

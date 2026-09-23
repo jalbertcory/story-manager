@@ -136,6 +136,53 @@ describe("AudiobookReader", () => {
     );
     expect(paragraphs[1]).toHaveTextContent("A new paragraph.");
   });
+  it("loads every page of sentences for long chapters", async () => {
+    const sentence = (id) => ({
+      id,
+      original_text: `Sentence ${id}.`,
+      character_id: 10,
+      audio_duration_ms: 1000,
+      reading_block_index: id,
+      reading_block_type: "paragraph",
+    });
+    const requestedPages = [];
+    globalThis.fetch = vi.fn((url) => {
+      const page = Number(
+        new URL(url, "http://localhost").searchParams.get("page"),
+      );
+      requestedPages.push(page);
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            items: page === 1 ? [sentence(1)] : [sentence(1001)],
+            total: 2,
+          }),
+      });
+    });
+
+    renderWithClient(
+      <AudiobookReader
+        bookId={11}
+        aiEnabled
+        chapters={[
+          {
+            id: 9,
+            chapter_number: 1,
+            title: "Chapter 1",
+            audio_file_path: "chapter.mp3",
+            needs_reassembly: false,
+          },
+        ]}
+        characters={[{ id: 10, name: "Narrator" }]}
+      />,
+    );
+
+    expect(await screen.findByText("Sentence 1001.")).toBeInTheDocument();
+    expect(screen.getByText("Sentence 1.")).toBeInTheDocument();
+    expect(requestedPages).toEqual([1, 2]);
+  });
+
   it("plays audio-only tracks without requesting synchronized text", () => {
     globalThis.fetch = vi.fn();
     const { container } = renderWithClient(

@@ -148,8 +148,10 @@ class BookCatalogFacets(BaseModel):
 class BookCatalogPage(BaseModel):
     items: List[BookCatalogEntry] = Field(default_factory=list)
     next_cursor: Optional[str] = None
-    total_count: int = 0
-    facets: BookCatalogFacets = Field(default_factory=BookCatalogFacets)
+    # Summaries describe the whole traversal, which the cursor pins, so they are
+    # only computed for the first page and are null on continuation pages.
+    total_count: Optional[int] = None
+    facets: Optional[BookCatalogFacets] = None
 
 
 # Pydantic model for creating a new book log.

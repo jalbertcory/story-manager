@@ -2872,3 +2872,43 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
     await db.refresh(book)
     assert output_path.exists()
     assert book.audiobook_pipeline_status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_list_chapters_aggregates_sentence_progress(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    chapter, character, _sentence = await _seed_audio_chapter(db, book.id, sentence_status="audio_generated")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter_id=chapter.id,
+        sentences_data=[
+            {
+                "html_element_id": "ch1_s1",
+                "sequence_order": 1,
+                "original_text": "Unsure speaker.",
+                "character_id": character.id,
+                "status": "ready_for_audio",
+                "speaker_confidence": 0.4,
+            },
+            {
+                "html_element_id": "ch1_s2",
+                "sequence_order": 2,
+                "original_text": "Not yet diarized.",
+                "status": "pending_diarization",
+            },
+        ],
+    )
+    empty_chapter = await crud.audiobook.create_chapter(
+        db, book_id=book.id, chapter_number=2, content_file_name="Text/chapter_2.xhtml"
+    )
+
+    chapters = await audiobook_router.list_chapters(book.id, db)
+
+    by_id = {item.id: item for item in chapters}
+    assert [item.id for item in chapters] == [chapter.id, empty_chapter.id]
+    assert by_id[chapter.id].sentence_count == 3
+    assert by_id[chapter.id].processed_sentence_count == 2
+    assert by_id[chapter.id].audio_generated_count == 1
+    assert by_id[chapter.id].low_confidence_count == 1
+    assert by_id[empty_chapter.id].sentence_count == 0
+    assert by_id[empty_chapter.id].low_confidence_count == 0

@@ -122,3 +122,36 @@ class TestAdminAuth:
         request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "scheme": "http"})
         with pytest.raises(RuntimeError, match="Invalid STORY_MANAGER_ADMIN_COOKIE_SECURE"):
             is_admin_cookie_secure(request)
+
+
+@pytest.mark.asyncio
+async def test_reader_key_usage_is_recorded_at_most_every_interval(db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app import auth, crud
+
+    token, prefix = generate_reader_token()
+    await crud.create_api_key(db, label="Kobo", token=token, prefix=prefix)
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(auth, "_now_utc", lambda: now)
+    commits = []
+    real_commit = db.commit
+
+    async def counting_commit():
+        commits.append(now)
+        await real_commit()
+
+    monkeypatch.setattr(db, "commit", counting_commit)
+
+    key = await auth._get_key_by_token(db, token)
+    assert key.last_used_at.replace(tzinfo=timezone.utc) == now
+    assert len(commits) == 1
+
+    now += timedelta(minutes=1)
+    await auth._get_key_by_token(db, token)
+    assert len(commits) == 1  # a burst of requests does not write each time
+
+    now += auth.LAST_USED_UPDATE_INTERVAL
+    key = await auth._get_key_by_token(db, token)
+    assert len(commits) == 2
+    assert key.last_used_at.replace(tzinfo=timezone.utc) == now

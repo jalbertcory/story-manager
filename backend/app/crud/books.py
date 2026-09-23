@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, asc, cast, delete, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 from sqlalchemy.future import select
 from sqlalchemy.sql import Select
 from .. import models, schemas
@@ -108,6 +109,29 @@ async def get_books(
     """Retrieve a list of books from the database."""
     query = _build_books_query(sort_by=sort_by, sort_order=sort_order)
     result = await db.execute(query.offset(skip).limit(limit))
+    return list(result.scalars().all())
+
+
+async def get_books_for_file_health(db: AsyncSession) -> List[models.Book]:
+    """Live books with only the columns library file-health checks read."""
+    result = await db.execute(
+        select(models.Book)
+        .where(models.Book.deleted_at.is_(None))
+        .options(
+            load_only(
+                models.Book.id,
+                models.Book.title,
+                models.Book.author,
+                models.Book.source_type,
+                models.Book.source_url,
+                models.Book.download_status,
+                models.Book.immutable_path,
+                models.Book.current_path,
+                models.Book.cover_path,
+            )
+        )
+        .order_by(asc(models.Book.title), asc(models.Book.id))
+    )
     return list(result.scalars().all())
 
 

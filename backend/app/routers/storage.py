@@ -1,6 +1,7 @@
 """Storage cleanup and persistent log endpoints."""
 
 from .. import api_schemas as contracts
+import asyncio
 import logging
 from typing import Optional, TypedDict
 
@@ -66,8 +67,8 @@ async def validate_library(db: AsyncSession = Depends(get_db)) -> contracts.Libr
     Check every book record for missing or broken file paths.
     Returns a list of issues found (empty list means everything is healthy).
     """
-    books = await crud.get_books(db, limit=100000)
-    issues = inspect_library_files(books, library_path=LIBRARY_PATH)
+    books = await crud.get_books_for_file_health(db)
+    issues = await asyncio.to_thread(inspect_library_files, books, library_path=LIBRARY_PATH)
 
     if issues:
         logger.warning("Library validation found %d issue(s)", len(issues))
