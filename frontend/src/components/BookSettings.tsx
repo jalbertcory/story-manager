@@ -1,4 +1,6 @@
 import { displayValue, stringValue } from "../lib/errors";
+import { parseLocation } from "../lib/navigation";
+import { setNavigationGuard } from "../lib/navigationGuard";
 import type { Book, BookSectionChange } from "../types";
 import type { components } from "../api/schema";
 import { useEffect, useRef, useState } from "react";
@@ -197,22 +199,33 @@ function BookSettings({
     isDirty,
   } = useBookSettingsForm(initialBook);
 
-  // Warn before a reload or tab close discards unsaved edits.
+  // Set once the book is deleted or detached, so leaving afterwards never asks
+  // about edits that no longer matter.
+  const leavingDeliberately = useRef(false);
+
+  // Warn before a reload, tab close, or in-app navigation discards unsaved
+  // edits. Switching between this book's settings sections keeps the form.
   useEffect(() => {
     if (!isDirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [isDirty]);
+    const releaseGuard = setNavigationGuard((href) => {
+      if (leavingDeliberately.current) return true;
+      const target = new URL(href, window.location.origin);
+      const next = parseLocation(target.pathname, target.hash, target.search);
+      if (next.bookId === initialBook.id && next.bookSection !== "overview")
+        return true;
+      return window.confirm(
+        "You have unsaved changes to this book. Discard them?",
+      );
+    });
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      releaseGuard();
+    };
+  }, [isDirty, initialBook.id]);
 
-  const leaveSettings = () => {
-    if (
-      isDirty &&
-      !window.confirm("You have unsaved changes to this book. Discard them?")
-    )
-      return;
-    onBack();
-  };
+  const leaveSettings = () => onBack();
   const [previewedChapter, setPreviewedChapter] = useState<string | null>(null);
   const [internalBookTab, setInternalBookTab] = useState("details");
   const bookTab = bookSection
@@ -349,6 +362,7 @@ function BookSettings({
       void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
+      leavingDeliberately.current = true;
       onBack();
     },
   });
@@ -362,6 +376,7 @@ function BookSettings({
       void queryClient.invalidateQueries({
         queryKey: ["library-book-info", book.id],
       });
+      leavingDeliberately.current = true;
       onBack();
     },
   });

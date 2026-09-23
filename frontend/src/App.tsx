@@ -31,6 +31,7 @@ import {
   PRIMARY_NAV,
   SECTION_NAV,
 } from "./lib/navigation";
+import { allowNavigation } from "./lib/navigationGuard";
 
 function currentLocation() {
   return {
@@ -77,6 +78,7 @@ export default function App() {
       .catch((error: unknown) => setAuthError(errorMessage(error)));
   }, []);
   const navigate = useCallback((href: string, state: NavigationState = {}) => {
+    if (!allowNavigation(href)) return;
     window.history.replaceState(
       {
         ...parseNavigationState(window.history.state),
