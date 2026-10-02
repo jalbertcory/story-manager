@@ -20,6 +20,8 @@ import AdminLogin from "./components/AdminLogin";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
 import AttentionDashboard from "./components/AttentionDashboard";
+import Icon, { type IconName } from "./components/ui/Icon";
+import ThemeToggle from "./components/ui/ThemeToggle";
 
 // The library, book overview, and attention views load with the app; other
 // pages are fetched on first visit to keep the initial bundle small.
@@ -42,6 +44,14 @@ import {
   SECTION_NAV,
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
+
+const NAV_ICONS: Record<string, IconName> = {
+  library: "library",
+  updates: "updates",
+  review: "review",
+  activity: "activity",
+  settings: "settings",
+};
 
 function currentLocation() {
   return {
@@ -231,7 +241,7 @@ export default function App() {
 
   if (!authStatus)
     return (
-      <div className="app-container">
+      <div className="app-loading">
         <h1>Story Manager</h1>
         <p role={authError ? "alert" : "status"}>{authError || "Loading…"}</p>
       </div>
@@ -370,26 +380,13 @@ export default function App() {
       className={`app-container workspace-shell${globalDragging ? " drag-over" : ""}`}
       onClick={followInternalLink}
     >
-      <header className="app-header">
+      <aside className="app-sidebar">
         <a href="/" className="wordmark">
+          <span className="wordmark-mark" aria-hidden="true">
+            <Icon name="library" size={18} />
+          </span>
           <h1>Story Manager</h1>
         </a>
-        {authStatus.mode === "password" && (
-          <button
-            className="btn-text"
-            onClick={() => {
-              setAuthError("");
-              void logout()
-                .then(setAuthStatus)
-                .catch((error: unknown) => setAuthError(errorMessage(error)));
-            }}
-          >
-            Sign out
-          </button>
-        )}
-        {authError && <p role="alert">{authError}</p>}
-      </header>
-      <div className="workspace-layout">
         <nav className="workspace-nav" aria-label="Primary navigation">
           {PRIMARY_NAV.map((item, index) => (
             <a
@@ -398,7 +395,11 @@ export default function App() {
               href={item.path}
               aria-current={activePrimary === item.key ? "page" : undefined}
             >
-              {item.label}
+              <Icon name={NAV_ICONS[item.key] ?? "library"} />
+              <span className="nav-label">{item.label}</span>
+              <span className="nav-label-short" aria-hidden="true">
+                {item.shortLabel}
+              </span>
               {item.key === "activity" && jobs.length > 0 && (
                 <span
                   className="workspace-count"
@@ -410,40 +411,54 @@ export default function App() {
             </a>
           ))}
         </nav>
-        <main className="workspace-main">
+        <div className="app-sidebar-footer">
+          <ThemeToggle />
+          {authStatus.mode === "password" && (
+            <button
+              className="btn-text sidebar-signout"
+              onClick={() => {
+                setAuthError("");
+                void logout()
+                  .then(setAuthStatus)
+                  .catch((error: unknown) => setAuthError(errorMessage(error)));
+              }}
+            >
+              <Icon name="logout" size={16} />
+              <span className="sidebar-signout-label">Sign out</span>
+            </button>
+          )}
+        </div>
+      </aside>
+      <main className="workspace-main">
+        <div className="workspace-content">
+          {authError && (
+            <p className="error workspace-alert" role="alert">
+              {authError}
+            </p>
+          )}
           {activePrimary === "settings" && activeTab !== "settings" && (
             <a className="settings-back" href="/settings">
               ← Settings
             </a>
           )}
           {secondary.length > 0 && (
-            <div className="workspace-subnav">
-              <label>
-                Activity view
-                <select
-                  aria-label="Activity view"
-                  value={activeTab}
-                  onChange={(e) =>
-                    navigate(
-                      secondary.find((item) => item.key === e.target.value)
-                        ?.path || "/activity",
-                    )
-                  }
+            <nav className="segmented-nav" aria-label="Activity view">
+              {secondary.map((item) => (
+                <a
+                  key={item.key}
+                  href={item.path}
+                  aria-current={activeTab === item.key ? "page" : undefined}
                 >
-                  {secondary.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                  {item.label}
+                </a>
+              ))}
+            </nav>
           )}
           <Suspense fallback={<p role="status">Loading…</p>}>
             {renderContent()}
           </Suspense>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import type { LibraryValues } from "../../types";
 import { useId, useState } from "react";
+import Icon from "../ui/Icon";
 
 export default function LibraryToolbar({
   values,
@@ -52,18 +53,23 @@ export default function LibraryToolbar({
   return (
     <div className="library-controls">
       <div className="library-toolbar">
-        <input
-          aria-label="Search library"
-          placeholder="Search title, author, series, universe, or tag"
-          value={q}
-          onChange={(event) => setQ(event.target.value)}
-        />
+        <div className="library-search">
+          <Icon name="search" size={17} />
+          <input
+            type="search"
+            aria-label="Search library"
+            placeholder="Search title, author, series, universe, or tag"
+            value={q}
+            onChange={(event) => setQ(event.target.value)}
+          />
+        </div>
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={panelId}
           onClick={() => (onFiltersToggle || setLocalOpen)(!expanded)}
         >
+          <Icon name="filter" size={16} />
           Filters{activeCount > 0 ? ` (${activeCount})` : ""}
         </button>
       </div>

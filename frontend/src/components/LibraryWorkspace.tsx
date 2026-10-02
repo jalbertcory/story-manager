@@ -20,6 +20,7 @@ import LibraryGroups from "./library/LibraryGroups";
 import LibraryToolbar from "./library/LibraryToolbar";
 import SavedLibraryViews from "./library/SavedLibraryViews";
 import SeriesOrganizer from "./library/SeriesOrganizer";
+import Icon from "./ui/Icon";
 
 export default function LibraryWorkspace({
   search,
@@ -212,6 +213,7 @@ export default function LibraryWorkspace({
           )}
         </div>
         <a className="btn-primary" href="/import">
+          <Icon name="plus" size={17} />
           Add books
         </a>
       </div>
@@ -225,7 +227,6 @@ export default function LibraryWorkspace({
         genres={facets?.genres ?? []}
         inSeries={Boolean(series)}
       />
-      <SavedLibraryViews path={libraryPath(current)} onNavigate={onNavigate} />
       {source === "audiobook" && (
         <p className="hint">
           Books missing an EPUB. Upload matching EPUBs to add text to these
@@ -247,11 +248,17 @@ export default function LibraryWorkspace({
           </button>
         </div>
       )}
-      {!active.isLoading && total != null && (
-        <p role="status">
-          Showing {items.length} of {total} {grouped ? "groups" : "books"}
-        </p>
-      )}
+      <div className="library-status-row">
+        {!active.isLoading && total != null && (
+          <p role="status">
+            Showing {items.length} of {total} {grouped ? "groups" : "books"}
+          </p>
+        )}
+        <SavedLibraryViews
+          path={libraryPath(current)}
+          onNavigate={onNavigate}
+        />
+      </div>
       {!active.isLoading && grouped && (
         <LibraryGroups
           items={groupItems}
@@ -286,31 +293,33 @@ export default function LibraryWorkspace({
           {allSeries.error && assigningSeries && (
             <p role="alert">Could not load series: {allSeries.error.message}</p>
           )}
-          {bookItems.map((book) => (
-            <BookRow
-              key={book.id}
-              book={book}
-              onEdit={openBook}
-              actions={
-                assigningSeries && allSeries.data ? (
-                  <StandaloneTagAction
-                    book={book}
-                    seriesOptions={allSeries.data}
-                  />
-                ) : null
-              }
-              subtitle={
-                book.series
-                  ? `${book.series}${book.series_index != null ? ` · Book ${book.series_index}` : ""}`
-                  : null
-              }
-            />
-          ))}
-          {!items.length && !active.error && (
-            <p className="empty-state">
-              No books found. Try another search or add a book.
-            </p>
-          )}
+          <div className="library-book-list">
+            {bookItems.map((book) => (
+              <BookRow
+                key={book.id}
+                book={book}
+                onEdit={openBook}
+                actions={
+                  assigningSeries && allSeries.data ? (
+                    <StandaloneTagAction
+                      book={book}
+                      seriesOptions={allSeries.data}
+                    />
+                  ) : null
+                }
+                subtitle={
+                  book.series
+                    ? `${book.series}${book.series_index != null ? ` · Book ${book.series_index}` : ""}`
+                    : null
+                }
+              />
+            ))}
+            {!items.length && !active.error && (
+              <p className="empty-state">
+                No books found. Try another search or add a book.
+              </p>
+            )}
+          </div>
         </>
       )}
       {active.hasNextPage && (

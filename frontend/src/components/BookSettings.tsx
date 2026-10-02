@@ -546,7 +546,7 @@ function BookSettings({
         bookTab === "audiobook" ? " book-settings--wide" : ""
       }`}
     >
-      <div className="settings-header">
+      <nav className="breadcrumbs" aria-label="Book location">
         <button
           className="btn-text"
           onClick={leaveSettings}
@@ -558,21 +558,24 @@ function BookSettings({
             deleteMutation.isPending ||
             enableAudiobookMutation.isPending
           }
-          style={{ flexShrink: 0 }}
         >
           ← Back to library
         </button>
+        {onNavigationChange && (
+          <>
+            <span aria-hidden="true">/</span>
+            <a href={`/books/${book.id}/overview`}>{book.title}</a>
+          </>
+        )}
+        <span aria-hidden="true">/</span>
+        <span>{bookTab === "audiobook" ? "Audiobooks" : "Details"}</span>
+      </nav>
+      <div className="settings-header">
         <div className="settings-title-block">
           <h2>{book.title}</h2>
           <span>{book.author || "Unknown author"}</span>
         </div>
       </div>
-
-      {onNavigationChange && (
-        <a className="settings-back" href={`/books/${book.id}/overview`}>
-          ← Book overview
-        </a>
-      )}
       <nav className="book-settings-tabs">
         <button
           className={`book-settings-tab${bookTab === "details" ? " book-settings-tab--active" : ""}`}
