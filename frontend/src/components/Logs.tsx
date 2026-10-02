@@ -5,10 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 const LEVELS = ["ALL", "ERROR", "WARNING", "INFO", "DEBUG"];
 
 const LEVEL_COLORS: Record<string, string> = {
-  ERROR: "#f87171",
-  WARNING: "#fbbf24",
-  INFO: "#60a5fa",
-  DEBUG: "#9ca3af",
+  ERROR: "var(--danger)",
+  WARNING: "var(--warning)",
+  INFO: "var(--info)",
+  DEBUG: "var(--text-muted)",
 };
 
 function HealthCard({
@@ -228,7 +228,9 @@ function Logs({ onBack }: { onBack?: () => void }) {
               </span>
               <span
                 className="observability-level"
-                style={{ color: LEVEL_COLORS[entry.level] ?? "#9ca3af" }}
+                style={{
+                  color: LEVEL_COLORS[entry.level] ?? "var(--text-muted)",
+                }}
               >
                 {entry.level}
               </span>

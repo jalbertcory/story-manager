@@ -156,13 +156,13 @@ function StorageCleanup({ onBack }: { onBack: () => void }) {
                         fontSize: "0.8rem",
                         padding: "0.3rem 0.5rem",
                         borderRadius: "4px",
-                        background: "var(--surface, #1a1a2e)",
+                        background: "var(--surface)",
                       }}
                     >
                       <span
                         style={{
                           wordBreak: "break-all",
-                          color: deleted ? "#6b7280" : "#e2e8f0",
+                          color: deleted ? "var(--text-subtle)" : "var(--text)",
                         }}
                       >
                         {f.path}
@@ -200,7 +200,7 @@ function StorageCleanup({ onBack }: { onBack: () => void }) {
                         fontSize: "0.85rem",
                         padding: "0.4rem 0.6rem",
                         borderRadius: "4px",
-                        background: "var(--surface, #1a1a2e)",
+                        background: "var(--surface)",
                         gap: "1rem",
                       }}
                     >
@@ -213,7 +213,7 @@ function StorageCleanup({ onBack }: { onBack: () => void }) {
                       <span
                         style={{
                           flexShrink: 0,
-                          color: "#f87171",
+                          color: "var(--danger)",
                           fontFamily: "monospace",
                           fontSize: "0.8rem",
                         }}
@@ -239,7 +239,7 @@ function StorageCleanup({ onBack }: { onBack: () => void }) {
             <p
               style={{
                 marginTop: "0.75rem",
-                color: "#4ade80",
+                color: "var(--success)",
                 fontSize: "0.875rem",
               }}
             >

@@ -380,7 +380,7 @@ function Utilities({
                           fontSize: "0.85rem",
                           padding: "0.4rem 0.6rem",
                           borderRadius: "4px",
-                          background: "var(--surface, #1a1a2e)",
+                          background: "var(--surface)",
                           gap: "1rem",
                         }}
                       >
@@ -393,7 +393,7 @@ function Utilities({
                         <span
                           style={{
                             flexShrink: 0,
-                            color: "#f87171",
+                            color: "var(--danger)",
                             fontFamily: "monospace",
                             fontSize: "0.8rem",
                           }}
@@ -978,7 +978,7 @@ function Utilities({
             {preview?.skipped_reason && (
               <p
                 className="hint"
-                style={{ marginTop: "0.5rem", color: "#fbbf24" }}
+                style={{ marginTop: "0.5rem", color: "var(--warning)" }}
               >
                 {preview.skipped_reason}
               </p>
@@ -1027,13 +1027,15 @@ function Utilities({
                               fontSize: "0.8rem",
                               padding: "0.3rem 0.5rem",
                               borderRadius: "4px",
-                              background: "var(--surface, #1a1a2e)",
+                              background: "var(--surface)",
                             }}
                           >
                             <span
                               style={{
                                 wordBreak: "break-all",
-                                color: deleted ? "#6b7280" : "#e2e8f0",
+                                color: deleted
+                                  ? "var(--text-subtle)"
+                                  : "var(--text)",
                               }}
                             >
                               {f.path}
@@ -1073,7 +1075,7 @@ function Utilities({
                               fontSize: "0.85rem",
                               padding: "0.4rem 0.6rem",
                               borderRadius: "4px",
-                              background: "var(--surface, #1a1a2e)",
+                              background: "var(--surface)",
                               gap: "1rem",
                             }}
                           >
@@ -1086,7 +1088,7 @@ function Utilities({
                             <span
                               style={{
                                 flexShrink: 0,
-                                color: "#f87171",
+                                color: "var(--danger)",
                                 fontFamily: "monospace",
                                 fontSize: "0.8rem",
                               }}
@@ -1112,7 +1114,7 @@ function Utilities({
                   <p
                     style={{
                       marginTop: "0.75rem",
-                      color: "#4ade80",
+                      color: "var(--success)",
                       fontSize: "0.875rem",
                     }}
                   >

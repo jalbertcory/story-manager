@@ -96,6 +96,22 @@ describe("App workspaces", () => {
     };
   });
 
+  it("cycles and remembers the colour theme from the sidebar", async () => {
+    mockApi();
+    window.localStorage.removeItem("story-manager-theme");
+    delete document.documentElement.dataset.theme;
+    renderWithClient(<App />);
+    const toggle = await screen.findByRole("button", { name: /^Theme: System/ });
+    fireEvent.click(toggle);
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(window.localStorage.getItem("story-manager-theme")).toBe("light");
+    fireEvent.click(screen.getByRole("button", { name: /^Theme: Light/ }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    fireEvent.click(screen.getByRole("button", { name: /^Theme: Dark/ }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(window.localStorage.getItem("story-manager-theme")).toBeNull();
+  });
+
   it("shows sign-out failures and lets the user retry", async () => {
     mockApi((url) => url === "/api/auth/status"
       ? { mode: "password", authenticated: true } : undefined);

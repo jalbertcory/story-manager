@@ -1,24 +1,65 @@
+/*
+ * Story Manager design system — "Lamplight".
+ *
+ * Every colour, radius, and shadow in the app resolves through these tokens.
+ * The dark "ink" theme is the default; the light "paper" theme applies when
+ * the system prefers it or the reader picks it from the sidebar. Components
+ * should reference semantic tokens (--surface, --accent-soft, --danger) rather
+ * than raw colours so both themes stay in step.
+ */
 :root {
-  --bg: #171510;
-  --surface: #1f1c17;
-  --surface-2: #29251e;
-  --surface-3: #332e25;
-  --border: rgba(226, 214, 192, 0.13);
-  --border-strong: rgba(226, 214, 192, 0.28);
-  --text: #eee7d9;
-  --text-muted: #a39989;
-  --accent: #d5836a;
-  --accent-hover: #e59a80;
-  --danger: #e06e67;
-  --danger-hover: #ec847d;
-  --success: #b79a68;
-  --warning: #d9a654;
-  --radius: 1px;
-  --radius-sm: 1px;
-  --radius-lg: 1px;
+  --font-sans:
+    "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", system-ui, sans-serif;
+  --font-serif:
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Charter,
+    "Bitstream Charter", Georgia, serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  font-family: "Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  line-height: 1.5;
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --sidebar-width: 248px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Ink (dark) */
+  --bg: #0f1115;
+  --bg-elevated: #13161c;
+  --surface: #171a21;
+  --surface-2: #1e222b;
+  --surface-3: #282d38;
+  --border: #262b35;
+  --border-strong: #394050;
+  --text: #ecebe6;
+  --text-muted: #9ca2ae;
+  --text-subtle: #6f7685;
+  --accent: #f0b54e;
+  --accent-hover: #f7c873;
+  --accent-contrast: #1b1407;
+  --accent-soft: rgb(240 181 78 / 12%);
+  --accent-ring: rgb(240 181 78 / 35%);
+  --danger: #f2766b;
+  --danger-hover: #f79187;
+  --danger-soft: rgb(242 118 107 / 13%);
+  --success: #6fd09a;
+  --success-soft: rgb(111 208 154 / 12%);
+  --warning: #fb9a53;
+  --warning-soft: rgb(251 154 83 / 13%);
+  --info: #7fb2ff;
+  --info-soft: rgb(127 178 255 / 13%);
+  --error: var(--danger);
+  --overlay: rgb(5 6 9 / 70%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow: 0 6px 18px -6px rgb(0 0 0 / 55%), 0 2px 6px rgb(0 0 0 / 30%);
+  --shadow-lg: 0 24px 60px -12px rgb(0 0 0 / 65%);
+  --cover-shadow: 0 10px 22px -8px rgb(0 0 0 / 75%), 0 2px 4px rgb(0 0 0 / 40%);
+
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
   font-weight: 400;
   color: var(--text);
   background-color: var(--bg);
@@ -29,7 +70,80 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-*, *::before, *::after {
+/* Paper (light) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f1ea;
+    --bg-elevated: #faf8f3;
+    --surface: #fffdf9;
+    --surface-2: #f1ede4;
+    --surface-3: #e7e1d4;
+    --border: #e3ddd0;
+    --border-strong: #cbc2af;
+    --text: #1d1b17;
+    --text-muted: #625c51;
+    --text-subtle: #8c8577;
+    --accent: #a3560b;
+    --accent-hover: #874607;
+    --accent-contrast: #fffaf1;
+    --accent-soft: rgb(163 86 11 / 10%);
+    --accent-ring: rgb(163 86 11 / 28%);
+    --danger: #be3a2e;
+    --danger-hover: #a02c22;
+    --danger-soft: rgb(190 58 46 / 9%);
+    --success: #2c7a4d;
+    --success-soft: rgb(44 122 77 / 10%);
+    --warning: #b4570a;
+    --warning-soft: rgb(180 87 10 / 10%);
+    --info: #2d66b0;
+    --info-soft: rgb(45 102 176 / 9%);
+    --overlay: rgb(29 27 23 / 45%);
+    --shadow-sm: 0 1px 2px rgb(60 45 20 / 8%);
+    --shadow: 0 6px 18px -8px rgb(60 45 20 / 22%), 0 2px 5px rgb(60 45 20 / 8%);
+    --shadow-lg: 0 24px 60px -16px rgb(60 45 20 / 30%);
+    --cover-shadow:
+      0 10px 20px -8px rgb(60 45 20 / 45%), 0 2px 4px rgb(60 45 20 / 15%);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f1ea;
+  --bg-elevated: #faf8f3;
+  --surface: #fffdf9;
+  --surface-2: #f1ede4;
+  --surface-3: #e7e1d4;
+  --border: #e3ddd0;
+  --border-strong: #cbc2af;
+  --text: #1d1b17;
+  --text-muted: #625c51;
+  --text-subtle: #8c8577;
+  --accent: #a3560b;
+  --accent-hover: #874607;
+  --accent-contrast: #fffaf1;
+  --accent-soft: rgb(163 86 11 / 10%);
+  --accent-ring: rgb(163 86 11 / 28%);
+  --danger: #be3a2e;
+  --danger-hover: #a02c22;
+  --danger-soft: rgb(190 58 46 / 9%);
+  --success: #2c7a4d;
+  --success-soft: rgb(44 122 77 / 10%);
+  --warning: #b4570a;
+  --warning-soft: rgb(180 87 10 / 10%);
+  --info: #2d66b0;
+  --info-soft: rgb(45 102 176 / 9%);
+  --overlay: rgb(29 27 23 / 45%);
+  --shadow-sm: 0 1px 2px rgb(60 45 20 / 8%);
+  --shadow: 0 6px 18px -8px rgb(60 45 20 / 22%), 0 2px 5px rgb(60 45 20 / 8%);
+  --shadow-lg: 0 24px 60px -16px rgb(60 45 20 / 30%);
+  --cover-shadow:
+    0 10px 20px -8px rgb(60 45 20 / 45%), 0 2px 4px rgb(60 45 20 / 15%);
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -39,69 +153,146 @@ body {
   min-height: 100vh;
 }
 
-h1, h2, h3 {
-  font-family: Georgia, "Times New Roman", serif;
+::selection {
+  background: var(--accent-ring);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
   color: var(--text);
   margin: 0;
 }
 
-h1 { font-size: 1.85rem; font-weight: 500; letter-spacing: -0.025em; }
-h2 { font-size: 1.45rem; font-weight: 500; letter-spacing: -0.02em; }
-h3 { font-size: 1.05rem; font-weight: 500; }
+h1 {
+  font-size: 1.9rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+}
+h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+h3 {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
 
 a {
   color: var(--accent);
   text-decoration: none;
-  transition: color 0.15s;
+  transition: color 0.15s var(--ease);
 }
 a:hover {
   color: var(--accent-hover);
 }
 
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  padding: 0.45em 1em;
+  padding: 0.5em 1em;
   font-size: 0.875rem;
   font-weight: 500;
   font-family: inherit;
-  background-color: var(--surface-2);
+  line-height: 1.25;
+  background-color: var(--surface);
   color: var(--text);
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background-color 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
   white-space: nowrap;
 }
 button:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  border-color: var(--text-subtle);
+}
+button:active:not(:disabled) {
   background-color: var(--surface-3);
-  border-color: var(--accent);
 }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-button:focus-visible {
+:is(button, a, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-input, select, textarea {
-  background-color: var(--surface-2);
+input,
+select,
+textarea {
+  background-color: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--text);
   font-size: 0.875rem;
   font-family: inherit;
-  padding: 0.45em 0.75em;
-  transition: border-color 0.15s;
+  padding: 0.5em 0.75em;
+  transition:
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
   width: 100%;
 }
-input:focus, select:focus, textarea:focus {
+input:hover:not(:disabled, :focus),
+select:hover:not(:disabled, :focus),
+textarea:hover:not(:disabled, :focus) {
+  border-color: var(--text-subtle);
+}
+input:focus,
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
-input::placeholder, textarea::placeholder {
-  color: var(--text-muted);
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--accent);
+  box-shadow: none;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-subtle);
 }
 select {
   cursor: pointer;
+}
+
+summary {
+  cursor: pointer;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

@@ -20,6 +20,7 @@ import AdminLogin from "./components/AdminLogin";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
 import AttentionDashboard from "./components/AttentionDashboard";
+import Icon, { BrandMark } from "./components/Icon";
 
 // The library, book overview, and attention views load with the app; other
 // pages are fetched on first visit to keep the initial bundle small.
@@ -42,6 +43,18 @@ import {
   SECTION_NAV,
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
+import {
+  nextThemePreference,
+  readThemePreference,
+  saveThemePreference,
+  type ThemePreference,
+} from "./lib/theme";
+
+const THEME_LABELS: Record<ThemePreference, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+};
 
 function currentLocation() {
   return {
@@ -63,6 +76,7 @@ export default function App() {
   const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const [audioTabs, setAudioTabs] = useState<Record<number, string>>({});
   const [globalDragging, setGlobalDragging] = useState(false);
+  const [theme, setTheme] = useState(readThemePreference);
   const pendingScroll = useRef<number | null>(null);
   const restoreLibraryScroll = useCallback(() => {
     if (pendingScroll.current != null) {
@@ -370,26 +384,13 @@ export default function App() {
       className={`app-container workspace-shell${globalDragging ? " drag-over" : ""}`}
       onClick={followInternalLink}
     >
-      <header className="app-header">
-        <a href="/" className="wordmark">
-          <h1>Story Manager</h1>
-        </a>
-        {authStatus.mode === "password" && (
-          <button
-            className="btn-text"
-            onClick={() => {
-              setAuthError("");
-              void logout()
-                .then(setAuthStatus)
-                .catch((error: unknown) => setAuthError(errorMessage(error)));
-            }}
-          >
-            Sign out
-          </button>
-        )}
-        {authError && <p role="alert">{authError}</p>}
-      </header>
-      <div className="workspace-layout">
+      <aside className="workspace-sidebar">
+        <header className="app-header">
+          <a href="/" className="wordmark">
+            <BrandMark />
+            <h1>Story Manager</h1>
+          </a>
+        </header>
         <nav className="workspace-nav" aria-label="Primary navigation">
           {PRIMARY_NAV.map((item, index) => (
             <a
@@ -398,7 +399,8 @@ export default function App() {
               href={item.path}
               aria-current={activePrimary === item.key ? "page" : undefined}
             >
-              {item.label}
+              <Icon name={item.key} />
+              <span className="workspace-nav-label">{item.label}</span>
               {item.key === "activity" && jobs.length > 0 && (
                 <span
                   className="workspace-count"
@@ -410,7 +412,49 @@ export default function App() {
             </a>
           ))}
         </nav>
+        <div className="workspace-sidebar-footer">
+          <button
+            type="button"
+            className="btn-text sidebar-action"
+            onClick={() => {
+              const next = nextThemePreference(theme);
+              saveThemePreference(next);
+              setTheme(next);
+            }}
+            aria-label={`Theme: ${THEME_LABELS[theme]}. Switch to ${THEME_LABELS[nextThemePreference(theme)]}`}
+            title={`Theme: ${THEME_LABELS[theme]}`}
+          >
+            <Icon name={theme} size={18} />
+            <span className="sidebar-action-label">
+              {THEME_LABELS[theme]} theme
+            </span>
+          </button>
+          {authStatus.mode === "password" && (
+            <button
+              type="button"
+              className="btn-text sidebar-action"
+              aria-label="Sign out"
+              title="Sign out"
+              onClick={() => {
+                setAuthError("");
+                void logout()
+                  .then(setAuthStatus)
+                  .catch((error: unknown) => setAuthError(errorMessage(error)));
+              }}
+            >
+              <Icon name="sign-out" size={18} />
+              <span className="sidebar-action-label">Sign out</span>
+            </button>
+          )}
+        </div>
+      </aside>
+      <div className="workspace-layout">
         <main className="workspace-main">
+          {authError && (
+            <p className="error" role="alert">
+              {authError}
+            </p>
+          )}
           {activePrimary === "settings" && activeTab !== "settings" && (
             <a className="settings-back" href="/settings">
               ← Settings

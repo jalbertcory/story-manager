@@ -106,7 +106,7 @@ function ReaderKeys({ showHeading = true }) {
               display: "block",
               padding: "0.75rem",
               borderRadius: "6px",
-              background: "var(--surface, #1a1a2e)",
+              background: "var(--surface)",
               wordBreak: "break-all",
             }}
           >
@@ -141,7 +141,7 @@ function ReaderKeys({ showHeading = true }) {
                 gap: "1rem",
                 padding: "0.9rem 1rem",
                 borderRadius: "8px",
-                background: "var(--surface, #1a1a2e)",
+                background: "var(--surface)",
                 opacity: key.revoked_at ? 0.7 : 1,
                 flexWrap: "wrap",
               }}
