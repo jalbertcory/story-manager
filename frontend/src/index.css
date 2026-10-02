@@ -147,9 +147,15 @@
   box-sizing: border-box;
 }
 
+/* Restate text colour and type on body so a host or user-agent body style
+   cannot override what the theme sets on :root. */
 body {
   margin: 0;
   background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.55;
   min-height: 100vh;
 }
 
