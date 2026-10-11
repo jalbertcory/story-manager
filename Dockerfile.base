@@ -1,8 +1,12 @@
-FROM python:3.13-slim
+FROM python:3.14-slim-trixie
 
-# Install PostgreSQL and Node.js
-RUN apt-get update && apt-get install -y curl postgresql postgresql-contrib \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+# Install PostgreSQL and Node.js.
+# The PostgreSQL major version is pinned on purpose: installs keep their data
+# directory in a volume, and a newer major cannot open an older cluster without
+# pg_upgrade. Pin the Debian release too so a base-image rollover cannot change
+# which PostgreSQL major is available.
+RUN apt-get update && apt-get install -y curl postgresql-17 \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

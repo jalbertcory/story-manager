@@ -19,7 +19,7 @@ from ..lifecycle import (
 )
 
 
-def _build_books_query(sort_by: str = "title", sort_order: str = "asc") -> Select[tuple[models.Book]]:
+def _build_books_query(sort_by: str = "title", sort_order: str = "asc") -> Select[models.Book]:
     sort_columns = {
         "title": models.Book.title,
         "author": models.Book.author,
@@ -37,7 +37,7 @@ def _build_books_query(sort_by: str = "title", sort_order: str = "asc") -> Selec
     )
 
 
-def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc") -> Select[tuple[models.Book]]:
+def _build_book_search_query(q: str, sort_by: str = "title", sort_order: str = "asc") -> Select[models.Book]:
     pattern = f"%{q}%"
     return _build_books_query(sort_by=sort_by, sort_order=sort_order).filter(
         or_(

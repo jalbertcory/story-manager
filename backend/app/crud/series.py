@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, List, cast
 
 from fastapi import HTTPException
-from sqlalchemy import Table, update, asc, case, func
+from sqlalchemy import Table, update, case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.sql.elements import UnaryExpression
@@ -35,10 +35,10 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
 
 def _series_order_columns() -> tuple[UnaryExpression[Any], ...]:
     return (
-        asc(case((models.Book.series_index.is_(None), 1), else_=0)),
-        asc(models.Book.series_index),
-        asc(models.Book.title),
-        asc(models.Book.id),
+        case((models.Book.series_index.is_(None), 1), else_=0).asc(),
+        models.Book.series_index.asc(),
+        models.Book.title.asc(),
+        models.Book.id.asc(),
     )
 
 
@@ -82,7 +82,7 @@ async def get_all_series(db: AsyncSession) -> List[str]:
         .distinct()
         .order_by(models.Book.series)
     )
-    return [row[0] for row in result.all()]
+    return [series for series in result.scalars().all() if series is not None]
 
 
 async def get_series_metadata(db: AsyncSession, series_name: str) -> models.SeriesMetadata | None:

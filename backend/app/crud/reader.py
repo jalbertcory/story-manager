@@ -24,7 +24,7 @@ def _has_reader_content() -> ColumnElement[bool]:
     )
 
 
-def _reader_books_query() -> Select[tuple[models.Book]]:
+def _reader_books_query() -> Select[models.Book]:
     return select(models.Book).where(
         _has_reader_content(),
         models.Book.download_status.is_(None),

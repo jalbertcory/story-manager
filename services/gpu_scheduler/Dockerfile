@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.11.8 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.0 AS uv
 
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 LABEL org.opencontainers.image.source="https://github.com/jalbertcory/story-manager"
 LABEL org.opencontainers.image.description="Story Manager scheduled GPU-container availability controller"

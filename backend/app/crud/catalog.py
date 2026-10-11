@@ -150,7 +150,7 @@ async def get_catalog_series_page(
 ) -> tuple[list[models.Book], bool, list[CursorValue]]:
     expressions = _catalog_series_sort_expressions(sort_by)
     primary_order = desc(expressions[0]) if sort_order == "desc" else asc(expressions[0])
-    groups: Select[tuple[str | None, Any, Any, Any]] = (
+    groups: Select[str | None, Any, Any, Any] = (
         select(
             models.Book.series.label("series"),
             expressions[0].label("sort_value"),
