@@ -85,17 +85,18 @@ markers = [
 packages = ["backend"]
 
 # The app runs on Python 3.14, but shared modules in services/ also run on the
-# 3.12/3.13 model images. Keep formatter and type-check targets at 3.13 so no
-# 3.14-only syntax (e.g. unparenthesized `except A, B:`) leaks into them.
+# 3.12/3.13 model images. Keep formatter and type-check targets at the oldest of
+# those (3.12) so no newer syntax or stdlib API (e.g. unparenthesized
+# `except A, B:`) leaks into them.
 [tool.black]
 line-length = 127
-target-version = ["py313"]
+target-version = ["py312"]
 
 [tool.flake8]
 max-line-length = 127
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.12"
 files = ["backend/app", "services"]
 exclude = ["(^|/)(tests|\\.venv)/"]
 strict = true
