@@ -158,8 +158,8 @@ async def _metadata_proposals(db: AsyncSession, limit: int) -> schemas.Attention
             schemas.AttentionMetadataItem(
                 proposal_id=proposal.id,
                 book_id=book.id,
-                title=book.title,
-                author=book.author,
+                title=book.title or "",
+                author=book.author or "",
                 note=proposal.note,
             )
             for proposal, book in rows

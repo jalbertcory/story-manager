@@ -132,7 +132,7 @@ This approach spins up a clean Postgres instance, runs all migrations from scrat
 docker run --name pg-migration-test \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=story_manager \
-  -p 5433:5432 -d postgres:16
+  -p 5433:5432 -d postgres:17
 
 # Wait for it to be ready
 until docker exec pg-migration-test pg_isready -U postgres; do sleep 1; done

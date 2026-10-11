@@ -135,7 +135,7 @@ async def get_processing_jobs(
     if book_id is not None:
         query = query.where(ProcessingJob.book_id == book_id)
     result = await db.execute(query)
-    return list(result.tuples().all())
+    return [(job, title) for job, title in result.all()]
 
 
 async def claim_processing_job(

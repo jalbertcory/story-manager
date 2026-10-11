@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local Qwen3-TTS adapter for Story Manager"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "fastapi==0.139.0",
+    "fastapi==0.143.0",
     "numpy==2.4.6",
     "peft>=0.17,<1",
     "pydub==0.25.1",
@@ -12,7 +12,7 @@ dependencies = [
     "soundfile>=0.13,<1",
     "torch>=2.8,<3",
     "transformers>=4.57,<6",
-    "uvicorn[standard]==0.51.0",
+    "uvicorn[standard]==0.54.0",
 ]
 
 [tool.uv]

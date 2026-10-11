@@ -1,6 +1,6 @@
 # Development
 
-This project uses Python 3.13.5, Node.js 22, PostgreSQL, `uv`, `pyenv`, and `nvm`.
+This project uses Python 3.14.8, Node.js 24, PostgreSQL 17, `uv`, `pyenv`, and `nvm`.
 
 ## First-Time Setup
 
@@ -182,7 +182,8 @@ production Python under `services`. Functions need complete signatures, collecti
 need type arguments, and typed functions cannot silently return `Any` or call
 untyped functions. Strict mode also checks incompatible comparisons and requires
 explicit public re-exports.
-It targets Python 3.13, matching the development and CI environment. Test fixtures,
+It targets Python 3.12: the app runs on 3.14, but shared service modules also run on
+the 3.12/3.13 model images, so code must stay 3.12-compatible. Test fixtures,
 Alembic migration scripts, and operational scripts are outside this gate.
 New application/service modules are included automatically.
 

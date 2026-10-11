@@ -589,7 +589,8 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 
 **`pyproject.toml`** (core):
 - `spacy>=3.7,<4` — sentence tokenization
-- `httpx2==2.12.0` — HTTP client for LLM and TTS provider calls (exports the `httpx` module)
+- `httpx==0.28.1` — HTTP client for LLM and TTS provider calls (`import httpx`)
+- `httpx2` — required by Starlette's `TestClient`; it installs only the `httpx2` module
 - `mutagen>=1.47` — MP3 duration extraction
 
 **`Dockerfile`**:

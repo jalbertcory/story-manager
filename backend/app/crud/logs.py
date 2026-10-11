@@ -122,4 +122,4 @@ async def get_book_logs_for_task(
         .filter(*conditions)
         .order_by(models.BookLog.timestamp.asc())
     )
-    return task, list(result.tuples().all())
+    return task, [(log, title) for log, title in result.all()]

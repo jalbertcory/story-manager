@@ -179,7 +179,9 @@ async def get_metadata_inbox_entries(
         .limit(limit)
     )
     rows = result.all()
-    entries = []
+    entries: list[
+        tuple[models.MetadataProposal, models.Book, Optional[models.BookMetadataMatch], list[models.BookMetadataMatch]]
+    ] = []
     for proposal, book, match in rows:
         candidates = await get_metadata_matches_by_book_id(db, book.id)
         entries.append((proposal, book, match, candidates))

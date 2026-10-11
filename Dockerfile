@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=ghcr.io/jalbertcory/story-manager/base:d9cc9830314ba91abb46c1350b942b7dbc5317a9d288707b7b2c16323a2a3b24
+ARG BASE_IMAGE=ghcr.io/jalbertcory/story-manager/base:cc2cd4089d5b76aec320b4de863c9f4dcdadc87e88ef9a74fc9a8260c8fa1c66
 FROM ${BASE_IMAGE}
 
 COPY pyproject.toml uv.lock ./
