@@ -8,6 +8,7 @@ on:
       - services/omnivoice/**
       - services/speaker_similarity.py
       - services/tts_consistency.py
+      - services/voice_roster.py
       - services/__init__.py
       - .github/workflows/omnivoice-image.yml
   # PR builds paused to conserve Actions minutes; main publishing stays enabled.
@@ -18,6 +19,7 @@ on:
   #     - services/omnivoice/**
   #     - services/speaker_similarity.py
   #     - services/tts_consistency.py
+  #     - services/voice_roster.py
   #     - services/__init__.py
   #     - .github/workflows/omnivoice-image.yml
 

@@ -22,7 +22,7 @@ class SettingsPatch(UpdateModel):
     tts_model: str | None = None
     tts_default_voice: str | None = None
     tts_max_block_chars: int = 500
-    tts_voice_similarity_threshold: float = 0.45
+    tts_voice_drift_margin: float = 3.0
     tts_quality_attempts: int = 3
     transcription_provider: str | None = None
     transcription_api_key: str | None = Field(default=None, repr=False)
@@ -68,8 +68,8 @@ def apply_settings_patch(record: models.AudiobookSettings, data: Mapping[str, ob
         record.tts_default_voice = patch.tts_default_voice
     if "tts_max_block_chars" in patch.model_fields_set:
         record.tts_max_block_chars = patch.tts_max_block_chars
-    if "tts_voice_similarity_threshold" in patch.model_fields_set:
-        record.tts_voice_similarity_threshold = patch.tts_voice_similarity_threshold
+    if "tts_voice_drift_margin" in patch.model_fields_set:
+        record.tts_voice_drift_margin = patch.tts_voice_drift_margin
     if "tts_quality_attempts" in patch.model_fields_set:
         record.tts_quality_attempts = patch.tts_quality_attempts
     if "transcription_provider" in patch.model_fields_set:

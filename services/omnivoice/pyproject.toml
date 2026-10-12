@@ -10,6 +10,7 @@ dependencies = [
     # Text normalization (numbers, dates, currency) needs WeTextProcessing, whose
     # pynini dependency only publishes Linux x86_64 wheels.
     "omnivoice[tn]==0.2.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime>=1.22,<2",
     "pydub==0.25.1",
     "torch==2.8.0",
     "torchaudio==2.8.0",

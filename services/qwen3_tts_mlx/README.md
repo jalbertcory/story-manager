@@ -1,7 +1,7 @@
 # Qwen3-TTS MLX Adapter
 
 This Apple-Silicon runtime implements the same Story Manager Qwen3-TTS HTTP contract using MLX-Audio 0.5.8. It reuses the
-durable `qwen3-...` voice store and the shared signal/WavLM quality checks. The default clone and CustomVoice models
+durable `qwen3-...` voice store and the shared signal and speaker-verification quality checks. The default clone and CustomVoice models
 are the 6-bit 1.7B MLX conversions. The larger clone model is the default because it preserves enrollment-speaker
 identity substantially better across long-form lines than the 0.6B variant.
 

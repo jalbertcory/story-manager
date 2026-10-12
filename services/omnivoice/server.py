@@ -31,8 +31,15 @@ from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: 
 from .normalization import prepare_for_normalization  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
-from services.speaker_similarity import get_speaker_verifier  # noqa: E402
 from services.tts_consistency import seed_for_attempt  # noqa: E402
+from services.voice_roster import (  # noqa: E402
+    MAX_ROSTER_VOICE_IDS,
+    DesignCandidate,
+    SpeakerCheck,
+    SpeakerGuard,
+    design_distinct_voice,
+    generate_checked,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,8 @@ VOICE_STORE_PATH = Path(
         str(Path(os.getenv("HF_HOME", ".cache/omnivoice")) / "voices"),
     )
 )
+# OmniVoice only reads tagged attributes, so free-text texture cannot be steered.
+DESIGN_FEATURES = ("pitch", "age", "accent", "pace")
 VOICE_DESIGN_TEXT = os.getenv(
     "OMNIVOICE_VOICE_DESIGN_TEXT",
     "Once upon a quiet morning, I found the courage to tell this story clearly, warmly, and in my own voice.",
@@ -62,13 +71,23 @@ class GenerateRequest(BaseModel):
     voice_id: str | None = None
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    # Legacy absolute speaker-similarity floor; prefer drift_margin.
     min_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    # Standard deviations below the voice's calibrated similarity before a take
+    # is retried; 0 or null disables the drift and cast checks.
+    drift_margin: float | None = Field(default=None, ge=0.0, le=10.0)
+    cast_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     quality_attempts: int = Field(default=QUALITY_ATTEMPTS, ge=1, le=10)
 
 
 class DesignVoiceRequest(BaseModel):
     voice: str = Field(min_length=1, max_length=1000)
     language: str | None = None
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
+    # Defaults to the active speaker verifier's calibrated roster limit.
+    max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    quality_attempts: int = Field(default=6, ge=1, le=20)
 
 
 class DesignVoiceResponse(BaseModel):
@@ -76,6 +95,8 @@ class DesignVoiceResponse(BaseModel):
     voice: str
     sample_text: str
     sample_url: str
+    max_cross_voice_similarity: float | None = None
+    attempts: int = 1
 
 
 class BatchGenerateRequest(BaseModel):
@@ -127,6 +148,7 @@ class OmniVoiceRuntime:
         self._voice_store = VoiceStore(VOICE_STORE_PATH)
         self._voice_clone_prompts: dict[str, object] = {}
         self.normalize_text = False
+        self._speaker_guard = SpeakerGuard(self._voice_store.sample_path, self._generate_probe)
 
     def load(self) -> None:
         self.device = get_best_device() if DEVICE == "auto" else DEVICE
@@ -194,89 +216,98 @@ class OmniVoiceRuntime:
         self._voice_clone_prompts[voice_id] = prompt
         return prompt
 
-    def design_voice(self, request: DesignVoiceRequest) -> StoredVoice:
-        if self.model is None:
+    def _stored_instruct(self, voice_id: str) -> str | None:
+        try:
+            return self._voice_store.get(voice_id).instruct
+        except KeyError:
+            return None
+
+    def design_voice(self, request: DesignVoiceRequest) -> tuple[StoredVoice, DesignCandidate]:
+        model = self.model
+        if model is None:
             raise RuntimeError("OmniVoice model is not loaded")
         with self._generate_lock:
-            translated = translate_generation_prompt(request.voice, VOICE_DESIGN_TEXT)
-            # The stored ref_text must match the enrollment sample word for word,
-            # so the sample is spoken from the exact text that is saved with it.
-            audio, _similarity, _attempts = self._generate_valid_audio(
-                GenerateRequest(
-                    text=VOICE_DESIGN_TEXT,
-                    voice=request.voice,
-                    language=request.language,
-                ),
-                1,
-                normalize=False,
+
+            def render(description: str, seed: int | None) -> tuple[np.ndarray, int]:
+                sample = GenerateRequest(text=VOICE_DESIGN_TEXT, voice=description, language=request.language, seed=seed)
+                # The stored ref_text must match the enrollment sample word for word,
+                # so the sample is spoken from the exact text that is saved with it.
+                return self._generate_audio([sample], normalize=False)[0], model.sampling_rate
+
+            candidate = design_distinct_voice(
+                render,
+                lambda audio, rate: self._speaker_guard.closest_voice(request.avoid_voice_ids, audio, rate),
+                self._stored_instruct,
+                voice=request.voice,
+                seed=request.seed,
+                attempts=request.quality_attempts,
+                max_similarity=self._speaker_guard.roster_limit(request.max_voice_similarity),
+                features=DESIGN_FEATURES,
+                label="OmniVoice voice design",
             )
+            translated = translate_generation_prompt(candidate.voice, VOICE_DESIGN_TEXT)
             stored = self._voice_store.create(
                 model=MODEL_ID,
                 instruct=translated.instruct or "",
                 ref_text=translated.text,
-                audio=audio,
-                sampling_rate=self.model.sampling_rate,
+                audio=candidate.audio,
+                sampling_rate=model.sampling_rate,
+                description=candidate.voice,
             )
-            self._voice_clone_prompts[stored.id] = self.model.create_voice_clone_prompt(
+            self._voice_clone_prompts[stored.id] = model.create_voice_clone_prompt(
                 ref_audio=str(self._voice_store.sample_path(stored.id)),
                 ref_text=stored.ref_text,
             )
-            return stored
+            self._speaker_guard.try_calibrate(stored.id)
+            return stored, candidate
+
+    def _generate_probe(self, voice_id: str, text: str, seed: int) -> tuple[np.ndarray, int]:
+        if self.model is None:
+            raise RuntimeError("OmniVoice model is not loaded")
+        stored = self._voice_store.get(voice_id)
+        # Probe with the designed description so pace tags apply as they do in
+        # generation; older voices only have the translated instruct.
+        request = GenerateRequest(text=text, voice=stored.description or stored.instruct or None, voice_id=voice_id, seed=seed)
+        return self._generate_audio([request])[0], self.model.sampling_rate
+
+    def _check_audio(self, request: GenerateRequest, audio: np.ndarray, sampling_rate: int) -> SpeakerCheck:
+        validate_generated_audio(audio, sampling_rate)
+        return self._speaker_guard.check(
+            request.voice_id,
+            audio,
+            sampling_rate,
+            drift_margin=request.drift_margin,
+            cast_voice_ids=request.cast_voice_ids,
+            min_similarity=request.min_voice_similarity,
+        )
 
     def _generate_valid_audio(
         self,
         request: GenerateRequest,
         request_number: int,
+        initial: np.ndarray | None = None,
         *,
         normalize: bool = True,
     ) -> tuple[np.ndarray, float | None, int]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
+        sampling_rate = self.model.sampling_rate
 
-        last_error = None
-        for attempt in range(1, request.quality_attempts + 1):
+        def generate(attempt: int) -> tuple[np.ndarray, int]:
             attempt_request = request
             if request.seed is not None:
                 attempt_request = request.model_copy(update={"seed": seed_for_attempt(request.seed, attempt)})
-            audio = self._generate_audio([attempt_request], normalize=normalize)[0]
-            try:
-                validate_generated_audio(audio, self.model.sampling_rate)
-                similarity = self._voice_similarity(request, audio)
-                if (
-                    request.min_voice_similarity is not None
-                    and similarity is not None
-                    and similarity < request.min_voice_similarity
-                ):
-                    raise AudioQualityError(f"speaker similarity {similarity:.3f} is below {request.min_voice_similarity:.3f}")
-                return audio, similarity, attempt
-            except AudioQualityError as exc:
-                last_error = exc
-                logger.warning(
-                    "Rejected generated audio for request %d on quality attempt %d/%d: %s",
-                    request_number,
-                    attempt,
-                    request.quality_attempts,
-                    exc,
-                )
+            return self._generate_audio([attempt_request], normalize=normalize)[0], sampling_rate
 
         text = request.text.replace("\n", " ")[:120]
-        raise AudioQualityError(
-            f"request {request_number} ({text!r}) failed quality validation after "
-            f"{request.quality_attempts} attempts: {last_error}"
-        ) from last_error
-
-    def _voice_similarity(self, request: GenerateRequest, audio: np.ndarray) -> float | None:
-        if not request.voice_id:
-            return None
-        if self.model is None:
-            raise RuntimeError("OmniVoice model is not loaded")
-        sample_path = self._voice_store.sample_path(request.voice_id)
-        return get_speaker_verifier().similarity(
-            request.voice_id,
-            sample_path,
-            audio,
-            self.model.sampling_rate,
+        audio, _rate, check, attempts = generate_checked(
+            generate,
+            lambda candidate, rate: self._check_audio(request, candidate, rate),
+            attempts=request.quality_attempts,
+            label=f"request {request_number} ({text!r})",
+            initial=None if initial is None else (initial, sampling_rate),
         )
+        return audio, check.similarity, attempts
 
     def generate_batch(self, requests: list[GenerateRequest]) -> list[tuple[bytes, int, float | None, int]]:
         if self.model is None:
@@ -285,28 +316,13 @@ class OmniVoiceRuntime:
         has_voice_ids = [bool(request.voice_id) for request in requests]
         can_native_batch = all(has_voice_ids) or not any(has_voice_ids)
         if NATIVE_BATCHING and len(requests) > 1 and can_native_batch:
+            # Each native output counts as the item's first attempt; rejected
+            # items are retried individually with their next attempt seed.
             audios = self._generate_audio(requests)
-            valid_audios: list[tuple[np.ndarray, float | None, int]] = []
-            for index, (request, audio) in enumerate(zip(requests, audios, strict=True), start=1):
-                try:
-                    validate_generated_audio(audio, self.model.sampling_rate)
-                    similarity = self._voice_similarity(request, audio)
-                    if (
-                        request.min_voice_similarity is not None
-                        and similarity is not None
-                        and similarity < request.min_voice_similarity
-                    ):
-                        raise AudioQualityError(
-                            f"speaker similarity {similarity:.3f} is below {request.min_voice_similarity:.3f}"
-                        )
-                    valid_audios.append((audio, similarity, 1))
-                except AudioQualityError as exc:
-                    logger.warning(
-                        "Rejected native batch output for request %d; regenerating individually: %s",
-                        index,
-                        exc,
-                    )
-                    valid_audios.append(self._generate_valid_audio(request, index))
+            valid_audios = [
+                self._generate_valid_audio(request, index, initial=audio)
+                for index, (request, audio) in enumerate(zip(requests, audios, strict=True), start=1)
+            ]
         else:
             valid_audios = [self._generate_valid_audio(request, index) for index, request in enumerate(requests, start=1)]
 
@@ -349,15 +365,19 @@ async def health() -> dict[str, object]:
 @app.post("/voices/design", response_model=DesignVoiceResponse)
 async def design_voice(request: DesignVoiceRequest) -> DesignVoiceResponse:
     try:
-        stored = await asyncio.to_thread(runtime.design_voice, request)
+        stored, candidate = await asyncio.to_thread(runtime.design_voice, request)
+    except AudioQualityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("OmniVoice voice design failed.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return DesignVoiceResponse(
         id=stored.id,
-        voice=request.voice,
+        voice=candidate.voice,
         sample_text=stored.ref_text,
         sample_url=f"/voices/{stored.id}/sample",
+        max_cross_voice_similarity=candidate.similarity,
+        attempts=candidate.attempt,
     )
 
 

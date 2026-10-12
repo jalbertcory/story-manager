@@ -51,6 +51,7 @@ class _Client:
             return _Response(
                 {
                     "id": "omnivoice-0123456789abcdef0123456789abcdef",
+                    "voice": "female, low pitch, australian accent",
                     "sample_text": "Reference text.",
                     "sample_url": "/voices/example/sample",
                 }
@@ -204,6 +205,8 @@ async def test_qwen3_sends_consistency_controls_and_reads_quality_metadata():
             voice_provider="qwen3",
             seed=12345,
             min_voice_similarity=0.55,
+            drift_margin=2.5,
+            cast_voice_ids=("qwen3-narrator", "preset:Ryan"),
             quality_attempts=4,
         ),
     )
@@ -220,6 +223,8 @@ async def test_qwen3_sends_consistency_controls_and_reads_quality_metadata():
         "text": "Keep this character stable.",
         "seed": 12345,
         "min_voice_similarity": 0.55,
+        "drift_margin": 2.5,
+        "cast_voice_ids": ["qwen3-narrator", "preset:Ryan"],
         "quality_attempts": 4,
     }
 
@@ -237,9 +242,32 @@ async def test_design_omnivoice_voice_returns_durable_provider_id():
     )
 
     assert designed.id == "omnivoice-0123456789abcdef0123456789abcdef"
+    assert designed.voice == "female, low pitch, australian accent"
     url, request = _Client.calls[0]
     assert url == "http://omnivoice:8001/voices/design"
-    assert request["json"] == {"voice": "female, low pitch, british accent"}
+    assert request["json"] == {"voice": "female, low pitch, british accent", "quality_attempts": 6}
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_design_avoids_the_cast_with_the_worker_calibrated_limit():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+
+    await tts_providers.design_omnivoice_voice(
+        settings,
+        "[gender-male][pitch-low]",
+        seed=7,
+        avoid_voice_ids=["omnivoice-a", "omnivoice-b", "omnivoice-a"],
+    )
+
+    assert _Client.calls[0][1]["json"] == {
+        "voice": "[gender-male][pitch-low]",
+        "quality_attempts": 6,
+        "seed": 7,
+        "avoid_voice_ids": ["omnivoice-a", "omnivoice-b"],
+    }
 
 
 @pytest.mark.asyncio
@@ -262,10 +290,10 @@ async def test_qwen_voice_design_requests_cross_character_separation():
     assert url == "http://qwen3:8003/voices/design"
     assert request["json"] == {
         "voice": "[gender-female][pitch-low] A smoky, measured contralto.",
+        "quality_attempts": 8,
         "seed": 123,
         "avoid_voice_ids": ["qwen3-first", "qwen3-second"],
         "max_voice_similarity": 0.88,
-        "quality_attempts": 8,
     }
 
 
@@ -435,3 +463,18 @@ async def test_fixed_voice_provider_requires_a_voice_id():
 
     with pytest.raises(RuntimeError, match="voice ID is required"):
         await tts_providers.synthesize_speech(settings, TTSRequest(text="Hello."))
+
+
+def test_large_casts_are_capped_to_a_stable_prefix_the_workers_accept():
+    from services.voice_roster import MAX_ROSTER_VOICE_IDS as WORKER_LIMIT
+
+    cast = tuple(f"omnivoice-{index:032x}" for index in range(300))
+    request = TTSRequest(text="Hello.", voice_id="omnivoice-self", drift_margin=3.0, cast_voice_ids=cast + cast[:5])
+
+    payload = tts_providers._local_request_payload(request, "omnivoice")
+    design: dict[str, object] = {}
+    tts_providers._add_roster_limits(design, list(cast), None)
+
+    assert tts_providers.MAX_ROSTER_VOICE_IDS <= WORKER_LIMIT
+    assert payload["cast_voice_ids"] == list(cast[: tts_providers.MAX_ROSTER_VOICE_IDS])
+    assert design["avoid_voice_ids"] == list(cast[: tts_providers.MAX_ROSTER_VOICE_IDS])

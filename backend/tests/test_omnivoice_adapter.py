@@ -115,3 +115,17 @@ def test_voice_store_rejects_untrusted_or_unknown_ids(tmp_path):
         store.get("../../private")
     with pytest.raises(KeyError, match="Unknown"):
         store.get("omnivoice-00000000000000000000000000000000")
+
+
+def test_worker_requests_accept_a_large_cast():
+    """Runs where the worker's dependencies are installed (e.g. the OmniVoice venv)."""
+    pytest.importorskip("torch")
+    pytest.importorskip("omnivoice")
+    from services.omnivoice import server
+
+    # More than the backend's 256-voice cap, which fits the workers' limit.
+    cast = [f"omnivoice-{index:032x}" for index in range(300)]
+    generate = server.GenerateRequest(text="Hello.", voice_id=cast[0], drift_margin=3.0, cast_voice_ids=cast)
+    design = server.DesignVoiceRequest(voice="[gender-female]", avoid_voice_ids=cast)
+
+    assert len(generate.cast_voice_ids) == len(design.avoid_voice_ids) == 300

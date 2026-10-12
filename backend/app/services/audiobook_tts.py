@@ -39,11 +39,13 @@ logger = logging.getLogger(__name__)
 TTS_BATCH_SIZE = max(1, int(os.getenv("AUDIOBOOK_TTS_BATCH_SIZE", "4")))
 TTS_FETCH_SIZE = max(TTS_BATCH_SIZE, int(os.getenv("AUDIOBOOK_TTS_FETCH_SIZE", "64")))
 _LOCAL_DESIGN_PROVIDERS = {"omnivoice", "qwen3"}
-VOICE_ROSTER_MAX_SIMILARITY = 0.9
-_QWEN_PRESET_VOICES = {
-    "female": ("Vivian", "Serena", "Ono_Anna", "Sohee"),
-    "male": ("Ryan", "Aiden", "Uncle_Fu", "Dylan", "Eric"),
-    "neutral": ("Vivian", "Ryan", "Serena", "Aiden", "Ono_Anna", "Uncle_Fu", "Sohee", "Dylan", "Eric"),
+# Only the English-native official speakers: the others carry Chinese, Japanese
+# or Korean accents that do not fit an English audiobook. Qwen ships no
+# English-native female speaker, so female characters never fall back to one.
+_QWEN_PRESET_VOICES: dict[str, tuple[str, ...]] = {
+    "female": (),
+    "male": ("Ryan", "Aiden"),
+    "neutral": ("Ryan", "Aiden"),
 }
 _LEADING_EXPRESSION_RE = re.compile(
     r"^((?:\[(?:laughter|sigh|whisper|surprise-oh|dissatisfaction-hnn|confirmation-en)\]\s*)+)",
@@ -170,6 +172,8 @@ def _compatible_qwen_presets(character: AudiobookCharacter) -> list[str]:
     match = re.search(r"\[gender-(female|male|neutral)\]", character.voice_prompt or "", re.IGNORECASE)
     gender = match.group(1).lower() if match else "neutral"
     presets = _QWEN_PRESET_VOICES[gender]
+    if not presets:
+        return []
     offset = stable_character_seed(character) % len(presets)
     return [f"preset:{presets[(offset + index) % len(presets)]}" for index in range(len(presets))]
 
@@ -189,7 +193,6 @@ async def _materialize_distinct_qwen_preset(
                 voice_prompt,
                 seed=character.tts_seed,
                 avoid_voice_ids=avoid_voice_ids,
-                max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 409:
@@ -226,13 +229,11 @@ async def _ensure_character_voice(
     if character.voice_prompt != voice_prompt:
         character.voice_prompt = voice_prompt
         changed = True
-    avoid_voice_ids = []
-    if provider == "qwen3":
-        avoid_voice_ids = [
-            candidate.tts_voice_id
-            for candidate in await crud.audiobook.get_characters_for_book(db, character.book_id)
-            if candidate.id != character.id and candidate.tts_voice_provider == provider and candidate.tts_voice_id
-        ]
+    avoid_voice_ids = [
+        candidate.tts_voice_id
+        for candidate in await crud.audiobook.get_characters_for_book(db, character.book_id)
+        if candidate.id != character.id and candidate.tts_voice_provider == provider and candidate.tts_voice_id
+    ]
     # Keep the legacy symbol as the patch point for integrations while the
     # implementation now supports both local design-capable providers.
     try:
@@ -241,18 +242,24 @@ async def _ensure_character_voice(
             voice_prompt,
             seed=character.tts_seed,
             avoid_voice_ids=avoid_voice_ids,
-            max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
         )
+        # Keep the description the worker settled on so the roster matches the voice.
+        designed_prompt = designed.voice
     except httpx.HTTPStatusError as exc:
-        if provider != "qwen3" or exc.response.status_code != 409:
+        # Workers keep their most distinct design rather than failing on
+        # similarity, so a 409 here means no usable audio at all.
+        if provider != "qwen3" or exc.response.status_code != 409 or not _compatible_qwen_presets(character):
             raise
-        logger.info("Voice design saturated for %s; trying a distinct official preset reference.", character.name)
+        logger.info("Voice design produced no usable audio for %s; trying an English official preset.", character.name)
         designed = await _materialize_distinct_qwen_preset(
             settings,
             character,
             voice_prompt,
             avoid_voice_ids,
         )
+        designed_prompt = None
+    if designed_prompt:
+        character.voice_prompt = designed_prompt
     character.tts_voice_id = designed.id
     character.tts_voice_provider = provider
     await db.commit()
@@ -305,20 +312,29 @@ async def _build_sentence_request(
     return requests[0]
 
 
+def _cast_voice_ids(settings: ProviderSettings | None, cast: list[AudiobookCharacter]) -> tuple[str, ...]:
+    """Stored voices of the book's cast on the active provider, for drift checks."""
+    voice_ids = (_voice_id_for_provider(settings, member) for member in cast)
+    return tuple(dict.fromkeys(voice_id for voice_id in voice_ids if voice_id))
+
+
 def _request_for_character(
     settings: ProviderSettings | None,
     character: AudiobookCharacter | None,
     text: str,
+    cast_voice_ids: tuple[str, ...] = (),
 ) -> TTSRequest:
     voice_prompt = character.voice_prompt if character and character.voice_prompt else DEFAULT_VOICE_PROMPT
     voice_id = _voice_id_for_provider(settings, character) if character else None
+    drift_margin = getattr(settings, "tts_voice_drift_margin", 3.0) if voice_id else None
     return TTSRequest(
         text=text,
         voice_prompt=voice_prompt,
         voice_id=voice_id,
         voice_provider=character.tts_voice_provider if character else None,
         seed=character.tts_seed if character else None,
-        min_voice_similarity=(getattr(settings, "tts_voice_similarity_threshold", 0.45) if voice_id else None),
+        drift_margin=drift_margin,
+        cast_voice_ids=(tuple(cast_id for cast_id in cast_voice_ids if cast_id != voice_id) if drift_margin else ()),
         quality_attempts=getattr(settings, "tts_quality_attempts", 3) or 3,
     )
 
@@ -327,33 +343,33 @@ async def _build_sentence_requests(
     settings: ProviderSettings | None,
     sentence: AudiobookSentence,
     db: AsyncSession,
+    cast: list[AudiobookCharacter] | None = None,
 ) -> list[TTSRequest]:
-    """Render dialogue with its character and attribution prose with Narrator."""
+    """Render dialogue with its character and attribution prose with Narrator.
+
+    Batch callers pass the book's ``cast`` once; voices assigned while building
+    requests update those same session objects.
+    """
 
     character = await db.get(AudiobookCharacter, sentence.character_id) if sentence.character_id is not None else None
     await _ensure_character_voice(settings, character, db)
+    if cast is None:
+        chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+        cast = await crud.audiobook.get_characters_for_book(db, chapter.book_id) if chapter is not None else []
+    cast_voice_ids = _cast_voice_ids(settings, cast)
     full_text = sentence.tagged_text or sentence.original_text
     if character is None or character.is_narrator:
-        return [_request_for_character(settings, character, full_text)]
+        return [_request_for_character(settings, character, full_text, cast_voice_ids)]
 
     segments, _quote_state = split_speech_segments(sentence.original_text)
     spoken_segments = [segment for segment in segments if segment.has_speech]
     roles = {segment.is_dialogue for segment in spoken_segments}
     if len(spoken_segments) < 2 or roles != {False, True}:
-        return [_request_for_character(settings, character, full_text)]
+        return [_request_for_character(settings, character, full_text, cast_voice_ids)]
 
-    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
-    narrator = None
-    if chapter is not None:
-        narrator = next(
-            (
-                candidate
-                for candidate in await crud.audiobook.get_characters_for_book(db, chapter.book_id)
-                if candidate.is_narrator
-            ),
-            None,
-        )
+    narrator = next((candidate for candidate in cast if candidate.is_narrator), None)
     await _ensure_character_voice(settings, narrator, db)
+    cast_voice_ids = _cast_voice_ids(settings, cast)
 
     expression_match = _LEADING_EXPRESSION_RE.match(full_text)
     expression_prefix = expression_match.group(1).strip() if expression_match else ""
@@ -369,6 +385,7 @@ async def _build_sentence_requests(
                 settings,
                 character if segment.is_dialogue else narrator,
                 text,
+                cast_voice_ids,
             )
         )
     return requests
@@ -542,7 +559,8 @@ async def _generate_sentence_clips(
     """Generate adjacent same-voice sentences as longer, more stable blocks."""
     if not sentences:
         return {}
-    request_groups = [await _build_sentence_requests(settings, sentence, db) for sentence in sentences]
+    cast = await crud.audiobook.get_characters_for_book(db, book_id)
+    request_groups = [await _build_sentence_requests(settings, sentence, db, cast) for sentence in sentences]
     max_chars = max(100, getattr(settings, "tts_max_block_chars", 500) or 500)
     blocks = _generation_blocks(sentences, request_groups, max_chars=max_chars)
     failures: dict[int, Exception] = {}

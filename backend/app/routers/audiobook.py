@@ -62,7 +62,6 @@ from ..services.audiobook_metadata import filename_metadata
 from ..services.book_matching import title_match_keys as _libation_title_keys
 from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
 from ..services.audiobook_tts import (
-    VOICE_ROSTER_MAX_SIMILARITY,
     distinctive_voice_prompt,
     stable_character_seed,
 )
@@ -274,7 +273,7 @@ class SettingsResponse(BaseModel):
     tts_model: Optional[str]
     tts_default_voice: Optional[str]
     tts_max_block_chars: int
-    tts_voice_similarity_threshold: float
+    tts_voice_drift_margin: float
     tts_quality_attempts: int
     transcription_provider: str
     transcription_api_key_set: bool
@@ -309,7 +308,9 @@ class SettingsUpdate(BaseModel):
     tts_model: Optional[str] = None
     tts_default_voice: Optional[str] = None
     tts_max_block_chars: Optional[int] = Field(default=None, ge=100, le=2000)
-    tts_voice_similarity_threshold: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    # Standard deviations below a voice's calibrated similarity before a take is
+    # retried; 0 disables the drift and cast checks.
+    tts_voice_drift_margin: Optional[float] = Field(default=None, ge=0.0, le=10.0)
     tts_quality_attempts: Optional[int] = Field(default=None, ge=1, le=10)
     transcription_provider: Optional[str] = None
     transcription_api_key: Optional[str] = None
@@ -1878,9 +1879,8 @@ async def design_character_voice(
         voice_prompt,
         seed=character.tts_seed,
         avoid_voice_ids=avoid_voice_ids,
-        max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
     )
-    character.voice_prompt = voice_prompt
+    character.voice_prompt = designed.voice or voice_prompt
     character.tts_voice_id = designed.id
     character.tts_voice_provider = provider
     await db.commit()
@@ -2234,7 +2234,7 @@ def _settings_response(settings: AudiobookSettings | None) -> SettingsResponse:
             tts_model=None,
             tts_default_voice=None,
             tts_max_block_chars=500,
-            tts_voice_similarity_threshold=0.45,
+            tts_voice_drift_margin=3.0,
             tts_quality_attempts=3,
             transcription_provider="none",
             transcription_api_key_set=False,
@@ -2259,9 +2259,7 @@ def _settings_response(settings: AudiobookSettings | None) -> SettingsResponse:
         tts_model=settings.tts_model,
         tts_default_voice=settings.tts_default_voice,
         tts_max_block_chars=settings.tts_max_block_chars or 500,
-        tts_voice_similarity_threshold=(
-            settings.tts_voice_similarity_threshold if settings.tts_voice_similarity_threshold is not None else 0.45
-        ),
+        tts_voice_drift_margin=(settings.tts_voice_drift_margin if settings.tts_voice_drift_margin is not None else 3.0),
         tts_quality_attempts=settings.tts_quality_attempts or 3,
         transcription_provider=settings.transcription_provider or "none",
         transcription_api_key_set=bool(settings.transcription_api_key),
@@ -2367,7 +2365,7 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         "tts_model": previous.tts_model if previous else None,
         "tts_default_voice": previous.tts_default_voice if previous else None,
         "tts_max_block_chars": previous.tts_max_block_chars if previous else 500,
-        "tts_voice_similarity_threshold": previous.tts_voice_similarity_threshold if previous else 0.45,
+        "tts_voice_drift_margin": previous.tts_voice_drift_margin if previous else 3.0,
         "tts_quality_attempts": previous.tts_quality_attempts if previous else 3,
     }
     next_tts = {name: data.get(name, value) for name, value in previous_tts.items()}

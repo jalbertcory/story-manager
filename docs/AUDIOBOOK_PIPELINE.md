@@ -204,7 +204,7 @@ as chapter previews and the full pipeline, and are recovered after an app restar
 | tts_model | String | Provider model name, when applicable |
 | tts_default_voice | String | Default fixed voice ID, when applicable |
 | tts_max_block_chars | Integer | Maximum text length for an adjacent same-speaker generation block |
-| tts_voice_similarity_threshold | Float | Minimum enrollment/candidate similarity for local cloned voices |
+| tts_voice_drift_margin | Float | Standard deviations below a local voice's calibrated similarity before a take is retried (default 3; 0 disables drift and cast checks) |
 | tts_quality_attempts | Integer | Maximum signal/speaker validation attempts in a local adapter |
 | roster_prompt_template | Text | Override default roster extraction prompt |
 | diarization_prompt_template | Text | Override default diarization prompt |
@@ -334,7 +334,8 @@ Accept: audio/mpeg
   "voice": "[gender-female][pitch-high][speed-normal]",
   "voice_id": "omnivoice-0123456789abcdef0123456789abcdef",
   "seed": 123456789,
-  "min_voice_similarity": 0.45,
+  "drift_margin": 3.0,
+  "cast_voice_ids": ["omnivoice-narrator...", "omnivoice-rival..."],
   "quality_attempts": 3,
   "text": "She laughed. [laughter] \"I can't believe it,\" she said."
 }
@@ -351,7 +352,18 @@ or intentionally using one-shot voice design.
 
 For every local character, Story Manager stores a deterministic seed and sends it with each request. Validation
 retries use the reproducible sequence `seed`, `seed + 1`, and so on. Designed/cloned voices are compared with their
-enrollment WAV using WavLM speaker embeddings; outputs below the configured threshold are rejected and retried.
+enrollment WAV using WeSpeaker ResNet34 speaker embeddings (`SPEAKER_VERIFIER_MODEL` selects another verifier).
+
+The worker renders three fixed probe sentences with each voice and stores the voice's own similarity median and
+MAD-based spread in `<voice>.profile.json` beside the enrollment WAV, keyed by verifier model and revision. OmniVoice
+calibrates when a voice is designed; the Qwen workers calibrate on first use, so creating a cast does not swap between
+the design and clone models for every character. A take is rejected and retried when it scores more than
+`drift_margin` spreads (clamped to a model-specific minimum and maximum) below that median, or when it scores at least
+as close to another voice in `cast_voice_ids` as to its own. Story Manager sends up to 256 of the book's other stored
+voices for the active provider as the cast, in roster order, and the same cap applies to `avoid_voice_ids` during
+design. If every attempt is rejected for drift, the take with the most headroom is kept and a
+warning is logged instead of failing the sentence. `min_voice_similarity` is still accepted as a legacy absolute floor
+that fails hard.
 Similarity scores, attempt counts, and block IDs are returned by the API and shown in the Script Editor.
 
 Qwen3 roster enrollment also compares each new reference with every previously assigned cast reference. A candidate
@@ -428,7 +440,7 @@ Choose **Qwen3-TTS** and use `http://127.0.0.1:8003`. Character voice IDs may be
 as `preset:Ryan`, persistent `qwen3-...` voices created from the roster, or PEFT adapters named
 `lora:<directory-name>`. Adapter directories and their required `voice.json` enrollment metadata are documented in
 `services/qwen3_tts/README.md`. The service stores model weights, designed reference voices, LoRA files, and the
-WavLM speaker verifier under the configured model cache.
+WeSpeaker speaker-verifier ONNX model under the configured model cache.
 
 ## Deterministic Local Harness
 

@@ -9,6 +9,7 @@ on:
       - services/omnivoice/audio_quality.py
       - services/speaker_similarity.py
       - services/tts_consistency.py
+      - services/voice_roster.py
       - services/__init__.py
       - .github/workflows/qwen3-tts-image.yml
   # PR builds paused to conserve Actions minutes; main publishing stays enabled.
@@ -20,6 +21,7 @@ on:
   #     - services/omnivoice/audio_quality.py
   #     - services/speaker_similarity.py
   #     - services/tts_consistency.py
+  #     - services/voice_roster.py
   #     - services/__init__.py
   #     - .github/workflows/qwen3-tts-image.yml
 

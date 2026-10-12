@@ -12,6 +12,7 @@ BEGIN
           AND column_name IN (
             'tts_max_block_chars',
             'tts_voice_similarity_threshold',
+            'tts_voice_drift_margin',
             'tts_quality_attempts',
             'tts_seed',
             'generation_group_id',
