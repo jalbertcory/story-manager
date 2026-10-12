@@ -4,10 +4,10 @@ This optional service exposes Qwen3-TTS through Story Manager's local TTS contra
 
 - Stable built-in speakers with IDs such as `preset:Ryan` and `preset:Aiden`.
 - Designed voices saved as durable `qwen3-...` reference clips and reused through voice cloning.
-- Cross-cast WavLM separation checks that reject enrollment voices which sound too much like an existing character.
+- Cross-cast speaker-embedding separation checks that reject enrollment voices which sound too much like an existing character.
 - Built-in presets that can be rendered once and persisted as clone references, keeping long-form synthesis on one model.
 - Existing PEFT LoRA adapters addressed as `lora:<directory-name>`.
-- Per-character deterministic seeds and WavLM speaker-similarity rejection/retry.
+- Per-character deterministic seeds and speaker-similarity rejection/retry.
 
 `make start` manages this worker with the rest of the local stack. To run only this service, use
 `make run-qwen3-tts`, then add a `Qwen3-TTS` endpoint at
@@ -35,5 +35,7 @@ Provider Voice ID. For built-in voices, assign `preset:Ryan`, `preset:Aiden`, or
 Automatic roster provisioning materializes a compatible preset as a durable `qwen3-...` clone only when free-form
 voice design cannot find another sufficiently distinct identity.
 
-The first similarity-checked clone downloads `microsoft/wavlm-base-plus-sv`; preserve the Hugging Face cache along
-with the Qwen model and voice-store directories.
+The first similarity-checked clone downloads the WeSpeaker ResNet34-LM ONNX speaker verifier
+(`Wespeaker/wespeaker-voxceleb-resnet34-LM`, ~27 MB, run with ONNX Runtime on CPU); preserve the Hugging Face cache
+along with the Qwen model and voice-store directories. Set `SPEAKER_VERIFIER_MODEL=microsoft/wavlm-base-plus-sv` to
+use the previous WavLM x-vector verifier; thresholds follow the selected model automatically.

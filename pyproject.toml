@@ -113,5 +113,6 @@ ignore_missing_imports = true
 module = [
     "torch.*", "transformers.*", "soundfile.*", "whisperx.*",
     "pydub.*", "qwen_tts.*", "peft.*", "omnivoice.*", "mlx.*", "mlx_audio.*",
+    "onnxruntime.*", "huggingface_hub.*",
 ]
 ignore_missing_imports = true

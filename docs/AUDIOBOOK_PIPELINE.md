@@ -351,7 +351,7 @@ or intentionally using one-shot voice design.
 
 For every local character, Story Manager stores a deterministic seed and sends it with each request. Validation
 retries use the reproducible sequence `seed`, `seed + 1`, and so on. Designed/cloned voices are compared with their
-enrollment WAV using WavLM speaker embeddings; outputs below the configured threshold are rejected and retried.
+enrollment WAV using WeSpeaker ResNet34 speaker embeddings (`SPEAKER_VERIFIER_MODEL` selects another verifier); outputs below the configured threshold are rejected and retried.
 Similarity scores, attempt counts, and block IDs are returned by the API and shown in the Script Editor.
 
 Qwen3 roster enrollment also compares each new reference with every previously assigned cast reference. A candidate
@@ -428,7 +428,7 @@ Choose **Qwen3-TTS** and use `http://127.0.0.1:8003`. Character voice IDs may be
 as `preset:Ryan`, persistent `qwen3-...` voices created from the roster, or PEFT adapters named
 `lora:<directory-name>`. Adapter directories and their required `voice.json` enrollment metadata are documented in
 `services/qwen3_tts/README.md`. The service stores model weights, designed reference voices, LoRA files, and the
-WavLM speaker verifier under the configured model cache.
+WeSpeaker speaker-verifier ONNX model under the configured model cache.
 
 ## Deterministic Local Harness
 
