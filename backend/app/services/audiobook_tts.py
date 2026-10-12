@@ -305,20 +305,29 @@ async def _build_sentence_request(
     return requests[0]
 
 
+def _cast_voice_ids(settings: ProviderSettings | None, cast: list[AudiobookCharacter]) -> tuple[str, ...]:
+    """Stored voices of the book's cast on the active provider, for drift checks."""
+    voice_ids = (_voice_id_for_provider(settings, member) for member in cast)
+    return tuple(dict.fromkeys(voice_id for voice_id in voice_ids if voice_id))
+
+
 def _request_for_character(
     settings: ProviderSettings | None,
     character: AudiobookCharacter | None,
     text: str,
+    cast_voice_ids: tuple[str, ...] = (),
 ) -> TTSRequest:
     voice_prompt = character.voice_prompt if character and character.voice_prompt else DEFAULT_VOICE_PROMPT
     voice_id = _voice_id_for_provider(settings, character) if character else None
+    drift_margin = getattr(settings, "tts_voice_drift_margin", 3.0) if voice_id else None
     return TTSRequest(
         text=text,
         voice_prompt=voice_prompt,
         voice_id=voice_id,
         voice_provider=character.tts_voice_provider if character else None,
         seed=character.tts_seed if character else None,
-        min_voice_similarity=(getattr(settings, "tts_voice_similarity_threshold", 0.45) if voice_id else None),
+        drift_margin=drift_margin,
+        cast_voice_ids=(tuple(cast_id for cast_id in cast_voice_ids if cast_id != voice_id) if drift_margin else ()),
         quality_attempts=getattr(settings, "tts_quality_attempts", 3) or 3,
     )
 
@@ -332,28 +341,22 @@ async def _build_sentence_requests(
 
     character = await db.get(AudiobookCharacter, sentence.character_id) if sentence.character_id is not None else None
     await _ensure_character_voice(settings, character, db)
+    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
+    cast = await crud.audiobook.get_characters_for_book(db, chapter.book_id) if chapter is not None else []
+    cast_voice_ids = _cast_voice_ids(settings, cast)
     full_text = sentence.tagged_text or sentence.original_text
     if character is None or character.is_narrator:
-        return [_request_for_character(settings, character, full_text)]
+        return [_request_for_character(settings, character, full_text, cast_voice_ids)]
 
     segments, _quote_state = split_speech_segments(sentence.original_text)
     spoken_segments = [segment for segment in segments if segment.has_speech]
     roles = {segment.is_dialogue for segment in spoken_segments}
     if len(spoken_segments) < 2 or roles != {False, True}:
-        return [_request_for_character(settings, character, full_text)]
+        return [_request_for_character(settings, character, full_text, cast_voice_ids)]
 
-    chapter = await db.get(AudiobookChapter, sentence.chapter_id)
-    narrator = None
-    if chapter is not None:
-        narrator = next(
-            (
-                candidate
-                for candidate in await crud.audiobook.get_characters_for_book(db, chapter.book_id)
-                if candidate.is_narrator
-            ),
-            None,
-        )
+    narrator = next((candidate for candidate in cast if candidate.is_narrator), None)
     await _ensure_character_voice(settings, narrator, db)
+    cast_voice_ids = _cast_voice_ids(settings, cast)
 
     expression_match = _LEADING_EXPRESSION_RE.match(full_text)
     expression_prefix = expression_match.group(1).strip() if expression_match else ""
@@ -369,6 +372,7 @@ async def _build_sentence_requests(
                 settings,
                 character if segment.is_dialogue else narrator,
                 text,
+                cast_voice_ids,
             )
         )
     return requests

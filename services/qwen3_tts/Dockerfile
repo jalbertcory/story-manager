@@ -18,7 +18,7 @@ WORKDIR /app
 COPY services/qwen3_tts/pyproject.toml services/qwen3_tts/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY services/__init__.py services/speaker_similarity.py services/tts_consistency.py /app/services/
+COPY services/__init__.py services/speaker_similarity.py services/tts_consistency.py services/voice_roster.py /app/services/
 COPY services/omnivoice/__init__.py services/omnivoice/audio_quality.py /app/services/omnivoice/
 COPY services/qwen3_tts /app/services/qwen3_tts
 

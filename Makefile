@@ -321,7 +321,19 @@ test-migrations:
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0037; \
 	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
-		< scripts/migration-tts-provider-lock-downgrade-verify.sql
+		< scripts/migration-tts-provider-lock-downgrade-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0043; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-drift-margin-setup.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-drift-margin-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0043; \
+	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		< scripts/migration-voice-drift-margin-downgrade-verify.sql
 
 e2e:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true

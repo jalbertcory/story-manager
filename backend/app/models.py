@@ -400,7 +400,7 @@ class AudiobookSettings(Base):
     tts_model: Mapped[str | None] = mapped_column(String, nullable=True)
     tts_default_voice: Mapped[str | None] = mapped_column(String, nullable=True)
     tts_max_block_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=500, server_default="500")
-    tts_voice_similarity_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.45, server_default="0.45")
+    tts_voice_drift_margin: Mapped[float] = mapped_column(Float, nullable=False, default=3.0, server_default="3.0")
     tts_quality_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3, server_default="3")
     transcription_provider: Mapped[str | None] = mapped_column(String, nullable=True)
     transcription_api_key: Mapped[str | None] = mapped_column(String, nullable=True)

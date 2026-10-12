@@ -553,9 +553,9 @@ function AudiobookSettings() {
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [maxBlockChars, setMaxBlockChars] = useState<number | string>(500);
-  const [voiceSimilarityThreshold, setVoiceSimilarityThreshold] = useState<
-    number | string
-  >(0.45);
+  const [voiceDriftMargin, setVoiceDriftMargin] = useState<number | string>(
+    3,
+  );
   const [qualityAttempts, setQualityAttempts] = useState<number | string>(3);
   const [initialised, setInitialised] = useState(false);
 
@@ -567,9 +567,7 @@ function AudiobookSettings() {
       setRosterPrompt(settings.roster_prompt_template || "");
       setDiarizationPrompt(settings.diarization_prompt_template || "");
       setMaxBlockChars(settings.tts_max_block_chars ?? 500);
-      setVoiceSimilarityThreshold(
-        settings.tts_voice_similarity_threshold ?? 0.45,
-      );
+      setVoiceDriftMargin(settings.tts_voice_drift_margin ?? 3);
       setQualityAttempts(settings.tts_quality_attempts ?? 3);
       setInitialised(true);
     }
@@ -582,7 +580,7 @@ function AudiobookSettings() {
     roster_prompt_template: rosterPrompt || null,
     diarization_prompt_template: diarizationPrompt || null,
     tts_max_block_chars: Number(maxBlockChars),
-    tts_voice_similarity_threshold: Number(voiceSimilarityThreshold),
+    tts_voice_drift_margin: Number(voiceDriftMargin),
     tts_quality_attempts: Number(qualityAttempts),
   });
 
@@ -791,19 +789,20 @@ function AudiobookSettings() {
               </span>
             </label>
             <label>
-              Minimum voice similarity
+              Voice drift margin
               <input
                 type="number"
-                min="-1"
-                max="1"
-                step="0.01"
-                value={voiceSimilarityThreshold}
-                onChange={(event) =>
-                  setVoiceSimilarityThreshold(event.target.value)
-                }
+                min="0"
+                max="10"
+                step="0.5"
+                value={voiceDriftMargin}
+                onChange={(event) => setVoiceDriftMargin(event.target.value)}
               />
               <span className="settings-hint">
-                Local cloned voices below this WavLM score are regenerated.
+                Local voices are regenerated when a line falls this many
+                standard deviations below the voice&apos;s usual similarity, or
+                sounds closer to another cast voice. Lower is stricter; 0
+                turns the check off.
               </span>
             </label>
             <label>

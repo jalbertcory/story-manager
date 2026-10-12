@@ -41,7 +41,12 @@ class TTSRequest:
     voice_id: str | None = None
     voice_provider: str | None = None
     seed: int | None = None
+    # Legacy absolute similarity floor; local workers fail the take below it.
     min_voice_similarity: float | None = None
+    # Standard deviations below the voice's calibrated similarity before a take
+    # is retried, also enabling the closer-to-another-cast-voice check.
+    drift_margin: float | None = None
+    cast_voice_ids: tuple[str, ...] = ()
     quality_attempts: int = 3
 
 
@@ -140,6 +145,9 @@ def _local_request_payload(request: TTSRequest, provider: str) -> dict[str, obje
         payload["seed"] = request.seed
     if request.min_voice_similarity is not None:
         payload["min_voice_similarity"] = request.min_voice_similarity
+    if request.drift_margin is not None:
+        payload["drift_margin"] = request.drift_margin
+        payload["cast_voice_ids"] = list(request.cast_voice_ids)
     # Send the application setting even when it matches our default. Local
     # workers can override their own default through the environment, but an
     # explicit per-request value must remain authoritative.

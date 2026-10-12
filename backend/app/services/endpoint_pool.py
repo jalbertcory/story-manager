@@ -30,7 +30,7 @@ class EndpointSettings(BaseModel):
     tts_model: str | None = None
     tts_default_voice: str | None = None
     tts_max_block_chars: int = 500
-    tts_voice_similarity_threshold: float = 0.45
+    tts_voice_drift_margin: float = 3.0
     tts_quality_attempts: int = 3
     transcription_provider: str | None = None
     transcription_api_key: str | None = Field(default=None, repr=False)
@@ -43,7 +43,7 @@ class EndpointSettings(BaseModel):
     roster_prompt_template: str | None = None
     diarization_prompt_template: str | None = None
 
-    @field_validator("tts_max_block_chars", "tts_voice_similarity_threshold", "tts_quality_attempts", mode="before")
+    @field_validator("tts_max_block_chars", "tts_voice_drift_margin", "tts_quality_attempts", mode="before")
     @classmethod
     def legacy_numeric_defaults(cls, value: object, info: ValidationInfo) -> object:
         return cls.model_fields[info.field_name].default if value is None and info.field_name else value

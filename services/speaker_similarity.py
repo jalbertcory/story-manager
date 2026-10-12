@@ -28,7 +28,7 @@ from services.tts_consistency import candidate_has_enough_speech
 
 if TYPE_CHECKING:
     import onnxruntime
-    from transformers import AutoModelForAudioXVector, FeatureExtractionMixin
+    from transformers import FeatureExtractionMixin, PreTrainedModel
 
 WESPEAKER_RESNET34 = "Wespeaker/wespeaker-voxceleb-resnet34-LM"
 WAVLM_XVECTOR = "microsoft/wavlm-base-plus-sv"
@@ -143,9 +143,7 @@ class _WeSpeakerEmbedder:
         providers = ["CPUExecutionProvider"]
         if device.startswith("cuda") and "CUDAExecutionProvider" in ort.get_available_providers():
             providers.insert(0, "CUDAExecutionProvider")
-        self._session: onnxruntime.InferenceSession = ort.InferenceSession(
-            _wespeaker_onnx_path(model_id), providers=providers
-        )
+        self._session: onnxruntime.InferenceSession = ort.InferenceSession(_wespeaker_onnx_path(model_id), providers=providers)
         self._input = self._session.get_inputs()[0].name
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
@@ -159,7 +157,7 @@ class _XVectorEmbedder:
 
         self._device = device
         self._extractor: FeatureExtractionMixin = AutoFeatureExtractor.from_pretrained(model_id)
-        self._model: AutoModelForAudioXVector = AutoModelForAudioXVector.from_pretrained(model_id).to(device).eval()
+        self._model: PreTrainedModel = AutoModelForAudioXVector.from_pretrained(model_id).to(device).eval()
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
         import torch
@@ -220,8 +218,7 @@ class SpeakerVerifier:
             return {}
         candidate_embedding = self.embedding(candidate, sampling_rate)
         return {
-            key: float(np.dot(self.reference_embedding(key, path), candidate_embedding))
-            for key, path in references.items()
+            key: float(np.dot(self.reference_embedding(key, path), candidate_embedding)) for key, path in references.items()
         }
 
     def similarity(

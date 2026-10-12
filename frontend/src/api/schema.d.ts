@@ -5267,8 +5267,8 @@ export interface components {
             tts_provider: string | null;
             /** Tts Quality Attempts */
             tts_quality_attempts: number;
-            /** Tts Voice Similarity Threshold */
-            tts_voice_similarity_threshold: number;
+            /** Tts Voice Drift Margin */
+            tts_voice_drift_margin: number;
         };
         /** SettingsUpdate */
         SettingsUpdate: {
@@ -5314,8 +5314,8 @@ export interface components {
             tts_provider?: string | null;
             /** Tts Quality Attempts */
             tts_quality_attempts?: number | null;
-            /** Tts Voice Similarity Threshold */
-            tts_voice_similarity_threshold?: number | null;
+            /** Tts Voice Drift Margin */
+            tts_voice_drift_margin?: number | null;
         };
         /**
          * SourceType

@@ -4,7 +4,7 @@ BEGIN
         SELECT 1
         FROM audiobook_settings
         WHERE tts_max_block_chars <> 500
-           OR tts_voice_similarity_threshold <> 0.45
+           OR tts_voice_drift_margin <> 3.0
            OR tts_quality_attempts <> 3
     ) THEN
         RAISE EXCEPTION '0037 did not apply voice-consistency defaults';

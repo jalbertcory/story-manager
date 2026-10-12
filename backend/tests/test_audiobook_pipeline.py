@@ -1963,6 +1963,57 @@ async def test_mixed_dialogue_tts_uses_character_then_narrator_voice(db):
 
 
 @pytest.mark.asyncio
+async def test_tts_requests_carry_drift_margin_and_the_other_cast_voices(db):
+    book = await _make_book(db, audiobook_enabled=True)
+    await crud.audiobook.create_characters_bulk(
+        db,
+        book.id,
+        [
+            {
+                "name": "Narrator",
+                "is_narrator": True,
+                "tts_voice_id": "omnivoice-narrator",
+                "tts_voice_provider": "omnivoice",
+            },
+            {"name": "Ada", "tts_voice_id": "omnivoice-ada", "tts_voice_provider": "omnivoice"},
+            {"name": "Bram", "tts_voice_id": "omnivoice-bram", "tts_voice_provider": "omnivoice"},
+            {"name": "Cass", "tts_voice_id": "cass", "tts_voice_provider": "elevenlabs"},
+            {"name": "Dale"},
+        ],
+    )
+    ada = next(c for c in await crud.audiobook.get_characters_for_book(db, book.id) if c.name == "Ada")
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "chapter.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": "ada-1",
+                "sequence_order": 0,
+                "original_text": "“Hold the lantern higher.”",
+                "character_id": ada.id,
+                "status": "ready_for_audio",
+            }
+        ],
+    )
+    sentence = (await crud.audiobook.get_sentences_for_chapter(db, chapter.id))[0]
+    settings = models.AudiobookSettings(tts_provider="omnivoice", tts_voice_drift_margin=2.0, tts_quality_attempts=3)
+
+    [request] = await audiobook_tts._build_sentence_requests(settings, sentence, db)
+
+    assert request.voice_id == "omnivoice-ada"
+    assert request.drift_margin == 2.0
+    assert request.min_voice_similarity is None
+    assert sorted(request.cast_voice_ids) == ["omnivoice-bram", "omnivoice-narrator"]
+
+    settings.tts_voice_drift_margin = 0.0
+    [disabled] = await audiobook_tts._build_sentence_requests(settings, sentence, db)
+
+    assert disabled.drift_margin == 0.0
+    assert disabled.cast_voice_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_tts_settings_invalidate_only_unfinished_books_below_eighty_percent(db, tmp_path, monkeypatch):
     library_path = tmp_path / "library"
     library_path.mkdir()

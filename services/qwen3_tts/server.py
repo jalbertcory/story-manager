@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 import gc
 from io import BytesIO
 import json
@@ -25,6 +25,7 @@ import torch
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
 from services.speaker_similarity import get_speaker_verifier
 from services.tts_consistency import seed_for_attempt, voice_instruction
+from services.voice_roster import SpeakerCheck, SpeakerGuard, generate_checked
 from .voice_store import StoredVoice, VoiceStore
 
 if TYPE_CHECKING:
@@ -53,7 +54,12 @@ class GenerateRequest(BaseModel):
     voice_id: str | None = None
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    # Legacy absolute speaker-similarity floor; prefer drift_margin.
     min_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    # Standard deviations below the voice's calibrated similarity before a take
+    # is retried; 0 or null disables the drift and cast checks.
+    drift_margin: float | None = Field(default=None, ge=0.0, le=10.0)
+    cast_voice_ids: list[str] = Field(default_factory=list, max_length=64)
     quality_attempts: int = Field(default=3, ge=1, le=10)
 
 
@@ -113,6 +119,56 @@ def _instruction(profile: str | None) -> str:
     return voice_instruction(profile)
 
 
+def speaker_guard(
+    reference_path: Callable[[str], Path | None],
+    generate_once: Callable[[GenerateRequest], tuple[np.ndarray, int]],
+) -> SpeakerGuard:
+    """Drift checks for stored clones; LoRA references are user files and stay uncalibrated."""
+    return SpeakerGuard(
+        reference_path,
+        lambda voice_id, text, seed: generate_once(GenerateRequest(text=text, voice_id=voice_id, seed=seed)),
+        calibratable=lambda voice_id: not voice_id.startswith("lora:"),
+    )
+
+
+def validate_speaker(guard: SpeakerGuard, request: GenerateRequest, audio: np.ndarray, rate: int) -> SpeakerCheck:
+    validate_generated_audio(audio, rate)
+    return guard.check(
+        request.voice_id,
+        audio,
+        rate,
+        drift_margin=request.drift_margin,
+        cast_voice_ids=request.cast_voice_ids,
+        min_similarity=request.min_voice_similarity,
+    )
+
+
+def generate_valid_audio(
+    generate_once: Callable[[GenerateRequest], tuple[np.ndarray, int]],
+    guard: SpeakerGuard,
+    request: GenerateRequest,
+    *,
+    label: str,
+    initial: tuple[np.ndarray, int] | None = None,
+) -> tuple[np.ndarray, int, float | None, int]:
+    """Generate one request with reproducible per-attempt seeds and speaker checks."""
+
+    def generate(attempt: int) -> tuple[np.ndarray, int]:
+        attempt_request = request
+        if request.seed is not None:
+            attempt_request = request.model_copy(update={"seed": seed_for_attempt(request.seed, attempt)})
+        return generate_once(attempt_request)
+
+    audio, rate, check, attempts = generate_checked(
+        generate,
+        lambda candidate, candidate_rate: validate_speaker(guard, request, candidate, candidate_rate),
+        attempts=request.quality_attempts,
+        label=label,
+        initial=initial,
+    )
+    return audio, rate, check.similarity, attempts
+
+
 class TTSRuntime(Protocol):
     """Interface shared by the PyTorch and MLX HTTP adapters."""
 
@@ -146,6 +202,7 @@ class QwenRuntime:
         self._lock = threading.RLock()
         self._voices = VoiceStore(VOICE_STORE_PATH)
         self._clone_prompts: dict[str, list[VoiceClonePromptItem]] = {}
+        self._speaker_guard = speaker_guard(self._reference_path, self._generate_once)
 
     def load(self) -> None:
         self.device = self._resolve_device()
@@ -328,45 +385,18 @@ class QwenRuntime:
             raise RuntimeError(f"Qwen returned {len(wavs)} outputs for {len(requests)} batch requests.")
         return [np.asarray(wav).reshape(-1) for wav in wavs], rate
 
-    def _validate_audio(
-        self,
-        request: GenerateRequest,
-        audio: np.ndarray,
-        rate: int,
-    ) -> float | None:
-        validate_generated_audio(audio, rate)
-        similarity = None
-        reference = self._reference_path(request.voice_id) if request.voice_id else None
-        if reference is not None:
-            similarity = get_speaker_verifier().similarity(request.voice_id or "", reference, audio, rate)
-        if request.min_voice_similarity is not None and similarity is not None and similarity < request.min_voice_similarity:
-            raise AudioQualityError(f"speaker similarity {similarity:.3f} is below {request.min_voice_similarity:.3f}")
-        return similarity
+    def _validate_audio(self, request: GenerateRequest, audio: np.ndarray, rate: int) -> SpeakerCheck:
+        return validate_speaker(self._speaker_guard, request, audio, rate)
 
     def _generate_valid_audio(
         self,
         request: GenerateRequest,
         *,
-        start_attempt: int = 1,
+        initial: tuple[np.ndarray, int] | None = None,
     ) -> tuple[np.ndarray, int, float | None, int]:
-        last_error = None
-        for attempt in range(start_attempt, request.quality_attempts + 1):
-            attempt_request = request
-            if request.seed is not None:
-                attempt_request = request.model_copy(update={"seed": seed_for_attempt(request.seed, attempt)})
-            audio, rate = self._generate_once(attempt_request)
-            try:
-                similarity = self._validate_audio(request, audio, rate)
-                return audio, rate, similarity, attempt
-            except AudioQualityError as exc:
-                last_error = exc
-                logger.warning(
-                    "Rejected Qwen3-TTS output on attempt %d/%d: %s",
-                    attempt,
-                    request.quality_attempts,
-                    exc,
-                )
-        raise AudioQualityError(f"Qwen3-TTS failed quality validation: {last_error}") from last_error
+        return generate_valid_audio(
+            self._generate_once, self._speaker_guard, request, initial=initial, label="Qwen3-TTS output"
+        )
 
     def generate(self, request: GenerateRequest) -> tuple[bytes, int, float | None, int]:
         with self._lock:
@@ -391,18 +421,11 @@ class QwenRuntime:
                 if len(group) == 1:
                     generated[indices[0]] = self._generate_valid_audio(group[0])
                     continue
+                # Each native output is the item's first attempt; rejected items
+                # are retried individually with their next attempt seed.
                 audios, rate = self._generate_many_once(group)
                 for index, request, audio in zip(indices, group, audios, strict=True):
-                    try:
-                        similarity = self._validate_audio(request, audio, rate)
-                        generated[index] = (audio, rate, similarity, 1)
-                    except AudioQualityError as exc:
-                        logger.warning(
-                            "Rejected native Qwen batch output for request %d; retrying individually: %s",
-                            index + 1,
-                            exc,
-                        )
-                        generated[index] = self._generate_valid_audio(request, start_attempt=2)
+                    generated[index] = self._generate_valid_audio(request, initial=(audio, rate))
 
             results = []
             for item in generated:
@@ -438,6 +461,7 @@ class QwenRuntime:
                     or last_similarity <= request.max_voice_similarity
                 ):
                     stored = self._voices.create(request.voice, DESIGN_TEXT, audio, rate)
+                    self._speaker_guard.calibrate(stored.id)
                     return stored, last_similarity, attempt
                 logger.warning(
                     "Rejected designed voice on attempt %d/%d: cross-character similarity %.3f exceeds %.3f",
@@ -476,7 +500,9 @@ class QwenRuntime:
                     f"({similarity:.3f}, limit {request.max_voice_similarity:.3f})."
                 )
             description = f"Official Qwen preset {request.voice_id.removeprefix('preset:')}: {request.voice}"
-            return self._voices.create(description, DESIGN_TEXT, audio, rate), similarity, 1
+            stored = self._voices.create(description, DESIGN_TEXT, audio, rate)
+            self._speaker_guard.calibrate(stored.id)
+            return stored, similarity, 1
 
 
 runtime: TTSRuntime = QwenRuntime()

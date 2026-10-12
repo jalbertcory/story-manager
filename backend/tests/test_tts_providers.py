@@ -204,6 +204,8 @@ async def test_qwen3_sends_consistency_controls_and_reads_quality_metadata():
             voice_provider="qwen3",
             seed=12345,
             min_voice_similarity=0.55,
+            drift_margin=2.5,
+            cast_voice_ids=("qwen3-narrator", "preset:Ryan"),
             quality_attempts=4,
         ),
     )
@@ -220,6 +222,8 @@ async def test_qwen3_sends_consistency_controls_and_reads_quality_metadata():
         "text": "Keep this character stable.",
         "seed": 12345,
         "min_voice_similarity": 0.55,
+        "drift_margin": 2.5,
+        "cast_voice_ids": ["qwen3-narrator", "preset:Ryan"],
         "quality_attempts": 4,
     }
 
