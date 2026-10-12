@@ -132,43 +132,43 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-cuda-nvrtc", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cuda-runtime", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cufft", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cufile", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cuda-cupti", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-curand", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-cusolver", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-cusparse", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-cusolver", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
-    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-nvtx", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 
 [[package]]
@@ -440,7 +440,7 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.5.0"
+version = "0.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -452,9 +452,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/d0/6e2e6c548dbc9d4d996e959e3a0e34faf64ca357462733ee94a42046664b/mlx_audio-0.5.0.tar.gz", hash = "sha256:d5aba4b99c006acd735408189d127eaf6ed53be0cad789e2eb51aa57f4f6bf13", size = 1584608, upload-time = "2026-08-17T17:47:57.542Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/a6/c75b328fc1059d0a3d56cf8330e9df6745dfe8c6ec38a3c6cfef2d42ad5f/mlx_audio-0.5.8.tar.gz", hash = "sha256:55a7378a4d27dddeba2d989f71f255ce70498b3f1c27928a8b1fb0baf3577d9e", size = 1762499, upload-time = "2026-10-05T18:31:07.108Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/76/b2c80758d610f507beb9fd89690e0a43c0028d222738a37b722ba7ff44eb/mlx_audio-0.5.0-py3-none-any.whl", hash = "sha256:90f4619186708a2cd4df9824d2ef3d2e427707264414fb604a3ca9dc499cc820", size = 1915152, upload-time = "2026-08-17T17:47:55.692Z" },
+    { url = "https://files.pythonhosted.org/packages/77/b4/5fe7a122537321a1305c95d57280542691deddcd102fa8e84149525108bb/mlx_audio-0.5.8-py3-none-any.whl", hash = "sha256:cf2eaef3d5d965d3a0a5c98ab68d4867db51daace190a77b3b9576577a7d2eab", size = 2121074, upload-time = "2026-10-05T18:31:05.651Z" },
 ]
 
 [[package]]
@@ -1022,7 +1022,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.143.0" },
-    { name = "mlx-audio", specifier = "==0.5.0" },
+    { name = "mlx-audio", specifier = "==0.5.8" },
     { name = "numpy", specifier = ">=2.4,<3" },
     { name = "pydub", specifier = "==0.25.1" },
     { name = "soundfile", specifier = ">=0.13,<1" },
