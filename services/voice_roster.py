@@ -339,7 +339,9 @@ class SpeakerGuard:
 
 # --- Roster distinctness for voice design ------------------------------------
 
-DESIGN_FEATURES = ("pitch", "texture", "age", "accent", "pace")
+# Retry order. Texture comes last: adding a rough timbre can contradict the
+# requested character ("bright", "sweet") more than a pitch, age or accent step.
+DESIGN_FEATURES = ("pitch", "age", "accent", "pace", "texture")
 # Accents every local design model accepts for English speech.
 ENGLISH_ACCENTS = ("american", "british", "australian", "canadian")
 _PITCHES = ("very-low", "low", "medium", "high", "very-high")

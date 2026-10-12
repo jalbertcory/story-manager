@@ -9,6 +9,7 @@ import pytest
 from services.omnivoice.audio_quality import AudioQualityError
 from services.speaker_similarity import WESPEAKER_RESNET34, SpeakerVerifier
 from services.voice_roster import (
+    DESIGN_FEATURES,
     PROBE_TEXTS,
     SHORT_CLIP_MAX_EXTRA,
     SimilarityProfile,
@@ -417,6 +418,16 @@ def test_design_diverges_from_the_closest_voice_until_distinct():
     ]
     assert len({seed for _voice, seed in designer.rendered}) == 3
     assert candidate.voice == designer.rendered[-1][0]
+
+
+def test_design_changes_texture_only_after_the_other_features():
+    designer = _Designer([0.6, 0.6, 0.6, 0.6, 0.6, 0.4])
+
+    candidate = _design(designer, attempts=6, features=DESIGN_FEATURES)
+
+    assert candidate.attempt == 6
+    assert "raspy" not in designer.rendered[4][0]
+    assert candidate.voice.endswith("A raspy, gravelly voice.")
 
 
 def test_design_keeps_the_most_distinct_take_when_none_clears_the_limit():
