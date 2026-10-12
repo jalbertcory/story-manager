@@ -65,6 +65,48 @@ def test_leaves_forms_the_upstream_normalizer_handles_unchanged(text):
     assert prepare_for_normalization(text) == text
 
 
+@pytest.mark.parametrize(
+    ("accent", "expected"),
+    [
+        ("irish", "british accent"),
+        ("scottish", "british accent"),
+        ("new-zealand", "australian accent"),
+        ("British", "british accent"),
+        ("indian", "indian accent"),
+    ],
+)
+def test_maps_legacy_accent_tags_to_supported_omnivoice_accents(accent, expected):
+    prompt = translate_generation_prompt(f"[gender-male][accent-{accent}]", "Hello.")
+
+    assert prompt.instruct == f"male, {expected}"
+
+
+def test_drops_unknown_legacy_accent_with_warning(caplog):
+    with caplog.at_level("WARNING", logger="services.omnivoice.prompt"):
+        prompt = translate_generation_prompt("[gender-female][accent-martian][age-old]", "Hello.")
+
+    assert prompt.instruct == "female, elderly"
+    assert "martian" in caplog.text
+
+
+def test_maps_unsupported_accent_in_native_instruction():
+    prompt = translate_generation_prompt("male, elderly, Irish accent", "Hello.")
+
+    assert prompt.instruct == "male, elderly, british accent"
+
+
+def test_drops_unknown_accent_from_native_instruction():
+    prompt = translate_generation_prompt("female, martian accent", "Hello.")
+
+    assert prompt.instruct == "female"
+
+
+def test_preserves_native_instruction_without_accent_changes():
+    prompt = translate_generation_prompt("男，河南话", "你好。")
+
+    assert prompt.instruct == "男，河南话"
+
+
 def test_rejects_stationary_mechanical_noise():
     sampling_rate = 24000
     rng = np.random.default_rng(42)

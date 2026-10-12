@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 _VOICE_TAG_RE = re.compile(r"\[([a-z]+)-([^\]]+)\]", re.IGNORECASE)
 _TEXT_TAG_RE = re.compile(r"\[([a-z][a-z-]*)\]", re.IGNORECASE)
@@ -45,6 +48,41 @@ _AGE = {
 }
 _SPEED = {"slow": 0.85, "normal": 1.0, "fast": 1.15}
 
+# OmniVoice 0.2 rejects any accent outside this list
+# (omnivoice/utils/voice_design.py ``_INSTRUCT_CATEGORIES``).
+_SUPPORTED_ACCENTS = frozenset(
+    {
+        "american",
+        "australian",
+        "british",
+        "canadian",
+        "chinese",
+        "indian",
+        "japanese",
+        "korean",
+        "portuguese",
+        "russian",
+    }
+)
+# Nearest supported accent for common descriptions OmniVoice does not accept.
+_ACCENT_ALIASES = {
+    "english": "british",
+    "irish": "british",
+    "scottish": "british",
+    "welsh": "british",
+    "cockney": "british",
+    "uk": "british",
+    "us": "american",
+    "southern": "american",
+    "texan": "american",
+    "new york": "american",
+    "kiwi": "australian",
+    "new zealand": "australian",
+    "brazilian": "portuguese",
+    "mandarin": "chinese",
+    "cantonese": "chinese",
+}
+
 
 @dataclass(frozen=True)
 class GenerationPrompt:
@@ -77,14 +115,18 @@ def translate_generation_prompt(voice: str | None, text: str) -> GenerationPromp
             elif category == "age" and value in _AGE:
                 attributes["age"] = _AGE[value]
             elif category == "accent" and value:
-                attributes["accent"] = f"{value} accent"
+                accent = _normalize_accent(value)
+                if accent:
+                    attributes["accent"] = accent
             elif category == "style" and value == "whisper":
                 attributes["style"] = "whisper"
             elif category == "speed" and value in _SPEED:
                 speed = _SPEED[value]
     elif raw_voice:
         # Also accept native OmniVoice instructions for new/manual profiles.
-        attributes["native"] = raw_voice
+        native = _normalize_native_accents(raw_voice)
+        if native:
+            attributes["native"] = native
 
     def replace_text_tag(match: re.Match[str]) -> str:
         tag = match.group(1).lower()
@@ -99,3 +141,35 @@ def translate_generation_prompt(voice: str | None, text: str) -> GenerationPromp
     normalized_text = re.sub(r"\s+", " ", _TEXT_TAG_RE.sub(replace_text_tag, text)).strip()
     instruct = ", ".join(attributes.values()) or None
     return GenerationPrompt(text=normalized_text, instruct=instruct, speed=speed)
+
+
+def _normalize_accent(value: str) -> str | None:
+    """Return a supported ``<name> accent`` item, or ``None`` to drop it."""
+
+    name = re.sub(r"[\s_-]+", " ", value.lower()).strip()
+    name = re.sub(r"\s*accent$", "", name).strip()
+    if name in _SUPPORTED_ACCENTS:
+        return f"{name} accent"
+    alias = _ACCENT_ALIASES.get(name)
+    if alias:
+        logger.info("Mapping unsupported OmniVoice accent %r to %r.", value, alias)
+        return f"{alias} accent"
+    logger.warning("Dropping unsupported OmniVoice accent %r.", value)
+    return None
+
+
+def _normalize_native_accents(instruct: str) -> str:
+    """Map or drop unsupported accent items in a native instruct string."""
+
+    items = [item.strip() for item in re.split(r"[,，]", instruct) if item.strip()]
+    normalized: list[str] = []
+    changed = False
+    for item in items:
+        if item.lower().endswith("accent"):
+            accent = _normalize_accent(item)
+            changed = changed or accent != item.lower()
+            if accent:
+                normalized.append(accent)
+        else:
+            normalized.append(item)
+    return ", ".join(normalized) if changed else instruct
