@@ -354,12 +354,14 @@ For every local character, Story Manager stores a deterministic seed and sends i
 retries use the reproducible sequence `seed`, `seed + 1`, and so on. Designed/cloned voices are compared with their
 enrollment WAV using WeSpeaker ResNet34 speaker embeddings (`SPEAKER_VERIFIER_MODEL` selects another verifier).
 
-When a voice is created, the worker renders three fixed probe sentences with it and stores the voice's own similarity
-mean and standard deviation in `<voice>.profile.json` beside the enrollment WAV, keyed by verifier model. Voices created
-before profiles existed are calibrated on first use. A take is rejected and retried when it scores more than
-`drift_margin` standard deviations (with a model-specific minimum spread) below that mean, or when it scores at least
-as close to another voice in `cast_voice_ids` as to its own. Story Manager sends the book's other stored voices for the
-active provider as the cast. If every attempt is rejected for drift, the take with the most headroom is kept and a
+The worker renders three fixed probe sentences with each voice and stores the voice's own similarity median and
+MAD-based spread in `<voice>.profile.json` beside the enrollment WAV, keyed by verifier model and revision. OmniVoice
+calibrates when a voice is designed; the Qwen workers calibrate on first use, so creating a cast does not swap between
+the design and clone models for every character. A take is rejected and retried when it scores more than
+`drift_margin` spreads (clamped to a model-specific minimum and maximum) below that median, or when it scores at least
+as close to another voice in `cast_voice_ids` as to its own. Story Manager sends up to 256 of the book's other stored
+voices for the active provider as the cast, in roster order, and the same cap applies to `avoid_voice_ids` during
+design. If every attempt is rejected for drift, the take with the most headroom is kept and a
 warning is logged instead of failing the sentence. `min_voice_similarity` is still accepted as a legacy absolute floor
 that fails hard.
 Similarity scores, attempt counts, and block IDs are returned by the API and shown in the Script Editor.

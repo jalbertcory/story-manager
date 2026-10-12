@@ -463,3 +463,18 @@ async def test_fixed_voice_provider_requires_a_voice_id():
 
     with pytest.raises(RuntimeError, match="voice ID is required"):
         await tts_providers.synthesize_speech(settings, TTSRequest(text="Hello."))
+
+
+def test_large_casts_are_capped_to_a_stable_prefix_the_workers_accept():
+    from services.voice_roster import MAX_ROSTER_VOICE_IDS as WORKER_LIMIT
+
+    cast = tuple(f"omnivoice-{index:032x}" for index in range(300))
+    request = TTSRequest(text="Hello.", voice_id="omnivoice-self", drift_margin=3.0, cast_voice_ids=cast + cast[:5])
+
+    payload = tts_providers._local_request_payload(request, "omnivoice")
+    design: dict[str, object] = {}
+    tts_providers._add_roster_limits(design, list(cast), None)
+
+    assert tts_providers.MAX_ROSTER_VOICE_IDS <= WORKER_LIMIT
+    assert payload["cast_voice_ids"] == list(cast[: tts_providers.MAX_ROSTER_VOICE_IDS])
+    assert design["avoid_voice_ids"] == list(cast[: tts_providers.MAX_ROSTER_VOICE_IDS])

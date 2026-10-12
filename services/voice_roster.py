@@ -7,7 +7,7 @@ is judged relative to the voice instead of against one absolute cosine
 threshold that means different things for different voices and verifiers.
 
 A generated line is rejected and retried when it falls more than ``margin``
-standard deviations below its voice's probe mean, or when it scores at least
+standard deviations below its voice's typical probe score, or when it scores at least
 as close to another voice in the cast as to its own. If every attempt is
 rejected for those reasons, the take with the most slack is kept rather than
 failing the whole sentence.
@@ -26,8 +26,11 @@ from dataclasses import dataclass
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
+import threading
 
 import numpy as np
 
@@ -38,6 +41,8 @@ from services.tts_consistency import seed_for_attempt
 logger = logging.getLogger(__name__)
 
 DEFAULT_DRIFT_MARGIN = 3.0
+# Request limit for cast and avoid lists. The backend sends at most 256.
+MAX_ROSTER_VOICE_IDS = 512
 PROBE_TEXTS = (
     "The rain had stopped by the time we reached the old stone bridge at the edge of town.",
     "Honestly, I never expected him to say yes, but he laughed and handed me the keys.",
@@ -61,22 +66,32 @@ Audio = tuple[np.ndarray, int]
 
 @dataclass(frozen=True)
 class SimilarityProfile:
-    """How closely a voice's own generations normally match its enrollment."""
+    """How closely a voice's own generations normally match its enrollment.
+
+    ``mean`` and ``std`` are robust estimates (median and MAD-based sigma), so
+    one odd probe cannot drag the floor down.
+    """
 
     model: str
     mean: float
     std: float
     count: int
 
-    def floor(self, margin: float, std_floor: float) -> float:
-        return self.mean - margin * max(self.std, std_floor)
+    def floor(self, margin: float, std_floor: float, std_max: float = math.inf) -> float:
+        return self.mean - margin * min(max(self.std, std_floor), std_max)
+
+
+# Scales the median absolute deviation to a standard deviation for normal data.
+_MAD_TO_SIGMA = 1.4826
 
 
 def profile_from_scores(model: str, scores: Iterable[float]) -> SimilarityProfile | None:
     values = np.asarray([score for score in scores if math.isfinite(score)], dtype=np.float64)
     if values.size < 2:
         return None
-    return SimilarityProfile(model=model, mean=float(values.mean()), std=float(values.std(ddof=1)), count=int(values.size))
+    centre = float(np.median(values))
+    spread = _MAD_TO_SIGMA * float(np.median(np.abs(values - centre)))
+    return SimilarityProfile(model=model, mean=centre, std=spread, count=int(values.size))
 
 
 def profile_path(sample_path: Path) -> Path:
@@ -102,9 +117,14 @@ def save_profile(sample_path: Path, profile: SimilarityProfile) -> None:
     except (FileNotFoundError, ValueError):
         entries = {}
     entries[profile.model] = {"mean": profile.mean, "std": profile.std, "count": profile.count}
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(entries, indent=2, sort_keys=True), encoding="utf-8")
-    temporary.replace(path)
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(entries, handle, indent=2, sort_keys=True)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -134,6 +154,7 @@ def judge_speaker(
     std_floor: float,
     min_similarity: float | None = None,
     seconds: float | None = None,
+    std_max: float = math.inf,
 ) -> SpeakerCheck:
     """Apply the drift rules to precomputed verifier scores.
 
@@ -154,7 +175,7 @@ def judge_speaker(
     reasons = []
     slack = math.inf
     if profile is not None:
-        floor = profile.floor(margin + short_clip_margin(seconds), std_floor)
+        floor = profile.floor(margin + short_clip_margin(seconds), std_floor, std_max)
         slack = similarity - floor
         if similarity < floor:
             reasons.append(f"speaker similarity {similarity:.3f} is below this voice's drift floor {floor:.3f}")
@@ -231,9 +252,30 @@ class SpeakerGuard:
         self._calibratable = calibratable
         self._verifier = verifier
         self._profiles: dict[tuple[str, str], SimilarityProfile | None] = {}
+        self._locks: dict[str, threading.RLock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _voice_lock(self, voice_id: str) -> threading.RLock:
+        with self._locks_guard:
+            return self._locks.setdefault(voice_id, threading.RLock())
+
+    def try_calibrate(self, voice_id: str) -> SimilarityProfile | None:
+        """Calibrate a freshly stored voice without failing the request that stored it.
+
+        On error nothing is cached, so the first drift check calibrates again.
+        """
+        try:
+            return self.calibrate(voice_id)
+        except Exception:
+            logger.exception("Could not calibrate %s yet; it will be calibrated on first use.", voice_id)
+            return None
 
     def calibrate(self, voice_id: str) -> SimilarityProfile | None:
         """Synthesize the probe sentences and persist the voice's own range."""
+        with self._voice_lock(voice_id):
+            return self._calibrate(voice_id)
+
+    def _calibrate(self, voice_id: str) -> SimilarityProfile | None:
         reference = self._reference_path(voice_id)
         if reference is None or not self._calibratable(voice_id):
             return None
@@ -271,12 +313,16 @@ class SpeakerGuard:
         key = (voice_id, model)
         if key in self._profiles:
             return self._profiles[key]
-        reference = self._reference_path(voice_id)
-        profile = load_profile(reference, model) if reference is not None else None
-        if profile is None:
-            return self.calibrate(voice_id)
-        self._profiles[key] = profile
-        return profile
+        with self._voice_lock(voice_id):
+            # Another request may have calibrated this voice while we waited.
+            if key in self._profiles:
+                return self._profiles[key]
+            reference = self._reference_path(voice_id)
+            profile = load_profile(reference, model) if reference is not None else None
+            if profile is None:
+                return self._calibrate(voice_id)
+            self._profiles[key] = profile
+            return profile
 
     def cast_references(self, voice_id: str, cast_voice_ids: Sequence[str]) -> dict[str, Path]:
         references = {}
@@ -332,6 +378,7 @@ class SpeakerGuard:
             profile=profile,
             margin=drift_margin,
             std_floor=verifier.calibration.drift_std_floor,
+            std_max=verifier.calibration.drift_std_max,
             min_similarity=min_similarity,
             seconds=np.asarray(audio).size / rate if rate > 0 else None,
         )

@@ -553,9 +553,7 @@ function AudiobookSettings() {
   const [rosterPrompt, setRosterPrompt] = useState("");
   const [diarizationPrompt, setDiarizationPrompt] = useState("");
   const [maxBlockChars, setMaxBlockChars] = useState<number | string>(500);
-  const [voiceDriftMargin, setVoiceDriftMargin] = useState<number | string>(
-    3,
-  );
+  const [voiceDriftMargin, setVoiceDriftMargin] = useState<number | string>(3);
   const [qualityAttempts, setQualityAttempts] = useState<number | string>(3);
   const [initialised, setInitialised] = useState(false);
 
@@ -580,7 +578,11 @@ function AudiobookSettings() {
     roster_prompt_template: rosterPrompt || null,
     diarization_prompt_template: diarizationPrompt || null,
     tts_max_block_chars: Number(maxBlockChars),
-    tts_voice_drift_margin: Number(voiceDriftMargin),
+    // A cleared field keeps the saved margin; Number("") would send 0 and
+    // silently turn the drift and cast checks off.
+    ...(String(voiceDriftMargin).trim() === ""
+      ? {}
+      : { tts_voice_drift_margin: Number(voiceDriftMargin) }),
     tts_quality_attempts: Number(qualityAttempts),
   });
 
@@ -801,8 +803,9 @@ function AudiobookSettings() {
               <span className="settings-hint">
                 Local voices are regenerated when a line falls this many
                 standard deviations below the voice&apos;s usual similarity, or
-                sounds closer to another cast voice. Lower is stricter; 0
-                turns the check off.
+                sounds closer to another cast voice. Smaller values are
+                stricter. Enter 0 to turn off both checks; leave it blank to
+                keep the saved value.
               </span>
             </label>
             <label>

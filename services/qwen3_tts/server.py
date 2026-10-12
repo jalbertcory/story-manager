@@ -24,7 +24,13 @@ import torch
 
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
 from services.tts_consistency import seed_for_attempt, voice_instruction
-from services.voice_roster import SpeakerCheck, SpeakerGuard, design_distinct_voice, generate_checked
+from services.voice_roster import (
+    MAX_ROSTER_VOICE_IDS,
+    SpeakerCheck,
+    SpeakerGuard,
+    design_distinct_voice,
+    generate_checked,
+)
 from .voice_store import StoredVoice, VoiceStore
 
 if TYPE_CHECKING:
@@ -58,7 +64,7 @@ class GenerateRequest(BaseModel):
     # Standard deviations below the voice's calibrated similarity before a take
     # is retried; 0 or null disables the drift and cast checks.
     drift_margin: float | None = Field(default=None, ge=0.0, le=10.0)
-    cast_voice_ids: list[str] = Field(default_factory=list, max_length=64)
+    cast_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     quality_attempts: int = Field(default=3, ge=1, le=10)
 
 
@@ -66,7 +72,7 @@ class DesignVoiceRequest(BaseModel):
     voice: str = Field(min_length=1, max_length=1000)
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=32)
+    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     # Defaults to the active speaker verifier's calibrated roster limit.
     max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
     quality_attempts: int = Field(default=6, ge=1, le=20)
@@ -86,7 +92,7 @@ class PresetVoiceRequest(BaseModel):
     voice: str = Field(min_length=1, max_length=1000)
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=32)
+    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
 
 
@@ -146,7 +152,7 @@ def design_stored_voice(
     *,
     label: str,
 ) -> tuple[StoredVoice, float | None, int]:
-    """Design, store and calibrate a voice kept clear of ``avoid_voice_ids``.
+    """Design and store a voice kept clear of ``avoid_voice_ids``.
 
     ``render`` synthesizes the design sample for a (possibly diverged)
     description and seed.
@@ -162,7 +168,9 @@ def design_stored_voice(
         label=label,
     )
     stored = voices.create(candidate.voice, DESIGN_TEXT, candidate.audio, candidate.rate)
-    guard.calibrate(stored.id)
+    # No eager calibration: probes run on the clone model, and switching away
+    # from the design model for every new voice reloads both models per
+    # character. The first drift check calibrates the voice instead.
     return stored, candidate.similarity, candidate.attempt
 
 
@@ -501,7 +509,7 @@ class QwenRuntime:
             similarity = check_preset_distinct(self._speaker_guard, request, audio, rate)
             description = f"Official Qwen preset {request.voice_id.removeprefix('preset:')}: {request.voice}"
             stored = self._voices.create(description, DESIGN_TEXT, audio, rate)
-            self._speaker_guard.calibrate(stored.id)
+            # Calibrated on first use, like designed voices.
             return stored, similarity, 1
 
 

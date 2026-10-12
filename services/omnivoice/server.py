@@ -33,6 +33,7 @@ from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
 from services.tts_consistency import seed_for_attempt  # noqa: E402
 from services.voice_roster import (  # noqa: E402
+    MAX_ROSTER_VOICE_IDS,
     DesignCandidate,
     SpeakerCheck,
     SpeakerGuard,
@@ -75,7 +76,7 @@ class GenerateRequest(BaseModel):
     # Standard deviations below the voice's calibrated similarity before a take
     # is retried; 0 or null disables the drift and cast checks.
     drift_margin: float | None = Field(default=None, ge=0.0, le=10.0)
-    cast_voice_ids: list[str] = Field(default_factory=list, max_length=64)
+    cast_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     quality_attempts: int = Field(default=QUALITY_ATTEMPTS, ge=1, le=10)
 
 
@@ -83,7 +84,7 @@ class DesignVoiceRequest(BaseModel):
     voice: str = Field(min_length=1, max_length=1000)
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=32)
+    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=MAX_ROSTER_VOICE_IDS)
     # Defaults to the active speaker verifier's calibrated roster limit.
     max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
     quality_attempts: int = Field(default=6, ge=1, le=20)
@@ -251,20 +252,22 @@ class OmniVoiceRuntime:
                 ref_text=translated.text,
                 audio=candidate.audio,
                 sampling_rate=model.sampling_rate,
+                description=candidate.voice,
             )
             self._voice_clone_prompts[stored.id] = model.create_voice_clone_prompt(
                 ref_audio=str(self._voice_store.sample_path(stored.id)),
                 ref_text=stored.ref_text,
             )
-            self._speaker_guard.calibrate(stored.id)
+            self._speaker_guard.try_calibrate(stored.id)
             return stored, candidate
 
     def _generate_probe(self, voice_id: str, text: str, seed: int) -> tuple[np.ndarray, int]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
-        request = GenerateRequest(
-            text=text, voice=self._voice_store.get(voice_id).instruct or None, voice_id=voice_id, seed=seed
-        )
+        stored = self._voice_store.get(voice_id)
+        # Probe with the designed description so pace tags apply as they do in
+        # generation; older voices only have the translated instruct.
+        request = GenerateRequest(text=text, voice=stored.description or stored.instruct or None, voice_id=voice_id, seed=seed)
         return self._generate_audio([request])[0], self.model.sampling_rate
 
     def _check_audio(self, request: GenerateRequest, audio: np.ndarray, sampling_rate: int) -> SpeakerCheck:

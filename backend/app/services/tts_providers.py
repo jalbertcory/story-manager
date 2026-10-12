@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections.abc import Iterable
 import math
 from dataclasses import dataclass
 import re
@@ -138,6 +139,16 @@ def _request_voice_id(request: TTSRequest, provider: str) -> str | None:
     return request.voice_id
 
 
+# Most voice IDs sent as a drift-check cast or design avoid list. Workers accept
+# 512; each listed voice costs a speaker-embedding comparison per take. Callers
+# list the roster narrator first, then by name, so the cap keeps a stable set.
+MAX_ROSTER_VOICE_IDS = 256
+
+
+def _roster_voice_ids(voice_ids: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(voice_ids))[:MAX_ROSTER_VOICE_IDS]
+
+
 def _local_request_payload(request: TTSRequest, provider: str) -> dict[str, object]:
     payload: dict[str, object] = {
         "voice": request.voice_prompt,
@@ -150,7 +161,7 @@ def _local_request_payload(request: TTSRequest, provider: str) -> dict[str, obje
         payload["min_voice_similarity"] = request.min_voice_similarity
     if request.drift_margin is not None:
         payload["drift_margin"] = request.drift_margin
-        payload["cast_voice_ids"] = list(request.cast_voice_ids)
+        payload["cast_voice_ids"] = _roster_voice_ids(request.cast_voice_ids)
     # Send the application setting even when it matches our default. Local
     # workers can override their own default through the environment, but an
     # explicit per-request value must remain authoritative.
@@ -437,7 +448,7 @@ def _add_roster_limits(
     """Ask the worker to stay clear of the cast; it owns the calibrated limit unless overridden."""
     if not avoid_voice_ids:
         return
-    payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
+    payload["avoid_voice_ids"] = _roster_voice_ids(avoid_voice_ids)
     if max_voice_similarity is not None:
         payload["max_voice_similarity"] = max_voice_similarity
 

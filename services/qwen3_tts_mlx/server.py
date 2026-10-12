@@ -229,7 +229,7 @@ class MLXQwenRuntime:
             similarity = api.check_preset_distinct(self._speaker_guard, request, audio, rate)
             description = f"Official Qwen preset {request.voice_id.removeprefix('preset:')}: {request.voice}"
             stored = self._voices.create(description, api.DESIGN_TEXT, audio, rate)
-            self._speaker_guard.calibrate(stored.id)
+            # Calibrated on first use, like designed voices.
             return stored, similarity, 1
 
 

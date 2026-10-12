@@ -59,11 +59,14 @@ class VerifierCalibration:
     # standard deviations) into a similarity floor, so a voice whose probes
     # happened to agree closely is not rejected for ordinary variation.
     drift_std_floor: float
+    # Upper bound on that spread, so a calibration skewed by an odd probe
+    # cannot push the floor low enough to disable the drift check.
+    drift_std_max: float
 
 
 CALIBRATIONS = {
-    "wespeaker": VerifierCalibration(family="wespeaker", roster_max_similarity=0.45, drift_std_floor=0.05),
-    "xvector": VerifierCalibration(family="xvector", roster_max_similarity=0.9, drift_std_floor=0.012),
+    "wespeaker": VerifierCalibration(family="wespeaker", roster_max_similarity=0.45, drift_std_floor=0.05, drift_std_max=0.1),
+    "xvector": VerifierCalibration(family="xvector", roster_max_similarity=0.9, drift_std_floor=0.012, drift_std_max=0.03),
 }
 
 

@@ -21,6 +21,9 @@ class StoredVoice:
     instruct: str
     ref_text: str
     sample_file: str
+    # The Story Manager description the voice was designed from, including
+    # pace tags that ``instruct`` cannot carry. Empty for older voices.
+    description: str = ""
 
 
 class VoiceStore:
@@ -37,6 +40,7 @@ class VoiceStore:
         ref_text: str,
         audio: np.ndarray,
         sampling_rate: int,
+        description: str = "",
     ) -> StoredVoice:
         self.root.mkdir(parents=True, exist_ok=True)
         voice_id = f"omnivoice-{uuid.uuid4().hex}"
@@ -47,6 +51,7 @@ class VoiceStore:
             instruct=instruct,
             ref_text=ref_text,
             sample_file=sample_file,
+            description=description,
         )
         self._write_wav(self.root / sample_file, audio, sampling_rate)
         metadata_path = self.root / f"{voice_id}.json"

@@ -1,13 +1,14 @@
 import json
 import math
 from pathlib import Path
+import threading
 import wave
 
 import numpy as np
 import pytest
 
 from services.omnivoice.audio_quality import AudioQualityError
-from services.speaker_similarity import PINNED_REVISIONS, WESPEAKER_RESNET34, SpeakerVerifier
+from services.speaker_similarity import CALIBRATIONS, PINNED_REVISIONS, WESPEAKER_RESNET34, SpeakerVerifier
 from services.voice_roster import (
     DESIGN_FEATURES,
     PROBE_TEXTS,
@@ -63,13 +64,26 @@ def test_profile_from_scores_needs_two_finite_scores():
     profile = profile_from_scores("m", [0.7, 0.8, 0.9])
     assert profile is not None
     assert profile.mean == pytest.approx(0.8)
-    assert profile.std == pytest.approx(0.1)
+    assert profile.std == pytest.approx(1.4826 * 0.1)
     assert profile.count == 3
 
 
-def test_profile_floor_uses_the_std_floor_for_unusually_consistent_probes():
+def test_one_bad_probe_cannot_disable_the_drift_check():
+    wespeaker = CALIBRATIONS["wespeaker"]
+    profile = profile_from_scores("m", [0.72, 0.70, 0.35])
+    assert profile is not None
+    # A plain mean and std (0.59 +/- 0.21) put the floor near -0.04.
+    floor = profile.floor(3.0, wespeaker.drift_std_floor, wespeaker.drift_std_max)
+    assert profile.mean == pytest.approx(0.70)
+    assert floor == pytest.approx(0.55)
+    assert judge_speaker({"self": 0.36}, "self", profile=profile, margin=3.0, std_floor=wespeaker.drift_std_floor).rejection
+
+
+def test_profile_floor_clamps_the_spread():
     assert PROFILE.floor(3.0, std_floor=0.05) == pytest.approx(0.65)
     assert PROFILE.floor(3.0, std_floor=0.01) == pytest.approx(0.74)
+    wide = SimilarityProfile(model="m", mean=0.59, std=0.21, count=3)
+    assert wide.floor(3.0, std_floor=0.05, std_max=0.1) == pytest.approx(0.29)
 
 
 def test_profiles_are_stored_per_verifier_next_to_the_sample(tmp_path):
@@ -262,6 +276,60 @@ def test_guard_recalibrates_when_the_verifier_weights_change(tmp_path):
     guard.profile("low")
 
     assert len(cast.probes) == 2 * len(PROBE_TEXTS)
+
+
+def test_concurrent_profile_saves_never_share_a_temporary_file(tmp_path):
+    sample = _write_wav(tmp_path / "voice.wav", _voiced(200.0))
+    errors: list[BaseException] = []
+
+    def save(index: int) -> None:
+        try:
+            for _ in range(25):
+                save_profile(sample, SimilarityProfile(model=f"m{index}", mean=0.8, std=0.02, count=3))
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert json.loads(profile_path(sample).read_text())
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_eager_calibration_is_retried_on_first_use(tmp_path):
+    cast = _Cast(tmp_path)
+    working_probe = cast.generate_probe
+
+    def broken_probe(voice_id: str, text: str, seed: int) -> tuple[np.ndarray, int]:
+        raise RuntimeError("model busy")
+
+    guard = SpeakerGuard(
+        cast.reference_path,
+        lambda *args: probe(*args),
+        verifier=lambda: SpeakerVerifier(model_id=WESPEAKER_RESNET34, embedder=_pitch_embedder),
+    )
+    probe = broken_probe
+    assert guard.try_calibrate("low") is None
+
+    probe = working_probe
+    assert guard.profile("low") is not None
+    assert len(cast.probes) == len(PROBE_TEXTS)
+
+
+def test_concurrent_first_use_calibrates_a_voice_once(tmp_path):
+    cast = _Cast(tmp_path)
+    guard = _guard(cast)
+    threads = [threading.Thread(target=guard.profile, args=("mid",)) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(cast.probes) == len(PROBE_TEXTS)
 
 
 def test_guard_lazily_calibrates_voices_created_before_profiles(tmp_path):
