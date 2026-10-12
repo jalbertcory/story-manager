@@ -1743,6 +1743,10 @@ def test_generation_blocks_isolate_mixed_role_sentence_requests():
     assert [[sentence.id for sentence, _requests in block] for block in blocks] == [[1], [2], [3]]
 
 
+async def _no_cast(_db, _book_id):
+    return []
+
+
 @pytest.mark.asyncio
 async def test_generation_batches_multiple_stable_blocks(monkeypatch):
     sentences = [
@@ -1758,7 +1762,7 @@ async def test_generation_batches_multiple_stable_blocks(monkeypatch):
     ]
     generated_batches = []
 
-    async def build_requests(_settings, sentence, _db):
+    async def build_requests(_settings, sentence, _db, _cast):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -1771,6 +1775,7 @@ async def test_generation_batches_multiple_stable_blocks(monkeypatch):
         generated_batches.append([[sentence.id for sentence, _requests in block] for block in blocks])
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
     monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", generate_stable_blocks)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
@@ -1793,7 +1798,7 @@ async def test_failed_native_batch_reports_every_attempted_stable_block(monkeypa
         for index in range(8)
     ]
 
-    async def build_requests(_settings, sentence, _db):
+    async def build_requests(_settings, sentence, _db, _cast):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -1806,6 +1811,7 @@ async def test_failed_native_batch_reports_every_attempted_stable_block(monkeypa
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
     monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", fail_stable_blocks)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
@@ -1863,7 +1869,7 @@ async def test_generation_stops_after_first_failed_provider_block(monkeypatch):
     ]
     attempted = []
 
-    async def build_requests(_settings, sentence, _db):
+    async def build_requests(_settings, sentence, _db, _cast):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -1876,6 +1882,7 @@ async def test_generation_stops_after_first_failed_provider_block(monkeypatch):
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
+    monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
     monkeypatch.setattr(audiobook_tts, "_generate_sentence_clip", fail_generation)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
@@ -2017,6 +2024,70 @@ async def test_mixed_dialogue_tts_uses_character_then_narrator_voice(db):
         ("she muttered by the door.", "narrator voice"),
     ]
     assert narrator.is_narrator is True
+
+
+@pytest.mark.asyncio
+async def test_sentence_batches_load_the_cast_once_and_see_voices_assigned_mid_batch(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    await crud.audiobook.create_characters_bulk(
+        db,
+        book.id,
+        [
+            {
+                "name": "Narrator",
+                "is_narrator": True,
+                "tts_voice_id": "omnivoice-narrator",
+                "tts_voice_provider": "omnivoice",
+            },
+            {"name": "Ada", "tts_voice_id": "omnivoice-ada", "tts_voice_provider": "omnivoice"},
+            {"name": "Bram"},
+        ],
+    )
+    characters = {c.name: c for c in await crud.audiobook.get_characters_for_book(db, book.id)}
+    chapter = await crud.audiobook.create_chapter(db, book.id, 1, "chapter.xhtml")
+    await crud.audiobook.create_sentences_bulk(
+        db,
+        chapter.id,
+        [
+            {
+                "html_element_id": element_id,
+                "sequence_order": order,
+                "original_text": "“Hold the lantern higher.”",
+                "character_id": characters[name].id,
+                "status": "ready_for_audio",
+            }
+            for order, (element_id, name) in enumerate([("ada-1", "Ada"), ("bram-1", "Bram"), ("ada-2", "Ada")])
+        ],
+    )
+    sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
+    loads = []
+    load_cast = crud.audiobook.get_characters_for_book
+
+    async def counting_load(session, book_id):
+        loads.append(book_id)
+        return await load_cast(session, book_id)
+
+    async def assign_voice(_settings, character, _db):
+        if character is not None and character.tts_voice_id is None:
+            character.tts_voice_id = f"omnivoice-{character.name.lower()}"
+            character.tts_voice_provider = "omnivoice"
+
+    captured = {}
+
+    async def capture(_settings, _book_id, sentence, _db, requests=None):
+        captured[sentence.html_element_id] = requests
+
+    monkeypatch.setattr(crud.audiobook, "get_characters_for_book", counting_load)
+    monkeypatch.setattr(audiobook_tts, "_ensure_character_voice", assign_voice)
+    monkeypatch.setattr(audiobook_tts, "_generate_sentence_clip", capture)
+    settings = models.AudiobookSettings(tts_provider="omnivoice", tts_voice_drift_margin=3.0, tts_quality_attempts=3)
+
+    failures = await audiobook_tts._generate_sentence_clips(settings, book.id, sentences, db)
+
+    assert not failures
+    assert loads == [book.id]
+    assert sorted(captured["ada-1"][0].cast_voice_ids) == ["omnivoice-narrator"]
+    assert sorted(captured["ada-2"][0].cast_voice_ids) == ["omnivoice-bram", "omnivoice-narrator"]
 
 
 @pytest.mark.asyncio

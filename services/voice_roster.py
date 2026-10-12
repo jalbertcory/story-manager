@@ -249,25 +249,25 @@ class SpeakerGuard:
             score = verifier.similarity(voice_id, reference, audio, rate)
             if score is not None:
                 scores.append(score)
-        profile = profile_from_scores(verifier.model_id, scores)
+        profile = profile_from_scores(verifier.profile_key, scores)
         if profile is not None:
             save_profile(reference, profile)
             logger.info(
                 "Calibrated %s with %s: similarity %.3f +/- %.3f over %d probes.",
                 voice_id,
-                verifier.model_id,
+                verifier.profile_key,
                 profile.mean,
                 profile.std,
                 profile.count,
             )
         else:
             logger.warning("Could not calibrate %s; only the cast check will apply.", voice_id)
-        self._profiles[(voice_id, verifier.model_id)] = profile
+        self._profiles[(voice_id, verifier.profile_key)] = profile
         return profile
 
     def profile(self, voice_id: str) -> SimilarityProfile | None:
         """Return the stored calibration, calibrating older voices on first use."""
-        model = self._verifier().model_id
+        model = self._verifier().profile_key
         key = (voice_id, model)
         if key in self._profiles:
             return self._profiles[key]

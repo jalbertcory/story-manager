@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from services.omnivoice.audio_quality import AudioQualityError
-from services.speaker_similarity import WESPEAKER_RESNET34, SpeakerVerifier
+from services.speaker_similarity import PINNED_REVISIONS, WESPEAKER_RESNET34, SpeakerVerifier
 from services.voice_roster import (
     DESIGN_FEATURES,
     PROBE_TEXTS,
@@ -246,11 +246,22 @@ def test_guard_calibrates_with_fixed_probes_and_persists_the_profile(tmp_path):
     assert profile is not None and profile.count == len(PROBE_TEXTS)
     assert profile.mean == pytest.approx(1.0)
     assert [text for text, _seed in cast.probes] == list(PROBE_TEXTS)
-    assert load_profile(cast.samples["low"], WESPEAKER_RESNET34) == profile
+    assert load_profile(cast.samples["low"], f"{WESPEAKER_RESNET34}@{PINNED_REVISIONS[WESPEAKER_RESNET34]}") == profile
 
     fresh = _guard(cast)
     assert fresh.profile("low") == profile
     assert len(cast.probes) == len(PROBE_TEXTS), "stored profiles are not recalibrated"
+
+
+def test_guard_recalibrates_when_the_verifier_weights_change(tmp_path):
+    cast = _Cast(tmp_path)
+    _guard(cast).calibrate("low")
+    other_weights = SpeakerVerifier(model_id=WESPEAKER_RESNET34, embedder=_pitch_embedder, revision="0" * 40)
+    guard = SpeakerGuard(cast.reference_path, cast.generate_probe, verifier=lambda: other_weights)
+
+    guard.profile("low")
+
+    assert len(cast.probes) == 2 * len(PROBE_TEXTS)
 
 
 def test_guard_lazily_calibrates_voices_created_before_profiles(tmp_path):

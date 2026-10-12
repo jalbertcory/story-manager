@@ -1,10 +1,14 @@
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 import wave
 
 import numpy as np
 import pytest
 
+import services.speaker_similarity as speaker_similarity
 from services.speaker_similarity import (
+    PINNED_REVISIONS,
     WAVLM_XVECTOR,
     WESPEAKER_RESNET34,
     SpeakerVerifier,
@@ -43,6 +47,24 @@ def test_model_family_and_calibration_select_the_matching_score_scale():
     assert model_family(WAVLM_XVECTOR) == "xvector"
     assert calibration_for(WESPEAKER_RESNET34).roster_max_similarity < calibration_for(WAVLM_XVECTOR).roster_max_similarity
     assert calibration_for(WESPEAKER_RESNET34).drift_std_floor > calibration_for(WAVLM_XVECTOR).drift_std_floor
+
+
+def test_hub_weights_are_pinned_and_part_of_the_profile_key(monkeypatch):
+    downloads = []
+
+    def download(repo, filename, revision=None):
+        downloads.append((repo, filename, revision))
+        return "/models/voxceleb_resnet34_LM.onnx"
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=download))
+    revision = PINNED_REVISIONS[WESPEAKER_RESNET34]
+
+    assert speaker_similarity._wespeaker_onnx_path(WESPEAKER_RESNET34, revision) == "/models/voxceleb_resnet34_LM.onnx"
+    assert downloads == [(WESPEAKER_RESNET34, "voxceleb_resnet34_LM.onnx", revision)]
+    assert all(len(pin) == 40 for pin in PINNED_REVISIONS.values())
+    assert SpeakerVerifier(model_id=WESPEAKER_RESNET34).profile_key == f"{WESPEAKER_RESNET34}@{revision}"
+    assert SpeakerVerifier(model_id=WAVLM_XVECTOR).revision == PINNED_REVISIONS[WAVLM_XVECTOR]
+    assert SpeakerVerifier(model_id="/models/custom.onnx").profile_key == "/models/custom.onnx"
 
 
 def test_kaldi_fbank_uses_25ms_frames_with_10ms_shift_and_mean_normalization():

@@ -32,7 +32,14 @@ if TYPE_CHECKING:
 
 WESPEAKER_RESNET34 = "Wespeaker/wespeaker-voxceleb-resnet34-LM"
 WAVLM_XVECTOR = "microsoft/wavlm-base-plus-sv"
+# Hub weights are pinned: a changed upstream file would silently move every
+# similarity score and invalidate the calibration profiles stored per voice.
+PINNED_REVISIONS = {
+    WESPEAKER_RESNET34: "f0c48c298fd835726c27956a5d617bad7115627e",
+    WAVLM_XVECTOR: "feb593a6c23c1cc3d9510425c29b0a14d2b07b1e",
+}
 MODEL_ID = os.getenv("SPEAKER_VERIFIER_MODEL", WESPEAKER_RESNET34)
+REVISION = os.getenv("SPEAKER_VERIFIER_REVISION") or PINNED_REVISIONS.get(MODEL_ID)
 DEVICE = os.getenv("SPEAKER_VERIFIER_DEVICE", "cpu")
 SAMPLING_RATE = 16_000
 
@@ -129,24 +136,26 @@ def kaldi_fbank(audio: np.ndarray, num_bins: int = 80) -> np.ndarray:
     return np.asarray(feats - feats.mean(axis=0), dtype=np.float32)
 
 
-def _wespeaker_onnx_path(model_id: str) -> str:
+def _wespeaker_onnx_path(model_id: str, revision: str | None) -> str:
     if model_id.lower().endswith(".onnx"):
         return model_id
     from huggingface_hub import hf_hub_download
 
     repo_name = model_id.split("/", 1)[1]
     filename = repo_name.removeprefix("wespeaker-").replace("-", "_") + ".onnx"
-    return str(hf_hub_download(model_id, filename))
+    return str(hf_hub_download(model_id, filename, revision=revision))
 
 
 class _WeSpeakerEmbedder:
-    def __init__(self, model_id: str, device: str) -> None:
+    def __init__(self, model_id: str, revision: str | None, device: str) -> None:
         import onnxruntime as ort
 
         providers = ["CPUExecutionProvider"]
         if device.startswith("cuda") and "CUDAExecutionProvider" in ort.get_available_providers():
             providers.insert(0, "CUDAExecutionProvider")
-        self._session: onnxruntime.InferenceSession = ort.InferenceSession(_wespeaker_onnx_path(model_id), providers=providers)
+        self._session: onnxruntime.InferenceSession = ort.InferenceSession(
+            _wespeaker_onnx_path(model_id, revision), providers=providers
+        )
         self._input = self._session.get_inputs()[0].name
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
@@ -155,12 +164,12 @@ class _WeSpeakerEmbedder:
 
 
 class _XVectorEmbedder:
-    def __init__(self, model_id: str, device: str) -> None:
+    def __init__(self, model_id: str, revision: str | None, device: str) -> None:
         from transformers import AutoFeatureExtractor, AutoModelForAudioXVector
 
         self._device = device
-        self._extractor: FeatureExtractionMixin = AutoFeatureExtractor.from_pretrained(model_id)
-        self._model: PreTrainedModel = AutoModelForAudioXVector.from_pretrained(model_id).to(device).eval()
+        self._extractor: FeatureExtractionMixin = AutoFeatureExtractor.from_pretrained(model_id, revision=revision)
+        self._model: PreTrainedModel = AutoModelForAudioXVector.from_pretrained(model_id, revision=revision).to(device).eval()
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
         import torch
@@ -172,25 +181,41 @@ class _XVectorEmbedder:
         return np.asarray(embedding.float().cpu().numpy(), dtype=np.float32).reshape(-1)
 
 
-def _build_embedder(model_id: str, device: str) -> _Embedder:
+def _build_embedder(model_id: str, revision: str | None, device: str) -> _Embedder:
     if model_family(model_id) == "wespeaker":
-        return _WeSpeakerEmbedder(model_id, device)
-    return _XVectorEmbedder(model_id, device)
+        return _WeSpeakerEmbedder(model_id, revision, device)
+    return _XVectorEmbedder(model_id, revision, device)
+
+
+def _default_revision(model_id: str) -> str | None:
+    return REVISION if model_id == MODEL_ID else PINNED_REVISIONS.get(model_id)
 
 
 class SpeakerVerifier:
     """Compare generated speech with stored character enrollment samples."""
 
-    def __init__(self, model_id: str = MODEL_ID, device: str = DEVICE, embedder: _Embedder | None = None) -> None:
+    def __init__(
+        self,
+        model_id: str = MODEL_ID,
+        device: str = DEVICE,
+        embedder: _Embedder | None = None,
+        revision: str | None = None,
+    ) -> None:
         self.model_id = model_id
+        self.revision = revision if revision is not None else _default_revision(model_id)
         self.calibration = calibration_for(model_id)
         self._device = device
         self._embedder = embedder
         self._reference_embeddings: dict[str, np.ndarray] = {}
 
+    @property
+    def profile_key(self) -> str:
+        """Identify the exact weights, so calibrations never mix score scales."""
+        return f"{self.model_id}@{self.revision}" if self.revision else self.model_id
+
     def embedding(self, audio: np.ndarray, sampling_rate: int) -> np.ndarray:
         if self._embedder is None:
-            self._embedder = _build_embedder(self.model_id, self._device)
+            self._embedder = _build_embedder(self.model_id, self.revision, self._device)
         vector = np.asarray(self._embedder(_resample(audio, sampling_rate)), dtype=np.float64).reshape(-1)
         norm = float(np.linalg.norm(vector))
         if norm == 0.0:
