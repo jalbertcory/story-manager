@@ -62,7 +62,6 @@ from ..services.audiobook_metadata import filename_metadata
 from ..services.book_matching import title_match_keys as _libation_title_keys
 from ..services.audiobook_reading import ReadingBlock, chapter_reading_blocks
 from ..services.audiobook_tts import (
-    VOICE_ROSTER_MAX_SIMILARITY,
     distinctive_voice_prompt,
     stable_character_seed,
 )
@@ -1880,9 +1879,8 @@ async def design_character_voice(
         voice_prompt,
         seed=character.tts_seed,
         avoid_voice_ids=avoid_voice_ids,
-        max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
     )
-    character.voice_prompt = voice_prompt
+    character.voice_prompt = designed.voice or voice_prompt
     character.tts_voice_id = designed.id
     character.tts_voice_provider = provider
     await db.commit()

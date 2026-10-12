@@ -1552,6 +1552,7 @@ async def test_omnivoice_design_is_created_once_and_persisted_on_roster(db, monk
             sample_url="/voices/example/sample",
             max_cross_voice_similarity=None,
             attempts=1,
+            voice=f"[pitch-low]{voice_prompt}",
         )
 
     monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", design_voice)
@@ -1571,6 +1572,35 @@ async def test_omnivoice_design_is_created_once_and_persisted_on_roster(db, monk
     assert first.seed is not None
     assert character.tts_voice_id == first.voice_id
     assert character.tts_voice_provider == "omnivoice"
+    assert character.voice_prompt == f"[pitch-low]{calls[0][0]}", "the worker's diverged description is kept"
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_design_avoids_existing_cast_voices(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    _chapter, character, sentence = await _seed_audio_chapter(db, book.id)
+    (other,) = await crud.audiobook.create_characters_bulk(
+        db, book.id, [{"name": "Other", "voice_prompt": "[gender-male]", "is_narrator": False}]
+    )
+    other.tts_voice_id = "omnivoice-other"
+    other.tts_voice_provider = "omnivoice"
+    settings = models.AudiobookSettings(tts_provider="omnivoice", tts_base_url="http://omnivoice:8001")
+    db.add(settings)
+    await db.commit()
+    calls = []
+
+    async def design_voice(_settings, _voice_prompt, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            id="omnivoice-new", sample_text="t", sample_url="/s", max_cross_voice_similarity=0.4, attempts=2, voice=None
+        )
+
+    monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", design_voice)
+
+    await audiobook_tts._build_sentence_request(settings, sentence, db)
+
+    assert calls[0]["avoid_voice_ids"] == ["omnivoice-other"]
+    assert "max_voice_similarity" not in calls[0], "the worker owns the calibrated roster limit"
 
 
 def test_distinctive_voice_prompt_expands_generic_profiles_per_character():
@@ -1594,10 +1624,10 @@ def test_distinctive_voice_prompt_expands_generic_profiles_per_character():
 
 
 @pytest.mark.asyncio
-async def test_qwen_distinctness_conflict_materializes_compatible_preset(db, monkeypatch):
+async def test_qwen_design_failure_materializes_an_english_preset(db, monkeypatch):
     book = await _make_book(db, audiobook_enabled=True)
     _chapter, character, sentence = await _seed_audio_chapter(db, book.id)
-    character.voice_prompt = "[gender-female][pitch-medium] A clear, measured alto voice."
+    character.voice_prompt = "[gender-male][pitch-medium] A clear, measured baritone voice."
     settings = models.AudiobookSettings(
         tts_provider="qwen3",
         tts_base_url="http://qwen3:8003",
@@ -1619,6 +1649,7 @@ async def test_qwen_distinctness_conflict_materializes_compatible_preset(db, mon
             sample_url="/voices/example/sample",
             max_cross_voice_similarity=0.73,
             attempts=1,
+            voice="Official Qwen preset Ryan: a clear voice.",
         )
 
     monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", saturated_design)
@@ -1628,10 +1659,35 @@ async def test_qwen_distinctness_conflict_materializes_compatible_preset(db, mon
     await db.refresh(character)
 
     assert presets
-    assert presets[0][0] in {"preset:Vivian", "preset:Serena", "preset:Ono_Anna", "preset:Sohee"}
+    assert presets[0][0] in {"preset:Ryan", "preset:Aiden"}
     assert presets[0][1]["seed"] == character.tts_seed
     assert request.voice_id == "qwen3-0123456789abcdef0123456789abcdef"
     assert character.tts_voice_provider == "qwen3"
+    assert character.voice_prompt.startswith("[gender-male]"), "preset descriptions do not replace the profile"
+
+
+@pytest.mark.asyncio
+async def test_qwen_design_failure_never_gives_a_female_character_a_non_english_preset(db, monkeypatch):
+    book = await _make_book(db, audiobook_enabled=True)
+    _chapter, character, sentence = await _seed_audio_chapter(db, book.id)
+    character.voice_prompt = "[gender-female][pitch-medium] A clear, measured alto voice."
+    settings = models.AudiobookSettings(tts_provider="qwen3", tts_base_url="http://qwen3:8003")
+    db.add(settings)
+    await db.commit()
+
+    async def failed_design(*_args, **_kwargs):
+        request = httpx.Request("POST", "http://qwen3:8003/voices/design")
+        raise httpx.HTTPStatusError("no usable audio", request=request, response=httpx.Response(409, request=request))
+
+    async def materialize(*_args, **_kwargs):
+        raise AssertionError("no English-native female preset exists")
+
+    monkeypatch.setattr(audiobook_tts, "design_omnivoice_voice", failed_design)
+    monkeypatch.setattr(audiobook_tts, "materialize_qwen_preset_voice", materialize)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await audiobook_tts._build_sentence_request(settings, sentence, db)
+    assert audiobook_tts._compatible_qwen_presets(character) == []
 
 
 def test_generation_blocks_keep_adjacent_same_voice_together_and_honor_limits():
@@ -1894,6 +1950,7 @@ async def test_manual_omnivoice_design_can_be_auditioned(db, monkeypatch):
             sample_url="/voices/example/sample",
             max_cross_voice_similarity=None,
             attempts=1,
+            voice=None,
         )
 
     async def get_sample(_settings, voice_id):

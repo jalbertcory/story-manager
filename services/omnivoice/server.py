@@ -27,12 +27,18 @@ from pydantic import BaseModel, Field  # noqa: E402
 from pydub import AudioSegment  # noqa: E402
 import torch  # noqa: E402
 
-from .audio_quality import validate_generated_audio  # noqa: E402
+from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: E402
 from .normalization import prepare_for_normalization  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
 from services.tts_consistency import seed_for_attempt  # noqa: E402
-from services.voice_roster import SpeakerCheck, SpeakerGuard, generate_checked  # noqa: E402
+from services.voice_roster import (  # noqa: E402
+    DesignCandidate,
+    SpeakerCheck,
+    SpeakerGuard,
+    design_distinct_voice,
+    generate_checked,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,8 @@ VOICE_STORE_PATH = Path(
         str(Path(os.getenv("HF_HOME", ".cache/omnivoice")) / "voices"),
     )
 )
+# OmniVoice only reads tagged attributes, so free-text texture cannot be steered.
+DESIGN_FEATURES = ("pitch", "age", "accent", "pace")
 VOICE_DESIGN_TEXT = os.getenv(
     "OMNIVOICE_VOICE_DESIGN_TEXT",
     "Once upon a quiet morning, I found the courage to tell this story clearly, warmly, and in my own voice.",
@@ -74,6 +82,11 @@ class GenerateRequest(BaseModel):
 class DesignVoiceRequest(BaseModel):
     voice: str = Field(min_length=1, max_length=1000)
     language: str | None = None
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    avoid_voice_ids: list[str] = Field(default_factory=list, max_length=32)
+    # Defaults to the active speaker verifier's calibrated roster limit.
+    max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    quality_attempts: int = Field(default=6, ge=1, le=20)
 
 
 class DesignVoiceResponse(BaseModel):
@@ -81,6 +94,8 @@ class DesignVoiceResponse(BaseModel):
     voice: str
     sample_text: str
     sample_url: str
+    max_cross_voice_similarity: float | None = None
+    attempts: int = 1
 
 
 class BatchGenerateRequest(BaseModel):
@@ -200,35 +215,49 @@ class OmniVoiceRuntime:
         self._voice_clone_prompts[voice_id] = prompt
         return prompt
 
-    def design_voice(self, request: DesignVoiceRequest) -> StoredVoice:
-        if self.model is None:
+    def _stored_instruct(self, voice_id: str) -> str | None:
+        try:
+            return self._voice_store.get(voice_id).instruct
+        except KeyError:
+            return None
+
+    def design_voice(self, request: DesignVoiceRequest) -> tuple[StoredVoice, DesignCandidate]:
+        model = self.model
+        if model is None:
             raise RuntimeError("OmniVoice model is not loaded")
         with self._generate_lock:
-            translated = translate_generation_prompt(request.voice, VOICE_DESIGN_TEXT)
-            # The stored ref_text must match the enrollment sample word for word,
-            # so the sample is spoken from the exact text that is saved with it.
-            audio, _similarity, _attempts = self._generate_valid_audio(
-                GenerateRequest(
-                    text=VOICE_DESIGN_TEXT,
-                    voice=request.voice,
-                    language=request.language,
-                ),
-                1,
-                normalize=False,
+
+            def render(description: str, seed: int | None) -> tuple[np.ndarray, int]:
+                sample = GenerateRequest(text=VOICE_DESIGN_TEXT, voice=description, language=request.language, seed=seed)
+                # The stored ref_text must match the enrollment sample word for word,
+                # so the sample is spoken from the exact text that is saved with it.
+                return self._generate_audio([sample], normalize=False)[0], model.sampling_rate
+
+            candidate = design_distinct_voice(
+                render,
+                lambda audio, rate: self._speaker_guard.closest_voice(request.avoid_voice_ids, audio, rate),
+                self._stored_instruct,
+                voice=request.voice,
+                seed=request.seed,
+                attempts=request.quality_attempts,
+                max_similarity=self._speaker_guard.roster_limit(request.max_voice_similarity),
+                features=DESIGN_FEATURES,
+                label="OmniVoice voice design",
             )
+            translated = translate_generation_prompt(candidate.voice, VOICE_DESIGN_TEXT)
             stored = self._voice_store.create(
                 model=MODEL_ID,
                 instruct=translated.instruct or "",
                 ref_text=translated.text,
-                audio=audio,
-                sampling_rate=self.model.sampling_rate,
+                audio=candidate.audio,
+                sampling_rate=model.sampling_rate,
             )
-            self._voice_clone_prompts[stored.id] = self.model.create_voice_clone_prompt(
+            self._voice_clone_prompts[stored.id] = model.create_voice_clone_prompt(
                 ref_audio=str(self._voice_store.sample_path(stored.id)),
                 ref_text=stored.ref_text,
             )
             self._speaker_guard.calibrate(stored.id)
-            return stored
+            return stored, candidate
 
     def _generate_probe(self, voice_id: str, text: str, seed: int) -> tuple[np.ndarray, int]:
         if self.model is None:
@@ -333,15 +362,19 @@ async def health() -> dict[str, object]:
 @app.post("/voices/design", response_model=DesignVoiceResponse)
 async def design_voice(request: DesignVoiceRequest) -> DesignVoiceResponse:
     try:
-        stored = await asyncio.to_thread(runtime.design_voice, request)
+        stored, candidate = await asyncio.to_thread(runtime.design_voice, request)
+    except AudioQualityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("OmniVoice voice design failed.")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return DesignVoiceResponse(
         id=stored.id,
-        voice=request.voice,
+        voice=candidate.voice,
         sample_text=stored.ref_text,
         sample_url=f"/voices/{stored.id}/sample",
+        max_cross_voice_similarity=candidate.similarity,
+        attempts=candidate.attempt,
     )
 
 

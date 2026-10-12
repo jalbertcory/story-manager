@@ -23,9 +23,8 @@ from pydantic import BaseModel, Field
 import torch
 
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
-from services.speaker_similarity import get_speaker_verifier
 from services.tts_consistency import seed_for_attempt, voice_instruction
-from services.voice_roster import SpeakerCheck, SpeakerGuard, generate_checked
+from services.voice_roster import SpeakerCheck, SpeakerGuard, design_distinct_voice, generate_checked
 from .voice_store import StoredVoice, VoiceStore
 
 if TYPE_CHECKING:
@@ -68,6 +67,7 @@ class DesignVoiceRequest(BaseModel):
     language: str | None = None
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
     avoid_voice_ids: list[str] = Field(default_factory=list, max_length=32)
+    # Defaults to the active speaker verifier's calibrated roster limit.
     max_voice_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
     quality_attempts: int = Field(default=6, ge=1, le=20)
 
@@ -129,6 +129,52 @@ def speaker_guard(
         lambda voice_id, text, seed: generate_once(GenerateRequest(text=text, voice_id=voice_id, seed=seed)),
         calibratable=lambda voice_id: not voice_id.startswith("lora:"),
     )
+
+
+def _stored_description(voices: VoiceStore, voice_id: str) -> str | None:
+    try:
+        return voices.get(voice_id).description
+    except (KeyError, ValueError):
+        return None
+
+
+def design_stored_voice(
+    guard: SpeakerGuard,
+    voices: VoiceStore,
+    request: DesignVoiceRequest,
+    render: Callable[[str, int | None], tuple[np.ndarray, int]],
+    *,
+    label: str,
+) -> tuple[StoredVoice, float | None, int]:
+    """Design, store and calibrate a voice kept clear of ``avoid_voice_ids``.
+
+    ``render`` synthesizes the design sample for a (possibly diverged)
+    description and seed.
+    """
+    candidate = design_distinct_voice(
+        render,
+        lambda audio, rate: guard.closest_voice(request.avoid_voice_ids, audio, rate),
+        lambda voice_id: _stored_description(voices, voice_id),
+        voice=request.voice,
+        seed=request.seed,
+        attempts=request.quality_attempts,
+        max_similarity=guard.roster_limit(request.max_voice_similarity),
+        label=label,
+    )
+    stored = voices.create(candidate.voice, DESIGN_TEXT, candidate.audio, candidate.rate)
+    guard.calibrate(stored.id)
+    return stored, candidate.similarity, candidate.attempt
+
+
+def check_preset_distinct(guard: SpeakerGuard, request: PresetVoiceRequest, audio: np.ndarray, rate: int) -> float | None:
+    """Reject a materialized preset that sounds like an existing cast voice."""
+    rival_id, similarity = guard.closest_voice(request.avoid_voice_ids, audio, rate)
+    limit = guard.roster_limit(request.max_voice_similarity)
+    if similarity is not None and similarity > limit:
+        raise AudioQualityError(
+            f"preset {request.voice_id} is too similar to cast voice {rival_id} ({similarity:.3f}, limit {limit:.3f})."
+        )
+    return similarity
 
 
 def validate_speaker(guard: SpeakerGuard, request: GenerateRequest, audio: np.ndarray, rate: int) -> SpeakerCheck:
@@ -295,23 +341,6 @@ class QwenRuntime:
             return Path(metadata["ref_audio_path"])
         return self._voices.sample_path(voice_id)
 
-    def _cross_voice_similarity(
-        self,
-        request: DesignVoiceRequest | PresetVoiceRequest,
-        audio: np.ndarray,
-        rate: int,
-    ) -> float | None:
-        scores = []
-        verifier = get_speaker_verifier()
-        for voice_id in dict.fromkeys(request.avoid_voice_ids):
-            reference = self._reference_path(voice_id)
-            if reference is None:
-                continue
-            similarity = verifier.similarity(f"voice-roster:{voice_id}", reference, audio, rate)
-            if similarity is not None:
-                scores.append(similarity)
-        return max(scores, default=None)
-
     def _generate_once(self, request: GenerateRequest) -> tuple[np.ndarray, int]:
         if request.seed is not None:
             torch.manual_seed(request.seed)
@@ -439,41 +468,21 @@ class QwenRuntime:
     def design(self, request: DesignVoiceRequest) -> tuple[StoredVoice, float | None, int]:
         with self._lock:
             model = self._load("design")
-            last_similarity = None
-            for attempt in range(1, request.quality_attempts + 1):
-                attempt_seed = seed_for_attempt(request.seed, attempt)
-                if attempt_seed is not None:
-                    torch.manual_seed(attempt_seed)
+
+            def render(description: str, seed: int | None) -> tuple[np.ndarray, int]:
+                if seed is not None:
+                    torch.manual_seed(seed)
                     if torch.cuda.is_available():
-                        torch.cuda.manual_seed_all(attempt_seed)
+                        torch.cuda.manual_seed_all(seed)
                 wavs, rate = model.generate_voice_design(
                     text=DESIGN_TEXT,
                     language=request.language or LANGUAGE,
-                    instruct=_instruction(request.voice),
+                    instruct=_instruction(description),
                     non_streaming_mode=True,
                 )
-                audio = np.concatenate(wavs) if len(wavs) > 1 else wavs[0]
-                validate_generated_audio(audio, rate)
-                last_similarity = self._cross_voice_similarity(request, audio, rate)
-                if (
-                    request.max_voice_similarity is None
-                    or last_similarity is None
-                    or last_similarity <= request.max_voice_similarity
-                ):
-                    stored = self._voices.create(request.voice, DESIGN_TEXT, audio, rate)
-                    self._speaker_guard.calibrate(stored.id)
-                    return stored, last_similarity, attempt
-                logger.warning(
-                    "Rejected designed voice on attempt %d/%d: cross-character similarity %.3f exceeds %.3f",
-                    attempt,
-                    request.quality_attempts,
-                    last_similarity,
-                    request.max_voice_similarity,
-                )
-        raise AudioQualityError(
-            "Qwen3-TTS could not design a sufficiently distinct voice "
-            f"(closest roster similarity {last_similarity:.3f}, limit {request.max_voice_similarity:.3f})."
-        )
+                return (np.concatenate(wavs) if len(wavs) > 1 else wavs[0]), rate
+
+            return design_stored_voice(self._speaker_guard, self._voices, request, render, label="Qwen3 voice design")
 
     def materialize_preset(self, request: PresetVoiceRequest) -> tuple[StoredVoice, float | None, int]:
         """Render an official preset once and persist it as a clone reference."""
@@ -489,16 +498,7 @@ class QwenRuntime:
                 )
             )
             validate_generated_audio(audio, rate)
-            similarity = self._cross_voice_similarity(request, audio, rate)
-            if (
-                request.max_voice_similarity is not None
-                and similarity is not None
-                and similarity > request.max_voice_similarity
-            ):
-                raise AudioQualityError(
-                    f"preset {request.voice_id} is too similar to the existing cast "
-                    f"({similarity:.3f}, limit {request.max_voice_similarity:.3f})."
-                )
+            similarity = check_preset_distinct(self._speaker_guard, request, audio, rate)
             description = f"Official Qwen preset {request.voice_id.removeprefix('preset:')}: {request.voice}"
             stored = self._voices.create(description, DESIGN_TEXT, audio, rate)
             self._speaker_guard.calibrate(stored.id)

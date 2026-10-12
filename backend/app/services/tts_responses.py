@@ -15,6 +15,7 @@ class TTSResponse(BaseModel):
 
 class DesignedVoiceResponse(TTSResponse):
     id: NonemptyText
+    voice: NonemptyText | None = None
     sample_text: NonemptyText
     sample_url: NonemptyText
     max_cross_voice_similarity: Similarity | None = None

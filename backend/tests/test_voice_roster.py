@@ -10,15 +10,21 @@ from services.omnivoice.audio_quality import AudioQualityError
 from services.speaker_similarity import WESPEAKER_RESNET34, SpeakerVerifier
 from services.voice_roster import (
     PROBE_TEXTS,
+    SHORT_CLIP_MAX_EXTRA,
     SimilarityProfile,
     SpeakerCheck,
     SpeakerGuard,
+    design_distinct_voice,
+    diverge_feature,
+    diverge_profile,
     generate_checked,
     judge_speaker,
     load_profile,
     profile_from_scores,
     profile_path,
     save_profile,
+    short_clip_margin,
+    voice_features,
 )
 
 RATE = 16_000
@@ -97,6 +103,23 @@ def test_judge_rejects_takes_closer_to_another_cast_voice():
 
     assert check.rejection is not None and "closer to cast voice rival" in check.rejection
     assert check.slack == pytest.approx(-0.02)
+
+
+def test_short_clips_get_a_wider_drift_floor():
+    assert short_clip_margin(None) == 0.0
+    assert short_clip_margin(6.0) == 0.0
+    assert 0.0 < short_clip_margin(3.0) < short_clip_margin(2.0) < short_clip_margin(1.0)
+    assert short_clip_margin(0.2) == SHORT_CLIP_MAX_EXTRA
+
+    scores = {"own": 0.63}
+    assert judge_speaker(scores, "own", profile=PROFILE, margin=3.0, std_floor=0.05, seconds=6.0).rejection
+    assert judge_speaker(scores, "own", profile=PROFILE, margin=3.0, std_floor=0.05, seconds=2.0).rejection is None
+
+
+def test_short_clips_still_fail_the_cast_check():
+    check = judge_speaker({"own": 0.5, "rival": 0.55}, "own", profile=PROFILE, margin=3.0, std_floor=0.05, seconds=1.0)
+
+    assert check.rejection is not None and "closer to cast voice rival" in check.rejection
 
 
 def test_judge_cast_check_still_applies_before_a_voice_is_calibrated():
@@ -268,3 +291,153 @@ def test_guard_without_margin_only_reports_similarity(tmp_path):
     assert check.rejection is None
     assert check.similarity is not None and check.similarity < 0.1
     assert cast.probes == []
+
+
+def test_guard_roster_limit_defaults_to_the_verifier_calibration(tmp_path):
+    guard = _guard(_Cast(tmp_path))
+
+    assert guard.roster_limit(None) == pytest.approx(0.45)
+    assert guard.roster_limit(0.3) == 0.3
+
+
+def test_guard_finds_the_closest_stored_voice(tmp_path):
+    cast = _Cast(tmp_path)
+    guard = _guard(cast)
+
+    closest, similarity = guard.closest_voice(["low", "high", "preset:Ryan"], _voiced(700.0), RATE)
+
+    assert closest == "high"
+    assert similarity == pytest.approx(1.0)
+    assert guard.closest_voice([], _voiced(700.0), RATE) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        (
+            "[gender-female][age-young-adult][pitch-high][speed-fast] A bright voice.",
+            {"gender": "female", "age": "young-adult", "pitch": "high", "pace": "fast"},
+        ),
+        (
+            "male, middle-aged, very low pitch, british accent",
+            {"gender": "male", "age": "middle-aged", "pitch": "very-low", "accent": "british"},
+        ),
+        ("A gravelly old fisherman, slow pace.", {"pace": "slow", "texture": "rough"}),
+        ("A warm young woman narrator.", {"gender": "female", "age": "young-adult"}),
+    ],
+)
+def test_voice_features_read_tags_and_phrases(description, expected):
+    assert voice_features(description) == expected
+
+
+def test_diverge_feature_moves_away_from_the_rival():
+    ours = "[gender-female][pitch-high] Bright."
+
+    assert diverge_feature(ours, "female, high pitch", "pitch") == "[gender-female][pitch-very-high] Bright."
+    assert diverge_feature(ours, "female, very high pitch", "pitch") == "[gender-female][pitch-medium] Bright."
+    assert diverge_feature("[pitch-very-high]", "high pitch", "pitch") is None, "already apart at the edge"
+    assert diverge_feature(ours, "female, medium pitch", "pitch") == "[gender-female][pitch-very-high] Bright."
+    assert diverge_feature(ours, "female, high pitch", "texture") == f"{ours} A raspy, gravelly voice."
+    assert diverge_feature(ours, "female, raspy voice", "texture") is None
+
+
+def test_diverge_feature_keeps_accents_english_and_gender_fixed():
+    ours = "[gender-male][accent-british] Calm."
+
+    assert diverge_feature(ours, "male, british accent", "accent") == "[gender-male][accent-australian] Calm."
+    assert diverge_feature(ours, "male, american accent", "accent") is None
+    changed = diverge_feature("A calm young man.", "male, american accent", "accent")
+    assert changed is not None
+    assert voice_features(changed)["accent"] == "british"
+    assert voice_features(changed)["gender"] == "male", "phrase-only descriptions keep their gender as a tag"
+
+
+def test_diverge_feature_does_not_turn_adults_into_children():
+    assert voice_features(diverge_feature("[age-teenager]", "teenager", "age") or "")["age"] == "young-adult"
+    assert voice_features(diverge_feature("[age-child]", "child", "age") or "")["age"] == "teenager"
+
+
+def test_diverge_profile_changes_each_feature_once():
+    rival = "female, young adult, high pitch, american accent"
+    first, remaining = diverge_profile("[gender-female][pitch-high] Bright.", rival, ("pitch", "age"))
+    second, remaining = diverge_profile(first, rival, remaining)
+
+    assert first == "[gender-female][pitch-very-high] Bright."
+    assert voice_features(second)["age"] != "young-adult"
+    assert remaining == ()
+    assert diverge_profile(second, rival, remaining) == (second, ())
+
+
+class _Designer:
+    """Render each description as a tone and score it by scripted similarities."""
+
+    def __init__(self, similarities, failures=()):
+        self.similarities = list(similarities)
+        self.failures = set(failures)
+        self.rendered: list[tuple[str, int | None]] = []
+
+    def render(self, description, seed):
+        self.rendered.append((description, seed))
+        if len(self.rendered) in self.failures:
+            return np.zeros(RATE, dtype=np.float32), RATE
+        return _voiced(200.0 + 50 * len(self.rendered)), RATE
+
+    def closest(self, _audio, _rate):
+        return "rival", self.similarities.pop(0)
+
+
+def _design(designer, **kwargs):
+    options = {"voice": "[gender-female][pitch-high] Bright.", "seed": 10, "attempts": 4, "max_similarity": 0.45}
+    options.update(kwargs)
+    return design_distinct_voice(
+        designer.render, designer.closest, lambda _voice_id: "female, high pitch, american accent", **options
+    )
+
+
+def test_design_accepts_a_distinct_first_take():
+    designer = _Designer([0.3])
+
+    candidate = _design(designer)
+
+    assert candidate.attempt == 1
+    assert candidate.voice == "[gender-female][pitch-high] Bright."
+    assert candidate.similarity == 0.3
+
+
+def test_design_diverges_from_the_closest_voice_until_distinct():
+    designer = _Designer([0.6, 0.5, 0.4])
+
+    candidate = _design(designer, features=("pitch", "accent"))
+
+    assert candidate.attempt == 3
+    assert [voice for voice, _seed in designer.rendered] == [
+        "[gender-female][pitch-high] Bright.",
+        "[gender-female][pitch-very-high] Bright.",
+        "[gender-female][pitch-very-high][accent-british] Bright.",
+    ]
+    assert len({seed for _voice, seed in designer.rendered}) == 3
+    assert candidate.voice == designer.rendered[-1][0]
+
+
+def test_design_keeps_the_most_distinct_take_when_none_clears_the_limit():
+    designer = _Designer([0.7, 0.55, 0.6])
+
+    candidate = _design(designer, attempts=3)
+
+    assert candidate.attempt == 2
+    assert candidate.similarity == 0.55
+    assert candidate.voice == designer.rendered[1][0]
+
+
+def test_design_retries_unusable_audio_and_fails_without_any():
+    designer = _Designer([0.2], failures={1})
+    assert _design(designer).attempt == 2
+
+    with pytest.raises(AudioQualityError, match="no usable audio after 2 attempts"):
+        _design(_Designer([], failures={1, 2}), attempts=2)
+
+
+def test_design_without_a_cast_accepts_the_first_usable_take():
+    designer = _Designer([None])
+
+    assert _design(designer).attempt == 1

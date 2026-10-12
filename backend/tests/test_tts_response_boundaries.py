@@ -51,6 +51,7 @@ def settings():
         {**VOICE, "id": "  "},
         {**VOICE, "sample_text": {}},
         {**VOICE, "sample_url": []},
+        {**VOICE, "voice": "  "},
         {**VOICE, "attempts": True},
         {**VOICE, "attempts": -2},
         {**VOICE, "attempts": 1.5},
@@ -75,7 +76,7 @@ async def test_voice_response_optional_fields_and_extensions(mock_worker, settin
         result = await tts_providers.materialize_qwen_preset_voice(settings, "preset:Ryan", "voice")
     else:
         result = await tts_providers.design_local_voice(settings, "voice")
-    assert result == tts_providers.DesignedVoice(**VOICE)
+    assert result == tts_providers.DesignedVoice(**VOICE, voice="description")
 
 
 @pytest.mark.asyncio

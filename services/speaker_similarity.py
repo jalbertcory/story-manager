@@ -43,7 +43,10 @@ class VerifierCalibration:
 
     family: str
     # Designed voices whose sample scores above this against an existing cast
-    # voice are treated as duplicates.
+    # voice are treated as duplicates. For WeSpeaker, distinct benchmark voices
+    # scored 0.14-0.42 sample-to-sample; the one pair at 0.52 produced takes
+    # scoring up to 0.65 against each other, inside the bottom 1% of genuine
+    # takes (0.58).
     roster_max_similarity: float
     # Lower bound on the per-voice spread used to turn the drift margin (in
     # standard deviations) into a similarity floor, so a voice whose probes
@@ -52,7 +55,7 @@ class VerifierCalibration:
 
 
 CALIBRATIONS = {
-    "wespeaker": VerifierCalibration(family="wespeaker", roster_max_similarity=0.6, drift_std_floor=0.05),
+    "wespeaker": VerifierCalibration(family="wespeaker", roster_max_similarity=0.45, drift_std_floor=0.05),
     "xvector": VerifierCalibration(family="xvector", roster_max_similarity=0.9, drift_std_floor=0.012),
 }
 

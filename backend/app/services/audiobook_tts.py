@@ -39,11 +39,13 @@ logger = logging.getLogger(__name__)
 TTS_BATCH_SIZE = max(1, int(os.getenv("AUDIOBOOK_TTS_BATCH_SIZE", "4")))
 TTS_FETCH_SIZE = max(TTS_BATCH_SIZE, int(os.getenv("AUDIOBOOK_TTS_FETCH_SIZE", "64")))
 _LOCAL_DESIGN_PROVIDERS = {"omnivoice", "qwen3"}
-VOICE_ROSTER_MAX_SIMILARITY = 0.9
-_QWEN_PRESET_VOICES = {
-    "female": ("Vivian", "Serena", "Ono_Anna", "Sohee"),
-    "male": ("Ryan", "Aiden", "Uncle_Fu", "Dylan", "Eric"),
-    "neutral": ("Vivian", "Ryan", "Serena", "Aiden", "Ono_Anna", "Uncle_Fu", "Sohee", "Dylan", "Eric"),
+# Only the English-native official speakers: the others carry Chinese, Japanese
+# or Korean accents that do not fit an English audiobook. Qwen ships no
+# English-native female speaker, so female characters never fall back to one.
+_QWEN_PRESET_VOICES: dict[str, tuple[str, ...]] = {
+    "female": (),
+    "male": ("Ryan", "Aiden"),
+    "neutral": ("Ryan", "Aiden"),
 }
 _LEADING_EXPRESSION_RE = re.compile(
     r"^((?:\[(?:laughter|sigh|whisper|surprise-oh|dissatisfaction-hnn|confirmation-en)\]\s*)+)",
@@ -170,6 +172,8 @@ def _compatible_qwen_presets(character: AudiobookCharacter) -> list[str]:
     match = re.search(r"\[gender-(female|male|neutral)\]", character.voice_prompt or "", re.IGNORECASE)
     gender = match.group(1).lower() if match else "neutral"
     presets = _QWEN_PRESET_VOICES[gender]
+    if not presets:
+        return []
     offset = stable_character_seed(character) % len(presets)
     return [f"preset:{presets[(offset + index) % len(presets)]}" for index in range(len(presets))]
 
@@ -189,7 +193,6 @@ async def _materialize_distinct_qwen_preset(
                 voice_prompt,
                 seed=character.tts_seed,
                 avoid_voice_ids=avoid_voice_ids,
-                max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 409:
@@ -226,13 +229,11 @@ async def _ensure_character_voice(
     if character.voice_prompt != voice_prompt:
         character.voice_prompt = voice_prompt
         changed = True
-    avoid_voice_ids = []
-    if provider == "qwen3":
-        avoid_voice_ids = [
-            candidate.tts_voice_id
-            for candidate in await crud.audiobook.get_characters_for_book(db, character.book_id)
-            if candidate.id != character.id and candidate.tts_voice_provider == provider and candidate.tts_voice_id
-        ]
+    avoid_voice_ids = [
+        candidate.tts_voice_id
+        for candidate in await crud.audiobook.get_characters_for_book(db, character.book_id)
+        if candidate.id != character.id and candidate.tts_voice_provider == provider and candidate.tts_voice_id
+    ]
     # Keep the legacy symbol as the patch point for integrations while the
     # implementation now supports both local design-capable providers.
     try:
@@ -241,18 +242,24 @@ async def _ensure_character_voice(
             voice_prompt,
             seed=character.tts_seed,
             avoid_voice_ids=avoid_voice_ids,
-            max_voice_similarity=VOICE_ROSTER_MAX_SIMILARITY,
         )
+        # Keep the description the worker settled on so the roster matches the voice.
+        designed_prompt = designed.voice
     except httpx.HTTPStatusError as exc:
-        if provider != "qwen3" or exc.response.status_code != 409:
+        # Workers keep their most distinct design rather than failing on
+        # similarity, so a 409 here means no usable audio at all.
+        if provider != "qwen3" or exc.response.status_code != 409 or not _compatible_qwen_presets(character):
             raise
-        logger.info("Voice design saturated for %s; trying a distinct official preset reference.", character.name)
+        logger.info("Voice design produced no usable audio for %s; trying an English official preset.", character.name)
         designed = await _materialize_distinct_qwen_preset(
             settings,
             character,
             voice_prompt,
             avoid_voice_ids,
         )
+        designed_prompt = None
+    if designed_prompt:
+        character.voice_prompt = designed_prompt
     character.tts_voice_id = designed.id
     character.tts_voice_provider = provider
     await db.commit()

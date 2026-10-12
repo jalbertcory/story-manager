@@ -18,11 +18,9 @@ import mlx.core as mx
 from mlx_audio.tts.utils import load_model
 import numpy as np
 
-from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
+from services.omnivoice.audio_quality import validate_generated_audio
 from services.qwen3_tts import server as api
 from services.qwen3_tts.voice_store import StoredVoice, VoiceStore
-from services.speaker_similarity import get_speaker_verifier
-from services.tts_consistency import seed_for_attempt
 from services.voice_roster import SpeakerCheck
 
 logger = logging.getLogger(__name__)
@@ -68,23 +66,6 @@ class MLXQwenRuntime:
         if voice_id.startswith("preset:"):
             return None
         return self._reference(voice_id)[0]
-
-    def _cross_voice_similarity(
-        self,
-        request: api.DesignVoiceRequest | api.PresetVoiceRequest,
-        audio: np.ndarray,
-        rate: int,
-    ) -> float | None:
-        scores = []
-        verifier = get_speaker_verifier()
-        for voice_id in dict.fromkeys(request.avoid_voice_ids):
-            reference = self._reference_path(voice_id)
-            if reference is None:
-                continue
-            similarity = verifier.similarity(f"voice-roster:{voice_id}", reference, audio, rate)
-            if similarity is not None:
-                scores.append(similarity)
-        return max(scores, default=None)
 
     @staticmethod
     def _seed(seed: int | None) -> None:
@@ -215,37 +196,18 @@ class MLXQwenRuntime:
     def design(self, request: api.DesignVoiceRequest) -> tuple[StoredVoice, float | None, int]:
         with self._lock:
             model = self._load("design")
-            last_similarity = None
-            for attempt in range(1, request.quality_attempts + 1):
-                self._seed(seed_for_attempt(request.seed, attempt))
-                audio, rate = self._audio(
+
+            def render(description: str, seed: int | None) -> tuple[np.ndarray, int]:
+                self._seed(seed)
+                return self._audio(
                     model.generate_voice_design(
                         text=api.DESIGN_TEXT,
                         language=request.language or api.LANGUAGE,
-                        instruct=api._instruction(request.voice),
+                        instruct=api._instruction(description),
                     )
                 )
-                validate_generated_audio(audio, rate)
-                last_similarity = self._cross_voice_similarity(request, audio, rate)
-                if (
-                    request.max_voice_similarity is None
-                    or last_similarity is None
-                    or last_similarity <= request.max_voice_similarity
-                ):
-                    stored = self._voices.create(request.voice, api.DESIGN_TEXT, audio, rate)
-                    self._speaker_guard.calibrate(stored.id)
-                    return stored, last_similarity, attempt
-                logger.warning(
-                    "Rejected designed MLX voice on attempt %d/%d: " "cross-character similarity %.3f exceeds %.3f",
-                    attempt,
-                    request.quality_attempts,
-                    last_similarity,
-                    request.max_voice_similarity,
-                )
-        raise AudioQualityError(
-            "Qwen3-TTS MLX could not design a sufficiently distinct voice "
-            f"(closest roster similarity {last_similarity:.3f}, limit {request.max_voice_similarity:.3f})."
-        )
+
+            return api.design_stored_voice(self._speaker_guard, self._voices, request, render, label="Qwen3 MLX voice design")
 
     def materialize_preset(
         self,
@@ -264,16 +226,7 @@ class MLXQwenRuntime:
                 )
             )
             validate_generated_audio(audio, rate)
-            similarity = self._cross_voice_similarity(request, audio, rate)
-            if (
-                request.max_voice_similarity is not None
-                and similarity is not None
-                and similarity > request.max_voice_similarity
-            ):
-                raise AudioQualityError(
-                    f"preset {request.voice_id} is too similar to the existing cast "
-                    f"({similarity:.3f}, limit {request.max_voice_similarity:.3f})."
-                )
+            similarity = api.check_preset_distinct(self._speaker_guard, request, audio, rate)
             description = f"Official Qwen preset {request.voice_id.removeprefix('preset:')}: {request.voice}"
             stored = self._voices.create(description, api.DESIGN_TEXT, audio, rate)
             self._speaker_guard.calibrate(stored.id)

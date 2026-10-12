@@ -51,6 +51,7 @@ class _Client:
             return _Response(
                 {
                     "id": "omnivoice-0123456789abcdef0123456789abcdef",
+                    "voice": "female, low pitch, australian accent",
                     "sample_text": "Reference text.",
                     "sample_url": "/voices/example/sample",
                 }
@@ -241,9 +242,32 @@ async def test_design_omnivoice_voice_returns_durable_provider_id():
     )
 
     assert designed.id == "omnivoice-0123456789abcdef0123456789abcdef"
+    assert designed.voice == "female, low pitch, australian accent"
     url, request = _Client.calls[0]
     assert url == "http://omnivoice:8001/voices/design"
-    assert request["json"] == {"voice": "female, low pitch, british accent"}
+    assert request["json"] == {"voice": "female, low pitch, british accent", "quality_attempts": 6}
+
+
+@pytest.mark.asyncio
+async def test_omnivoice_design_avoids_the_cast_with_the_worker_calibrated_limit():
+    settings = models.AudiobookSettings(
+        tts_provider="omnivoice",
+        tts_base_url="http://omnivoice:8001/generate",
+    )
+
+    await tts_providers.design_omnivoice_voice(
+        settings,
+        "[gender-male][pitch-low]",
+        seed=7,
+        avoid_voice_ids=["omnivoice-a", "omnivoice-b", "omnivoice-a"],
+    )
+
+    assert _Client.calls[0][1]["json"] == {
+        "voice": "[gender-male][pitch-low]",
+        "quality_attempts": 6,
+        "seed": 7,
+        "avoid_voice_ids": ["omnivoice-a", "omnivoice-b"],
+    }
 
 
 @pytest.mark.asyncio
@@ -266,10 +290,10 @@ async def test_qwen_voice_design_requests_cross_character_separation():
     assert url == "http://qwen3:8003/voices/design"
     assert request["json"] == {
         "voice": "[gender-female][pitch-low] A smoky, measured contralto.",
+        "quality_attempts": 8,
         "seed": 123,
         "avoid_voice_ids": ["qwen3-first", "qwen3-second"],
         "max_voice_similarity": 0.88,
-        "quality_attempts": 8,
     }
 
 

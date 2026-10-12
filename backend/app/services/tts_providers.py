@@ -65,6 +65,9 @@ class DesignedVoice:
     sample_url: str
     max_cross_voice_similarity: float | None = None
     attempts: int = 1
+    # The description the worker settled on; it may differ from the request
+    # when the worker moved pitch, age, accent or pace away from a cast voice.
+    voice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -394,7 +397,7 @@ async def _design_local_voice_endpoint(
     *,
     seed: int | None = None,
     avoid_voice_ids: list[str] | None = None,
-    max_voice_similarity: float = 0.9,
+    max_voice_similarity: float | None = None,
     quality_attempts: int = 6,
 ) -> DesignedVoice:
     provider = tts_provider_name(settings)
@@ -403,14 +406,10 @@ async def _design_local_voice_endpoint(
     if not settings.tts_base_url:
         raise RuntimeError(f"{provider} base URL is required in Audio Settings.")
     timeout = httpx.Timeout(600.0, connect=10.0)
-    payload: dict[str, object] = {"voice": voice_prompt}
-    if provider == "qwen3":
-        if seed is not None:
-            payload["seed"] = seed
-        if avoid_voice_ids:
-            payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
-            payload["max_voice_similarity"] = max_voice_similarity
-        payload["quality_attempts"] = quality_attempts
+    payload: dict[str, object] = {"voice": voice_prompt, "quality_attempts": quality_attempts}
+    if seed is not None:
+        payload["seed"] = seed
+    _add_roster_limits(payload, avoid_voice_ids, max_voice_similarity)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f"{_local_tts_root(settings.tts_base_url)}/voices/design",
@@ -428,7 +427,19 @@ async def _design_local_voice_endpoint(
         sample_url=voice.sample_url,
         max_cross_voice_similarity=voice.max_cross_voice_similarity,
         attempts=voice.attempts,
+        voice=voice.voice,
     )
+
+
+def _add_roster_limits(
+    payload: dict[str, object], avoid_voice_ids: list[str] | None, max_voice_similarity: float | None
+) -> None:
+    """Ask the worker to stay clear of the cast; it owns the calibrated limit unless overridden."""
+    if not avoid_voice_ids:
+        return
+    payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
+    if max_voice_similarity is not None:
+        payload["max_voice_similarity"] = max_voice_similarity
 
 
 async def design_omnivoice_voice(
@@ -437,7 +448,7 @@ async def design_omnivoice_voice(
     *,
     seed: int | None = None,
     avoid_voice_ids: list[str] | None = None,
-    max_voice_similarity: float = 0.9,
+    max_voice_similarity: float | None = None,
     quality_attempts: int = 6,
 ) -> DesignedVoice:
     """Create a stateful reference on the primary local worker."""
@@ -461,7 +472,7 @@ async def materialize_qwen_preset_voice(
     *,
     seed: int | None = None,
     avoid_voice_ids: list[str] | None = None,
-    max_voice_similarity: float = 0.9,
+    max_voice_similarity: float | None = None,
 ) -> DesignedVoice:
     """Persist an official Qwen speaker as a clone so synthesis stays on one model."""
     if tts_provider_name(settings) != "qwen3" or not settings.tts_base_url:
@@ -472,9 +483,7 @@ async def materialize_qwen_preset_voice(
     }
     if seed is not None:
         payload["seed"] = seed
-    if avoid_voice_ids:
-        payload["avoid_voice_ids"] = list(dict.fromkeys(avoid_voice_ids))
-        payload["max_voice_similarity"] = max_voice_similarity
+    _add_roster_limits(payload, avoid_voice_ids, max_voice_similarity)
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
         response = await client.post(
             f"{_local_tts_root(settings.tts_base_url)}/voices/from-preset",
@@ -492,6 +501,7 @@ async def materialize_qwen_preset_voice(
         sample_url=voice.sample_url,
         max_cross_voice_similarity=voice.max_cross_voice_similarity,
         attempts=voice.attempts,
+        voice=voice.voice,
     )
 
 
