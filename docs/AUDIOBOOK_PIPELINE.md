@@ -393,9 +393,10 @@ the next run uses the new provider settings without redoing ingestion or speaker
 ### Official Local OmniVoice
 
 Story Manager includes a native adapter for the official
-[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 release. It uses the upstream model directly, keeps it
+[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.1 release. It uses the upstream model directly, keeps it
 resident between requests, translates existing bracket-style voice profiles into official voice-design attributes,
-and converts the 24 kHz output to MP3.
+spells out numbers, dates, and currency where the upstream normalizer is installed (Linux x86_64 and the Docker
+image), and converts the 24 kHz output to MP3.
 
 ```bash
 make run-omnivoice

@@ -3,6 +3,7 @@ import pytest
 import wave
 
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
+from services.omnivoice.normalization import prepare_for_normalization
 from services.omnivoice.prompt import translate_generation_prompt
 from services.omnivoice.voice_store import VoiceStore
 
@@ -36,6 +37,32 @@ def test_accepts_native_omnivoice_instruction():
     )
 
     assert prompt.instruct == "male, elderly, low pitch, american accent"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("In the 1990s it rained.", "In the nineteen nineties it rained."),
+        ("The mid-1960s and 1970's.", "The mid-nineteen sixties and nineteen seventies."),
+        ("The 1800s, 1910s, 2000s, and 2010s.", "The eighteen hundreds, nineteen tens, two thousands, and twenty tens."),
+        ("She paid $1,250.50 for 12 books.", "She paid $1,250 and 50 cents for 12 books."),
+        ("It cost $0.50, $1.01, $5.00, or $3.", "It cost 50 cents, $1 and 1 cent, $5, or $3."),
+    ],
+)
+def test_prepares_decades_and_cents_for_text_normalization(text, expected):
+    assert prepare_for_normalization(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "She was in her 20s, back in the '80s.",
+        "Room 1990s1 and 12.50 dollars.",
+        "He laughed [laughter] in 1999.",
+    ],
+)
+def test_leaves_forms_the_upstream_normalizer_handles_unchanged(text):
+    assert prepare_for_normalization(text) == text
 
 
 def test_rejects_stationary_mechanical_noise():

@@ -1,7 +1,7 @@
 # Local OmniVoice Adapter
 
 This service wraps the official Apache-2.0
-[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.0 model in Story Manager's
+[`k2-fsa/OmniVoice`](https://github.com/k2-fsa/OmniVoice) 0.2.1 model in Story Manager's
 `POST /generate` HTTP contract. It keeps the model loaded between sentence requests and returns MP3 bytes. It also
 offers `POST /generate-batch` for accelerators where native model batching improves throughput; Story Manager falls
 back to isolated sentence requests if a batch fails.
@@ -64,6 +64,7 @@ The image is rebuilt and published only when files under `services/omnivoice/` o
 | `OMNIVOICE_MP3_BITRATE` | `96k` | Returned MP3 bitrate |
 | `OMNIVOICE_MAX_BATCH_SIZE` | `8` | Maximum items accepted by `POST /generate-batch` |
 | `OMNIVOICE_NATIVE_BATCHING` | `false` | Opt into native model batching. Keep disabled on MPS, where native batches can produce stationary mechanical noise. |
+| `OMNIVOICE_NORMALIZE_TEXT` | `true` | Speak numbers, dates, and currency in words before synthesis (see [Text normalization](#text-normalization)). Set `false` to pass sentence text through unchanged. |
 | `OMNIVOICE_QUALITY_ATTEMPTS` | `3` | Maximum individual generations attempted when the signal-quality gate rejects an output. |
 | `OMNIVOICE_VOICE_STORE` | `$HF_HOME/voices` | Persistent enrollment samples backing reusable voice IDs. The default is inside the mapped `/models` volume in Docker. |
 | `OMNIVOICE_PORT` | `8001` | Port used by the Make target |
@@ -77,6 +78,22 @@ Legacy Story Manager profiles such as `[gender-female][pitch-low][speed-normal]`
 comma-separated voice-design attributes. Official instructions such as `female, middle-aged, low pitch` are also
 accepted directly. Supported OmniVoice non-verbal tags are preserved; unsupported historical tags are removed so
 one bad expression tag cannot fail a full audiobook run.
+
+## Text normalization
+
+OmniVoice reads digits poorly on its own: in testing it dropped "million" from "2,000,000", read "15%" as
+"15 fairs", and lost the cents in "$1,250.50". The adapter therefore enables OmniVoice 0.2.1's
+`generate(normalize_text=True)`, which rewrites numbers, dates, times, ordinals, and percentages into words
+before synthesis. Before that, a small pre-pass in `normalization.py` spells out four-digit decades ("1990s") and
+dollar amounts with cents ("$5.99"), which the upstream English normalizer misreads as "nineteen hundred and ninety
+seconds" and "five point nine nine dollars". Normalization applies only to sentence text. It is not applied to
+voice-design enrollment text or to the stored `ref_text`, which must match the reference sample word for word.
+
+The upstream normalizer depends on WeTextProcessing and `pynini`, and `pynini` publishes wheels only for Linux
+x86_64. The Docker image and Linux x86_64 installs include it. On macOS and Linux arm64, the adapter logs a warning at
+startup, reports `"normalize_text": false` from `/health`, and passes text through unchanged. Some forms are still
+read imperfectly even with normalization: `24/7` and `9/11` are read as fractions, phone numbers are mangled, and
+slash dates are read day-first (`4/5/1984` becomes "the fifth of April").
 
 ## Consistent voices
 

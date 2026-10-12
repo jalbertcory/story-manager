@@ -22,11 +22,13 @@ from fastapi import FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, Response  # noqa: E402
 from omnivoice import OmniVoice  # noqa: E402
 from omnivoice.utils.common import get_best_device  # noqa: E402
+from omnivoice.utils.text import normalize_text  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 from pydub import AudioSegment  # noqa: E402
 import torch  # noqa: E402
 
 from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: E402
+from .normalization import prepare_for_normalization  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
 from services.speaker_similarity import get_speaker_verifier  # noqa: E402
@@ -40,6 +42,7 @@ NUM_STEPS = int(os.getenv("OMNIVOICE_NUM_STEPS", "16"))
 MP3_BITRATE = os.getenv("OMNIVOICE_MP3_BITRATE", "96k")
 MAX_BATCH_SIZE = max(1, int(os.getenv("OMNIVOICE_MAX_BATCH_SIZE", "8")))
 NATIVE_BATCHING = os.getenv("OMNIVOICE_NATIVE_BATCHING", "false").lower() in {"1", "true", "yes"}
+NORMALIZE_TEXT = os.getenv("OMNIVOICE_NORMALIZE_TEXT", "true").lower() not in {"0", "false", "no"}
 QUALITY_ATTEMPTS = max(1, int(os.getenv("OMNIVOICE_QUALITY_ATTEMPTS", "3")))
 VOICE_STORE_PATH = Path(
     os.getenv(
@@ -103,6 +106,19 @@ def _encode_audio(audio: np.ndarray, sampling_rate: int) -> tuple[bytes, int]:
     return output.getvalue(), len(segment)
 
 
+def _text_normalization_available() -> bool:
+    """Load OmniVoice's optional normalizer now rather than on the first sentence."""
+    try:
+        normalize_text("1", "en")
+    except ImportError:
+        logger.warning(
+            "OMNIVOICE_NORMALIZE_TEXT is enabled but WeTextProcessing is not installed; "
+            "numbers, dates, and currency will be passed to OmniVoice unnormalized."
+        )
+        return False
+    return True
+
+
 class OmniVoiceRuntime:
     def __init__(self) -> None:
         self.model: OmniVoice | None = None
@@ -110,6 +126,7 @@ class OmniVoiceRuntime:
         self._generate_lock = threading.RLock()
         self._voice_store = VoiceStore(VOICE_STORE_PATH)
         self._voice_clone_prompts: dict[str, object] = {}
+        self.normalize_text = False
 
     def load(self) -> None:
         self.device = get_best_device() if DEVICE == "auto" else DEVICE
@@ -120,18 +137,25 @@ class OmniVoiceRuntime:
             device_map=self.device,
             dtype=dtype,
         )
-        logger.info("OmniVoice ready at %s Hz.", self.model.sampling_rate)
+        self.normalize_text = NORMALIZE_TEXT and _text_normalization_available()
+        logger.info(
+            "OmniVoice ready at %s Hz (text normalization %s).",
+            self.model.sampling_rate,
+            "on" if self.normalize_text else "off",
+        )
 
     def generate(self, request: GenerateRequest) -> tuple[bytes, int, float | None, int]:
         return self.generate_batch([request])[0]
 
-    def _generate_audio(self, requests: list[GenerateRequest]) -> list[np.ndarray]:
+    def _generate_audio(self, requests: list[GenerateRequest], *, normalize: bool = True) -> list[np.ndarray]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
         if len(requests) > 1 and any(request.seed is not None for request in requests):
-            return [self._generate_audio([request])[0] for request in requests]
+            return [self._generate_audio([request], normalize=normalize)[0] for request in requests]
         prompts = [translate_generation_prompt(request.voice, request.text) for request in requests]
+        use_normalizer = self.normalize_text and normalize
+        texts = [prepare_for_normalization(prompt.text) if use_normalizer else prompt.text for prompt in prompts]
         with self._generate_lock:
             if requests[0].seed is not None:
                 torch.manual_seed(requests[0].seed)
@@ -141,7 +165,7 @@ class OmniVoiceRuntime:
             if any(clone_prompts) and not all(clone_prompts):
                 raise RuntimeError("OmniVoice cannot mix designed and undesigned voices in one native batch.")
             audio = self.model.generate(
-                text=[prompt.text for prompt in prompts],
+                text=texts,
                 language=[request.language for request in requests],
                 instruct=[prompt.instruct for prompt in prompts],
                 voice_clone_prompt=clone_prompts if all(clone_prompts) else None,
@@ -149,6 +173,8 @@ class OmniVoiceRuntime:
                 num_step=NUM_STEPS,
                 class_temperature=0.0,
                 postprocess_output=True,
+                # Applies to the target text only; clone-prompt ref_text is untouched.
+                normalize_text=use_normalizer,
             )
 
         # OmniVoice.generate returns list[np.ndarray]; its package is untyped.
@@ -173,6 +199,8 @@ class OmniVoiceRuntime:
             raise RuntimeError("OmniVoice model is not loaded")
         with self._generate_lock:
             translated = translate_generation_prompt(request.voice, VOICE_DESIGN_TEXT)
+            # The stored ref_text must match the enrollment sample word for word,
+            # so the sample is spoken from the exact text that is saved with it.
             audio, _similarity, _attempts = self._generate_valid_audio(
                 GenerateRequest(
                     text=VOICE_DESIGN_TEXT,
@@ -180,6 +208,7 @@ class OmniVoiceRuntime:
                     language=request.language,
                 ),
                 1,
+                normalize=False,
             )
             stored = self._voice_store.create(
                 model=MODEL_ID,
@@ -194,7 +223,13 @@ class OmniVoiceRuntime:
             )
             return stored
 
-    def _generate_valid_audio(self, request: GenerateRequest, request_number: int) -> tuple[np.ndarray, float | None, int]:
+    def _generate_valid_audio(
+        self,
+        request: GenerateRequest,
+        request_number: int,
+        *,
+        normalize: bool = True,
+    ) -> tuple[np.ndarray, float | None, int]:
         if self.model is None:
             raise RuntimeError("OmniVoice model is not loaded")
 
@@ -203,7 +238,7 @@ class OmniVoiceRuntime:
             attempt_request = request
             if request.seed is not None:
                 attempt_request = request.model_copy(update={"seed": seed_for_attempt(request.seed, attempt)})
-            audio = self._generate_audio([attempt_request])[0]
+            audio = self._generate_audio([attempt_request], normalize=normalize)[0]
             try:
                 validate_generated_audio(audio, self.model.sampling_rate)
                 similarity = self._voice_similarity(request, audio)
@@ -305,6 +340,7 @@ async def health() -> dict[str, object]:
         "num_steps": NUM_STEPS,
         "max_batch_size": MAX_BATCH_SIZE,
         "native_batching": NATIVE_BATCHING,
+        "normalize_text": runtime.normalize_text,
         "quality_attempts": QUALITY_ATTEMPTS,
         "voice_store": str(VOICE_STORE_PATH),
     }
