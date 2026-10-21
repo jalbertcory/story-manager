@@ -42,28 +42,38 @@ export interface ParsedLocation {
 }
 
 export const PRIMARY_NAV = [
-  { key: "library", label: "Library", path: "/", defaultTab: "library" },
+  {
+    key: "library",
+    label: "Library",
+    shortLabel: "Library",
+    path: "/",
+    defaultTab: "library",
+  },
   {
     key: "updates",
     label: "Web updates",
+    shortLabel: "Updates",
     path: "/updates",
     defaultTab: "updates",
   },
   {
     key: "review",
     label: "Review suggestions",
+    shortLabel: "Review",
     path: "/review",
     defaultTab: "review",
   },
   {
     key: "activity",
     label: "Background activity",
+    shortLabel: "Activity",
     path: "/activity",
     defaultTab: "attention",
   },
   {
     key: "settings",
     label: "Settings",
+    shortLabel: "Settings",
     path: "/settings",
     defaultTab: "settings",
   },

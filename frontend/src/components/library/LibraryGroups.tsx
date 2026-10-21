@@ -53,7 +53,7 @@ export default function LibraryGroups({
               <span className="cover-placeholder">No cover</span>
             )}
           </div>
-          <div>
+          <div className="library-group-copy">
             <h3>
               {item.name ||
                 (groupBy === "universe" ? "No universe" : "Standalone books")}
@@ -72,9 +72,6 @@ export default function LibraryGroups({
               )}
             </div>
           </div>
-          <span className="group-chevron" aria-hidden="true">
-            ›
-          </span>
         </a>
       ))}
       {!items.length && (

@@ -143,24 +143,29 @@ describe("App workspaces", () => {
     const primary = await screen.findByRole("navigation", {
       name: "Primary navigation",
     });
+    const links = within(primary).getAllByRole("link");
     expect(
-      within(primary)
-        .getAllByRole("link")
-        .map((link) => link.textContent),
-    ).toEqual([
-      "Library",
-      "Web updates",
-      "Review suggestions",
-      "Background activity",
-      "Settings",
-    ]);
+      [
+        "Library",
+        "Web updates",
+        "Review suggestions",
+        "Background activity",
+        "Settings",
+      ].map((name) =>
+        links.indexOf(within(primary).getByRole("link", { name })),
+      ),
+    ).toEqual([0, 1, 2, 3, 4]);
     fireEvent.click(
       within(primary).getByRole("link", { name: "Background activity" }),
     );
     expect(
       await screen.findByRole("heading", { name: "Needs attention" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Activity view")).toHaveValue("attention");
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "Activity view" }),
+      ).getByRole("link", { name: "Overview" }),
+    ).toHaveAttribute("aria-current", "page");
     fireEvent.click(within(primary).getByRole("link", { name: "Settings" }));
     expect(
       await screen.findByRole("heading", { name: "Settings", exact: true }),

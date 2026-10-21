@@ -4,6 +4,11 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 import App from "./App";
+import { applyThemePreference, readThemePreference } from "./lib/theme";
+
+// Apply the saved theme before the first render to avoid a flash of the
+// wrong colors.
+applyThemePreference(readThemePreference());
 
 const queryClient = new QueryClient();
 

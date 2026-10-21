@@ -2,6 +2,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 
 import { login } from "../api/auth";
+import Icon from "./ui/Icon";
 
 function AdminLogin({
   onAuthenticated,
@@ -31,19 +32,25 @@ function AdminLogin({
   };
 
   return (
-    <div className="app-container">
-      <header className="app-header">
-        <h1>Story Manager</h1>
-      </header>
+    <div className="login-page">
       <main className="login-panel">
+        <div className="login-brand">
+          <span className="wordmark-mark" aria-hidden="true">
+            <Icon name="library" size={20} />
+          </span>
+          <h1>Story Manager</h1>
+        </div>
         <form
           className="login-form"
           onSubmit={(event) => {
             void handleSubmit(event);
           }}
         >
-          <h2>Admin Login</h2>
-          <label>
+          <div>
+            <h2>Admin Login</h2>
+            <p className="hint">Sign in to manage your library.</p>
+          </div>
+          <label className="field">
             Password
             <input
               type="password"

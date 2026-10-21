@@ -13,7 +13,10 @@ test("groups pages under canonical destinations and preserves history", async ({
   ).toHaveAttribute("aria-current", "page");
   await expect(primary.getByRole("link", { name: "Settings" })).toBeVisible();
 
-  await page.getByLabel("Activity view").selectOption("processing");
+  await page
+    .getByRole("navigation", { name: "Activity view" })
+    .getByRole("link", { name: "Processing jobs" })
+    .click();
   await expect(page).toHaveURL(/\/activity\/processing$/);
   await expect(
     page.getByRole("heading", { name: "Processing jobs" }),

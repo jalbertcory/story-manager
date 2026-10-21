@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Book, BookSectionChange } from "../types";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -7,6 +8,7 @@ import { getApiCoverUrl } from "../api/covers";
 import { sanitizeChapterHtml } from "../lib/chapterHtml";
 import UniverseMembership from "./UniverseMembership";
 import { libraryPath } from "../lib/library";
+import Icon from "./ui/Icon";
 
 export default function BookOverview({
   book,
@@ -80,7 +82,16 @@ export default function BookOverview({
           </>
         )}
       </nav>
-      <div className="book-hero">
+      <div
+        className="book-hero"
+        style={
+          book.cover_path
+            ? ({
+                "--hero-cover": `url("${getApiCoverUrl(book.id)}")`,
+              } as CSSProperties)
+            : undefined
+        }
+      >
         {book.cover_path ? (
           <img
             className="book-hero-cover"
@@ -92,7 +103,7 @@ export default function BookOverview({
         )}
         <div className="book-hero-copy">
           <h2>{book.title}</h2>
-          <p>{book.author || "Unknown author"}</p>
+          <p className="book-hero-author">{book.author || "Unknown author"}</p>
           {book.series && (
             <p className="hint">
               {book.series}
@@ -111,6 +122,7 @@ export default function BookOverview({
                 href={`/api/books/${book.id}/download`}
                 download
               >
+                <Icon name="download" size={16} />
                 Download EPUB
               </a>
             )}
@@ -119,10 +131,14 @@ export default function BookOverview({
                 className="btn-primary"
                 onClick={() => onSection("audiobooks", "listen-read")}
               >
+                <Icon name="headphones" size={16} />
                 Listen
               </button>
             )}
-            <button onClick={() => onSection("details")}>Edit details</button>
+            <button onClick={() => onSection("details")}>
+              <Icon name="edit" size={16} />
+              Edit details
+            </button>
           </div>
         </div>
       </div>
