@@ -49,6 +49,7 @@ from .fanficfare_types import (
 )
 from .library_paths import build_book_paths
 from .metadata_jobs import queue_metadata_sync_job
+from .royalroad_anubis import is_royalroad, royalroad_access, royalroad_cli_options
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +262,7 @@ def _run_fff_lossless_update(
     for config_path in config_paths:
         args.extend(["-c", str(config_path)])
     args.extend(["--non-interactive", "--debug", "-U", str(existing_epub_path)])
+    args.extend(royalroad_cli_options(source_url))
 
     parser = cli.mkParser(False)
     options, _ = parser.parse_args(args)
@@ -278,78 +280,79 @@ def _run_fff_lossless_update(
         ),
     )
 
-    normalized_url, chapter_begin, chapter_end = adapters.get_url_chapter_range(source_url)
-    adapter = cast(UpdateAdapter, adapters.getAdapter(configuration, normalized_url))
-    adapter.setChaptersRange(chapter_begin, chapter_end)
-    adapter.getStoryMetadataOnly()
+    with royalroad_access(configuration, source_url):
+        normalized_url, chapter_begin, chapter_end = adapters.get_url_chapter_range(source_url)
+        adapter = cast(UpdateAdapter, adapters.getAdapter(configuration, normalized_url))
+        adapter.setChaptersRange(chapter_begin, chapter_end)
+        adapter.getStoryMetadataOnly()
 
-    remote_chapters = [_chapter_record(chapter) for chapter in adapter.get_chapters()]
-    merge = _build_lossless_chapter_merge(
-        existing_urls=list(old_chapter_map),
-        existing_data=old_update_data[8],
-        remote_chapters=remote_chapters,
-        normalize_url=adapter.normalize_chapterurl,
-    )
-    if not overwrite and not merge.new_ids:
+        remote_chapters = [_chapter_record(chapter) for chapter in adapter.get_chapters()]
+        merge = _build_lossless_chapter_merge(
+            existing_urls=list(old_chapter_map),
+            existing_data=old_update_data[8],
+            remote_chapters=remote_chapters,
+            normalize_url=adapter.normalize_chapterurl,
+        )
+        if not overwrite and not merge.new_ids:
+            logger.info(
+                "No new chapters for %s; source is missing %s historical chapters that remain preserved.",
+                source_url,
+                len(merge.historical_ids),
+            )
+            return _LosslessUpdateResult(
+                changed=False,
+                preserved_chapter_count=len(merge.historical_ids),
+                new_chapter_count=0,
+            )
+
+        _realign_adapter_chapter_index(adapter, remote_chapters, merge.chapters)
+        adapter.chapterUrls = merge.chapters
+        adapter.story.setMetadata("numChapters", len(merge.chapters))
+        (
+            _,
+            _,
+            adapter.oldchapters,
+            adapter.oldimgs,
+            adapter.oldcover,
+            adapter.calibrebookmark,
+            adapter.logfile,
+            adapter.oldchaptersmap,
+            adapter.oldchaptersdata,
+        ) = old_update_data[:9]
+
+        temp_file = tempfile.NamedTemporaryFile(
+            prefix=f".{existing_epub_path.stem}.update-",
+            suffix=".epub",
+            dir=existing_epub_path.parent,
+            delete=False,
+        )
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+        temp_path.unlink()
+
+        try:
+            configuration.set("overrides", "output_filename", str(temp_path))
+            writer = cast(Writer, writers.getWriter("epub", configuration, adapter))
+            writer.writeStory()
+            if not temp_path.is_file():
+                raise LosslessChapterUpdateError("FanFicFare completed without producing an updated EPUB.")
+            _validate_lossless_epub(temp_path, merge, adapter.normalize_chapterurl)
+            temp_path.replace(existing_epub_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+
         logger.info(
-            "No new chapters for %s; source is missing %s historical chapters that remain preserved.",
+            "Lossless update for %s added %s chapters and preserved %s chapters no longer listed by the source.",
             source_url,
+            len(merge.new_ids),
             len(merge.historical_ids),
         )
         return _LosslessUpdateResult(
-            changed=False,
+            changed=True,
             preserved_chapter_count=len(merge.historical_ids),
-            new_chapter_count=0,
+            new_chapter_count=len(merge.new_ids),
         )
-
-    _realign_adapter_chapter_index(adapter, remote_chapters, merge.chapters)
-    adapter.chapterUrls = merge.chapters
-    adapter.story.setMetadata("numChapters", len(merge.chapters))
-    (
-        _,
-        _,
-        adapter.oldchapters,
-        adapter.oldimgs,
-        adapter.oldcover,
-        adapter.calibrebookmark,
-        adapter.logfile,
-        adapter.oldchaptersmap,
-        adapter.oldchaptersdata,
-    ) = old_update_data[:9]
-
-    temp_file = tempfile.NamedTemporaryFile(
-        prefix=f".{existing_epub_path.stem}.update-",
-        suffix=".epub",
-        dir=existing_epub_path.parent,
-        delete=False,
-    )
-    temp_path = Path(temp_file.name)
-    temp_file.close()
-    temp_path.unlink()
-
-    try:
-        configuration.set("overrides", "output_filename", str(temp_path))
-        writer = cast(Writer, writers.getWriter("epub", configuration, adapter))
-        writer.writeStory()
-        if not temp_path.is_file():
-            raise LosslessChapterUpdateError("FanFicFare completed without producing an updated EPUB.")
-        _validate_lossless_epub(temp_path, merge, adapter.normalize_chapterurl)
-        temp_path.replace(existing_epub_path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
-
-    logger.info(
-        "Lossless update for %s added %s chapters and preserved %s chapters no longer listed by the source.",
-        source_url,
-        len(merge.new_ids),
-        len(merge.historical_ids),
-    )
-    return _LosslessUpdateResult(
-        changed=True,
-        preserved_chapter_count=len(merge.historical_ids),
-        new_chapter_count=len(merge.new_ids),
-    )
 
 
 async def _enqueue_audiobook_refresh(book: models.Book, db: AsyncSession) -> None:
@@ -382,12 +385,34 @@ async def _enqueue_audiobook_refresh(book: models.Book, db: AsyncSession) -> Non
     await queue_audio_reconciliation(book, db)
 
 
+def _run_royalroad_download(args: List[str]) -> None:
+    """Use the same FFF configuration and writer with challenge-aware requests."""
+    from fanficfare import adapters, cli, writers
+
+    parser = cli.mkParser(False)
+    options, urls = parser.parse_args(args + royalroad_cli_options(args[-1]))
+    cli.expandOptions(options)
+    cli.validateOptions(parser, options, urls)
+    cli.setup(options)
+    source_url = urls[0]
+    configuration = cast(Configuration, cli.get_configuration(source_url, None, None, options))
+    with royalroad_access(configuration, source_url):
+        url, first, last = adapters.get_url_chapter_range(source_url)
+        adapter = cast(UpdateAdapter, adapters.getAdapter(configuration, url))
+        adapter.setChaptersRange(first or options.begin, last or options.end)
+        writer = cast(Writer, writers.getWriter("epub", configuration, adapter))
+        writer.writeStory()
+
+
 def _run_fff_main(args: List[str]) -> int:
     """Wrapper for fff_main that converts SystemExit into a return code."""
     from fanficfare.cli import main as fff_main
 
     try:
-        fff_main(args)
+        if args and is_royalroad(args[-1]):
+            _run_royalroad_download(args)
+        else:
+            fff_main(args)
         return 0
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else (1 if e.code is not None else 0)
