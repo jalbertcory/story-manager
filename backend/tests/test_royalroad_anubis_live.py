@@ -9,6 +9,7 @@ real. Files stay in pytest's temporary directory; the user's library is untouche
 """
 
 import os
+from urllib.parse import urlsplit
 
 import pytest
 from fanficfare.adapters.adapter_royalroadcom import RoyalRoadAdapter
@@ -26,6 +27,16 @@ def test_live_challenged_download_and_lossless_update(tmp_path, monkeypatch):
         "[defaults]\ninclude_images:false\nuse_flaresolverr_proxy:true\n"
         "[www.royalroad.com]\nusername:\npassword:\nslow_down_sleep_time:1\nconnect_timeout:30\n"
     )
+    browser_url = os.getenv("ROYALROAD_FLARESOLVERR_URL")
+    if browser_url:
+        parsed = urlsplit(browser_url)
+        assert parsed.scheme in {"http", "https"} and parsed.hostname
+        with ini.open("a") as config:
+            config.write(
+                f"flaresolverr_proxy_protocol:{parsed.scheme}\n"
+                f"flaresolverr_proxy_address:{parsed.hostname}\n"
+                f"flaresolverr_proxy_port:{parsed.port or (443 if parsed.scheme == 'https' else 80)}\n"
+            )
     path = tmp_path / "live.epub"
     selected = [0, 1]
     extract = RoyalRoadAdapter.extractChapterUrlsAndMetadata
