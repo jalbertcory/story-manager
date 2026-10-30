@@ -18,6 +18,7 @@ STORY = "https://www.royalroad.com/fiction/123"
 CHALLENGE_ID = "01a17a83-4622-7b35-baef-0c2c41931e93"
 RANDOM_DATA = "abcdef0123456789" * 8
 AUTH = "techaro.lol-anubis-auth-test"
+CLOUDFLARE = '<title>Just a moment...</title><script src="/cdn-cgi/challenge-platform/check.js"></script>'
 
 
 def challenge_html(algorithm="fast", difficulty=2, extensions=None):
@@ -80,11 +81,45 @@ class RoyalRoadServer:
         self.requests = []
         self.block = None
         self.expire_on_chapter = None
+        self.cloudflare = False
+        self.browser_failure = None
+        self.browser_calls = []
 
     def send(self, request, **kwargs):
         self.requests.append(request)
+        if urlsplit(request.url).hostname == "localhost":
+            assert request.url == "http://localhost:8191/v1" and request.method == "POST"
+            payload = json.loads(request.body)
+            assert payload["cmd"] == "request.get" and 0 < payload["maxTimeout"] <= 60000
+            assert "cookies" not in payload and "session" not in payload
+            self.browser_calls.append(payload["url"])
+            if self.browser_failure == "timeout":
+                raise requests.Timeout("Browser timed out")
+            body = self.content(urlsplit(payload["url"]).path)
+            failure = self.browser_failure
+            if failure == "challenge":
+                body = CLOUDFLARE
+            if failure == "anubis":
+                body = challenge_html()
+            if failure == "empty":
+                body = ""
+            return response_for(
+                request,
+                json.dumps(
+                    {
+                        "status": "error" if failure == "error" else "ok",
+                        "solution": {
+                            "status": 403 if failure == "status" else 200,
+                            "url": "https://example.com/" if failure == "redirect" else payload["url"],
+                            "response": body,
+                        },
+                    }
+                ),
+            )
         assert urlsplit(request.url).hostname == "www.royalroad.com", "Unexpected network access, including FlareSolverr"
         path = urlsplit(request.url).path
+        if self.cloudflare:
+            return response_for(request, CLOUDFLARE, status=403)
         if path.endswith("/css-load/" + CHALLENGE_ID):
             assert "verification=present" in request.headers.get("Cookie", "")
             return response_for(request, "", cookie="css=loaded")
@@ -103,11 +138,14 @@ class RoyalRoadServer:
         if self.block == "reject" or f"{AUTH}={self.generation}" not in request.headers.get("Cookie", ""):
             body = challenge_html(algorithm="unknown" if self.block == "unknown" else "fast", extensions=["css-load"])
             return response_for(request, body, status=403, cookie="verification=present")
+        return response_for(request, self.content(path))
+
+    def content(self, path):
         if path == "/fiction/123":
-            return response_for(request, story_html(self.chapters))
+            return story_html(self.chapters)
         chapter = int(path.split("/chapter/")[1].split("/")[0])
         assert chapter in self.chapters, "Attempted to fetch a removed chapter"
-        return response_for(request, f'<div class="chapter-inner chapter-content"><p>Saved prose {chapter}.</p></div>')
+        return f'<div class="chapter-inner chapter-content"><p>Saved prose {chapter}.</p></div>'
 
 
 @pytest.fixture
@@ -171,6 +209,95 @@ def test_no_new_chapters_keeps_epub_byte_identical_and_reuses_clearance(tmp_path
     assert result.preserved_chapter_count == 1
     assert path.read_bytes() == before
     assert server.pass_count == 1
+
+
+def test_cloudflare_fallback_download_and_lossless_update(tmp_path, server, ini):
+    server.cloudflare = True
+    path = tmp_path / "story.epub"
+    download(path, ini)
+    original = get_update_data(path)[7]
+    server.chapters = [1, 3, 4]
+    server.browser_calls.clear()
+    result = web_novel._run_fff_lossless_update(STORY, path, [ini], False)
+    updated = get_update_data(path)[7]
+    assert result == web_novel._LosslessUpdateResult(True, 1, 1)
+    assert len(updated) == 4
+    assert list(updated)[:3] == list(original)
+    for url, chapter in original.items():
+        assert updated[url].get_text() == chapter.get_text()
+    assert "Saved prose 4." in list(updated.values())[-1].get_text()
+    assert server.browser_calls == [STORY, list(updated)[-1]]
+    assert server.pass_count == 0
+
+
+@pytest.mark.parametrize("failure", ["timeout", "error", "status", "redirect", "empty", "challenge", "anubis"])
+@pytest.mark.parametrize("at_chapter", [False, True])
+def test_browser_failure_preserves_epub(tmp_path, server, ini, monkeypatch, failure, at_chapter):
+    path = tmp_path / "story.epub"
+    download(path, ini)
+    before = path.read_bytes()
+    server.chapters = [1, 3, 4]
+    server.browser_failure = failure
+    if at_chapter:
+        send = server.send
+
+        def challenge_new_chapter(request, **kwargs):
+            if "/chapter/4/" in request.url:
+                server.cloudflare = True
+            return send(request, **kwargs)
+
+        monkeypatch.setattr(server, "send", challenge_new_chapter)
+    else:
+        server.cloudflare = True
+    with pytest.raises(anubis.RoyalRoadChallengeError):
+        web_novel._run_fff_lossless_update(STORY, path, [ini], False)
+    assert path.read_bytes() == before
+    assert len(server.browser_calls) == 1
+    assert not list(tmp_path.glob(".*.update-*.epub"))
+
+
+def test_cloudflare_without_configured_browser_keeps_epub(tmp_path, server, ini):
+    path = tmp_path / "story.epub"
+    download(path, ini)
+    before = path.read_bytes()
+    ini.write_text(ini.read_text().replace("use_flaresolverr_proxy:true", "use_flaresolverr_proxy:false"))
+    server.cloudflare = True
+    with pytest.raises(anubis.RoyalRoadChallengeError, match="Configure use_flaresolverr_proxy"):
+        web_novel._run_fff_lossless_update(STORY, path, [ini], False)
+    assert not server.browser_calls
+    assert path.read_bytes() == before
+
+
+def test_cloudflare_non_get_never_replayed(server):
+    session = requests.Session()
+    anubis._install_handler(session, "test", anubis._FlareSolverr("http://localhost:8191/v1", 1000))
+    server.cloudflare = True
+    with pytest.raises(anubis.RoyalRoadChallengeError, match="non-GET"):
+        session.post(STORY)
+    assert not server.browser_calls
+
+
+@pytest.mark.parametrize("classes", ["hidden-content", "description-content", ""])
+def test_legacy_description_markup_compatibility(classes):
+    request = requests.Request("GET", STORY).prepare()
+    html = (
+        '<meta property="books:author" content="Author"><table id="chapters"></table>'
+        f'<div class="description"><div class="{classes}"><p>Story résumé.</p></div></div>'
+    )
+    response = response_for(request, html)
+    result = anubis._legacy_description_compatibility(response)
+    from bs4 import BeautifulSoup
+
+    description = BeautifulSoup(result.content, "html.parser").select_one("div.description div.hidden-content")
+    assert description.get_text() == "Story résumé."
+    if classes == "hidden-content":
+        assert result.content == html.encode()
+
+
+def test_description_compatibility_does_not_change_chapter_prose():
+    request = requests.Request("GET", STORY + "/chapter/1").prepare()
+    html = '<meta property="books:author" content="Author"><div class="description"><div>Prose</div></div>'
+    assert anubis._legacy_description_compatibility(response_for(request, html)).content == html.encode()
 
 
 @pytest.mark.parametrize("failure", ["unknown", "reject", "timeout"])

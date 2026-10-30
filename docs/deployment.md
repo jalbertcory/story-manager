@@ -156,14 +156,31 @@ Story Manager loads configs in this order:
 Later FanFicFare configs override earlier values. To use a different path, set `FFF_USER_CONFIG_PATH`.
 
 Royal Road downloads and updates automatically handle Anubis proof-of-work challenges through direct requests.
-For Royal Road jobs, Story Manager overrides the FlareSolverr, NSAPA, browser-cache, and CloudScraper settings.
-Other sites retain their configured fetchers. No `personal.ini` change is required.
+For Royal Road jobs, Story Manager uses direct requests first and disables NSAPA, browser-cache, and CloudScraper fetchers.
+If Cloudflare blocks a page, Story Manager retrieves that page through FlareSolverr when `use_flaresolverr_proxy` is enabled.
+Other sites retain their configured fetchers.
+
+To enable the Cloudflare fallback, configure your existing FlareSolverr server in `config/fanficfare/personal.ini`:
+
+```ini
+[www.royalroad.com]
+use_flaresolverr_proxy:true
+flaresolverr_proxy_address:flaresolverr
+flaresolverr_proxy_port:8191
+```
+
+Replace `flaresolverr` with the server address reachable from the Story Manager container.
+Each blocked GET gets one browser request, with a maximum solve timeout of 60 seconds.
+The fallback validates the returned page and rejects errors, empty responses, redirects outside Royal Road, and unresolved challenges.
+It does not send login cookies to FlareSolverr or copy browser clearance cookies into direct requests.
 
 The handler supports the `argon2id`, `fast`, and `slow` algorithms and the `css-load` extension.
 It keeps clearance cookies in memory and uses the same User-Agent for the challenge and story requests.
 Each challenged request gets one solve attempt and one retry, with a ten-second computation limit.
 Unsupported or rejected challenges fail the job and preserve the saved EPUB.
 Royal Road jobs also disable `continue_on_chapter_error` so errors cannot become chapter content.
+The handler also adapts legacy description markup for FanFicFare 4.62.0 until a release includes the
+[upstream description fix](https://github.com/JimmXinu/FanFicFare/commit/496f459d99360ff8f5fc0a56c47761a60242dc87).
 
 To check the workaround against Royal Road, run the opt-in smoke test:
 
@@ -174,6 +191,7 @@ RUN_ROYALROAD_LIVE_TEST=1 .venv/bin/python -m pytest -m integration backend/test
 The test downloads three public chapter bodies into a temporary EPUB.
 It limits the chapter list to simulate one removed chapter and one new chapter, then verifies that the update preserves the saved text.
 It does not change your library.
+To test the Cloudflare fallback, also set `ROYALROAD_FLARESOLVERR_URL` to your FlareSolverr URL, such as `http://localhost:8191`.
 
 Remote cover downloads reject loopback, private, link-local, and otherwise non-public destinations. A trusted private-network deployment can opt in to private cover URLs with `STORY_MANAGER_ALLOW_PRIVATE_COVER_URLS=true`.
 

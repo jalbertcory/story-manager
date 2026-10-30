@@ -1,8 +1,8 @@
-"""Bounded Royal Road Anubis support for FanFicFare's requests transport.
+"""Bounded Royal Road challenge support for FanFicFare's requests transport.
 
 Protocol reference: https://github.com/JimmXinu/FanFicFare/issues/1444
-Supports argon2id/css-load and the site's SHA-256 fast/slow worker. Unknown challenges
-fail closed rather than being passed to the story parser as chapter content.
+Supports Anubis proof of work and configured FlareSolverr fallback for Cloudflare.
+Unknown challenges fail closed rather than becoming chapter content.
 """
 
 import copy
@@ -12,6 +12,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.cookiejar import CookieJar
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
@@ -53,6 +54,88 @@ class _ChallengeData(BaseModel):
 class _Challenge(BaseModel):
     rules: _Rules
     challenge: _ChallengeData
+
+
+class _BrowserSolution(BaseModel):
+    status: Literal[200]
+    url: str
+    response: str = Field(min_length=1)
+
+
+class _BrowserResult(BaseModel):
+    status: Literal["ok"]
+    solution: _BrowserSolution
+
+
+def _is_cloudflare(response: requests.Response) -> bool:
+    if response.headers.get("cf-mitigated") == "challenge":
+        return True
+    content = response.content
+    if b"Just a moment" not in content or not any(
+        marker in content for marker in (b"/cdn-cgi/challenge-platform/", b"challenges.cloudflare.com")
+    ):
+        return False
+    soup = BeautifulSoup(content, "html.parser")
+    return soup.title is not None and "just a moment" in soup.title.get_text().lower()
+
+
+def _legacy_description_compatibility(response: requests.Response) -> requests.Response:
+    # FFF 4.62.0 expects hidden-content, but RR now also uses other classes.
+    # Remove after upgrading to a release containing upstream fix 496f459d:
+    # https://github.com/JimmXinu/FanFicFare/commit/496f459d99360ff8f5fc0a56c47761a60242dc87
+    if b"books:author" not in response.content:
+        return response
+    soup = BeautifulSoup(response.content, "html.parser")
+    if soup.select_one("table#chapters") is not None and soup.select_one("div.description div.hidden-content") is None:
+        description = soup.select_one("div.description div")
+        if description is not None:
+            description["class"] = [name for name in description.get_attribute_list("class") if name is not None] + [
+                "hidden-content"
+            ]
+            response._content = str(soup).encode("utf-8")
+            response.encoding = "utf-8"
+            response.headers.pop("Content-Length", None)
+    return response
+
+
+@dataclass(frozen=True)
+class _FlareSolverr:
+    endpoint: str
+    timeout_ms: int
+
+    def fetch(self, response: requests.Response) -> requests.Response:
+        # Retrieve public HTML in the browser. Do not export login cookies or
+        # copy browser clearance into requests, whose TLS identity is different.
+        logger.info("Fetching Royal Road Cloudflare challenge through configured FlareSolverr.")
+        try:
+            with requests.Session() as browser:
+                with browser.post(
+                    self.endpoint,
+                    json={"cmd": "request.get", "url": response.url, "maxTimeout": self.timeout_ms},
+                    timeout=self.timeout_ms / 1000 + 5,
+                    allow_redirects=False,
+                ) as reply:
+                    reply.raise_for_status()
+                    solved = _BrowserResult.model_validate_json(reply.content).solution
+        except (requests.RequestException, ValidationError) as exc:
+            raise RoyalRoadChallengeError(
+                "Royal Road Cloudflare check failed through FlareSolverr. The saved EPUB was retained."
+            ) from exc
+        if not is_royalroad(solved.url) or urlsplit(solved.url).scheme != "https":
+            raise RoyalRoadChallengeError("FlareSolverr redirected outside Royal Road; refusing the response.")
+        result = requests.Response()
+        result.status_code = 200
+        result.url = solved.url
+        result.request = response.request
+        result.headers["Content-Type"] = "text/html; charset=utf-8"
+        result.encoding = "utf-8"
+        result._content = solved.response.encode("utf-8")
+        # A successful proxy response can still contain a challenge. Never give
+        # that page to the adapter or recursively invoke the browser.
+        if _is_cloudflare(result) or _read_challenge(result) is not None:
+            raise RoyalRoadChallengeError("FlareSolverr returned another Royal Road bot challenge. Try again later.")
+        response.close()
+        return _legacy_description_compatibility(result)
 
 
 class _RequestsFetcher(Protocol):
@@ -148,7 +231,7 @@ def _merge_cookies(session: requests.Session, cookies: CookieJar) -> None:
         session.cookies.set_cookie(copy.copy(cookie))
 
 
-def _install_handler(session: requests.Session, user_agent: str) -> None:
+def _install_handler(session: requests.Session, user_agent: str, browser: _FlareSolverr | None = None) -> None:
     # Keep clearance separate for different user agents and network routes.
     settings = session.merge_environment_settings("https://www.royalroad.com/", {}, False, None, None)
     key = (user_agent, repr(sorted(settings["proxies"].items())))
@@ -173,9 +256,18 @@ def _install_handler(session: requests.Session, user_agent: str) -> None:
             }
         ):
             return response
+        if _is_cloudflare(response):
+            if response.request.method != "GET":
+                raise RoyalRoadChallengeError("Royal Road challenged a non-GET request; refusing to replay it.")
+            if browser is None:
+                raise RoyalRoadChallengeError(
+                    "Royal Road now requires a Cloudflare browser check. Configure use_flaresolverr_proxy:true "
+                    "and a reachable FlareSolverr server. The saved EPUB was retained."
+                )
+            return browser.fetch(response)
         challenge = _read_challenge(response)
         if challenge is None:
-            return response
+            return _legacy_description_compatibility(response)
         if response.request.method != "GET":
             raise RoyalRoadChallengeError("Royal Road challenged a non-GET request; refusing to replay it.")
         _merge_cookies(session, response.cookies)
@@ -214,6 +306,8 @@ def _install_handler(session: requests.Session, user_agent: str) -> None:
         retry.hooks = {"response": []}
         response.close()
         result = session.send(retry, **transport)
+        if _is_cloudflare(result) and browser is not None:
+            return browser.fetch(result)
         if _read_challenge(result) is not None:
             result.close()
             _auth_cookies.pop(key, None)
@@ -221,18 +315,30 @@ def _install_handler(session: requests.Session, user_agent: str) -> None:
         result.raise_for_status()
         _merge_cookies(session, result.cookies)
         _remember_clearance(session, key)
-        return result
+        return _legacy_description_compatibility(result)
 
     session.hooks.setdefault("response", []).append(handle)
 
 
 @contextmanager
 def royalroad_access(configuration: Configuration, source_url: str) -> Iterator[None]:
-    """Use direct, challenge-aware requests only for Royal Road jobs."""
+    """Use direct requests with a configured browser fallback for Royal Road."""
     if not is_royalroad(source_url):
         yield
         return
     config = cast(_Configuration, configuration)
+    browser = None
+    if str(config.getConfig("use_flaresolverr_proxy")).lower() in {"true", "withimages", "directimages"}:
+        endpoint = (
+            config.getConfig("flaresolverr_proxy_protocol", "http")
+            + "://"
+            + config.getConfig("flaresolverr_proxy_address", "localhost")
+            + ":"
+            + config.getConfig("flaresolverr_proxy_port", "8191")
+            + "/v1"
+        )
+        timeout_ms = max(1, min(int(config.getConfig("flaresolverr_proxy_timeout", "59000")), 60000))
+        browser = _FlareSolverr(endpoint, timeout_ms)
     for option in ("use_flaresolverr_proxy", "use_nsapa_proxy", "use_browser_cache", "use_cloudscraper"):
         config.set("overrides", option, "false")
     # FFF can otherwise turn an exception into an EPUB chapter containing an
@@ -241,7 +347,7 @@ def royalroad_access(configuration: Configuration, source_url: str) -> Iterator[
     config.reset_cached_config()
     fetcher = config.get_fetcher(make_new=True)
     session = fetcher.get_requests_session()
-    _install_handler(session, config.getConfig("user_agent"))
+    _install_handler(session, config.getConfig("user_agent"), browser)
     try:
         yield
     finally:
