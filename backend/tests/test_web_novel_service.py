@@ -1,10 +1,14 @@
+import asyncio
+import threading
 import zipfile
 from pathlib import Path
 
 import pytest
 from ebooklib import epub
 from lxml import etree
+from httpx import ASGITransport, AsyncClient
 
+from backend.app.main import app
 from backend.app.services import fanficfare_config, web_novel
 
 
@@ -119,6 +123,51 @@ def test_realign_adapter_chapter_index_after_historical_insert():
     web_novel._realign_adapter_chapter_index(adapter, remote, merged)
 
     assert adapter.chapterURLIndex == {"1": 0, "3": 2}
+
+
+@pytest.mark.asyncio
+async def test_auth_status_remains_responsive_during_epub_source_repair(tmp_path, monkeypatch, mocker):
+    """A slow EPUB repair must not block the request needed to reload the UI."""
+    monkeypatch.setattr(web_novel, "LIBRARY_PATH", tmp_path)
+    existing_epub = tmp_path / "existing.epub"
+    create_dummy_epub(existing_epub, "Before", "Author")
+    source_url = "https://example.com/story/1"
+    loop = asyncio.get_running_loop()
+    repair_started = asyncio.Event()
+    release_repair = threading.Event()
+    repair_finished = threading.Event()
+    original_sync = web_novel._sync_epub_source_url
+
+    def slow_source_repair(epub_path, url):
+        loop.call_soon_threadsafe(repair_started.set)
+        try:
+            # Bound the wait so the regression fails instead of hanging pytest.
+            release_repair.wait(timeout=3)
+            original_sync(epub_path, url)
+        finally:
+            repair_finished.set()
+
+    monkeypatch.setattr(web_novel, "_sync_epub_source_url", slow_source_repair)
+    mocker.patch(
+        "backend.app.services.web_novel._run_fff_lossless_update",
+        return_value=web_novel._LosslessUpdateResult(
+            changed=False,
+            preserved_chapter_count=0,
+            new_chapter_count=0,
+        ),
+    )
+    refresh = asyncio.create_task(web_novel.download_web_novel(source_url, existing_epub_path=existing_epub))
+    try:
+        await asyncio.wait_for(repair_started.wait(), timeout=5)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await asyncio.wait_for(client.get("/api/auth/status"), timeout=2)
+        assert response.status_code == 200
+        assert not repair_finished.is_set(), "UI reload waited for the EPUB repair to finish"
+    finally:
+        release_repair.set()
+        await asyncio.wait_for(refresh, timeout=5)
+
+    assert web_novel._get_epub_source_url(existing_epub) == source_url
 
 
 @pytest.mark.asyncio

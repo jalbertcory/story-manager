@@ -564,7 +564,9 @@ async def download_web_novel(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Expected existing EPUB for update, but none was found at {updated_epub_path}.",
                 )
-            _sync_epub_source_url(updated_epub_path, source_url)
+            # Repair can rewrite the entire archive. Keep it off the API event
+            # loop, including for checks that ultimately find no new chapters.
+            await asyncio.to_thread(_sync_epub_source_url, updated_epub_path, source_url)
             loop = asyncio.get_running_loop()
             try:
                 update_result = await loop.run_in_executor(
