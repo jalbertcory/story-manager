@@ -9,11 +9,13 @@ export default function LibraryGroups({
   groupBy,
   base,
   filters,
+  hideEmpty = false,
 }: {
   items: Awaited<ReturnType<typeof getLibraryGroups>>["items"];
   groupBy: string;
   base: LibraryValues;
   filters: LibraryValues;
+  hideEmpty?: boolean;
 }) {
   return (
     <div className="library-groups">
@@ -74,7 +76,7 @@ export default function LibraryGroups({
           </div>
         </a>
       ))}
-      {!items.length && (
+      {!items.length && !hideEmpty && (
         <p className="empty-state">
           No matching groups. Try another search or source.
         </p>
