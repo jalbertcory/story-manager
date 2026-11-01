@@ -89,6 +89,10 @@ class VerifyBackupPayload(JobPayload):
     filename: str = Field(min_length=1)
 
 
+class BackfillReaderChecksumsPayload(JobPayload):
+    pass
+
+
 JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "clean_book": CleanBookPayload,
     "clean_all": CleanAllPayload,
@@ -107,6 +111,7 @@ JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "retry_cover": RetryCoverPayload,
     "create_backup": CreateBackupPayload,
     "verify_backup": VerifyBackupPayload,
+    "backfill_reader_checksums": BackfillReaderChecksumsPayload,
 }
 
 

@@ -39,10 +39,10 @@ def _recovery_files_available(book: models.Book) -> bool:
     return any(path and (LIBRARY_PATH.parent / path).is_file() for path in paths)
 
 
-def _remove_book_files(book: models.Book) -> list[str]:
+def _remove_book_files(book_id: int, relative_paths: list[str | None]) -> list[str]:
     removed_paths: list[str] = []
 
-    for relative_path in [book.immutable_path, book.current_path, book.cover_path]:
+    for relative_path in relative_paths:
         if not relative_path:
             continue
 
@@ -52,7 +52,7 @@ def _remove_book_files(book: models.Book) -> list[str]:
             removed_paths.append(str(relative_path))
             remove_empty_parent_dirs(full_path)
 
-    audiobook_dir = book_audiobook_dir(book.id)
+    audiobook_dir = book_audiobook_dir(book_id)
     if audiobook_dir.exists():
         removed_paths.extend(str(path.relative_to(LIBRARY_PATH.parent)) for path in audiobook_dir.rglob("*") if path.is_file())
         shutil.rmtree(audiobook_dir)
@@ -65,9 +65,11 @@ async def _permanently_delete_book(db: AsyncSession, book: models.Book) -> None:
 
     Files left behind by a failed unlink are orphans that storage cleanup removes.
     """
+    book_id = book.id
+    relative_paths = [book.immutable_path, book.current_path, book.cover_path]
     await crud.delete_book(db, book=book)
     try:
-        _remove_book_files(book)
+        await asyncio.to_thread(_remove_book_files, book_id, relative_paths)
     except OSError:
         logger.exception("Deleted book %s but could not remove all of its files.", book.id)
 

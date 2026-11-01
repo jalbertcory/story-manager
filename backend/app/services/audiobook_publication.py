@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import posixpath
 import shutil
+import stat
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.sql.elements import ColumnElement
 
 from .. import crud
 from ..config import LIBRARY_PATH
@@ -80,6 +86,10 @@ def _resolved(relative_path: str | None) -> Path | None:
     return candidate
 
 
+def _matches(column: InstrumentedAttribute[str | None], value: str | None) -> ColumnElement[bool]:
+    return column.is_(None) if value is None else column == value
+
+
 def _relative(path: Path) -> str:
     return str(path.resolve().relative_to(LIBRARY_PATH.parent.resolve()))
 
@@ -111,11 +121,29 @@ def chapter_reader_audio_path(chapter: AudiobookChapter) -> Path | None:
     return _resolved(chapter.reader_audio_file_path or chapter.audio_file_path)
 
 
+def chapter_reader_smil_path(chapter: AudiobookChapter) -> Path | None:
+    return _resolved(chapter.reader_smil_file_path or chapter.smil_file_path)
+
+
+@lru_cache(maxsize=256)
+def _cached_reader_smil(path: str, mtime_ns: int, size: int, text_href: str) -> bytes:
+    """Rewrite a SMIL file once per on-disk version; the stat fields only key the cache."""
+    return reader_smil_bytes(Path(path).read_bytes(), text_href)
+
+
 def chapter_reader_smil_bytes(chapter: AudiobookChapter) -> bytes | None:
-    path = _resolved(chapter.reader_smil_file_path or chapter.smil_file_path)
-    if path is None or not path.is_file():
+    """Return the reader-ready SMIL. Blocking: call it through ``asyncio.to_thread``."""
+    path = chapter_reader_smil_path(chapter)
+    if path is None:
         return None
-    return reader_smil_bytes(path.read_bytes(), chapter.source_href or chapter.content_file_name or "")
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    text_href = chapter.source_href or chapter.content_file_name or ""
+    return _cached_reader_smil(str(path), info.st_mtime_ns, info.st_size, text_href)
 
 
 def text_reader_path(book: Book) -> Path | None:
@@ -133,6 +161,15 @@ def stage_reader_text_rendition(book_id: int, content_version: int, source: Path
     return _relative(target), target.stat().st_size, sha256_file(target)
 
 
+def _size_and_sha256(path: Path) -> tuple[int, str] | None:
+    return (path.stat().st_size, sha256_file(path)) if path.is_file() else None
+
+
+def _copy_and_checksum(source: Path, target: Path) -> tuple[int, str]:
+    _atomic_copy(source, target)
+    return target.stat().st_size, sha256_file(target)
+
+
 async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
     """Publish verified text/audio/SMIL files, then commit visible metadata once."""
     book = await db.get(Book, book_id)
@@ -146,9 +183,7 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
     content_version = book.audiobook_source_content_version or book.content_version or 1
     publication_root = book_audiobook_dir(book_id) / "reader"
     text_target = publication_root / f"text-v{content_version}.epub"
-    _atomic_copy(source_text, text_target)
-    text_size = text_target.stat().st_size
-    text_sha = sha256_file(text_target)
+    text_size, text_sha = await asyncio.to_thread(_copy_and_checksum, source_text, text_target)
 
     ready_count = 0
     for chapter in chapters:
@@ -168,8 +203,8 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
         key = chapter.stable_chapter_key or stable_chapter_key(href)
         chapter.stable_chapter_key = key
         chapter.source_href = href
-        audio_sha = sha256_file(source_audio)
-        smil_content = reader_smil_bytes(source_smil.read_bytes(), href)
+        audio_sha = await asyncio.to_thread(sha256_file, source_audio)
+        smil_content = reader_smil_bytes(await asyncio.to_thread(source_smil.read_bytes), href)
         smil_sha = sha256_bytes(smil_content)
         changed = chapter.audio_sha256 != audio_sha or chapter.smil_sha256 != smil_sha
         revision = max(1, (chapter.audio_revision or 0) + int(changed))
@@ -177,9 +212,9 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
         audio_target = chapter_dir / f"audio-v{revision}.mp3"
         smil_target = chapter_dir / f"overlay-v{revision}.smil"
         if changed or not audio_target.is_file():
-            _atomic_copy(source_audio, audio_target)
+            await asyncio.to_thread(_atomic_copy, source_audio, audio_target)
         if changed or not smil_target.is_file():
-            _atomic_write(smil_content, smil_target)
+            await asyncio.to_thread(_atomic_write, smil_content, smil_target)
 
         sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
         chapter.audio_revision = revision
@@ -223,3 +258,88 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
     book.audiobook_text_sha256 = text_sha
     book.audiobook_publication_error = None
     await db.commit()
+
+
+async def backfill_reader_checksums(db: AsyncSession) -> int:
+    """Fill the sizes and hashes that publications made before they were stored left null.
+
+    The reader routes fall back to hashing files per request while these are null.
+    Each update re-checks the null and the file paths so a concurrent publish wins.
+    """
+    filled = 0
+    chapters = (
+        (
+            await db.execute(
+                select(AudiobookChapter).where(
+                    AudiobookChapter.generation_state == ChapterGenerationStatus.READY.value,
+                    or_(
+                        AudiobookChapter.audio_size_bytes.is_(None),
+                        AudiobookChapter.audio_sha256.is_(None),
+                        AudiobookChapter.smil_size_bytes.is_(None),
+                        AudiobookChapter.smil_sha256.is_(None),
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for chapter in chapters:
+        same_files = (
+            AudiobookChapter.id == chapter.id,
+            _matches(AudiobookChapter.audio_file_path, chapter.audio_file_path),
+            _matches(AudiobookChapter.reader_audio_file_path, chapter.reader_audio_file_path),
+            _matches(AudiobookChapter.smil_file_path, chapter.smil_file_path),
+            _matches(AudiobookChapter.reader_smil_file_path, chapter.reader_smil_file_path),
+        )
+        audio_path = chapter_reader_audio_path(chapter)
+        audio = await asyncio.to_thread(_size_and_sha256, audio_path) if audio_path else None
+        if audio is not None and (chapter.audio_size_bytes is None or chapter.audio_sha256 is None):
+            result = await db.execute(
+                update(AudiobookChapter)
+                .where(*same_files, or_(AudiobookChapter.audio_size_bytes.is_(None), AudiobookChapter.audio_sha256.is_(None)))
+                .values(audio_size_bytes=audio[0], audio_sha256=audio[1])
+                .execution_options(synchronize_session=False)
+            )
+            filled += int(bool(getattr(result, "rowcount", 0)))
+        smil = await asyncio.to_thread(chapter_reader_smil_bytes, chapter)
+        if smil is not None and (chapter.smil_size_bytes is None or chapter.smil_sha256 is None):
+            result = await db.execute(
+                update(AudiobookChapter)
+                .where(*same_files, or_(AudiobookChapter.smil_size_bytes.is_(None), AudiobookChapter.smil_sha256.is_(None)))
+                .values(smil_size_bytes=len(smil), smil_sha256=sha256_bytes(smil))
+                .execution_options(synchronize_session=False)
+            )
+            filled += int(bool(getattr(result, "rowcount", 0)))
+        await db.commit()
+
+    books = (
+        (
+            await db.execute(
+                select(Book).where(
+                    Book.audiobook_text_file_path.is_not(None),
+                    or_(Book.audiobook_text_size_bytes.is_(None), Book.audiobook_text_sha256.is_(None)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for book in books:
+        text_path = _resolved(book.audiobook_text_file_path)
+        text = await asyncio.to_thread(_size_and_sha256, text_path) if text_path else None
+        if text is None:
+            continue
+        result = await db.execute(
+            update(Book)
+            .where(
+                Book.id == book.id,
+                Book.audiobook_text_file_path == book.audiobook_text_file_path,
+                or_(Book.audiobook_text_size_bytes.is_(None), Book.audiobook_text_sha256.is_(None)),
+            )
+            .values(audiobook_text_size_bytes=text[0], audiobook_text_sha256=text[1])
+            .execution_options(synchronize_session=False)
+        )
+        filled += int(bool(getattr(result, "rowcount", 0)))
+        await db.commit()
+    return filled

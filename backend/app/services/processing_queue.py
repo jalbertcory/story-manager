@@ -49,6 +49,7 @@ from .audiobook_import import (
 from .audiobook_queue import get_audiobook_queue
 from .audiobook_tts import generate_audio_for_sentence
 from .audiobook_assembly import assemble_chapter_preview
+from .audiobook_publication import backfill_reader_checksums
 from .audiobook_tts import generate_audio_for_chapter_preview
 from .backup_barrier import backup_barrier
 from .backups import create_backup_archive, resolve_backup, verify_backup_archive
@@ -634,6 +635,15 @@ class ProcessingQueue:
             await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Book cover updated")
         return "Book cover re-extracted"
 
+    async def _handle_backfill_reader_checksums(self, job: ProcessingJob) -> str:
+        async with SessionLocal() as db:
+            await crud.update_processing_job_progress(
+                db, job.id, current=0, total=1, detail="Recording reader audiobook file sizes and hashes"
+            )
+            filled = await backfill_reader_checksums(db)
+            await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail=f"Recorded {filled} checksums")
+        return f"Recorded {filled} reader audiobook checksums"
+
     async def _clean_book(self, job_id: int, book_id: int | None) -> str:
         if book_id is None:
             raise ValueError("Cleaning job has no book.")
@@ -903,6 +913,7 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "align_imported_audiobook": ("transcription", 3),
     "create_backup": ("maintenance", 1),
     "verify_backup": ("maintenance", 1),
+    "backfill_reader_checksums": ("maintenance", 3),
 }
 
 JobHandler = Callable[[ProcessingQueue, ProcessingJob], Awaitable[str]]
@@ -924,6 +935,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "generate_sentence_audio": ProcessingQueue._handle_generate_sentence_audio,
     "generate_chapter_preview": ProcessingQueue._handle_generate_chapter_preview,
     "retry_cover": ProcessingQueue._handle_retry_cover,
+    "backfill_reader_checksums": ProcessingQueue._handle_backfill_reader_checksums,
 }
 
 

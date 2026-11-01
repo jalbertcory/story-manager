@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -479,7 +480,7 @@ async def delete_imported_audiobook(
     edition_dir = audiobook_import.imported_audiobook_dir(edition.book_id, edition.id)
     await db.delete(edition)
     await db.commit()
-    shutil.rmtree(edition_dir, ignore_errors=True)
+    await asyncio.to_thread(shutil.rmtree, edition_dir, ignore_errors=True)
     return Response(status_code=204)
 
 
