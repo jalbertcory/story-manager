@@ -180,8 +180,12 @@ def resolve_frontend_file(full_path: str, dist_dir: Path = _FRONTEND_DIST) -> Pa
     if not full_path:
         return None
     root = dist_dir.resolve()
-    candidate = (root / full_path).resolve()
-    if not candidate.is_relative_to(root) or not candidate.is_file():
+    try:
+        candidate = (root / full_path).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return None
+    except (OSError, ValueError):
+        # Null bytes and over-long names cannot be files we serve.
         return None
     return candidate
 

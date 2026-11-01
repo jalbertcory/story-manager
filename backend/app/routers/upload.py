@@ -266,7 +266,16 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
         # Restore missing files for the existing book record.
         logger.info("Restoring missing files for '%s' by '%s' (id=%s)", title, author, existing.id)
-        immutable_path, current_path = reserve_book_paths(f"{title} - {author}.epub", author)
+        # The upload replaces both of this book's files, so a surviving one must not
+        # push the restored pair onto suffixed names or be left behind as an orphan.
+        library_root = LIBRARY_PATH.resolve()
+        for surviving in (existing.immutable_path, existing.current_path):
+            if not surviving:
+                continue
+            surviving_path = (LIBRARY_PATH.parent / surviving).resolve()
+            if surviving_path.is_relative_to(library_root):
+                surviving_path.unlink(missing_ok=True)
+        immutable_path, current_path = await asyncio.to_thread(reserve_book_paths, f"{title} - {author}.epub", author)
         temp_immutable_path.replace(immutable_path)
         temp_current_path.replace(current_path)
 
@@ -289,7 +298,7 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
     # Reserve fresh paths: a same-named file may belong to another book, such as
     # a web novel with the same title and author, and must never be replaced.
-    immutable_path, current_path = reserve_book_paths(f"{title} - {author}.epub", author)
+    immutable_path, current_path = await asyncio.to_thread(reserve_book_paths, f"{title} - {author}.epub", author)
     temp_immutable_path.replace(immutable_path)
     temp_current_path.replace(current_path)
 

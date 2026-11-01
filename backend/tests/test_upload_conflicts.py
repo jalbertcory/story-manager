@@ -99,3 +99,30 @@ def test_reserve_book_paths_skips_taken_names(library):
     assert second[1].name == "Title - Author - 2.epub"
     assert second[0].name == "immutable_Title - Author - 2.epub"
     assert all(path.exists() for path in (*first, *second))
+
+
+@pytest.mark.asyncio
+async def test_partial_restore_keeps_original_names_and_leaves_no_orphan(db, app_client, library):
+    immutable, current = library_paths.build_book_paths("Lost Story - Some Author.epub", "Some Author")
+    current.write_bytes(b"stale surviving copy")
+    book = models.Book(
+        title="Lost Story",
+        author="Some Author",
+        source_type=models.SourceType.epub,
+        immutable_path=str(immutable.relative_to(library.parent)),
+        current_path=str(current.relative_to(library.parent)),
+    )
+    db.add(book)
+    await db.commit()
+
+    response = app_client.post(
+        "/api/books/upload_epub",
+        files={"file": ("lost.epub", epub_bytes("Lost Story", "Some Author"))},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["id"] == book.id
+    assert response.json()["current_path"] == book.current_path
+    assert immutable.read_bytes().startswith(b"PK")
+    assert current.read_bytes().startswith(b"PK")
+    assert sorted(path.name for path in current.parent.iterdir()) == sorted([immutable.name, current.name])

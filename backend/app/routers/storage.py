@@ -114,9 +114,8 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
     ]
 
     # Refuse to run while anything may be writing library files that are not
-    # recorded in the database yet: downloads, refreshes, FanFicFare runs and
-    # processing jobs.
-    busy_reason = await _library_busy_reason(db, active_books)
+    # recorded in the database yet.
+    busy_reason = await _library_busy_reason(db)
     if busy_reason:
         return {
             "dry_run": dry_run,
@@ -160,13 +159,10 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
     return {"dry_run": dry_run, "files": orphans, "books": failed_import_books, "total_bytes": total_bytes}
 
 
-async def _library_busy_reason(db: AsyncSession, active_books: list[models.Book]) -> str | None:
-    downloading = sum(1 for book in active_books if book.download_status == "pending")
-    if downloading:
-        return f"{downloading} book(s) are still downloading. Run cleanup after all downloads complete."
-    refreshing = sum(1 for book in active_books if book.refresh_status in ("queued", "processing"))
-    if refreshing:
-        return f"{refreshing} book(s) are refreshing. Run cleanup after all refreshes complete."
+async def _library_busy_reason(db: AsyncSession) -> str | None:
+    # Web imports and refreshes run as processing jobs, so active jobs cover them.
+    # Book status columns are not checked: a cancelled or failed job can leave
+    # them set forever.
     if is_fanficfare_running():
         return "A web novel download or update is running. Run cleanup after it completes."
     active_jobs = await db.scalar(
@@ -177,15 +173,24 @@ async def _library_busy_reason(db: AsyncSession, active_books: list[models.Book]
     return None
 
 
+def _is_temporary_write(name: str) -> bool:
+    """Whether ``name`` looks like the app's own ``.<file name>.<suffix>`` temp file."""
+    return name.startswith(".") and "." in name[1:]
+
+
 def _is_cleanup_candidate(relative: Path, mtime: float, now: float) -> bool:
     """Whether an untracked file is old enough and outside protected areas to delete."""
+    age = now - mtime
     if relative.parts[0] == LIBRARY_STAGING_DIRNAME:
-        return now - mtime >= STALE_STAGING_SECONDS
-    # Other hidden files are temporary writes (atomic replaces, FanFicFare
-    # updates) or OS metadata; never treat them as orphans.
-    if any(part.startswith(".") for part in relative.parts):
+        return age >= STALE_STAGING_SECONDS
+    if any(part.startswith(".") for part in relative.parts[:-1]):
+        # Hidden directories hold restore safety copies or belong to other tools.
         return False
-    return now - mtime >= RECENT_FILE_GRACE_SECONDS
+    if relative.name.startswith("."):
+        # Temp files left by interrupted atomic writes; other dotfiles such as
+        # .DS_Store or sync-tool markers are left alone.
+        return _is_temporary_write(relative.name) and age >= STALE_STAGING_SECONDS
+    return age >= RECENT_FILE_GRACE_SECONDS
 
 
 def _find_orphaned_files(tracked: set[str], tracked_directories: set[str], now: float) -> list[OrphanedFile]:
@@ -224,4 +229,17 @@ def _delete_orphaned_files(orphans: list[OrphanedFile], now: float) -> list[Orph
         except FileNotFoundError:
             continue
         deleted.append(orphan)
+    _prune_empty_staging_dirs()
     return deleted
+
+
+def _prune_empty_staging_dirs() -> None:
+    """Remove empty per-download directories left in the staging area."""
+    staging = LIBRARY_PATH / LIBRARY_STAGING_DIRNAME
+    if not staging.is_dir():
+        return
+    for directory in sorted((d for d in staging.rglob("*") if d.is_dir() and not d.is_symlink()), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            continue

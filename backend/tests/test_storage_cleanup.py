@@ -37,26 +37,36 @@ async def test_cleanup_only_deletes_old_untracked_files(app_client, library):
     old = storage.RECENT_FILE_GRACE_SECONDS * 2
     orphan = write_aged(library / "Author" / "Old Orphan.epub", old)
     fresh = write_aged(library / "Author" / "Just Uploaded.epub", 5)
+    stale = storage.STALE_STAGING_SECONDS * 2
     atomic_temp = write_aged(library / "Author" / ".Book.epub.abc123", old)
-    stale_staging = write_aged(library / ".staging" / "tmp_abc_upload.epub", storage.STALE_STAGING_SECONDS * 2)
+    stale_atomic_temp = write_aged(library / "Author" / ".Story.update-xyz.epub", stale)
+    os_metadata = write_aged(library / "Author" / ".DS_Store", stale)
+    restore_copy = write_aged(library / ".story-manager-restore-abc" / "previous-library" / "Book.epub", stale)
+    stale_staging = write_aged(library / ".staging" / "fff-old" / "Story.epub", stale)
     active_staging = write_aged(library / ".staging" / "fff-xyz" / "Story.epub", old)
 
     preview = cleanup(app_client, dry_run=True)
     assert sorted(f["path"] for f in preview["files"]) == [
-        "library/.staging/tmp_abc_upload.epub",
+        "library/.staging/fff-old/Story.epub",
+        "library/Author/.Story.update-xyz.epub",
         "library/Author/Old Orphan.epub",
     ]
 
     cleanup(app_client, dry_run=False)
     assert not orphan.exists()
     assert not stale_staging.exists()
+    assert not stale_staging.parent.exists()
+    assert not stale_atomic_temp.exists()
     assert fresh.exists()
     assert atomic_temp.exists()
+    assert os_metadata.exists()
+    assert restore_copy.exists()
     assert active_staging.exists()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_refuses_while_book_is_refreshing(app_client, db, library):
+async def test_cleanup_ignores_stuck_book_status_without_active_job(app_client, db, library):
+    # A cancelled or failed refresh can leave these set; they must not block cleanup forever.
     orphan = write_aged(library / "orphan.epub", storage.RECENT_FILE_GRACE_SECONDS * 2)
     db.add(
         models.Book(
@@ -71,8 +81,8 @@ async def test_cleanup_refuses_while_book_is_refreshing(app_client, db, library)
 
     result = cleanup(app_client, dry_run=False)
 
-    assert "refreshing" in result["skipped_reason"]
-    assert orphan.exists()
+    assert result.get("skipped_reason") is None
+    assert not orphan.exists()
 
 
 @pytest.mark.asyncio

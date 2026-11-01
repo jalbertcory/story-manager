@@ -16,6 +16,8 @@ from uuid import uuid4
 
 from sqlalchemy.engine import URL, make_url
 
+from .library_paths import LIBRARY_STAGING_DIRNAME
+
 BACKUP_FORMAT = "story-manager-backup"
 BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
@@ -180,11 +182,19 @@ def _write_file(archive: zipfile.ZipFile, source: Path, archive_name: str) -> Ba
     return {"path": archive_name, "size_bytes": size, "sha256": digest.hexdigest()}
 
 
+def _is_transient_library_entry(relative: Path) -> bool:
+    """In-progress uploads/downloads and restore safety copies are not library content."""
+    top = relative.parts[0]
+    return top == LIBRARY_STAGING_DIRNAME or top.startswith(_RESTORE_STAGING_PREFIX)
+
+
 def _library_files(library_path: Path) -> list[Path]:
     if not library_path.exists():
         return []
     files: list[Path] = []
     for candidate in library_path.rglob("*"):
+        if _is_transient_library_entry(candidate.relative_to(library_path)):
+            continue
         if candidate.is_symlink():
             raise BackupError(f"Library backups do not follow symbolic links: {candidate}")
         if candidate.is_file():
@@ -426,7 +436,8 @@ def restore_backup_archive(
 
         # Leave staging directories from earlier failed restores in place;
         # they may hold a preserved copy of an older library.
-        previous_entries = [entry for entry in library_path.iterdir() if not entry.name.startswith(_RESTORE_STAGING_PREFIX)]
+        # In-progress staging files are left in place as well.
+        previous_entries = [entry for entry in library_path.iterdir() if not _is_transient_library_entry(Path(entry.name))]
         restored_entries: list[Path] = []
 
         def roll_back_library() -> None:

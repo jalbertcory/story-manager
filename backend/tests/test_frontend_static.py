@@ -30,6 +30,8 @@ def test_missing_or_empty_path_falls_back(dist_dir):
         "/etc/hosts",
         "../secret.txt",
         "assets/../../secret.txt",
+        "index.html\x00.js",
+        "a" * 5000,
     ],
 )
 def test_rejects_paths_outside_dist(dist_dir, full_path):

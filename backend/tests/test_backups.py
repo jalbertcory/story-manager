@@ -160,6 +160,36 @@ def test_restore_replaces_library_after_database_restore(monkeypatch, tmp_path):
     assert not (library / "old.epub").exists()
 
 
+def test_backup_and_restore_leave_staging_and_restore_copies_alone(monkeypatch, tmp_path):
+    library = tmp_path / "library"
+    (library / ".staging" / "fff-abc").mkdir(parents=True)
+    (library / ".staging" / "fff-abc" / "Story.epub").write_bytes(b"in progress")
+    (library / ".story-manager-restore-old").mkdir()
+    (library / ".story-manager-restore-old" / "kept.epub").write_bytes(b"older library")
+    (library / "book.epub").write_bytes(b"epub data")
+    monkeypatch.setattr(backups, "_dump_database", _fake_database_dump)
+    summary = backups.create_backup_archive(
+        database_url="postgresql+psycopg://storyuser:secret@localhost/story_manager",
+        library_path=library,
+        backup_path=tmp_path / "backups",
+    )
+    archive = tmp_path / "backups" / str(summary["filename"])
+
+    assert backups.verify_backup_archive(archive)["library"]["file_count"] == 1
+
+    monkeypatch.setattr(backups, "_run_postgres_tool", lambda *_args: None)
+    backups.restore_backup_archive(
+        archive_path=archive,
+        database_url="postgresql+psycopg://storyuser:secret@localhost/story_manager",
+        library_path=library,
+        pg_restore_path=shutil.which("true"),
+    )
+
+    assert (library / ".staging" / "fff-abc" / "Story.epub").read_bytes() == b"in progress"
+    assert (library / ".story-manager-restore-old" / "kept.epub").read_bytes() == b"older library"
+    assert (library / "book.epub").read_bytes() == b"epub data"
+
+
 def test_restore_rolls_library_back_when_database_restore_fails(monkeypatch, tmp_path):
     archive, source_library = _create_archive(monkeypatch, tmp_path)
     source_library.rename(tmp_path / "source-library")
