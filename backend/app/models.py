@@ -374,6 +374,18 @@ class SchedulerSettings(Base):
     web_novel_schedule_timezone: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class AdminAuthState(Base):
+    """Single-row admin session state; bumping the epoch revokes every issued session."""
+
+    __tablename__ = "admin_auth_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 

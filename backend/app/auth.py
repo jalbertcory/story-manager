@@ -7,18 +7,23 @@ import binascii
 import hashlib
 import hmac
 import os
+import logging
 import secrets
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import models
 from .database import get_db
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=False)
 _basic = HTTPBasic(auto_error=False)
@@ -29,6 +34,7 @@ ADMIN_AUTH_PASSWORD = "password"
 ADMIN_SESSION_SECONDS = 60 * 60 * 24 * 14
 ADMIN_AUTH_MODES = {ADMIN_AUTH_DISABLED, ADMIN_AUTH_PASSWORD}
 ADMIN_COOKIE_SECURE_AUTO = "auto"
+ADMIN_AUTH_STATE_ID = 1
 
 
 def _now_utc() -> datetime:
@@ -76,6 +82,18 @@ def validate_admin_auth_configuration() -> None:
         raise RuntimeError("Invalid STORY_MANAGER_ADMIN_COOKIE_SECURE value; expected auto, true, or false")
 
 
+def warn_if_admin_auth_disabled() -> None:
+    """Make an unauthenticated deployment obvious in the startup log."""
+    if is_admin_auth_enabled():
+        return
+    logger.warning(
+        "!!! Story Manager admin authentication is DISABLED (STORY_MANAGER_AUTH_MODE=disabled). "
+        "Every admin API and audiobook file is open to anyone who can reach this server. "
+        "Only run this way behind an authenticating reverse proxy (for example Authentik or "
+        "Authelia forward auth); otherwise set STORY_MANAGER_ADMIN_PASSWORD. !!!"
+    )
+
+
 def _admin_password() -> Optional[str]:
     password = os.getenv("STORY_MANAGER_ADMIN_PASSWORD")
     return password if password else None
@@ -89,39 +107,169 @@ def verify_admin_password(password: str) -> bool:
     expected = _admin_password()
     if expected is None:
         return False
-    return hmac.compare_digest(password, expected)
+    # compare_digest only accepts ASCII str, so compare UTF-8 bytes to keep
+    # non-ASCII passwords from raising instead of failing the comparison.
+    return hmac.compare_digest(password.encode("utf-8"), expected.encode("utf-8"))
 
 
-def _sign_admin_payload(payload: str) -> str:
+def _admin_signing_key() -> bytes:
     secret = _admin_session_secret()
     if secret is None:
         raise RuntimeError("Admin auth is enabled but no admin password/session secret is configured")
-    return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    # Bind sessions to the current password as well as the secret, so changing
+    # the password revokes existing sessions even with a dedicated session secret.
+    password = (_admin_password() or "").encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), b"story-manager-admin-session\0" + password, hashlib.sha256).digest()
 
 
-def create_admin_session_token(now: int | None = None) -> str:
+def _sign_admin_payload(payload: str) -> str:
+    return hmac.new(_admin_signing_key(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_admin_session_token(now: int | None = None, epoch: int = 0) -> str:
     expires_at = (now or int(time.time())) + ADMIN_SESSION_SECONDS
-    payload = base64.urlsafe_b64encode(str(expires_at).encode("ascii")).decode("ascii").rstrip("=")
+    payload = base64.urlsafe_b64encode(f"{expires_at}:{epoch}".encode("ascii")).decode("ascii").rstrip("=")
     signature = _sign_admin_payload(payload)
     return f"{payload}.{signature}"
 
 
-def validate_admin_session_token(token: str | None, now: int | None = None) -> bool:
+def validate_admin_session_token(token: str | None, now: int | None = None, epoch: int = 0) -> bool:
+    """Check signature, expiry, and that the token was issued in the current session epoch."""
     if not token or "." not in token:
         return False
 
     payload, signature = token.split(".", 1)
     expected_signature = _sign_admin_payload(payload)
-    if not hmac.compare_digest(signature, expected_signature):
+    if not hmac.compare_digest(signature.encode("utf-8"), expected_signature.encode("utf-8")):
         return False
 
     try:
         padded = payload + "=" * (-len(payload) % 4)
-        expires_at = int(base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii"))
+        expires_text, epoch_text = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").split(":", 1)
+        expires_at = int(expires_text)
+        token_epoch = int(epoch_text)
     except (binascii.Error, ValueError, UnicodeDecodeError):
         return False
 
-    return expires_at > (now or int(time.time()))
+    return token_epoch == epoch and expires_at > (now or int(time.time()))
+
+
+async def get_admin_session_epoch(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(models.AdminAuthState.session_epoch).where(models.AdminAuthState.id == ADMIN_AUTH_STATE_ID)
+    )
+    epoch = result.scalar_one_or_none()
+    return epoch if epoch is not None else 0
+
+
+async def revoke_admin_sessions(db: AsyncSession) -> int:
+    """Advance the session epoch, invalidating every previously issued admin cookie."""
+    result = await db.execute(
+        update(models.AdminAuthState)
+        .where(models.AdminAuthState.id == ADMIN_AUTH_STATE_ID)
+        .values(session_epoch=models.AdminAuthState.session_epoch + 1)
+        .returning(models.AdminAuthState.session_epoch)
+    )
+    epoch = result.scalar_one_or_none()
+    if epoch is None:
+        epoch = 1
+        db.add(models.AdminAuthState(id=ADMIN_AUTH_STATE_ID, session_epoch=epoch))
+    await db.commit()
+    return epoch
+
+
+async def is_admin_session_valid(db: AsyncSession, token: str | None) -> bool:
+    if not token:
+        return False
+    return validate_admin_session_token(token, epoch=await get_admin_session_epoch(db))
+
+
+@dataclass
+class _LoginFailures:
+    count: int
+    last_failure: float
+    locked_until: float
+
+
+class LoginThrottle:
+    """Per-client exponential backoff for failed admin logins.
+
+    The first ``free_attempts`` failures are not delayed; each later failure
+    doubles the lockout up to ``max_lockout_seconds``. A successful login, or
+    ``reset_after_seconds`` without failures, clears the client's history.
+    """
+
+    def __init__(
+        self,
+        *,
+        free_attempts: int = 5,
+        base_lockout_seconds: float = 1.0,
+        max_lockout_seconds: float = 15 * 60,
+        reset_after_seconds: float = 60 * 60,
+        max_tracked_clients: int = 10_000,
+    ) -> None:
+        self.free_attempts = free_attempts
+        self.base_lockout_seconds = base_lockout_seconds
+        self.max_lockout_seconds = max_lockout_seconds
+        self.reset_after_seconds = reset_after_seconds
+        self.max_tracked_clients = max_tracked_clients
+        self._failures: dict[str, _LoginFailures] = {}
+        self._lock = threading.Lock()
+
+    def retry_after(self, client: str, now: float | None = None) -> int:
+        """Seconds the client must wait before another attempt (0 when allowed)."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            entry = self._current(client, now)
+            if entry is None or entry.locked_until <= now:
+                return 0
+            return max(1, int(entry.locked_until - now + 0.999))
+
+    def record_failure(self, client: str, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            entry = self._current(client, now)
+            if entry is None:
+                if len(self._failures) >= self.max_tracked_clients:
+                    self._prune(now)
+                entry = _LoginFailures(count=0, last_failure=now, locked_until=0.0)
+                self._failures[client] = entry
+            entry.count += 1
+            entry.last_failure = now
+            excess = entry.count - self.free_attempts
+            if excess > 0:
+                lockout = min(self.base_lockout_seconds * 2 ** (excess - 1), self.max_lockout_seconds)
+                entry.locked_until = now + lockout
+
+    def record_success(self, client: str) -> None:
+        with self._lock:
+            self._failures.pop(client, None)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._failures.clear()
+
+    def _current(self, client: str, now: float) -> _LoginFailures | None:
+        entry = self._failures.get(client)
+        if entry is not None and entry.locked_until <= now and now - entry.last_failure >= self.reset_after_seconds:
+            del self._failures[client]
+            return None
+        return entry
+
+    def _prune(self, now: float) -> None:
+        stale = [
+            client
+            for client, entry in self._failures.items()
+            if entry.locked_until <= now and now - entry.last_failure >= self.reset_after_seconds
+        ]
+        for client in stale:
+            del self._failures[client]
+        if len(self._failures) >= self.max_tracked_clients:
+            oldest = min(self._failures, key=lambda client: self._failures[client].last_failure)
+            del self._failures[oldest]
+
+
+admin_login_throttle = LoginThrottle()
 
 
 def generate_reader_token() -> tuple[str, str]:

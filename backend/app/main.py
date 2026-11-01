@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import crud
 from .admin_auth_middleware import AdminAuthMiddleware
 from .backup_middleware import BackupWriteBarrierMiddleware
-from .auth import validate_admin_auth_configuration
+from .auth import validate_admin_auth_configuration, warn_if_admin_auth_disabled
 from .config import LIBRARY_PATH
 from .errors import install_error_handlers
 from .middleware import RequestIdMiddleware
@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _file_handler not in root_logger.handlers:
         root_logger.addHandler(_file_handler)
     logger.info("Starting up Story Manager services.")
+    warn_if_admin_auth_disabled()
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     await _processing_queue.start()

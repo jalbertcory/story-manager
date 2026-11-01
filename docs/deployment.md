@@ -128,6 +128,11 @@ The app stores a signed, HTTP-only session cookie after login. To keep sessions 
 STORY_MANAGER_ADMIN_SESSION_SECRET=long-random-value
 ```
 
+Sessions last 14 days. Logging out revokes every session issued before it (not only the current browser's), and
+changing `STORY_MANAGER_ADMIN_PASSWORD` revokes all sessions as well. After five failed logins from one client address,
+further attempts are delayed with exponential backoff (HTTP 429 with `Retry-After`, up to 15 minutes). Behind a reverse
+proxy, run uvicorn with forwarded-header support so the backoff sees real client addresses.
+
 Admin cookies automatically use the `Secure` flag when the request is HTTPS. Set `STORY_MANAGER_ADMIN_COOKIE_SECURE=true` to require secure cookies explicitly, or `false` only for a trusted HTTP-only local deployment.
 
 If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 Proxy, or Cloudflare Access, disable built-in auth explicitly:
@@ -135,6 +140,9 @@ If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 
 ```bash
 STORY_MANAGER_AUTH_MODE=disabled
 ```
+
+With auth disabled, every admin route and audiobook file is open to anyone who can reach the server, so the app logs a
+prominent warning at startup. Only run it this way behind an authenticating proxy.
 
 Invalid authentication modes and password mode without a password stop the application at startup instead of disabling protection.
 

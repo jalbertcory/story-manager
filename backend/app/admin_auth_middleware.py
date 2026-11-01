@@ -1,10 +1,13 @@
 """Middleware that protects admin API routes when password auth is enabled."""
 
+from contextlib import aclosing
+
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from .auth import ADMIN_AUTH_COOKIE, is_admin_auth_enabled, validate_admin_session_token
+from .auth import ADMIN_AUTH_COOKIE, is_admin_auth_enabled, is_admin_session_valid
+from .database import get_db
 
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
@@ -13,7 +16,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            authenticated = validate_admin_session_token(request.cookies.get(ADMIN_AUTH_COOKIE))
+            authenticated = await self._session_is_valid(request)
         except RuntimeError as exc:
             return JSONResponse(status_code=500, content={"detail": str(exc)})
 
@@ -21,6 +24,19 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"detail": "Admin authentication required"})
 
         return await call_next(request)
+
+    @staticmethod
+    async def _session_is_valid(request: Request) -> bool:
+        token = request.cookies.get(ADMIN_AUTH_COOKIE)
+        if not token:
+            return False
+        # Resolve the session through the app's get_db dependency so overrides
+        # (tests, alternate engines) see the same database as the routes.
+        session_factory = request.app.dependency_overrides.get(get_db, get_db)
+        async with aclosing(session_factory()) as sessions:
+            async for db in sessions:
+                return await is_admin_session_valid(db, token)
+        return False
 
     @staticmethod
     def _requires_admin_auth(request: Request) -> bool:
