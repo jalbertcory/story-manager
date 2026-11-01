@@ -72,7 +72,6 @@ _processing_queue = get_processing_queue()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    is_test_app = bool(app.dependency_overrides)
     validate_admin_auth_configuration()
     # Re-attach handlers after uvicorn resets logging config on startup
     root_logger = logging.getLogger()
@@ -87,15 +86,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     await _processing_queue.start()
-    if not is_test_app:
-        processing_requeued = await _processing_queue.requeue_pending()
-        if processing_requeued:
-            logger.info("Finalized %s abandoned processing jobs at startup.", processing_requeued)
+    processing_requeued = await _processing_queue.requeue_pending()
+    if processing_requeued:
+        logger.info("Finalized %s abandoned processing jobs at startup.", processing_requeued)
     if not _scheduler.running:
         _scheduler.start()
     await schedule_next_web_novel_update()
-    if not is_test_app:
-        await schedule_next_metadata_recheck()
+    await schedule_next_metadata_recheck()
     yield
     await _processing_queue.stop()
     if _scheduler.running:

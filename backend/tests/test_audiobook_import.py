@@ -672,10 +672,6 @@ async def test_upload_endpoint_streams_large_format_to_staging(
     tmp_path,
     monkeypatch,
 ):
-    class FakeQueue:
-        async def enqueue(self, _edition_id):
-            return True
-
     async with sqlite_sessionmaker() as db:
         book, _chapter = await _seed_book_text(db)
         book_id = book.id
@@ -684,7 +680,6 @@ async def test_upload_endpoint_streams_large_format_to_staging(
         "imported_audiobook_dir",
         lambda selected_book_id, edition_id: tmp_path / str(selected_book_id) / str(edition_id),
     )
-    monkeypatch.setattr(audiobook_router, "get_audiobook_import_queue", lambda: FakeQueue())
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",
@@ -720,15 +715,6 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     sqlite_sessionmaker,
     monkeypatch,
 ):
-    class FakeAlignmentQueue:
-        queued = []
-
-        async def enqueue(self, edition_id):
-            self.queued.append(edition_id)
-            return True
-
-    queue = FakeAlignmentQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_alignment_queue", lambda: queue)
     async with sqlite_sessionmaker() as db:
         book, chapter = await _seed_book_text(db)
         db.add(
@@ -768,7 +754,20 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     assert response.status_code == 200
     assert response.json()["status"] == "aligning"
     assert response.json()["progress_total"] == 1
-    assert queue.queued == [edition_id]
+    async with sqlite_sessionmaker() as db:
+        jobs = (
+            (
+                await db.execute(
+                    select(ProcessingJob).where(
+                        ProcessingJob.job_type == "align_imported_audiobook",
+                        ProcessingJob.target_id == edition_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(jobs) == 1
 
 
 @pytest.mark.asyncio

@@ -576,7 +576,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `backend/app/services/audiobook_tts.py` | Phase 4: provider-neutral TTS orchestration per sentence |
 | `backend/app/services/tts_providers.py` | OmniVoice, OpenAI-compatible, OpenAI, ElevenLabs, and stub clients |
 | `backend/app/services/audiobook_assembly.py` | Phase 5: MP3 concat + SMIL + EPUB repackage |
-| `backend/app/services/audiobook_queue.py` | Async worker queue (mirrors `web_import_queue.py`) |
+| `backend/app/services/audiobook_queue.py` | Audiobook pipeline worker invoked by the durable processing queue |
 | `backend/app/routers/audiobook.py` | All API endpoints |
 | `backend/app/main.py` | Wire queue lifecycle + router |
 

@@ -98,43 +98,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class _LegacyQueueHook:
-    """No-op compatibility hook for integrations that patched the old queues."""
-
-    async def enqueue(self, _record_id: int) -> bool:
-        return True
-
-    async def enqueue_sentence_audio(self, _book_id: int, _sentence_id: int) -> bool:
-        return True
-
-    async def enqueue_preview(self, _book_id: int, _chapter_id: int) -> bool:
-        return True
-
-    def has_book_job(self, _book_id: int) -> bool:
-        return False
-
-
-_legacy_queue_hook = _LegacyQueueHook()
-
-
-def get_audiobook_queue() -> _LegacyQueueHook:
-    return _legacy_queue_hook
-
-
-def get_audiobook_import_queue() -> _LegacyQueueHook:
-    return _legacy_queue_hook
-
-
-def get_audiobook_alignment_queue() -> _LegacyQueueHook:
-    return _legacy_queue_hook
-
-
-async def _notify_legacy_queue(getter: Callable[[], _LegacyQueueHook], method: str, *args: int) -> None:
-    queue = getter()
-    if queue is not _legacy_queue_hook:
-        await getattr(queue, method)(*args)
-
-
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -955,7 +918,6 @@ async def upload_imported_audiobook(
             dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
             progress_detail="Queued after audiobook upload",
         )
-        await _notify_legacy_queue(get_audiobook_import_queue, "enqueue", edition.id)
     except Exception as exc:
         transition_state(
             edition,
@@ -1048,7 +1010,6 @@ async def retry_imported_audiobook(
         dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
         progress_detail="Queued audiobook import retry",
     )
-    await _notify_legacy_queue(get_audiobook_import_queue, "enqueue", edition.id)
     return await _imported_audiobook_response(edition, db)
 
 
@@ -1252,7 +1213,6 @@ async def align_imported_audiobook(
         dedupe_key=f"align_imported_audiobook:imported_audiobook:{edition.id}",
         progress_detail="Queued timestamp alignment",
     )
-    await _notify_legacy_queue(get_audiobook_alignment_queue, "enqueue", edition.id)
     return await _imported_audiobook_response(edition, db)
 
 
@@ -1497,7 +1457,6 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> co
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail="Queued to run audiobook to completion",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
     current_status = (await _get_book_or_404(book_id, db)).audiobook_pipeline_status
     return {"status": current_status, "queued": True}
 
@@ -1530,7 +1489,6 @@ async def step_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> con
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail=f"Queued next audiobook stage: {next_phase}",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
     return {"status": next_phase, "queued": True, "stop_after_phase": next_phase}
 
 
@@ -1562,7 +1520,6 @@ async def run_pipeline_batch(book_id: int, db: AsyncSession = Depends(get_db)) -
         dedupe_key=f"audiobook_pipeline:book:{book_id}:manual",
         progress_detail=f"Queued one audiobook batch: {next_phase}",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
     return {"status": next_phase, "queued": True, "batch_limit": 1}
 
 
@@ -1580,14 +1537,20 @@ async def pause_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> co
 @router.post("/api/books/{book_id}/audiobook/rebuild", response_model=contracts.PipelineQueued)
 async def rebuild_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
     book = await _get_audiobook_book_or_404(book_id, db)
-    legacy_queue = get_audiobook_queue()
-    if book.audiobook_pipeline_status in (
-        "ingesting",
-        "roster_gen",
-        "diarizing",
-        "audio_gen",
-        "assembling",
-    ) or (legacy_queue is not _legacy_queue_hook and legacy_queue.has_book_job(book_id)):
+    running_jobs = await crud.get_processing_jobs(
+        db, statuses=["running"], job_type="audiobook_pipeline", book_id=book_id, limit=1
+    )
+    if (
+        book.audiobook_pipeline_status
+        in (
+            "ingesting",
+            "roster_gen",
+            "diarizing",
+            "audio_gen",
+            "assembling",
+        )
+        or running_jobs
+    ):
         raise HTTPException(status_code=409, detail="Pause the active pipeline before rebuilding it")
     await queue_processing_job(
         db=db,
@@ -1635,7 +1598,6 @@ async def rebuild_audio_only(book_id: int, db: AsyncSession = Depends(get_db)) -
         dedupe_key=f"audiobook_pipeline:book:{book_id}:audio-rebuild",
         progress_detail="Queued AI TTS regeneration; speakers and human editions preserved",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
     return {"status": "audio_gen", "queued": True}
 
 
@@ -1667,7 +1629,6 @@ async def rebuild_character_roster(book_id: int, db: AsyncSession = Depends(get_
         dedupe_key=f"audiobook_pipeline:book:{book_id}:roster",
         progress_detail="Queued character-roster regeneration",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue", book_id)
     return {
         "status": "roster_gen",
         "queued": True,
@@ -2048,7 +2009,6 @@ async def generate_sentence_audio(
         dedupe_key=f"generate_sentence_audio:audiobook_sentence:{sentence_id}",
         progress_detail="Queued sentence-audio generation",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue_sentence_audio", book_id, sentence_id)
     return {
         "status": "audio_queued",
         "queued": True,
@@ -2154,7 +2114,6 @@ async def generate_chapter_preview(
         dedupe_key=f"generate_chapter_preview:audiobook_chapter:{chapter_id}",
         progress_detail="Queued chapter-preview generation",
     )
-    await _notify_legacy_queue(get_audiobook_queue, "enqueue_preview", book_id, chapter_id)
     return {"status": "queued", "queued": True, "chapter_id": chapter_id}
 
 

@@ -731,6 +731,23 @@ async def test_metadata_sync_uses_same_series_open_library_author_key_for_relate
     assert data["results"][0]["remote_title"] == "Dragon Saga 2"
 
 
+async def _assert_single_processing_job(job_type: str, target_id: int) -> None:
+    async with AsyncTestingSessionLocal() as session:
+        jobs = (
+            (
+                await session.execute(
+                    select(models.ProcessingJob).where(
+                        models.ProcessingJob.job_type == job_type,
+                        models.ProcessingJob.target_id == target_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(jobs) == 1
+
+
 @pytest.mark.asyncio
 async def test_create_metadata_job_enqueues_background_sync(db_session, mocker):
     async with AsyncTestingSessionLocal() as session:
@@ -745,17 +762,13 @@ async def test_create_metadata_job_enqueues_background_sync(db_session, mocker):
             ),
         )
 
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=True)
-    mocker.patch("backend.app.services.metadata_sync_queue.get_metadata_sync_queue", return_value=queue)
-
     response = client.post("/api/metadata/jobs", json={"book_ids": [book.id], "trigger": "manual"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "queued"
     assert data["total_books"] == 1
-    queue.enqueue.assert_awaited_once_with(data["id"])
+    await _assert_single_processing_job("metadata_sync", data["id"])
 
 
 @pytest.mark.asyncio
@@ -1602,10 +1615,6 @@ async def test_refresh_book(db_session, mocker):
     create_dummy_epub(immutable_path, "Original Title", "Original Author")
     current_path.write_bytes(immutable_path.read_bytes())
 
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=True)
-    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
-
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
             session,
@@ -1628,7 +1637,7 @@ async def test_refresh_book(db_session, mocker):
     # Book content should not have changed yet — only the status flipped.
     assert data["title"] == "Original Title"
     assert data["author"] == "Original Author"
-    queue.enqueue.assert_awaited_once_with(book.id)
+    await _assert_single_processing_job("refresh_book", book.id)
 
     async with AsyncTestingSessionLocal() as session:
         persisted = await crud.get_book(session, book_id=book.id)
@@ -1643,9 +1652,6 @@ async def test_refresh_book(db_session, mocker):
 @pytest.mark.asyncio
 async def test_refresh_book_while_already_queued_is_idempotent(db_session, mocker):
     """A second refresh while one is still queued/processing should not flip status back."""
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=False)
-    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1668,7 +1674,7 @@ async def test_refresh_book_while_already_queued_is_idempotent(db_session, mocke
     data = response.json()
     # Still "processing" — the endpoint should not step on an in-flight job.
     assert data["refresh_status"] == "processing"
-    queue.enqueue.assert_awaited_once_with(book.id)
+    await _assert_single_processing_job("refresh_book", book.id)
 
 
 @pytest.mark.asyncio
@@ -1697,9 +1703,6 @@ async def test_refresh_book_no_source_url(db_session):
 @pytest.mark.asyncio
 async def test_refresh_failed_placeholder_enqueues_refresh(db_session, mocker):
     """Refresh for a failed placeholder (no EPUB yet) enqueues a job without touching files."""
-    queue = mocker.Mock()
-    queue.enqueue = mocker.AsyncMock(return_value=True)
-    mocker.patch("backend.app.routers.web_novels.get_refresh_queue", return_value=queue)
 
     async with AsyncTestingSessionLocal() as session:
         book = await crud.create_book(
@@ -1721,7 +1724,7 @@ async def test_refresh_failed_placeholder_enqueues_refresh(db_session, mocker):
     assert data["refresh_status"] == "queued"
     # download_status is not cleared at enqueue time — the worker clears it on success.
     assert data["download_status"] == "error"
-    queue.enqueue.assert_awaited_once_with(book.id)
+    await _assert_single_processing_job("refresh_book", book.id)
 
 
 @pytest.mark.asyncio

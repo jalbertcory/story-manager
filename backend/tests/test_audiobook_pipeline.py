@@ -85,6 +85,8 @@ async def _seed_audio_chapter(db, book_id: int, *, sentence_status: str = "ready
 
 
 class _FakeQueue:
+    """Records durable jobs queued by the audiobook router while still persisting them."""
+
     def __init__(self, *, active_book_ids: set[int] | None = None):
         self.enqueued: list[int] = []
         self.active_book_ids = active_book_ids or set()
@@ -98,13 +100,22 @@ class _FakeQueue:
     def has_book_job(self, book_id: int) -> bool:
         return book_id in self.active_book_ids
 
-    async def enqueue_preview(self, book_id: int, chapter_id: int) -> bool:
-        self.preview_enqueued.append((book_id, chapter_id))
-        return True
+    def install(self, monkeypatch) -> "_FakeQueue":
+        real_queue_processing_job = audiobook_router.queue_processing_job
 
-    async def enqueue_sentence_audio(self, book_id: int, sentence_id: int) -> bool:
-        self.sentence_enqueued.append((book_id, sentence_id))
-        return True
+        async def recording_queue_processing_job(**kwargs):
+            job = await real_queue_processing_job(**kwargs)
+            job_type = kwargs["job_type"]
+            if job_type == "audiobook_pipeline":
+                self.enqueued.append(kwargs["book_id"])
+            elif job_type == "generate_chapter_preview":
+                self.preview_enqueued.append((kwargs["book_id"], kwargs["target_id"]))
+            elif job_type == "generate_sentence_audio":
+                self.sentence_enqueued.append((kwargs["book_id"], kwargs["target_id"]))
+            return job
+
+        monkeypatch.setattr(audiobook_router, "queue_processing_job", recording_queue_processing_job)
+        return self
 
 
 def test_default_roster_prompt_formats_voice_token_examples():
@@ -809,7 +820,7 @@ async def test_queue_persists_actionable_pipeline_error(db, sqlite_sessionmaker,
 async def test_books_default_audiobook_pipeline_disabled(db, monkeypatch):
     book = await _make_book(db)
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     with pytest.raises(audiobook_router.HTTPException) as exc_info:
         await audiobook_router.start_pipeline(book.id, db)
@@ -906,7 +917,7 @@ async def test_paused_pipeline_resumes_from_persisted_audio_state(db, monkeypatc
     await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
     await crud.audiobook.set_book_pipeline_status(db, book.id, "paused")
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.start_pipeline(book.id, db)
 
@@ -923,7 +934,7 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     await crud.audiobook.set_book_pipeline_status(db, book.id, "error")
     queue = _FakeQueue()
     reset_capabilities = []
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
     monkeypatch.setattr(audiobook_router, "reset_cooldowns", reset_capabilities.append)
 
     response = await audiobook_router.start_pipeline(book.id, db)
@@ -943,7 +954,7 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
 async def test_rebuild_rejects_an_active_pipeline(db, monkeypatch):
     book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="diarizing")
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     with pytest.raises(audiobook_router.HTTPException) as exc_info:
         await audiobook_router.rebuild_pipeline(book.id, db)
@@ -955,8 +966,18 @@ async def test_rebuild_rejects_an_active_pipeline(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_rebuild_waits_for_a_paused_worker_to_exit(db, monkeypatch):
     book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
-    queue = _FakeQueue(active_book_ids={book.id})
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    db.add(
+        models.ProcessingJob(
+            job_type="audiobook_pipeline",
+            status="running",
+            resource_lane="llm",
+            book_id=book.id,
+            target_type="book",
+            target_id=book.id,
+        )
+    )
+    await db.commit()
+    queue = _FakeQueue().install(monkeypatch)
 
     with pytest.raises(audiobook_router.HTTPException) as exc_info:
         await audiobook_router.rebuild_pipeline(book.id, db)
@@ -972,7 +993,7 @@ async def test_sentence_speaker_must_belong_to_the_same_book(db, monkeypatch):
     _chapter, _character, sentence = await _seed_audio_chapter(db, book.id)
     _other_chapter, other_character, _other_sentence = await _seed_audio_chapter(db, other_book.id)
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     with pytest.raises(audiobook_router.HTTPException) as exc_info:
         await audiobook_router.update_sentence(
@@ -991,7 +1012,7 @@ async def test_sentence_speaker_must_belong_to_the_same_book(db, monkeypatch):
 async def test_step_pipeline_runs_only_next_recoverable_phase(db, monkeypatch):
     book = await _make_book(db, audiobook_enabled=True)
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.step_pipeline(book.id, db)
 
@@ -1012,7 +1033,7 @@ async def test_run_batch_persists_one_unit_limit(db, monkeypatch):
     book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
     await _seed_audio_chapter(db, book.id, sentence_status="ready_for_audio")
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.run_pipeline_batch(book.id, db)
 
@@ -1112,7 +1133,7 @@ async def test_roster_rebuild_preserves_ingestion_and_clears_derived_analysis(db
     db.add(cue)
     await db.commit()
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.rebuild_character_roster(book.id, db)
 
@@ -1181,7 +1202,7 @@ async def test_audio_only_rebuild_preserves_speakers_and_human_audiobook(db, mon
     db.add(cue)
     await db.commit()
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.rebuild_audio_only(book.id, db)
 
@@ -2889,7 +2910,7 @@ async def test_manual_chapter_preview_requires_analysis_and_queues_work(db, monk
     book = await _make_book(db, audiobook_enabled=True, audiobook_pipeline_status="paused")
     chapter, _character, sentence = await _seed_audio_chapter(db, book.id)
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
 
     response = await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
     await db.refresh(chapter)
@@ -2917,7 +2938,7 @@ async def test_manual_sentence_audio_queues_and_generates_only_that_sentence(db,
     chapter.audio_file_path = "library/audiobooks/old-preview.mp3"
     await db.commit()
     queue = _FakeQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_queue", lambda: queue)
+    queue.install(monkeypatch)
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
 
     response = await audiobook_router.generate_sentence_audio(book.id, sentence.id, db)
