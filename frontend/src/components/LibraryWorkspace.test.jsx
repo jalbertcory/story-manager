@@ -5,7 +5,12 @@ import LibraryWorkspace from "./LibraryWorkspace";
 
 const response = (value) =>
   Promise.resolve({ ok: true, json: async () => value });
-const page = (items) => ({items, next_cursor: null, total_count: items.length, facets: {series: 1, standalone: 0, web: 0, genres: []}});
+const page = (items) => ({
+  items,
+  next_cursor: null,
+  total_count: items.length,
+  facets: { series: 1, standalone: 0, web: 0, genres: [] },
+});
 const missing = {
   id: 948,
   title: "Artemis Fowl",
@@ -30,7 +35,8 @@ describe("Audio-only library", () => {
             cover_ids: [],
           },
         ]);
-      if (url.startsWith("/api/books/catalog")) return response(page([missing]));
+      if (url.startsWith("/api/books/catalog"))
+        return response(page([missing]));
       return response([]);
     });
     vi.stubGlobal("fetch", fetch);
@@ -247,4 +253,82 @@ it("pages group summaries without discarding earlier groups", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Load more groups" }));
   await screen.findByRole("link", { name: /Second/ });
   expect(screen.getByRole("link", { name: /First/ })).toBeInTheDocument();
+});
+
+it("lists standalone search matches as books beside matching series", async () => {
+  const fetch = vi.fn((url) => {
+    if (url.startsWith("/api/library/groups"))
+      return response({
+        items: [
+          { name: "Saga", book_count: 2, author_count: 1, cover_ids: [] },
+          { name: null, book_count: 1, author_count: 1, cover_ids: [] },
+        ],
+        next_cursor: null,
+        total_count: 2,
+        facets: { genres: [] },
+      });
+    if (url.startsWith("/api/books/catalog"))
+      return response(
+        page([
+          {
+            id: 7,
+            title: "Saga Stories",
+            author: "Writer",
+            series: null,
+            source_type: "epub",
+          },
+        ]),
+      );
+    return response([]);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const onEdit = vi.fn();
+  renderWithClient(
+    <LibraryWorkspace
+      search="?group=series&q=saga"
+      onNavigate={vi.fn()}
+      onEdit={onEdit}
+    />,
+  );
+  expect(
+    await screen.findByRole("link", { name: /Saga.*2 books/ }),
+  ).toHaveAttribute("href", "/?group=series&series=Saga&q=saga");
+  fireEvent.click(await screen.findByRole("link", { name: /Saga Stories/ }));
+  expect(onEdit).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 7 }),
+    "/?group=series&q=saga",
+  );
+  expect(screen.queryByText("Standalone books")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Showing 1 of 1 series and 1 of 1 standalone book/),
+  ).toBeInTheDocument();
+  expect(
+    fetch.mock.calls.some(
+      ([url]) =>
+        url.startsWith("/api/books/catalog") &&
+        /[?&]series=(&|$)/.test(url) &&
+        url.includes("q=saga"),
+    ),
+  ).toBe(true);
+});
+
+it("keeps standalone books grouped when not searching", async () => {
+  const fetch = vi.fn(() =>
+    response({
+      items: [{ name: null, book_count: 3, author_count: 2, cover_ids: [] }],
+      next_cursor: null,
+      total_count: 1,
+      facets: { genres: [] },
+    }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  renderWithClient(
+    <LibraryWorkspace search="" onNavigate={vi.fn()} onEdit={vi.fn()} />,
+  );
+  expect(
+    await screen.findByRole("link", { name: /Standalone books/ }),
+  ).toBeInTheDocument();
+  expect(
+    fetch.mock.calls.some(([url]) => url.startsWith("/api/books/catalog")),
+  ).toBe(false);
 });
