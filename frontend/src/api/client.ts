@@ -43,9 +43,35 @@ export const api = createClient<paths>({
 
 type Result<T> = { data?: T; error?: unknown; response: Response };
 
-function requestError(error: unknown, fallbackMessage: string): Error {
+// A failed API response. The HTTP status lets global handlers tell an expired
+// session (401) or a bad request (4xx) apart from transient server failures.
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function isApiError(error: unknown, status?: number): error is ApiError {
+  return (
+    error instanceof ApiError && (status === undefined || error.status === status)
+  );
+}
+
+function requestError(
+  error: unknown,
+  fallbackMessage: string,
+  status: number,
+): ApiError {
+  return new ApiError(errorDetail(error, fallbackMessage), status);
+}
+
+function errorDetail(error: unknown, fallbackMessage: string): string {
   if (error && typeof error === "object" && "detail" in error) {
-    if (typeof error.detail === "string") return new Error(error.detail);
+    if (typeof error.detail === "string") return error.detail;
     if (Array.isArray(error.detail)) {
       const messages = error.detail.map((item: unknown) =>
         item &&
@@ -55,10 +81,10 @@ function requestError(error: unknown, fallbackMessage: string): Error {
           ? item.msg
           : "Invalid request",
       );
-      return new Error(messages.join("; "));
+      return messages.join("; ");
     }
   }
-  return new Error(fallbackMessage);
+  return fallbackMessage;
 }
 
 export async function unwrap<T>(
@@ -66,7 +92,8 @@ export async function unwrap<T>(
   fallbackMessage = "Request failed",
 ): Promise<T> {
   const result = await request;
-  if (!result.response.ok) throw requestError(result.error, fallbackMessage);
+  if (!result.response.ok)
+    throw requestError(result.error, fallbackMessage, result.response.status);
   if (result.data === undefined)
     throw new Error("The server returned an empty response.");
   return result.data;
@@ -96,7 +123,8 @@ export async function unwrapEmpty(
   fallbackMessage = "Request failed",
 ): Promise<null> {
   const result = await request;
-  if (!result.response.ok) throw requestError(result.error, fallbackMessage);
+  if (!result.response.ok)
+    throw requestError(result.error, fallbackMessage, result.response.status);
   return null;
 }
 

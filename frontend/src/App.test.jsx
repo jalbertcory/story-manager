@@ -115,6 +115,62 @@ describe("App workspaces", () => {
     expect(await screen.findByRole("heading", { name: "Admin Login" })).toBeInTheDocument();
   });
 
+  function rejectLibraryGroups(detail) {
+    const originalFetch = fetch.getMockImplementation();
+    fetch.mockImplementation((url, options) => url.startsWith("/api/library/groups?")
+      ? Promise.resolve({ ok: false, status: 401, json: async () => ({ detail }) })
+      : originalFetch(url, options));
+  }
+
+  it("asks to sign in again when the admin session expires", async () => {
+    mockApi((url) => url === "/api/auth/status"
+      ? { mode: "password", authenticated: true } : undefined);
+    rejectLibraryGroups("Admin authentication required");
+    renderWithClient(<App />);
+    expect(await screen.findByRole("heading", { name: "Admin Login" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Your session expired");
+  });
+
+  it("never shows sign-in for a 401 when app auth is disabled", async () => {
+    mockApi();
+    rejectLibraryGroups("Proxy says no");
+    renderWithClient(<App />);
+    expect(await screen.findByText(/Proxy says no/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Admin Login" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+  });
+
+  it("reports an unreachable server instead of assuming no sign-in", async () => {
+    mockApi();
+    const originalFetch = fetch.getMockImplementation();
+    fetch.mockImplementationOnce(() => Promise.reject(new TypeError("Failed to fetch")));
+    renderWithClient(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to fetch");
+    fetch.mockImplementation(originalFetch);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByAltText("Saga cover")).toBeInTheDocument();
+  });
+
+  it("keeps unsaved book edits when browser Back is refused", async () => {
+    mockApi();
+    renderWithClient(<App />);
+    await screen.findByAltText("Saga cover");
+    window.history.pushState(null, "", "/books/44/details");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    const title = await screen.findByLabelText("Title");
+    fireEvent.change(title, { target: { value: "Edited title" } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    window.history.replaceState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe("/books/44/details");
+    expect(screen.getByLabelText("Title")).toHaveValue("Edited title");
+    confirm.mockReturnValue(true);
+    window.history.replaceState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(await screen.findByAltText("Saga cover")).toBeInTheDocument();
+  });
+
   it("starts with cover groups and pages series books in server order", async () => {
     mockApi();
     renderWithClient(<App />);

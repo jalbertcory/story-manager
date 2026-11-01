@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import "./App.css";
 import "./Workspace.css";
 import { getAuthStatus, logout } from "./api/auth";
@@ -17,6 +17,7 @@ import { getBook } from "./api/books";
 import { getProcessingJobs } from "./api/processing";
 import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin";
+import ErrorBoundary from "./components/ErrorBoundary";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
 import AttentionDashboard from "./components/AttentionDashboard";
@@ -44,6 +45,7 @@ import {
   SECTION_NAV,
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
+import { onUnauthorized } from "./lib/authSession";
 
 const NAV_ICONS: Record<string, IconName> = {
   library: "library",
@@ -61,12 +63,19 @@ function currentLocation() {
   };
 }
 
+function currentHref() {
+  const { pathname, search, hash } = window.location;
+  return `${pathname}${search}${hash}`;
+}
+
+type AuthStatus = Awaited<ReturnType<typeof getAuthStatus>>;
+
 export default function App() {
+  const queryClient = useQueryClient();
   const [location, setLocation] = useState(currentLocation);
-  const [authStatus, setAuthStatus] = useState<Awaited<
-    ReturnType<typeof getAuthStatus>
-  > | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [pendingImportEntries, setPendingImportEntries] = useState<
     FileSystemEntry[]
   >([]);
@@ -90,12 +99,39 @@ export default function App() {
   );
   const isBook = route.view === "book";
   const activeTab = route.tab || "library";
-  const authenticated = Boolean(authStatus?.authenticated);
+  // A 401 from any request means the admin session expired. With app auth
+  // disabled (e.g. behind an auth proxy) a 401 is not ours to answer, so the
+  // UI is never blocked on a sign-in page.
+  const sessionLost = sessionExpired && authStatus?.mode !== "disabled";
+  const authenticated = Boolean(authStatus?.authenticated) && !sessionLost;
 
-  useEffect(() => {
+  const loadAuthStatus = useCallback(() => {
+    setAuthError("");
     getAuthStatus()
       .then(setAuthStatus)
       .catch((error: unknown) => setAuthError(errorMessage(error)));
+  }, []);
+  useEffect(loadAuthStatus, [loadAuthStatus]);
+  useEffect(() => onUnauthorized(() => setSessionExpired(true)), []);
+  const signedIn = (status: AuthStatus) => {
+    setSessionExpired(false);
+    setAuthStatus(status);
+    // Requests that failed while signed out should run again now.
+    void queryClient.invalidateQueries();
+  };
+
+  // The location the app is showing and its history state, so a refused Back or
+  // Forward can put the address bar back.
+  const committed = useRef({
+    href: currentHref(),
+    state: window.history.state as unknown,
+  });
+  const commitLocation = useCallback(() => {
+    committed.current = {
+      href: currentHref(),
+      state: window.history.state as unknown,
+    };
+    setLocation(currentLocation());
   }, []);
   const navigate = useCallback((href: string, state: NavigationState = {}) => {
     if (!allowNavigation(href)) return;
@@ -112,32 +148,47 @@ export default function App() {
       href,
     );
     pendingScroll.current = state.scrollY ?? null;
-    setLocation(currentLocation());
+    commitLocation();
     window.scrollTo(0, state.scrollY || 0);
-  }, []);
+  }, [commitLocation]);
   useEffect(() => {
     const onPop = () => {
+      // The browser has already moved. If a page with unsaved work refuses to
+      // be left, push the page that is still on screen back onto history.
+      if (!allowNavigation(currentHref())) {
+        window.history.pushState(
+          committed.current.state,
+          "",
+          committed.current.href,
+        );
+        return;
+      }
       pendingScroll.current =
         parseNavigationState(window.history.state).scrollY ?? null;
       returnTo.current =
         parseNavigationState(window.history.state).returnTo || "/";
-      setLocation(currentLocation());
+      commitLocation();
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [commitLocation]);
   useEffect(() => {
     const parsed = parseLocation(
       location.pathname,
       location.hash,
       location.search,
     );
-    if (parsed.redirectPath)
+    if (parsed.redirectPath) {
       window.history.replaceState(
         window.history.state,
         "",
         `${parsed.redirectPath}${location.search}${location.hash}`,
       );
+      committed.current = {
+        href: currentHref(),
+        state: window.history.state as unknown,
+      };
+    }
   }, [location]);
 
   const bookQuery = useQuery({
@@ -243,10 +294,29 @@ export default function App() {
     return (
       <div className="app-loading">
         <h1>Story Manager</h1>
-        <p role={authError ? "alert" : "status"}>{authError || "Loading…"}</p>
+        {authError ? (
+          <p role="alert">
+            {authError}{" "}
+            <button type="button" onClick={loadAuthStatus}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p role="status">Loading…</p>
+        )}
       </div>
     );
-  if (!authenticated) return <AdminLogin onAuthenticated={setAuthStatus} />;
+  if (!authenticated)
+    return (
+      <AdminLogin
+        onAuthenticated={signedIn}
+        notice={
+          sessionLost && authStatus.authenticated
+            ? "Your session expired. Sign in again to continue."
+            : undefined
+        }
+      />
+    );
 
   const renderContent = () => {
     if (isBook) {
@@ -419,7 +489,10 @@ export default function App() {
               onClick={() => {
                 setAuthError("");
                 void logout()
-                  .then(setAuthStatus)
+                  .then((status) => {
+                    setSessionExpired(false);
+                    setAuthStatus(status);
+                  })
                   .catch((error: unknown) => setAuthError(errorMessage(error)));
               }}
             >
@@ -454,9 +527,13 @@ export default function App() {
               ))}
             </nav>
           )}
-          <Suspense fallback={<p role="status">Loading…</p>}>
-            {renderContent()}
-          </Suspense>
+          <ErrorBoundary
+            key={`${location.pathname}${location.search}${location.hash}`}
+          >
+            <Suspense fallback={<p role="status">Loading…</p>}>
+              {renderContent()}
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </main>
     </div>
