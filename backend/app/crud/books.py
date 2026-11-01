@@ -303,8 +303,20 @@ async def get_book_by_title_and_author(
     return result.scalars().first()
 
 
+async def lock_book_for_update(db: AsyncSession, book_id: int) -> bool:
+    """Row-lock a book for the current transaction; return False if it no longer exists.
+
+    Writers that add rows referencing a book take this lock first so a concurrent
+    permanent delete either waits for them or is seen as already gone.
+    """
+    result = await db.execute(select(models.Book.id).where(models.Book.id == book_id).with_for_update())
+    return result.scalar_one_or_none() is not None
+
+
 async def delete_book(db: AsyncSession, book: models.Book) -> None:
     """Delete a book record from the database."""
+    # Lock the book before its dependent rows, matching the metadata sync job's lock order.
+    await lock_book_for_update(db, book.id)
     await db.execute(delete(models.MetadataProposal).where(models.MetadataProposal.book_id == book.id))
     await db.execute(delete(models.BookMetadataMatch).where(models.BookMetadataMatch.book_id == book.id))
     await db.execute(delete(models.BookLog).where(models.BookLog.book_id == book.id))

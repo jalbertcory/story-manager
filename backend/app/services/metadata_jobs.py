@@ -152,7 +152,8 @@ async def _sync_one_book(
     all_books: list[models.Book],
     checked_at: datetime,
     candidate_suggestions: Optional[list[MetadataSuggestion]] = None,
-) -> tuple[bool, bool, bool]:
+) -> Optional[tuple[bool, bool, bool]]:
+    """Record match results for one book; return None if the book was deleted mid-run."""
     if candidate_suggestions is None:
         settings = await crud.audiobook.get_audiobook_settings(db)
         candidate_groups = await generate_candidate_suggestions(
@@ -164,6 +165,12 @@ async def _sync_one_book(
         suggestions = candidate_groups[0]
     else:
         suggestions = candidate_suggestions
+
+    # Suggestion lookups can take a while; the book may have been permanently
+    # deleted meanwhile. Hold its row lock until commit so it cannot vanish
+    # under the match/proposal inserts below.
+    if not await crud.lock_book_for_update(db, book.id):
+        return None
 
     existing_matches = await crud.get_metadata_matches_by_book_id(db, book.id)
     existing_by_signature = {
@@ -399,14 +406,20 @@ async def process_metadata_sync_job(db: AsyncSession, job_id: int) -> None:
                 settings=settings,
             )
             for book, candidates in zip(batch, candidate_groups):
-                matched, proposed, applied = await _sync_one_book(
+                book_id = book.id
+                result = await _sync_one_book(
                     db,
                     book=book,
                     all_books=all_books,
                     checked_at=checked_at,
                     candidate_suggestions=candidates,
                 )
-                applied = applied or book.id in series_enriched_ids
+                if result is None:
+                    logger.info("Metadata sync job %s skipped book %s: deleted during sync.", job_id, book_id)
+                    matched, proposed, applied = False, False, False
+                else:
+                    matched, proposed, applied = result
+                    applied = applied or book_id in series_enriched_ids
                 job = await crud.get_metadata_sync_job(db, job_id)
                 if job is None:
                     return
