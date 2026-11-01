@@ -21,6 +21,15 @@ def disable_unconfigured_network_metadata(mocker):
     mocker.patch("backend.app.services.metadata.clients.AMAZON_METADATA_ENABLED", False)
 
 
+@pytest.fixture(autouse=True)
+def reset_admin_login_throttle():
+    from backend.app.auth import admin_login_throttle
+
+    admin_login_throttle.reset()
+    yield
+    admin_login_throttle.reset()
+
+
 @pytest_asyncio.fixture
 async def sqlite_sessionmaker():
     engine = create_async_engine(
@@ -39,6 +48,18 @@ async def sqlite_sessionmaker():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
         await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session():
+    """Tables for the shared engine that api_harness routes the app's database dependency to."""
+    from api_harness import engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest_asyncio.fixture

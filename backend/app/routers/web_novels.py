@@ -12,7 +12,6 @@ from .. import crud, models, schemas
 from ..database import get_db
 from ..lifecycle import WEB_REFRESH, WebRefreshStatus, transition_state
 from ..services.processing_queue import queue_processing_job
-from ..services.refresh_queue import RefreshQueue, get_refresh_queue
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +127,6 @@ async def refresh_book(
         dedupe_key=f"refresh_book:book:{db_book.id}",
         progress_detail="Queued from Refresh From Source",
     )
-    legacy_queue = get_refresh_queue()
-    if not isinstance(legacy_queue, RefreshQueue):
-        await legacy_queue.enqueue(db_book.id)
     response.headers["X-Processing-Job-Id"] = str(job.id)
     return db_book
 

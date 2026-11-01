@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .. import api_schemas as contracts
+import asyncio
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -17,18 +18,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..auth import get_reader_api_key
+from ..audiobook_schemas import ChapterResponse, ImportedAudiobookResponse
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.audiobook_publication import (
     chapter_reader_audio_path,
     chapter_reader_smil_bytes,
+    chapter_reader_smil_path,
     normalize_resource_href,
     sha256_bytes,
     sha256_file,
     stable_chapter_key,
     text_reader_path,
 )
-from . import audiobook as audiobook_router
+from ..services import audiobook_views
+from ..services.audiobook_views import AudiobookViewNotFoundError
 
 router = APIRouter(dependencies=[Depends(get_reader_api_key)])
 
@@ -447,9 +451,12 @@ async def _reader_audiobook_book(book_id: int, db: AsyncSession) -> models.Book:
 async def get_reader_human_audiobooks(
     book_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[audiobook_router.ImportedAudiobookResponse]:
+) -> list[ImportedAudiobookResponse]:
     """Reader-key-safe metadata for ready human-narrated audiobook editions."""
-    editions = await audiobook_router.list_imported_audiobooks(book_id, db)
+    try:
+        editions = await audiobook_views.list_imported_audiobook_responses(book_id, db)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
     return [
         edition.model_copy(
             update={
@@ -478,9 +485,12 @@ async def get_reader_human_audiobooks(
 async def get_reader_human_audiobook_chapters(
     book_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[audiobook_router.ChapterResponse]:
+) -> list[ChapterResponse]:
     """Chapter ids and hrefs used to match imported tracks to publication resources."""
-    return await audiobook_router.list_chapters(book_id, db)
+    try:
+        return await audiobook_views.chapter_responses(book_id, db)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
 
 
 @router.get(
@@ -493,7 +503,12 @@ async def get_reader_human_audiobook_audio(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    return await audiobook_router.get_imported_track_audio(edition_id, track_id, db)
+    try:
+        _edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        full_path = audiobook_views.imported_track_audio_path(track)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    return FileResponse(str(full_path), media_type=track.media_type)
 
 
 @router.get(
@@ -506,11 +521,12 @@ async def get_reader_human_audiobook_smil(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    response = await audiobook_router.get_imported_track_smil(edition_id, track_id, db)
-    text = bytes(response.body).decode("utf-8")
-    admin_audio_prefix = f"/api/imported-audiobooks/{edition_id}/tracks/"
-    reader_audio_prefix = f"/reader/human-audiobooks/{edition_id}/tracks/"
-    return Response(text.replace(admin_audio_prefix, reader_audio_prefix), media_type="application/smil+xml")
+    try:
+        edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        payload = await audiobook_views.imported_track_smil(edition, track, db, audio_url_prefix="/reader/human-audiobooks")
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    return Response(payload, media_type="application/smil+xml")
 
 
 def _etag(value: str) -> str:
@@ -535,15 +551,17 @@ def _asset_headers(etag: str, size: int, *, ranges: bool = False) -> dict[str, s
 
 
 def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict[str, str | int | None]:
+    """Build one manifest entry. Blocking (stats files, hashes legacy rows): run it in a thread."""
     href = normalize_resource_href(chapter.source_href or chapter.content_file_name, chapter.chapter_number)
     key = chapter.stable_chapter_key or stable_chapter_key(href)
     audio_path = chapter_reader_audio_path(chapter)
-    smil_content = chapter_reader_smil_bytes(chapter)
+    smil_path = chapter_reader_smil_path(chapter)
     is_ready = (
         chapter.generation_state == "ready"
         and audio_path is not None
         and audio_path.is_file()
-        and smil_content is not None
+        and smil_path is not None
+        and smil_path.is_file()
         and (chapter.audio_revision or 0) > 0
     )
     state = chapter.generation_state if chapter.generation_state in {"pending", "processing", "error"} else "ready"
@@ -563,7 +581,13 @@ def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict[st
     }
     if not is_ready:
         return payload
-    assert audio_path is not None and smil_content is not None
+    assert audio_path is not None
+    smil_size, smil_sha = chapter.smil_size_bytes, chapter.smil_sha256
+    if not smil_size or not smil_sha:
+        smil_content = chapter_reader_smil_bytes(chapter)
+        if smil_content is None:
+            return payload
+        smil_size, smil_sha = smil_size or len(smil_content), smil_sha or sha256_bytes(smil_content)
     version = chapter.audio_revision
     payload.update(
         {
@@ -571,13 +595,17 @@ def _manifest_chapter(chapter: models.AudiobookChapter, book_id: int) -> dict[st
             "duration_ms": chapter.duration_ms,
             "audio_size_bytes": chapter.audio_size_bytes or audio_path.stat().st_size,
             "audio_sha256": chapter.audio_sha256 or sha256_file(audio_path),
-            "smil_size_bytes": chapter.smil_size_bytes or len(smil_content),
-            "smil_sha256": chapter.smil_sha256 or sha256_bytes(smil_content),
+            "smil_size_bytes": smil_size,
+            "smil_sha256": smil_sha,
             "audio_url": f"/reader/books/{book_id}/audiobook/chapters/{key}/audio?version={version}",
             "smil_url": f"/reader/books/{book_id}/audiobook/chapters/{key}/smil?version={version}",
         }
     )
     return payload
+
+
+def _manifest_chapters(chapters: list[models.AudiobookChapter], book_id: int) -> list[dict[str, str | int | None]]:
+    return [_manifest_chapter(chapter, book_id) for chapter in chapters]
 
 
 @router.get(
@@ -596,8 +624,8 @@ async def reader_audiobook_manifest(
     if text_path is None:
         raise HTTPException(status_code=404, detail="Audiobook text rendition is not available")
     chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
-    text_size = book.audiobook_text_size_bytes or text_path.stat().st_size
-    text_sha = book.audiobook_text_sha256 or sha256_file(text_path)
+    text_size = book.audiobook_text_size_bytes or (await asyncio.to_thread(text_path.stat)).st_size
+    text_sha = book.audiobook_text_sha256 or await asyncio.to_thread(sha256_file, text_path)
     content_version = book.audiobook_text_content_version or book.content_version or 1
     manifest = {
         "revision": book.audiobook_revision or 0,
@@ -608,7 +636,7 @@ async def reader_audiobook_manifest(
             "sha256": text_sha,
             "url": f"/reader/books/{book_id}/audiobook/text",
         },
-        "chapters": [_manifest_chapter(chapter, book_id) for chapter in chapters],
+        "chapters": await asyncio.to_thread(_manifest_chapters, chapters, book_id),
     }
     body = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
     etag = _etag(sha256_bytes(body))
@@ -635,14 +663,16 @@ async def reader_audiobook_text(
     path = text_reader_path(book)
     if path is None:
         raise HTTPException(status_code=404, detail="Audiobook text rendition is not available")
-    sha = book.audiobook_text_sha256 or sha256_file(path)
+    sha = book.audiobook_text_sha256
+    if not sha:
+        sha = await asyncio.to_thread(sha256_file, path)
     etag = _etag(sha)
     if _etag_matches(request, etag):
         return Response(status_code=304, headers={"ETag": etag})
     return FileResponse(
         path,
         media_type="application/epub+zip",
-        headers=_asset_headers(etag, path.stat().st_size),
+        headers=_asset_headers(etag, (await asyncio.to_thread(path.stat)).st_size),
     )
 
 
@@ -702,8 +732,10 @@ async def reader_audiobook_chapter_audio(
     path = chapter_reader_audio_path(result)
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="Audiobook audio file is not available")
-    size = path.stat().st_size
-    sha = result.audio_sha256 or sha256_file(path)
+    size = (await asyncio.to_thread(path.stat)).st_size
+    sha = result.audio_sha256
+    if not sha:
+        sha = await asyncio.to_thread(sha256_file, path)
     etag = _etag(sha)
     if _etag_matches(request, etag):
         return Response(status_code=304, headers={"ETag": etag, "Accept-Ranges": "bytes"})
@@ -757,7 +789,7 @@ async def reader_audiobook_chapter_smil(
     result = await _reader_audiobook_chapter(book_id, chapter_key, version, db)
     if isinstance(result, JSONResponse):
         return result
-    content = chapter_reader_smil_bytes(result)
+    content = await asyncio.to_thread(chapter_reader_smil_bytes, result)
     if content is None:
         raise HTTPException(status_code=404, detail="Audiobook SMIL file is not available")
     sha = result.smil_sha256 or sha256_bytes(content)

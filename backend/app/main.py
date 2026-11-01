@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import crud
 from .admin_auth_middleware import AdminAuthMiddleware
 from .backup_middleware import BackupWriteBarrierMiddleware
-from .auth import validate_admin_auth_configuration
+from .auth import validate_admin_auth_configuration, warn_if_admin_auth_disabled
 from .config import LIBRARY_PATH
 from .errors import install_error_handlers
 from .middleware import RequestIdMiddleware
@@ -46,6 +46,7 @@ from .routers import (
     web_novels,
 )
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
+from .services.library_paths import audiobooks_root
 from .services.processing_queue import get_processing_queue
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,6 @@ _processing_queue = get_processing_queue()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    is_test_app = bool(app.dependency_overrides)
     validate_admin_auth_configuration()
     # Re-attach handlers after uvicorn resets logging config on startup
     root_logger = logging.getLogger()
@@ -83,18 +83,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _file_handler not in root_logger.handlers:
         root_logger.addHandler(_file_handler)
     logger.info("Starting up Story Manager services.")
+    warn_if_admin_auth_disabled()
     async with SessionLocal() as db:
         await crud.reset_stuck_update_tasks(db)
     await _processing_queue.start()
-    if not is_test_app:
-        processing_requeued = await _processing_queue.requeue_pending()
-        if processing_requeued:
-            logger.info("Finalized %s abandoned processing jobs at startup.", processing_requeued)
+    processing_requeued = await _processing_queue.requeue_pending()
+    if processing_requeued:
+        logger.info("Finalized %s abandoned processing jobs at startup.", processing_requeued)
     if not _scheduler.running:
         _scheduler.start()
     await schedule_next_web_novel_update()
-    if not is_test_app:
-        await schedule_next_metadata_recheck()
+    await schedule_next_metadata_recheck()
     yield
     await _processing_queue.stop()
     if _scheduler.running:
@@ -111,7 +110,7 @@ app.mount(
     RasterCoverStaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
     name="cover-files",
 )
-_AUDIOBOOK_DIR = LIBRARY_PATH / "audiobooks"
+_AUDIOBOOK_DIR = audiobooks_root()
 _AUDIOBOOK_DIR.mkdir(parents=True, exist_ok=True)
 app.mount(
     "/library/audiobooks",

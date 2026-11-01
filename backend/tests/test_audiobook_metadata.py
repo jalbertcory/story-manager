@@ -168,10 +168,8 @@ async def test_metadata_lookup_failure_does_not_fail_ready_audio(db, monkeypatch
 
 @pytest.mark.asyncio
 async def test_upload_without_title_uses_libation_identity(app_client, sqlite_sessionmaker, tmp_path, monkeypatch):
-    from backend.app.routers import audiobook
-
     monkeypatch.setattr(
-        audiobook, "imported_audiobook_dir", lambda book_id, edition_id: tmp_path / str(book_id) / str(edition_id)
+        audiobook_import, "imported_audiobook_dir", lambda book_id, edition_id: tmp_path / str(book_id) / str(edition_id)
     )
     response = app_client.post(
         "/api/audiobooks/upload",

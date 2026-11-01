@@ -315,7 +315,20 @@ test-migrations:
 		< scripts/migration-voice-drift-margin-verify.sql; \
 	$(ALEMBIC) downgrade 0043; \
 	$(MIGRATION_PSQL) \
-		< scripts/migration-voice-drift-margin-downgrade-verify.sql
+		< scripts/migration-voice-drift-margin-downgrade-verify.sql; \
+	$(ALEMBIC) upgrade 0045; \
+	$(MIGRATION_PSQL) \
+		-c "UPDATE audiobook_chapters SET generation_state = 'ready', audio_sha256 = NULL WHERE content_file_name = 'Text/existing.xhtml';" \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE generation_state = 'ready' AND audio_sha256 IS NULL) THEN RAISE EXCEPTION '0046 setup has no chapter missing checksums'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
+		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM processing_jobs WHERE job_type = 'backfill_reader_checksums' AND dedupe_key = 'backfill_reader_checksums:migration-0046' AND status = 'queued') <> 1 THEN RAISE EXCEPTION '0046 did not queue exactly one checksum backfill'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) downgrade 0045; \
+	$(MIGRATION_PSQL) \
+		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'backfill_reader_checksums') THEN RAISE EXCEPTION '0046 downgrade left a checksum backfill queued'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) upgrade head; \
+	STORY_MANAGER_TEST_POSTGRES_URL="$(MIGRATION_TEST_DATABASE_URL)" \
+		PYTHONPATH=. $(UV_RUN) python -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py
 
 e2e-debug: E2E_NPM_SCRIPT = test:e2e:debug
 e2e e2e-debug: E2E_NPM_SCRIPT ?= test:e2e

@@ -7,7 +7,9 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app import crud, models
-from backend.app.services import audiobook_llm, metadata_sync
+from backend.app.services import audiobook_llm
+from backend.app.services.metadata import suggestion
+from backend.app.services.metadata.providers import google_books, open_library
 from backend.app.services.llm_responses import AnthropicResponse, ChatResponse, OllamaResponse, RosterResponse
 from backend.app.services.metadata import arbitration, evidence
 from backend.app.services.metadata.responses import GOOGLE_VOLUME, OPEN_LIBRARY_DOC, valid_records
@@ -48,8 +50,8 @@ def search_identity():
 async def test_invalid_arbitration_keeps_ranking_and_scores(monkeypatch, change):
     book = models.Book(id=1, title="Book", author="Author")
     candidates = [
-        metadata_sync.MetadataSuggestion(book=book, matched=True, match_confidence=0.85),
-        metadata_sync.MetadataSuggestion(book=book, matched=True, match_confidence=0.84),
+        suggestion.MetadataSuggestion(book=book, matched=True, match_confidence=0.85),
+        suggestion.MetadataSuggestion(book=book, matched=True, match_confidence=0.84),
     ]
     payload = {"selected_index": 1, "exact_match": True, "confidence": 0.98, "reason": "Exact", **change}
     monkeypatch.setattr(arbitration, "_call_llm", AsyncMock(return_value=json.dumps(payload)))
@@ -208,7 +210,7 @@ def test_invalid_metadata_envelopes_are_empty(envelope):
 
 def test_open_library_skips_bad_records_and_accepts_sparse_legacy_shapes(monkeypatch):
     monkeypatch.setattr(
-        metadata_sync,
+        open_library,
         "_request_json",
         lambda *a, **kw: {
             "docs": [
@@ -219,9 +221,9 @@ def test_open_library_skips_bad_records_and_accepts_sparse_legacy_shapes(monkeyp
             ]
         },
     )
-    docs = metadata_sync._fetch_search_docs({"title": "Good"})
+    docs = open_library._fetch_search_docs({"title": "Good"})
     assert docs == [{"title": "Good", "author_name": "Author", "isbn": "9780123456786"}]
-    assert metadata_sync._score_search_doc(models.Book(title="Good", author="Author"), docs[0]) > 0.7
+    assert open_library._score_search_doc(models.Book(title="Good", author="Author"), docs[0]) > 0.7
 
 
 def test_google_volume_validation_reaches_scoring_with_nested_metadata(monkeypatch):
@@ -236,9 +238,9 @@ def test_google_volume_validation_reaches_scoring_with_nested_metadata(monkeypat
             "seriesInfo": {"shortSeriesBookTitle": "Series", "volumeSeries": [{"orderNumber": {"number": "2"}}]},
         },
     }
-    monkeypatch.setattr(metadata_sync, "_google_books_enabled", lambda: True)
+    monkeypatch.setattr(google_books, "_google_books_enabled", lambda: True)
     monkeypatch.setattr(
-        metadata_sync,
+        google_books,
         "_request_google_books_json",
         lambda *a, **kw: {
             "items": [
@@ -249,23 +251,23 @@ def test_google_volume_validation_reaches_scoring_with_nested_metadata(monkeypat
             ]
         },
     )
-    volumes = metadata_sync._fetch_google_books_volumes("Good")
+    volumes = google_books._fetch_google_books_volumes("Good")
     assert volumes == [good]
-    assert metadata_sync._google_books_metadata_details(volumes[0])["series_index"] == 2
-    assert metadata_sync._extract_google_remote_ids(volumes[0])["isbn_13"] == "9780123456786"
+    assert google_books._google_books_metadata_details(volumes[0])["series_index"] == 2
+    assert google_books._extract_google_remote_ids(volumes[0])["isbn_13"] == "9780123456786"
 
 
 def test_invalid_single_volume_and_work_are_noncritical(monkeypatch):
-    monkeypatch.setattr(metadata_sync, "_google_books_enabled", lambda: True)
-    monkeypatch.setattr(metadata_sync, "_request_google_books_json", lambda *a, **kw: {"volumeInfo": []})
-    monkeypatch.setattr(metadata_sync, "_request_json", lambda *a, **kw: {"description": {"value": 17}})
-    assert metadata_sync._fetch_google_books_volume_by_id("bad") is None
-    assert metadata_sync._fetch_work_data({"key": "/works/bad"}) == {}
+    monkeypatch.setattr(google_books, "_google_books_enabled", lambda: True)
+    monkeypatch.setattr(google_books, "_request_google_books_json", lambda *a, **kw: {"volumeInfo": []})
+    monkeypatch.setattr(open_library, "_request_json", lambda *a, **kw: {"description": {"value": 17}})
+    assert google_books._fetch_google_books_volume_by_id("bad") is None
+    assert open_library._fetch_work_data({"key": "/works/bad"}) == {}
 
 
 def test_author_work_entries_skip_bad_titles_without_losing_valid_works(monkeypatch):
     monkeypatch.setattr(
-        metadata_sync,
+        open_library,
         "_request_json",
         lambda *a, **kw: {
             "entries": [
@@ -276,7 +278,7 @@ def test_author_work_entries_skip_bad_titles_without_losing_valid_works(monkeypa
         },
     )
     cache = {}
-    assert metadata_sync._fetch_author_work_entries("author", cache) == [{"key": "/works/good", "title": "Good"}]
+    assert open_library._fetch_author_work_entries("author", cache) == [{"key": "/works/good", "title": "Good"}]
     assert cache["author"][0]["title"] == "Good"
 
 
@@ -299,7 +301,7 @@ def test_unscored_duplicate_does_not_replace_explicit_confidence():
 
 
 def test_malformed_manual_work_is_not_replaced_with_local_identity(monkeypatch):
-    monkeypatch.setattr(metadata_sync, "_fetch_search_docs", lambda _: [])
-    monkeypatch.setattr(metadata_sync, "_request_json", lambda *a, **kw: {"title": ["Invalid"]})
+    monkeypatch.setattr(open_library, "_fetch_search_docs", lambda _: [])
+    monkeypatch.setattr(open_library, "_request_json", lambda *a, **kw: {"title": ["Invalid"]})
     book = models.Book(id=1, title="Book", author="Author", metadata_remote_ids={"open_library_work_key": "/works/bad"})
-    assert metadata_sync._collect_search_doc_candidates(book, local_books_by_author={}, author_work_cache={}) == []
+    assert open_library.collect_search_doc_candidates(book, local_books_by_author={}, author_work_cache={}) == []

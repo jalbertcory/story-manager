@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from backend.app import models
-from backend.app.routers import audiobook
+from backend.app import audiobook_schemas
+from backend.app.routers import audiobook_settings
 from backend.app.services.book_recovery import restore_snapshot, snapshot_book
 from backend.app.services.endpoint_pool import configured_endpoints, route_request
 
@@ -40,7 +41,7 @@ async def test_endpoint_secret_intent_survives_validation_and_storage(db, change
     )
     db.add(settings)
     await db.commit()
-    update = audiobook.EndpointUpdate.model_validate(
+    update = audiobook_schemas.EndpointUpdate.model_validate(
         {
             "id": "host",
             "name": "Host",
@@ -48,7 +49,7 @@ async def test_endpoint_secret_intent_survives_validation_and_storage(db, change
             **changes,
         }
     )
-    response = await audiobook.update_settings(audiobook.SettingsUpdate(llm_endpoints=[update]), db)
+    response = await audiobook_settings.update_settings(audiobook_schemas.SettingsUpdate(llm_endpoints=[update]), db)
     await db.refresh(settings)
     assert settings.llm_endpoints[0]["api_key"] == expected
     assert settings.llm_api_key == expected

@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..metadata_sync import MetadataSuggestion
+    from .suggestion import MetadataSuggestion
     from .evidence import SearchIdentity
 
 from ...models import AudiobookSettings, Book

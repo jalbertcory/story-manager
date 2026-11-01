@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.engine import CursorResult
 
 from ..orm_updates import SettingsPatch, CharacterPatch, apply_settings_patch, apply_character_patch
-from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
+from ..config import AUDIOBOOK_ASSEMBLY_MARKER
+from ..services.library_paths import book_audiobook_dir
 from ..lifecycle import (
     AUDIOBOOK_PIPELINE,
     CHAPTER_PREVIEW,
@@ -42,7 +43,7 @@ async def get_human_audiobook_book_ids(db: AsyncSession, book_ids: list[int]) ->
 
 async def invalidate_packaged_audiobook(db: AsyncSession, book_id: int) -> None:
     """Remove a stale EPUB package and make a completed book resumable."""
-    packaged_epub = LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub"
+    packaged_epub = book_audiobook_dir(book_id) / "audiobook.epub"
     packaged_epub.unlink(missing_ok=True)
     await db.execute(
         update(Book)
@@ -1313,7 +1314,7 @@ async def infer_audiobook_resume_status(db: AsyncSession, book_id: int) -> str:
     total = sum(counts.values())
     if total > 0 and counts.get(SentenceStatus.AUDIO_GENERATED.value, 0) == total:
         pending_chapters = await get_chapters_pending_assembly(db, book_id)
-        output_dir = LIBRARY_PATH / "audiobooks" / str(book_id)
+        output_dir = book_audiobook_dir(book_id)
         packaged_epub = output_dir / "audiobook.epub"
         assembly_marker = output_dir / AUDIOBOOK_ASSEMBLY_MARKER
         return (

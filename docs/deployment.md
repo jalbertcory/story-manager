@@ -58,7 +58,8 @@ Each kind of constrained work has its own concurrency setting. All values defaul
 | `PROCESSING_TRANSCRIPTION_CONCURRENCY` | Human-audiobook timestamp alignment |
 
 Operational tuning is also available through `PROCESSING_LEASE_SECONDS` (default `60`),
-`PROCESSING_HEARTBEAT_SECONDS` (default `15`), `PROCESSING_POLL_SECONDS` (default `1`), and
+`PROCESSING_HEARTBEAT_SECONDS` (default `15`), `PROCESSING_POLL_SECONDS` (default `1`),
+`PROCESSING_REAPER_SECONDS` (default `15`; how often one background reaper cancels or fails expired leases), and
 `PROCESSING_RETRY_BACKOFF_SECONDS` (default `5`). A failed job is attempted at most three times with exponential
 backoff. User-triggered retry resets that attempt budget. Cancellation is immediate for queued jobs and cooperative
 at heartbeat/progress boundaries for running jobs.
@@ -152,6 +153,17 @@ The app stores a signed, HTTP-only session cookie after login. To keep sessions 
 STORY_MANAGER_ADMIN_SESSION_SECRET=long-random-value
 ```
 
+Sessions last 14 days. Logging out revokes every session issued before it (not only the current browser's), and
+changing `STORY_MANAGER_ADMIN_PASSWORD` revokes all sessions as well. After five failed logins from one client address,
+that address goes into exponential backoff (up to 15 minutes): wrong passwords get HTTP 429 with `Retry-After`, and its
+passwords are checked at most once per second. A correct password still signs in during backoff, so a stranger's bad
+guesses cannot lock you out.
+
+Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address (for example `FORWARDED_ALLOW_IPS=172.18.0.2`,
+or a comma-separated list) so the app trusts the proxy's `X-Forwarded-For` header and throttles each visitor separately.
+Without it, every visitor appears to come from the proxy and shares one backoff. Only list addresses that are your proxy:
+a trusted address can claim any client IP.
+
 Admin cookies automatically use the `Secure` flag when the request is HTTPS. Set `STORY_MANAGER_ADMIN_COOKIE_SECURE=true` to require secure cookies explicitly, or `false` only for a trusted HTTP-only local deployment.
 
 If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 Proxy, or Cloudflare Access, disable built-in auth explicitly:
@@ -159,6 +171,9 @@ If the app is already protected by a reverse proxy, Tailscale, Authelia, OAuth2 
 ```bash
 STORY_MANAGER_AUTH_MODE=disabled
 ```
+
+With auth disabled, every admin route and audiobook file is open to anyone who can reach the server, so the app logs a
+prominent warning at startup. Only run it this way behind an authenticating proxy.
 
 Invalid authentication modes and password mode without a password stop the application at startup instead of disabling protection.
 

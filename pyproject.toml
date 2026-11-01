@@ -55,6 +55,7 @@ en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/dow
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests that require network access (deselect with '-m not integration')",
+    "postgres: needs STORY_MANAGER_TEST_POSTGRES_URL pointing at a migrated PostgreSQL database (skipped otherwise)",
 ]
 
 [tool.setuptools]
