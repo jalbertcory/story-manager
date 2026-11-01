@@ -9,7 +9,7 @@ function libraryArchive(series: string) {
 import io, sys, zipfile, xml.etree.ElementTree as ET
 series = sys.argv[1]
 archive = io.BytesIO()
-with zipfile.ZipFile('test.epub') as source, zipfile.ZipFile(archive, 'w') as target:
+with zipfile.ZipFile('tests-e2e/fixtures/test.epub') as source, zipfile.ZipFile(archive, 'w') as target:
     for i in range(32):
         book = io.BytesIO()
         with zipfile.ZipFile(book, 'w') as output:
