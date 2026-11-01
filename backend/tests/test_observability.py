@@ -230,8 +230,10 @@ def test_health_metrics_and_redacted_diagnostics_are_available(app_client, monke
             "manifest.json",
         }
         combined = b"".join(archive.read(name) for name in archive.namelist())
+        configuration = archive.read("configuration.json")
     assert b"never-export-this" not in combined
-    assert b"STORY_MANAGER_ADMIN_PASSWORD" not in combined
+    # Logs may name the setting (the auth-disabled startup warning does); the allowlist must not export it.
+    assert b"STORY_MANAGER_ADMIN_PASSWORD" not in configuration
 
 
 def test_application_logs_support_correlation_filtering(app_client):

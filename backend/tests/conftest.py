@@ -51,6 +51,18 @@ async def sqlite_sessionmaker():
 
 
 @pytest_asyncio.fixture
+async def db_session():
+    """Tables for the shared engine that api_harness routes the app's database dependency to."""
+    from api_harness import engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture
 async def db(sqlite_sessionmaker):
     async with sqlite_sessionmaker() as session:
         yield session
