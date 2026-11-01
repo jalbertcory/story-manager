@@ -1,7 +1,11 @@
-import { api, unwrap, unwrapEmpty } from "./client";
+import { api, unwrap, unwrapEmpty, requestInit } from "./client";
+import type { RequestOptions } from "./client";
 
-export function getBackups() {
-  return unwrap(api.GET("/api/backups"), "Failed to load backups");
+export function getBackups(options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/backups", requestInit(options)),
+    "Failed to load backups",
+  );
 }
 
 export function createBackup() {

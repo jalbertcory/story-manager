@@ -9,7 +9,9 @@ import {
   triggerScheduler,
   updateSchedulerConfig,
 } from "../api/scheduler";
-const fetchHistory = () => getSchedulerHistory({ limit: 10 });
+import { queryKeys } from "../lib/queryKeys";
+const fetchHistory = ({ signal }: { signal: AbortSignal }) =>
+  getSchedulerHistory({ limit: 10 }, { signal });
 
 function getBrowserTimezone() {
   try {
@@ -74,8 +76,8 @@ function formatRunState(job: Awaited<ReturnType<typeof fetchJob>> | undefined) {
 
 function TaskLogsList({ taskId }: { taskId: number }) {
   const { data: logs, isLoading } = useQuery({
-    queryKey: ["task-logs", taskId],
-    queryFn: () => fetchTaskLogs(taskId),
+    queryKey: queryKeys.taskLogs(taskId),
+    queryFn: ({ signal }) => fetchTaskLogs(taskId, { signal }),
   });
 
   if (isLoading) return <p className="hint">Loading entries...</p>;
@@ -225,20 +227,20 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
   }, []);
 
   const { data: task, isLoading: statusLoading } = useQuery({
-    queryKey: ["scheduler-status"],
+    queryKey: queryKeys.schedulerStatus,
     queryFn: fetchStatus,
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 3000 : false,
   });
 
   const { data: job, isLoading: jobLoading } = useQuery({
-    queryKey: ["scheduler-job"],
+    queryKey: queryKeys.schedulerJob,
     queryFn: fetchJob,
     refetchInterval: task?.status === "running" ? 5000 : 60000,
   });
 
   const { data: history, isLoading: historyLoading } = useQuery({
-    queryKey: ["scheduler-history"],
+    queryKey: queryKeys.schedulerHistory,
     queryFn: fetchHistory,
     refetchInterval: task?.status === "running" ? 5000 : false,
   });
@@ -254,11 +256,19 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
   const triggerMutation = useMutation({
     mutationFn: triggerScheduler,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
-      void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-      void queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
-      void queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });
-      void queryClient.invalidateQueries({ queryKey: ["scheduler-history"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.processingJobs.all,
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.schedulerJob });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.schedulerStatus,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.schedulerHistory,
+      });
     },
   });
 
@@ -272,7 +282,7 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
     }) => updateSchedulerConfig({ time_local: timeLocal, timezone }),
     onSuccess: (data) => {
       setScheduleDirty(false);
-      queryClient.setQueryData(["scheduler-job"], data);
+      queryClient.setQueryData(queryKeys.schedulerJob, data);
     },
   });
 
@@ -355,7 +365,7 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
                   {scheduleMutation.isPending ? "Saving..." : "Save Schedule"}
                 </button>
                 {scheduleMutation.isError && (
-                  <p className="error">
+                  <p className="error" role="alert">
                     Failed: {scheduleMutation.error.message}
                   </p>
                 )}
@@ -406,7 +416,9 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
           {triggerMutation.isPending ? "Queueing..." : "Queue Run Now"}
         </button>
         {triggerMutation.isError && (
-          <p className="error">Failed: {triggerMutation.error.message}</p>
+          <p className="error" role="alert">
+            Failed: {triggerMutation.error.message}
+          </p>
         )}
         {triggerMutation.isSuccess && !isRunning && (
           <p className="job-queued-notice">

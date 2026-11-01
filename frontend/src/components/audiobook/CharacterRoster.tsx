@@ -11,6 +11,7 @@ import {
   updateCharacter,
 } from "../../api/audiobook";
 import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../../lib/queryKeys";
 
 function CharacterCard({
   character,
@@ -51,9 +52,11 @@ function CharacterCard({
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.audiobook.status(bookId),
+      });
     },
   });
 
@@ -67,9 +70,11 @@ function CharacterCard({
       setVoiceIdDirty(false);
       setSampleRevision(Date.now());
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.audiobook.status(bookId),
+      });
     },
   });
 
@@ -211,12 +216,14 @@ function CharacterCard({
         </div>
       )}
       {designMutation.isError && (
-        <p className="error">
+        <p className="error" role="alert">
           {designMutation.error?.message || "Voice design failed"}
         </p>
       )}
       {mutation.isError && (
-        <p className="error">{mutation.error?.message || "Save failed"}</p>
+        <p className="error" role="alert">
+          {mutation.error?.message || "Save failed"}
+        </p>
       )}
       {saved && (
         <p className="success">
@@ -268,12 +275,14 @@ function CharacterRoster({
     mutationFn: () => setBookTtsProvider(bookId, selectedProvider),
     onSuccess: () => {
       setConfirmProviderChange(false);
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     },
   });
@@ -281,13 +290,17 @@ function CharacterRoster({
     mutationFn: () => rebuildCharacterRoster(bookId),
     onSuccess: () => {
       setConfirmRegenerate(false);
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
-      void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     },
   });
@@ -295,7 +308,7 @@ function CharacterRoster({
     mutationFn: () => shareCharacterRosterWithSeries(bookId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
     },
   });
@@ -373,7 +386,9 @@ function CharacterRoster({
             </span>
           ))}
         {providerMutation.isError && (
-          <span className="error">{providerMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {providerMutation.error?.message}
+          </span>
         )}
       </div>
       <div className="roster-controls">
@@ -418,7 +433,9 @@ function CharacterRoster({
           </span>
         )}
         {regenerateMutation.isError && (
-          <span className="error">{regenerateMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {regenerateMutation.error?.message}
+          </span>
         )}
         {regenerateMutation.isSuccess && (
           <span className="success">
@@ -432,7 +449,9 @@ function CharacterRoster({
           </span>
         )}
         {shareMutation.isError && (
-          <span className="error">{shareMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {shareMutation.error?.message}
+          </span>
         )}
       </div>
       <div className="character-roster">

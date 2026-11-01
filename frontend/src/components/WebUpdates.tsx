@@ -7,6 +7,7 @@ import { getSchedulerJob, triggerScheduler } from "../api/scheduler";
 import type { OpenBook } from "../types";
 import { BookRow } from "./book-list/BookCards";
 import SchedulerStatus from "./SchedulerStatus";
+import { queryKeys } from "../lib/queryKeys";
 
 export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const client = useQueryClient();
@@ -14,17 +15,17 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const [filter, setFilter] = useState("all");
   const [notice, setNotice] = useState("");
   const booksQuery = useQuery({
-    queryKey: ["web-update-books"],
-    queryFn: () => getAllBookCatalog({ view: "web" }),
+    queryKey: queryKeys.webUpdateBooks,
+    queryFn: ({ signal }) => getAllBookCatalog({ view: "web" }, { signal }),
     refetchInterval: 5000,
   });
   const checksQuery = useQuery({
-    queryKey: ["web-checks"],
+    queryKey: queryKeys.webChecks,
     queryFn: getWebChecks,
     refetchInterval: 5000,
   });
   const schedule = useQuery({
-    queryKey: ["web-update-schedule"],
+    queryKey: queryKeys.webUpdateSchedule,
     queryFn: getSchedulerJob,
     refetchInterval: 10000,
   });
@@ -35,12 +36,12 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
       setNotice(
         id ? "Source check queued." : "Check queued for all followed novels.",
       );
-      for (const key of [
-        "web-update-books",
-        "active-processing-jobs",
-        "web-checks",
+      for (const queryKey of [
+        queryKeys.webUpdateBooks,
+        queryKeys.activeProcessingJobs,
+        queryKeys.webChecks,
       ])
-        void client.invalidateQueries({ queryKey: [key] });
+        void client.invalidateQueries({ queryKey });
     },
   });
   const checks = new Map(

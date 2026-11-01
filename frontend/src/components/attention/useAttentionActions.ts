@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { getProcessingJob } from "../../api/processing";
 import { queueProcessingJobs, retryProcessingJob } from "../../api/processing";
+import { invalidateBookViews, queryKeys } from "../../lib/queryKeys";
 
 const keyFor = (kind: ActionKind, item: ActionItem) =>
   `${kind}:${"id" in item ? item.id : item.book_id}`;
@@ -33,23 +34,21 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
   );
   const queries = useQueries({
     queries: tracked.map(([, result]) => ({
-      queryKey: ["attention-action-job", result.job.id],
-      queryFn: () => getProcessingJob(result.job.id),
+      queryKey: queryKeys.attentionActionJob(result.job.id),
+      queryFn: ({ signal }) => getProcessingJob(result.job.id, { signal }),
       initialData: result.job,
       refetchInterval: ({ state }: { state: { data: Job | undefined } }) =>
         active(state.data?.status) ? 2000 : false,
     })),
   });
   const invalidate = () => {
-    for (const key of [
-      "active-processing-jobs",
-      "processing-jobs",
-      "book-catalog",
-      "library-groups",
-      "book",
-      "library-book-info",
+    for (const queryKey of [
+      queryKeys.activeProcessingJobs,
+      queryKeys.processingJobs.all,
+      queryKeys.books.all,
     ])
-      void client.invalidateQueries({ queryKey: [key] });
+      void client.invalidateQueries({ queryKey });
+    invalidateBookViews(client);
   };
   const statuses = tracked.map(([key], index) => ({
     key,
@@ -119,7 +118,7 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
             ).jobs[0];
       if (!job)
         throw new Error("The server did not queue a job. Please retry.");
-      client.setQueryData(["attention-action-job", job.id], job);
+      client.setQueryData(queryKeys.attentionActionJob(job.id), job);
       setRequests((previous) => ({ ...previous, [key]: { title, job } }));
       invalidate();
     } catch (error) {

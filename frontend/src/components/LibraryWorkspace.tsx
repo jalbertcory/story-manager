@@ -21,6 +21,7 @@ import LibraryToolbar from "./library/LibraryToolbar";
 import SavedLibraryViews from "./library/SavedLibraryViews";
 import SeriesOrganizer from "./library/SeriesOrganizer";
 import Icon from "./ui/Icon";
+import { queryKeys } from "../lib/queryKeys";
 
 export default function LibraryWorkspace({
   search,
@@ -104,17 +105,20 @@ export default function LibraryWorkspace({
     sortOrder: order,
   };
   const groups = useInfiniteQuery({
-    queryKey: ["library-groups", { groupBy, ...request }],
-    queryFn: ({ pageParam }) =>
-      getLibraryGroups({
-        groupBy,
-        ...request,
-        sortBy:
-          sort === "series_index" || sort === "audiobook_enabled"
-            ? "title"
-            : sort,
-        cursor: pageParam,
-      }),
+    queryKey: queryKeys.libraryGroups.list({ groupBy, ...request }),
+    queryFn: ({ pageParam, signal }) =>
+      getLibraryGroups(
+        {
+          groupBy,
+          ...request,
+          sortBy:
+            sort === "series_index" || sort === "audiobook_enabled"
+              ? "title"
+              : sort,
+          cursor: pageParam,
+        },
+        { signal },
+      ),
     initialPageParam: "",
     getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: grouped,
@@ -154,7 +158,7 @@ export default function LibraryWorkspace({
       : groupTotal;
   const standaloneTotal = standalone.data?.pages[0]?.total_count;
   const allSeries = useQuery({
-    queryKey: ["series"],
+    queryKey: queryKeys.series,
     queryFn: getSeries,
     enabled: assigningSeries,
   });

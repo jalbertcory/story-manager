@@ -116,7 +116,7 @@ function ReaderKeys({ showHeading = true }) {
       )}
 
       {error && (
-        <p className="error" style={{ marginTop: "0.75rem" }}>
+        <p className="error" role="alert" style={{ marginTop: "0.75rem" }}>
           {error}
         </p>
       )}

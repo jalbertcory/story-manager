@@ -198,7 +198,11 @@ export function BookIdentifiersSection({
               rows={3}
             />
           </label>
-          {identifierError && <p className="error">{identifierError}</p>}
+          {identifierError && (
+            <p className="error" role="alert">
+              {identifierError}
+            </p>
+          )}
         </div>
       )}
     </section>
@@ -318,7 +322,7 @@ export function ChapterUpdateHistory({
       <h3>Update History</h3>
       {isLoading && <p className="hint">Loading update history...</p>}
       {isError && (
-        <p className="error">
+        <p className="error" role="alert">
           Update history failed: {error?.message || "Unable to load history"}
         </p>
       )}

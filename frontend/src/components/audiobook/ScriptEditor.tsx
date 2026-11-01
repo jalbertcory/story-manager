@@ -15,6 +15,7 @@ import {
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
 import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../../lib/queryKeys";
 
 const STATUS_ICONS: Record<string, string> = {
   pending_diarization: "⏳",
@@ -58,10 +59,10 @@ function SentenceRow({
     onSuccess: () => {
       setEditing(false);
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-sentences", bookId],
+        queryKey: queryKeys.audiobook.sentences.all(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
     },
   });
@@ -70,13 +71,13 @@ function SentenceRow({
     mutationFn: () => generateSentenceAudio(bookId, sentence.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-sentences", bookId],
+        queryKey: queryKeys.audiobook.sentences.all(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     },
   });
@@ -107,11 +108,18 @@ function SentenceRow({
             value={tags}
             onChange={(e) => setTags(e.target.value)}
             className="sentence-tags-input"
+            aria-label={`Tags for sentence ${sentence.sequence_order}`}
           />
         ) : (
-          <span onClick={() => setEditing(true)} title="Click to edit">
-            {tags}
-          </span>
+          <button
+            type="button"
+            className="sentence-tags-edit"
+            onClick={() => setEditing(true)}
+            aria-label={`Edit tags for sentence ${sentence.sequence_order}`}
+            title="Edit tags"
+          >
+            {tags || "Add tags"}
+          </button>
         )}
       </td>
       <td className="sentence-speaker">
@@ -209,7 +217,7 @@ function SentenceRow({
           </span>
         ) : null}
         {audioMutation.isError && (
-          <span className="error sentence-audio-error">
+          <span className="error sentence-audio-error" role="alert">
             {audioMutation.error?.message}
           </span>
         )}
@@ -237,7 +245,9 @@ function SentenceRow({
           </>
         )}
         {mutation.isError && (
-          <span className="error">{mutation.error?.message}</span>
+          <span className="error" role="alert">
+            {mutation.error?.message}
+          </span>
         )}
       </td>
     </tr>
@@ -293,14 +303,23 @@ function ScriptEditor({
   const limit = 50;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["audiobook-sentences", bookId, page, chapterFilter, reviewOnly],
-    queryFn: () =>
-      getSentences(bookId, {
-        page,
-        limit,
-        ...(chapterFilter ? { chapterId: Number(chapterFilter) } : {}),
-        reviewOnly,
-      }),
+    queryKey: queryKeys.audiobook.sentences.page(
+      bookId,
+      page,
+      chapterFilter,
+      reviewOnly,
+    ),
+    queryFn: ({ signal }) =>
+      getSentences(
+        bookId,
+        {
+          page,
+          limit,
+          ...(chapterFilter ? { chapterId: Number(chapterFilter) } : {}),
+          reviewOnly,
+        },
+        { signal },
+      ),
     placeholderData: keepPreviousData,
     refetchInterval: ({ state }) =>
       state.data?.items?.some((sentence) =>
@@ -313,7 +332,9 @@ function ScriptEditor({
   if (isLoading) return <p>Loading sentences…</p>;
   if (isError)
     return (
-      <p className="error">{error?.message || "Failed to load sentences"}</p>
+      <p className="error" role="alert">
+        {error?.message || "Failed to load sentences"}
+      </p>
     );
 
   const { items = [], total = 0 } = data || {};

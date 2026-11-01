@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getUniverses, setUniverseMembership } from "../api/library";
+import { invalidateBookViews, queryKeys } from "../lib/queryKeys";
 
 export default function UniverseMembership({
   bookId,
@@ -14,7 +15,7 @@ export default function UniverseMembership({
   const client = useQueryClient();
   const [name, setName] = useState(currentName || "");
   const { data: universes = [], error } = useQuery({
-    queryKey: ["universes"],
+    queryKey: queryKeys.universes,
     queryFn: getUniverses,
   });
   const mutation = useMutation({
@@ -31,15 +32,8 @@ export default function UniverseMembership({
       });
     },
     onSuccess: () => {
-      for (const key of [
-        "universes",
-        "library-groups",
-        "library-book-info",
-        "book-catalog",
-        "series-books",
-      ]) {
-        void client.invalidateQueries({ queryKey: [key] });
-      }
+      void client.invalidateQueries({ queryKey: queryKeys.universes });
+      invalidateBookViews(client);
     },
   });
   return (
