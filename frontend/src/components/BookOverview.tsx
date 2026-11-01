@@ -26,11 +26,11 @@ export default function BookOverview({
   const [chapterSearch, setChapterSearch] = useState("");
   const info = useQuery({
     queryKey: ["library-book-info", book.id],
-    queryFn: () => getLibraryBookInfo(book.id),
+    queryFn: ({ signal }) => getLibraryBookInfo(book.id, { signal }),
   });
   const chapters = useQuery({
     queryKey: ["cleaned-chapters", book.id],
-    queryFn: () => getBookCleanedChapters(book.id),
+    queryFn: ({ signal }) => getBookCleanedChapters(book.id, { signal }),
     enabled: chaptersOpen && Boolean(book.current_path),
   });
   const refresh = useMutation({

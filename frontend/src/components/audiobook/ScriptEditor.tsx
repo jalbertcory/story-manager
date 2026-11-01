@@ -294,13 +294,17 @@ function ScriptEditor({
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["audiobook-sentences", bookId, page, chapterFilter, reviewOnly],
-    queryFn: () =>
-      getSentences(bookId, {
-        page,
-        limit,
-        ...(chapterFilter ? { chapterId: Number(chapterFilter) } : {}),
-        reviewOnly,
-      }),
+    queryFn: ({ signal }) =>
+      getSentences(
+        bookId,
+        {
+          page,
+          limit,
+          ...(chapterFilter ? { chapterId: Number(chapterFilter) } : {}),
+          reviewOnly,
+        },
+        { signal },
+      ),
     placeholderData: keepPreviousData,
     refetchInterval: ({ state }) =>
       state.data?.items?.some((sentence) =>

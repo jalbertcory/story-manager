@@ -70,4 +70,38 @@ describe("useBookSettingsForm", () => {
     expect(result.current.title).toBe("Other Book");
     expect(result.current.isDirty).toBe(false);
   });
+
+  it("saves only edited fields, keeping values synced while editing", () => {
+    const { result, rerender } = renderHook(
+      ({ current }) => useBookSettingsForm(current),
+      { initialProps: { current: book() } },
+    );
+
+    act(() => result.current.setNotes("My notes"));
+    // A metadata recheck updates the author on the server mid-edit.
+    rerender({ current: book({ author: "Synced Author", series: "Saga" }) });
+
+    expect(result.current.author).toBe("Synced Author");
+    expect(result.current.notes).toBe("My notes");
+    let update;
+    act(() => {
+      update = result.current.getUpdatedFields();
+    });
+    expect(update).toEqual({ notes: "My notes" });
+  });
+
+  it("rejects malformed extra identifiers only when they change", () => {
+    const current = book();
+    const { result } = renderHook(() => useBookSettingsForm(current));
+
+    act(() => result.current.setOtherRemoteIdsJson("[1]"));
+    let update;
+    act(() => {
+      update = result.current.getUpdatedFields();
+    });
+    expect(update).toBeNull();
+    expect(result.current.identifierError).toBe(
+      "Other identifiers must be a JSON object.",
+    );
+  });
 });

@@ -5,7 +5,12 @@ import LibraryWorkspace from "./LibraryWorkspace";
 
 const response = (value) =>
   Promise.resolve({ ok: true, json: async () => value });
-const page = (items) => ({items, next_cursor: null, total_count: items.length, facets: {series: 1, standalone: 0, web: 0, genres: []}});
+const page = (items) => ({
+  items,
+  next_cursor: null,
+  total_count: items.length,
+  facets: { series: 1, standalone: 0, web: 0, genres: [] },
+});
 const missing = {
   id: 948,
   title: "Artemis Fowl",
@@ -30,7 +35,8 @@ describe("Audio-only library", () => {
             cover_ids: [],
           },
         ]);
-      if (url.startsWith("/api/books/catalog")) return response(page([missing]));
+      if (url.startsWith("/api/books/catalog"))
+        return response(page([missing]));
       return response([]);
     });
     vi.stubGlobal("fetch", fetch);
@@ -141,9 +147,12 @@ it("loads series pages incrementally and fetches the complete list only for orga
   );
   await screen.findByText("Volume 1");
   expect(screen.queryByText("Volume 2")).not.toBeInTheDocument();
-  expect(fetch.mock.calls.some(([url]) => url.includes("limit=100"))).toBe(
-    false,
-  );
+  expect(
+    fetch.mock.calls.some(
+      ([url]) =>
+        url.includes("/api/books/catalog?") && url.includes("limit=100"),
+    ),
+  ).toBe(false);
   expect(
     fetch.mock.calls.some(([url]) => url.includes("sort_by=series_index")),
   ).toBe(true);
@@ -156,9 +165,12 @@ it("loads series pages incrementally and fetches the complete list only for orga
   details.open = true;
   fireEvent(details, new Event("toggle"));
   await screen.findByRole("button", { name: "Rename" });
-  expect(fetch.mock.calls.some(([url]) => url.includes("limit=100"))).toBe(
-    true,
-  );
+  expect(
+    fetch.mock.calls.some(
+      ([url]) =>
+        url.includes("/api/books/catalog?") && url.includes("limit=100"),
+    ),
+  ).toBe(true);
 });
 
 it("preserves all filters in group links, saved views, and subsequent filter changes", async () => {

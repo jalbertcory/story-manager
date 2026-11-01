@@ -15,7 +15,7 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const [notice, setNotice] = useState("");
   const booksQuery = useQuery({
     queryKey: ["web-update-books"],
-    queryFn: () => getAllBookCatalog({ view: "web" }),
+    queryFn: ({ signal }) => getAllBookCatalog({ view: "web" }, { signal }),
     refetchInterval: 5000,
   });
   const checksQuery = useQuery({

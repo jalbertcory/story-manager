@@ -1,7 +1,11 @@
-import { api, unwrap } from "./client";
+import { api, unwrap, requestInit } from "./client";
+import type { RequestOptions } from "./client";
 
-export function getSeries() {
-  return unwrap(api.GET("/api/series"), "Failed to load series");
+export function getSeries(options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/series", requestInit(options)),
+    "Failed to load series",
+  );
 }
 
 export function renameSeries(series: string, newName: string) {

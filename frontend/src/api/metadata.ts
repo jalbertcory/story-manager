@@ -1,4 +1,5 @@
-import { api, unwrap, unwrapOptional } from "./client";
+import { api, unwrap, unwrapOptional, requestInit } from "./client";
+import type { RequestOptions } from "./client";
 
 export function previewMetadataSync(bookIds: number[] | null = null) {
   return unwrap(
@@ -24,13 +25,21 @@ export function queueMetadataSync(
   );
 }
 
-export function getLatestMetadataJob() {
-  return unwrapOptional(api.GET("/api/metadata/jobs/latest"));
+export function getLatestMetadataJob(options?: RequestOptions) {
+  return unwrapOptional(
+    api.GET("/api/metadata/jobs/latest", requestInit(options)),
+  );
 }
 
-export function getMetadataInbox({ offset = 0, limit = 100 } = {}) {
+export function getMetadataInbox(
+  { offset = 0, limit = 100 } = {},
+  options?: RequestOptions,
+) {
   return unwrap(
-    api.GET("/api/metadata/inbox", { params: { query: { offset, limit } } }),
+    api.GET("/api/metadata/inbox", {
+      ...requestInit(options),
+      params: { query: { offset, limit } },
+    }),
     "Failed to load metadata inbox",
   );
 }

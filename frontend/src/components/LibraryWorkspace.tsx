@@ -105,16 +105,19 @@ export default function LibraryWorkspace({
   };
   const groups = useInfiniteQuery({
     queryKey: ["library-groups", { groupBy, ...request }],
-    queryFn: ({ pageParam }) =>
-      getLibraryGroups({
-        groupBy,
-        ...request,
-        sortBy:
-          sort === "series_index" || sort === "audiobook_enabled"
-            ? "title"
-            : sort,
-        cursor: pageParam,
-      }),
+    queryFn: ({ pageParam, signal }) =>
+      getLibraryGroups(
+        {
+          groupBy,
+          ...request,
+          sortBy:
+            sort === "series_index" || sort === "audiobook_enabled"
+              ? "title"
+              : sort,
+          cursor: pageParam,
+        },
+        { signal },
+      ),
     initialPageParam: "",
     getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: grouped,

@@ -14,7 +14,7 @@ import "./App.css";
 import "./Workspace.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
-import { getProcessingJobs } from "./api/processing";
+import useActiveProcessingJobs from "./hooks/useActiveProcessingJobs";
 import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -133,24 +133,27 @@ export default function App() {
     };
     setLocation(currentLocation());
   }, []);
-  const navigate = useCallback((href: string, state: NavigationState = {}) => {
-    if (!allowNavigation(href)) return;
-    window.history.replaceState(
-      {
-        ...parseNavigationState(window.history.state),
-        scrollY: window.scrollY,
-      },
-      "",
-    );
-    window.history.pushState(
-      { ...state, returnTo: state.returnTo || returnTo.current },
-      "",
-      href,
-    );
-    pendingScroll.current = state.scrollY ?? null;
-    commitLocation();
-    window.scrollTo(0, state.scrollY || 0);
-  }, [commitLocation]);
+  const navigate = useCallback(
+    (href: string, state: NavigationState = {}) => {
+      if (!allowNavigation(href)) return;
+      window.history.replaceState(
+        {
+          ...parseNavigationState(window.history.state),
+          scrollY: window.scrollY,
+        },
+        "",
+      );
+      window.history.pushState(
+        { ...state, returnTo: state.returnTo || returnTo.current },
+        "",
+        href,
+      );
+      pendingScroll.current = state.scrollY ?? null;
+      commitLocation();
+      window.scrollTo(0, state.scrollY || 0);
+    },
+    [commitLocation],
+  );
   useEffect(() => {
     const onPop = () => {
       // The browser has already moved. If a page with unsaved work refuses to
@@ -193,9 +196,9 @@ export default function App() {
 
   const bookQuery = useQuery({
     queryKey: ["book", route.bookId],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (route.bookId == null) throw new Error("No book selected");
-      return getBook(route.bookId);
+      return getBook(route.bookId, { signal });
     },
     enabled: authenticated && isBook,
     refetchInterval: ({ state }) =>
@@ -203,16 +206,10 @@ export default function App() {
         ? 2000
         : false,
   });
-  const { data: jobs = [] } = useQuery({
-    queryKey: ["active-processing-jobs"],
-    queryFn: () =>
-      getProcessingJobs({ statuses: "queued,running", limit: 100 }),
-    enabled: authenticated,
-    refetchInterval: 5000,
-  });
+  const { data: jobs = [] } = useActiveProcessingJobs(authenticated);
   const attention = useQuery({
     queryKey: ["attention-dashboard"],
-    queryFn: () => getAttentionDashboard(5),
+    queryFn: ({ signal }) => getAttentionDashboard(5, { signal }),
     enabled: authenticated && activeTab === "attention",
     staleTime: 30000,
     refetchInterval: jobs.length ? 5000 : 60000,

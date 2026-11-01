@@ -9,7 +9,8 @@ import {
   triggerScheduler,
   updateSchedulerConfig,
 } from "../api/scheduler";
-const fetchHistory = () => getSchedulerHistory({ limit: 10 });
+const fetchHistory = ({ signal }: { signal: AbortSignal }) =>
+  getSchedulerHistory({ limit: 10 }, { signal });
 
 function getBrowserTimezone() {
   try {
@@ -75,7 +76,7 @@ function formatRunState(job: Awaited<ReturnType<typeof fetchJob>> | undefined) {
 function TaskLogsList({ taskId }: { taskId: number }) {
   const { data: logs, isLoading } = useQuery({
     queryKey: ["task-logs", taskId],
-    queryFn: () => fetchTaskLogs(taskId),
+    queryFn: ({ signal }) => fetchTaskLogs(taskId, { signal }),
   });
 
   if (isLoading) return <p className="hint">Loading entries...</p>;
@@ -254,7 +255,9 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
   const triggerMutation = useMutation({
     mutationFn: triggerScheduler,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
       void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["scheduler-job"] });
       void queryClient.invalidateQueries({ queryKey: ["scheduler-status"] });

@@ -519,11 +519,8 @@ describe("BookSettings", () => {
       expect(saveCall[1].headers).toEqual({
         "content-type": "application/json",
       });
+      // Only the edited fields are sent.
       expect(JSON.parse(saveCall[1].body)).toEqual({
-        title: "Identifier Book",
-        author: "Author",
-        series: "Saga",
-        series_index: 1,
         user_genre_tags: ["Fantasy", "Romance"],
         metadata_remote_ids: {
           isbn_13: "9780316339158",
@@ -531,9 +528,6 @@ describe("BookSettings", () => {
           open_library_work_key: "/works/OL500W",
           goodreads_id: "12345",
         },
-        removed_chapters: [],
-        content_selectors: [],
-        notes: null,
       });
     });
   });

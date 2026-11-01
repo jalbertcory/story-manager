@@ -17,7 +17,8 @@ export default function SeriesOrganizer({
   // Only mounted by an explicit organizer action; never reorder a filtered page.
   const books = useQuery({
     queryKey: ["series-books", series],
-    queryFn: () => getAllBookCatalog({ series, sortBy: "series_index" }),
+    queryFn: ({ signal }) =>
+      getAllBookCatalog({ series, sortBy: "series_index" }, { signal }),
   });
   const allSeries = useQuery({ queryKey: ["series"], queryFn: getSeries });
   if (books.isLoading || allSeries.isLoading)

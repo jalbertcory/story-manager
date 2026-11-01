@@ -113,6 +113,10 @@ function JobInspector({
   );
 }
 
+// Pipeline work runs for minutes; three polled endpoints at this pace keep the
+// progress view current without hammering the API.
+const ACTIVE_POLL_MS = 3000;
+
 const AI_SUB_TAB_KEYS = new Set([
   "progress",
   "analysis",
@@ -182,36 +186,36 @@ function AudiobookPipeline({
 
   const { data: statusData } = useQuery({
     queryKey: ["audiobook-status", bookId],
-    queryFn: () => getAudiobookStatus(bookId),
+    queryFn: ({ signal }) => getAudiobookStatus(bookId, { signal }),
     enabled: aiEnabled,
     refetchInterval: ({ state }) => {
       const s = state.data?.pipeline_status;
       const audioStillFinishing =
         (state.data?.sentence_counts?.audio_generating ?? 0) > 0;
-      return (s && isActive(s)) || audioStillFinishing ? 1000 : false;
+      return (s && isActive(s)) || audioStillFinishing ? ACTIVE_POLL_MS : false;
     },
   });
 
   const { data: characters = [] } = useQuery({
     queryKey: ["audiobook-characters", bookId],
-    queryFn: () => getCharacters(bookId),
+    queryFn: ({ signal }) => getCharacters(bookId, { signal }),
     enabled: aiEnabled,
   });
 
   const { data: imports = [] } = useQuery({
     queryKey: ["audiobook-imports", bookId],
-    queryFn: () => getImportedAudiobooks(bookId),
+    queryFn: ({ signal }) => getImportedAudiobooks(bookId, { signal }),
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
       state.data.some((edition) => activeImportStatuses.has(edition.status))
-        ? 1000
+        ? ACTIVE_POLL_MS
         : false,
   });
   const importedAudiobooks = Array.isArray(imports) ? imports : [];
 
   const { data: chapters = [] } = useQuery({
     queryKey: ["audiobook-chapters", bookId],
-    queryFn: () => getAudiobookChapters(bookId),
+    queryFn: ({ signal }) => getAudiobookChapters(bookId, { signal }),
     refetchInterval: ({ state }) => {
       const s = statusData?.pipeline_status;
       const previewActive = state.data?.some((chapter) =>
@@ -220,7 +224,7 @@ function AudiobookPipeline({
       const audioStillFinishing =
         (statusData?.sentence_counts?.audio_generating ?? 0) > 0;
       return (s && isActive(s)) || previewActive || audioStillFinishing
-        ? 1000
+        ? ACTIVE_POLL_MS
         : false;
     },
   });

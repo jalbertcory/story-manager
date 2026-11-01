@@ -43,38 +43,46 @@ import ConfirmActionDialog from "./ConfirmActionDialog";
 
 const fetchChapters = async ({
   queryKey,
+  signal,
 }: {
   queryKey: readonly [string, number, ...number[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookChapters(bookId);
+  return getBookChapters(bookId, { signal });
 };
 
 const fetchCleanedChapters = async ({
   queryKey,
+  signal,
 }: {
   queryKey: readonly [string, number, ...number[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookCleanedChapters(bookId);
+  return getBookCleanedChapters(bookId, { signal });
 };
 
 const fetchMatchedConfig = async ({
   queryKey,
+  signal,
 }: {
   queryKey: readonly [string, number, ...number[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getMatchedConfigs(bookId);
+  return getMatchedConfigs(bookId, { signal });
 };
 
 const fetchUpdateHistory = async ({
   queryKey,
+  signal,
 }: {
   queryKey: readonly [string, number, ...number[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookUpdateHistory(bookId);
+  return getBookUpdateHistory(bookId, { signal });
 };
 
 function describeRevisionSnapshot(
@@ -123,7 +131,7 @@ function BookSettings({
   // a mutation explicitly invalidates this key.
   const { data: polledBook } = useQuery({
     queryKey: ["book", initialBook.id],
-    queryFn: () => getBook(initialBook.id),
+    queryFn: ({ signal }) => getBook(initialBook.id, { signal }),
     initialData: initialBook,
     staleTime: Infinity,
     refetchInterval: ({ state }) => {
@@ -284,7 +292,7 @@ function BookSettings({
 
   const { data: revisions = [] } = useQuery({
     queryKey: ["book-revisions", book.id],
-    queryFn: () => getBookRevisions(book.id),
+    queryFn: ({ signal }) => getBookRevisions(book.id, { signal }),
   });
 
   const saveMutation = useMutation({

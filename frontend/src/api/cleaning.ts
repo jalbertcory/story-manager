@@ -1,9 +1,10 @@
-import { api, unwrap, unwrapEmpty } from "./client";
-import type { Body } from "./client";
+import { api, unwrap, unwrapEmpty, requestInit } from "./client";
+import type { Body, RequestOptions } from "./client";
 
-export function getMatchedConfigs(bookId: number) {
+export function getMatchedConfigs(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/matched-config", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch matched config",
@@ -23,8 +24,8 @@ export function previewCleaning(
   );
 }
 
-export const getCleaningConfigs = () =>
-  unwrap(api.GET("/api/cleaning-configs"));
+export const getCleaningConfigs = (options?: RequestOptions) =>
+  unwrap(api.GET("/api/cleaning-configs", requestInit(options)));
 export const createCleaningConfig = (
   body: Body<"/api/cleaning-configs", "post">,
 ) => unwrap(api.POST("/api/cleaning-configs", { body }));
@@ -46,5 +47,5 @@ export const deleteCleaningConfig = (id: number) =>
   );
 export const reprocessAllBooks = () =>
   unwrap(api.POST("/api/books/reprocess-all"));
-export const getReprocessAllStatus = () =>
-  unwrap(api.GET("/api/books/reprocess-all/status"));
+export const getReprocessAllStatus = (options?: RequestOptions) =>
+  unwrap(api.GET("/api/books/reprocess-all/status", requestInit(options)));

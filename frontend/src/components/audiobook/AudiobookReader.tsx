@@ -142,10 +142,10 @@ function ImportedEditionReader({
       trackId,
       selected?.alignment_score ?? "estimated",
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       trackId == null
         ? Promise.resolve([])
-        : getImportedTrackCues(edition.id, trackId),
+        : getImportedTrackCues(edition.id, trackId, { signal }),
     enabled: trackId != null && !audioOnly,
   });
 
@@ -317,9 +317,9 @@ function GeneratedEditionReader({
   const selected = selectedIndex >= 0 ? playable[selectedIndex] : null;
   const { data: sentences, isLoading } = useQuery({
     queryKey: ["audiobook-reader-sentences", bookId, chapterId],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (chapterId == null) throw new Error("Choose a chapter first.");
-      return getAllChapterSentences(bookId, chapterId);
+      return getAllChapterSentences(bookId, chapterId, { signal });
     },
     enabled: chapterId != null,
   });

@@ -124,21 +124,25 @@ function ProcessingJobs() {
     error,
   } = useQuery({
     queryKey: ["processing-jobs", statuses],
-    queryFn: () => getProcessingJobs({ statuses, limit: 200 }),
+    queryFn: ({ signal }) =>
+      getProcessingJobs({ statuses, limit: 200 }, { signal }),
     enabled: Boolean(processingLifecycle),
     refetchInterval: ({ state }) =>
       state.data?.some((job) => activeStatuses.has(job.status)) ? 1500 : 5000,
   });
   const { data: catalogPage } = useQuery({
     queryKey: ["processing-book-catalog", operation, debouncedBookSearch],
-    queryFn: () =>
-      getBookCatalog({
-        q: debouncedBookSearch,
-        view: operation === "refresh_book" ? "web" : "all",
-        sortBy: "title",
-        sortOrder: "asc",
-        limit: 100,
-      }),
+    queryFn: ({ signal }) =>
+      getBookCatalog(
+        {
+          q: debouncedBookSearch,
+          view: operation === "refresh_book" ? "web" : "all",
+          sortBy: "title",
+          sortOrder: "asc",
+          limit: 100,
+        },
+        { signal },
+      ),
     staleTime: 30_000,
   });
   const catalog = useMemo(() => catalogPage?.items ?? [], [catalogPage]);

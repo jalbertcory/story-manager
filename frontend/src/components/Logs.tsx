@@ -44,8 +44,11 @@ function Logs({ onBack }: { onBack?: () => void }) {
 
   const logsQuery = useQuery({
     queryKey: ["logs", level],
-    queryFn: () =>
-      getLogs({ limit: 500, ...(level !== "ALL" ? { level } : {}) }),
+    queryFn: ({ signal }) =>
+      getLogs(
+        { limit: 500, ...(level !== "ALL" ? { level } : {}) },
+        { signal },
+      ),
     refetchInterval: autoRefresh ? 3000 : false,
   });
   const healthQuery = useQuery({
@@ -55,7 +58,7 @@ function Logs({ onBack }: { onBack?: () => void }) {
   });
   const metricsQuery = useQuery({
     queryKey: ["observability-job-metrics"],
-    queryFn: () => getJobMetrics(24),
+    queryFn: ({ signal }) => getJobMetrics(24, { signal }),
     refetchInterval: autoRefresh ? 10000 : false,
   });
 

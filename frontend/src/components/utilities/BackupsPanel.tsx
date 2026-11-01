@@ -18,7 +18,7 @@ export default function BackupsPanel() {
   >(null);
   const { data: backupJobs = [] } = useQuery({
     queryKey: ["backup-jobs"],
-    queryFn: () => getProcessingJobs({ limit: 100 }),
+    queryFn: ({ signal }) => getProcessingJobs({ limit: 100 }, { signal }),
     select: (jobs) =>
       jobs.filter((job) =>
         ["create_backup", "verify_backup"].includes(job.job_type),

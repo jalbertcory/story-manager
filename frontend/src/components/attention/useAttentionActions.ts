@@ -34,7 +34,7 @@ export default function useAttentionActions(onRefresh?: () => unknown) {
   const queries = useQueries({
     queries: tracked.map(([, result]) => ({
       queryKey: ["attention-action-job", result.job.id],
-      queryFn: () => getProcessingJob(result.job.id),
+      queryFn: ({ signal }) => getProcessingJob(result.job.id, { signal }),
       initialData: result.job,
       refetchInterval: ({ state }: { state: { data: Job | undefined } }) =>
         active(state.data?.status) ? 2000 : false,

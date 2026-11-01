@@ -41,6 +41,16 @@ export const api = createClient<paths>({
   fetch: (request) => globalThis.fetch(request),
 });
 
+export type RequestOptions = { signal?: AbortSignal | undefined };
+
+// Request init carrying only the options openapi-fetch should forward. Query
+// functions pass their context here, so cancelled queries abort the fetch.
+export function requestInit({ signal }: RequestOptions = {}): {
+  signal?: AbortSignal;
+} {
+  return signal ? { signal } : {};
+}
+
 type Result<T> = { data?: T; error?: unknown; response: Response };
 
 // A failed API response. The HTTP status lets global handlers tell an expired
@@ -57,7 +67,8 @@ export class ApiError extends Error {
 
 export function isApiError(error: unknown, status?: number): error is ApiError {
   return (
-    error instanceof ApiError && (status === undefined || error.status === status)
+    error instanceof ApiError &&
+    (status === undefined || error.status === status)
   );
 }
 

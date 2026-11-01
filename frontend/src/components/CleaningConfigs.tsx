@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { FormEvent } from "react";
@@ -13,6 +13,8 @@ import {
 } from "../api/cleaning";
 type Config = components["schemas"]["CleaningConfig"];
 type ConfigInput = components["schemas"]["CleaningConfigCreate"];
+
+const REPROCESS_STATUS_KEY = ["reprocess-all-status"] as const;
 
 function ConfigForm({
   initial,
@@ -103,47 +105,36 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [jobNotice, setJobNotice] = useState("");
 
-  const [reprocessStatus, setReprocessStatus] = useState<Awaited<
-    ReturnType<typeof getReprocessAllStatus>
-  > | null>(null);
-  const [polling, setPolling] = useState(false);
-
-  const pollStatus = useCallback(async () => {
-    try {
-      const data = await getReprocessAllStatus();
-      setReprocessStatus(data);
-      if (!data.running) {
-        setPolling(false);
-        void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      }
-    } catch {
-      setPolling(false);
-    }
-  }, [queryClient]);
-
+  // A query (rather than component-local polling) so progress resumes after
+  // leaving the page and coming back while a library clean is still running.
+  const reprocessQuery = useQuery({
+    queryKey: REPROCESS_STATUS_KEY,
+    queryFn: getReprocessAllStatus,
+    refetchInterval: ({ state }) => (state.data?.running ? 2000 : false),
+  });
+  const reprocessStatus = reprocessQuery.data ?? null;
+  const wasRunning = useRef(false);
   useEffect(() => {
-    // Check if a reprocess is already running on mount
-    void pollStatus();
-  }, [pollStatus]);
-
-  useEffect(() => {
-    if (!polling) return;
-    const interval = setInterval(() => {
-      void pollStatus();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [polling, pollStatus]);
+    const running = Boolean(reprocessStatus?.running);
+    if (wasRunning.current && !running)
+      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+    wasRunning.current = running;
+  }, [queryClient, reprocessStatus?.running]);
 
   const reprocessMutation = useMutation({
     mutationFn: reprocessAllBooks,
     onSuccess: () => {
       setJobNotice("Library cleaning job queued.");
-      setReprocessStatus({ running: true, total: 0, processed: 0 });
-      setPolling(true);
+      queryClient.setQueryData(REPROCESS_STATUS_KEY, {
+        running: true,
+        total: 0,
+        processed: 0,
+      });
+      void queryClient.invalidateQueries({ queryKey: REPROCESS_STATUS_KEY });
     },
   });
 
-  const isReprocessing = polling || reprocessStatus?.running;
+  const isReprocessing = Boolean(reprocessStatus?.running);
 
   const {
     data: configs = [],
@@ -172,7 +163,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       );
       void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       setEditingId(null);
-      setPolling(true);
+      void queryClient.invalidateQueries({ queryKey: REPROCESS_STATUS_KEY });
     },
   });
 

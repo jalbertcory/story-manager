@@ -304,8 +304,11 @@ const AddBook = forwardRef<
     refetch: reloadCatalog,
   } = useQuery({
     queryKey: ["import-book-catalog"],
-    queryFn: () =>
-      getAllBookCatalog({ q: "", sortBy: "title", sortOrder: "asc" }),
+    queryFn: ({ signal }) =>
+      getAllBookCatalog(
+        { q: "", sortBy: "title", sortOrder: "asc" },
+        { signal },
+      ),
     enabled: importType === "audiobook",
     staleTime: 30_000,
   });

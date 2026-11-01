@@ -186,7 +186,8 @@ function Utilities({
     error: inboxError,
   } = useQuery({
     queryKey: ["metadata-inbox", metadataPage],
-    queryFn: () => getMetadataInbox({ offset: metadataPage * 20, limit: 21 }),
+    queryFn: ({ signal }) =>
+      getMetadataInbox({ offset: metadataPage * 20, limit: 21 }, { signal }),
     staleTime: 15000,
     refetchOnWindowFocus: false,
     refetchInterval:
