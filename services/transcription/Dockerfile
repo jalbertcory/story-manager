@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.13.0 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
 
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.4.3-cudnn-runtime-ubuntu24.04
 
 LABEL org.opencontainers.image.source="https://github.com/jalbertcory/story-manager"
 LABEL org.opencontainers.image.description="Story Manager WhisperX word-timestamp service"

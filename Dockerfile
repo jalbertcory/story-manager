@@ -7,7 +7,7 @@ FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
 # Frontend build. Only the compiled dist/ directory reaches the final image, so
 # Node.js and node_modules are not shipped.
 # ---------------------------------------------------------------------------
-FROM node:24-slim AS frontend
+FROM node:26-slim AS frontend
 
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
