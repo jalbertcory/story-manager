@@ -4,7 +4,7 @@ FROM python:3.14-slim-trixie
 
 LABEL org.opencontainers.image.source="https://github.com/jalbertcory/story-manager"
 LABEL org.opencontainers.image.description="Story Manager scheduled GPU-container availability controller"
-LABEL org.opencontainers.image.licenses="BSD-2-Clause"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=uv /uv /uvx /bin/
 

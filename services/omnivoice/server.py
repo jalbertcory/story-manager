@@ -18,7 +18,7 @@ from typing import cast
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import numpy as np  # noqa: E402
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, Response  # noqa: E402
 from omnivoice import OmniVoice  # noqa: E402
 from omnivoice.utils.common import get_best_device  # noqa: E402
@@ -31,6 +31,7 @@ from .audio_quality import AudioQualityError, validate_generated_audio  # noqa: 
 from .normalization import prepare_for_normalization  # noqa: E402
 from .prompt import translate_generation_prompt  # noqa: E402
 from .voice_store import StoredVoice, VoiceStore  # noqa: E402
+from services.service_auth import bearer_auth  # noqa: E402
 from services.tts_consistency import seed_for_attempt  # noqa: E402
 from services.voice_roster import (  # noqa: E402
     MAX_ROSTER_VOICE_IDS,
@@ -344,7 +345,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Story Manager OmniVoice Adapter", lifespan=lifespan)
+app = FastAPI(
+    title="Story Manager OmniVoice Adapter",
+    lifespan=lifespan,
+    dependencies=[Depends(bearer_auth())],
+)
 
 
 @app.get("/health")
@@ -367,10 +372,11 @@ async def design_voice(request: DesignVoiceRequest) -> DesignVoiceResponse:
     try:
         stored, candidate = await asyncio.to_thread(runtime.design_voice, request)
     except AudioQualityError as exc:
+        # Quality rejections are messages this service writes for the user.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("OmniVoice voice design failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="OmniVoice voice design failed; see the service logs.") from exc
     return DesignVoiceResponse(
         id=stored.id,
         voice=candidate.voice,
@@ -386,7 +392,7 @@ async def voice_sample(voice_id: str) -> FileResponse:
     try:
         sample_path = runtime._voice_store.sample_path(voice_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Voice not found.") from exc
     return FileResponse(sample_path, media_type="audio/wav", filename=f"{voice_id}.wav")
 
 
@@ -396,7 +402,7 @@ async def generate(request: GenerateRequest) -> Response:
         audio, duration_ms, similarity, attempts = await asyncio.to_thread(runtime.generate, request)
     except Exception as exc:
         logger.exception("OmniVoice generation failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="OmniVoice generation failed; see the service logs.") from exc
     return Response(
         audio,
         media_type="audio/mpeg",
@@ -415,7 +421,7 @@ async def generate_batch(request: BatchGenerateRequest) -> BatchGenerateResponse
         generated = await asyncio.to_thread(runtime.generate_batch, request.requests)
     except Exception as exc:
         logger.exception("OmniVoice batch generation failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="OmniVoice batch generation failed; see the service logs.") from exc
     return BatchGenerateResponse(
         items=[
             BatchGenerateItem(

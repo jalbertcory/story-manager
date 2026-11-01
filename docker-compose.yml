@@ -10,8 +10,14 @@ services:
       - ./config/pgdata:/tmp/pgdata
     environment:
       STORY_MANAGER_BACKUP_DIR: /app/backups
+      # The application runs as this user/group; PostgreSQL runs as postgres.
+      # Unset keeps the current owner of the library folder (1000 for a new one).
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
       GOOGLE_BOOKS_API_KEY: ${GOOGLE_BOOKS_API_KEY:-}
       GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED: ${GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED:-true}
       AMAZON_METADATA_ENABLED: ${AMAZON_METADATA_ENABLED:-false}
       AMAZON_METADATA_DOMAIN: ${AMAZON_METADATA_DOMAIN:-com}
     restart: unless-stopped
+    # uvicorn stops within 8 seconds; the extra margin covers a slow PostgreSQL shutdown.
+    stop_grace_period: 30s

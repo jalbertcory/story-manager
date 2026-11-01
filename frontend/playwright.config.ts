@@ -14,7 +14,7 @@ const webServer = isCi
   : [
       {
         command:
-          `zsh -lc 'export PYTHONPATH=backend && .venv/bin/alembic -c backend/alembic.ini upgrade head && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${backendPort}'`,
+          `sh -c 'export PYTHONPATH=backend && .venv/bin/alembic -c backend/alembic.ini upgrade head && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${backendPort}'`,
         url: backendUrl,
         cwd: "..",
         reuseExistingServer: true,

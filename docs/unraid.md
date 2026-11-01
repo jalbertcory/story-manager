@@ -20,6 +20,13 @@ In the Unraid web UI, open **Docker**, choose **Add Container**, switch to **Adv
 | Backup path | `/mnt/user/appdata/story-manager/backups` -> `/app/backups` (read/write)  |
 | Database path | `/mnt/user/appdata/story-manager/pgdata` -> `/tmp/pgdata` (read/write)    |
 | FanFicFare config | `/mnt/user/appdata/story-manager/fanficfare` -> `/app/config` (read-only) |
+| Variable `PUID` | `99` (Unraid's `nobody` user, which owns appdata shares)                   |
+| Variable `PGID` | `100` (Unraid's `users` group)                                            |
+
+The application runs as an unprivileged user whose IDs come from `PUID`/`PGID`; on startup it fixes ownership of the
+library, backup, and log folders, so existing appdata from older root-run images keeps working. If you leave
+`PUID`/`PGID` out, an existing library keeps its current non-root owner; set `PUID=0` to keep running the application
+as root. The database folder stays owned by the container's `postgres` user.
 
 The FanFicFare mapping is optional. If it is present, put custom settings in
 `/mnt/user/appdata/story-manager/fanficfare/personal.ini`. The production image always starts one application worker
@@ -34,7 +41,10 @@ mkdir -p /mnt/user/appdata/story-manager/{library,backups,pgdata,fanficfare}
 docker run -d \
   --name story-manager \
   --restart unless-stopped \
+  --stop-timeout 30 \
   -p 8889:8000 \
+  -e PUID=99 \
+  -e PGID=100 \
   -v /mnt/user/appdata/story-manager/library:/app/library \
   -v /mnt/user/appdata/story-manager/backups:/app/backups \
   -v /mnt/user/appdata/story-manager/pgdata:/tmp/pgdata \
@@ -72,7 +82,10 @@ WhisperX:          http://<UNRAID-IP>:8002
 As an alternative, put Story Manager and its AI services on the same user-defined Docker network and use their
 container names, such as `http://ollama:11434`, `http://story-manager-omnivoice:8001`,
 `http://story-manager-qwen3-tts:8003`, or `http://kokoro:8880`.
-Do not publish local AI endpoints to the internet; they are not authentication boundaries.
+Do not publish local AI endpoints to the internet. The adapters accept an optional shared bearer key through the
+`AI_SERVICE_API_KEY` container variable. For WhisperX, set it and enter the same value as the transcription API key in
+**Audio Settings**. Leave it unset on the OmniVoice and Qwen3-TTS adapters for now: Story Manager does not yet send a
+key to them, so setting one would make their requests fail.
 
 ## Speech-to-text alignment for imported audiobooks
 

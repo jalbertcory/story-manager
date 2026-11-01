@@ -4,7 +4,7 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 LABEL org.opencontainers.image.source="https://github.com/jalbertcory/story-manager"
 LABEL org.opencontainers.image.description="Story Manager WhisperX word-timestamp service"
-LABEL org.opencontainers.image.licenses="BSD-2-Clause"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=uv /uv /uvx /bin/
 
@@ -22,7 +22,7 @@ WORKDIR /app
 COPY services/transcription/pyproject.toml services/transcription/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY services/__init__.py /app/services/__init__.py
+COPY services/__init__.py services/service_auth.py /app/services/
 COPY services/transcription /app/services/transcription
 
 ENV PATH="/app/.venv/bin:${PATH}"
