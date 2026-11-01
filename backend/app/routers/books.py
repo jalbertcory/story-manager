@@ -19,7 +19,7 @@ from ..config import LIBRARY_PATH, RECYCLE_BIN_RETENTION_DAYS
 from ..database import get_db
 from ..services.catalog import build_book_catalog_page, normalize_genre_tags
 from ..services.chapter_history import build_chapter_update_history
-from ..services.library_paths import remove_empty_parent_dirs
+from ..services.library_paths import book_audiobook_dir, remove_empty_parent_dirs
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.processing_queue import queue_processing_job
 from ..services.book_recovery import (
@@ -52,7 +52,7 @@ def _remove_book_files(book: models.Book) -> list[str]:
             removed_paths.append(str(relative_path))
             remove_empty_parent_dirs(full_path)
 
-    audiobook_dir = LIBRARY_PATH / "audiobooks" / str(book.id)
+    audiobook_dir = book_audiobook_dir(book.id)
     if audiobook_dir.exists():
         removed_paths.extend(str(path.relative_to(LIBRARY_PATH.parent)) for path in audiobook_dir.rglob("*") if path.is_file())
         shutil.rmtree(audiobook_dir)
@@ -83,7 +83,7 @@ def _book_cleanup_preview(book: models.Book, log_entries: int = 0) -> contracts.
         size_bytes = full_path.stat().st_size if full_path.exists() and full_path.is_file() else 0
         files.append({"path": relative_path, "size_bytes": size_bytes})
 
-    audiobook_dir = LIBRARY_PATH / "audiobooks" / str(book.id)
+    audiobook_dir = book_audiobook_dir(book.id)
     if audiobook_dir.exists():
         files.extend(
             {

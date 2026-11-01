@@ -15,7 +15,6 @@ from ..audiobook_schemas import (
     BookTTSProviderUpdate,
     ChapterResponse,
 )
-from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..job_payloads import (
     AudiobookPipelinePayload,
@@ -30,7 +29,7 @@ from ..services.endpoint_pool import (
     reset_cooldowns,
     settings_for_provider,
 )
-from ..services.library_paths import resolve_library_file
+from ..services.library_paths import book_audiobook_dir, resolve_library_file
 from ..services.processing_queue import queue_processing_job
 from ..services.tts_providers import (
     tts_provider_name,
@@ -418,7 +417,7 @@ async def download_audiobook(book_id: int, db: AsyncSession = Depends(get_db)) -
     book = await get_audiobook_book_or_404(book_id, db)
     if book.audiobook_pipeline_status != "complete":
         raise HTTPException(status_code=409, detail="Audiobook generation is not complete")
-    full_path = (LIBRARY_PATH / "audiobooks" / str(book_id) / "audiobook.epub").resolve()
+    full_path = (book_audiobook_dir(book_id) / "audiobook.epub").resolve()
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="Audiobook EPUB not found on disk")
     filename = f"{book.title or 'audiobook'}-audiobook.epub"

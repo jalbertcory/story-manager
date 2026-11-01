@@ -24,6 +24,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from .library_paths import book_audiobook_dir
 from ..lifecycle import (
     ALIGNMENT_METHOD,
     AUDIOBOOK_PIPELINE,
@@ -489,7 +490,7 @@ async def rebuild_imported_audiobook(
 
 
 def imported_audiobook_dir(book_id: int, edition_id: int) -> Path:
-    return LIBRARY_PATH / "audiobooks" / str(book_id) / "imports" / str(edition_id)
+    return book_audiobook_dir(book_id) / "imports" / str(edition_id)
 
 
 def relative_library_path(path: Path) -> str:

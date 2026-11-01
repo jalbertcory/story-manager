@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ebooklib import epub
 from backend.app.main import app
-from backend.app.services import update_scheduler, web_novel
+from backend.app.services import library_paths, update_scheduler, web_novel
 from backend.app.services.series import SeriesBook, detect_series_from_books, detect_series_from_titles
 from backend.app.database import Base, get_db
 from backend.app import crud, epub_editor, models, schemas
@@ -1999,6 +1999,7 @@ async def test_restore_original_epub_clears_book_cleaning_rules(db_session, tmp_
 
     library_path = (tmp_path / "library").resolve()
     monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     library_path.mkdir(parents=True)
     immutable_path = library_path / "immutable_Original.epub"
     current_path = library_path / "Original.epub"
@@ -2072,6 +2073,7 @@ async def test_delete_book_preserves_audiobook_until_permanent_delete(db_session
 
     library_path = (tmp_path / "library").resolve()
     monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     library_path.mkdir(parents=True)
 
     async with AsyncTestingSessionLocal() as session:
@@ -2106,6 +2108,7 @@ async def test_permanent_delete_keeps_files_when_database_delete_fails(db_sessio
 
     library_path = (tmp_path / "library").resolve()
     monkeypatch.setattr(books_router, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     library_path.mkdir(parents=True)
 
     async with AsyncTestingSessionLocal() as session:

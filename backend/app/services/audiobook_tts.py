@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
 from .subprocesses import communicate_bounded
 from .audiobook_text import split_speech_segments
@@ -119,7 +120,7 @@ async def _book_tts_settings(
 
 
 def _snippet_path(book_id: int, sentence_id: int) -> Path:
-    return LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets" / f"{sentence_id}.mp3"
+    return book_audiobook_dir(book_id) / "snippets" / f"{sentence_id}.mp3"
 
 
 def _relative_path(full_path: Path) -> str:
@@ -844,7 +845,7 @@ async def generate_audio_for_book(book_id: int, db: AsyncSession) -> None:
     settings = await _book_tts_settings(db, book_id)
 
     # Ensure snippets directory exists
-    snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
+    snippets_dir = book_audiobook_dir(book_id) / "snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
 
     counts = await crud.audiobook.count_sentences_by_status(db, book_id)
@@ -939,7 +940,7 @@ async def generate_audio_for_chapter_preview(
 
     settings = await _book_tts_settings(db, book_id)
 
-    snippets_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id) / "snippets"
+    snippets_dir = book_audiobook_dir(book_id) / "snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
     completed = 0
     to_generate: list[AudiobookSentence] = []

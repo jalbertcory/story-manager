@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, Book
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
@@ -121,13 +122,13 @@ def text_reader_path(book: Book) -> Path | None:
     explicit = _resolved(book.audiobook_text_file_path)
     if explicit and explicit.is_file():
         return explicit
-    legacy = LIBRARY_PATH / "audiobooks" / str(book.id) / "working.epub"
+    legacy = book_audiobook_dir(book.id) / "working.epub"
     return legacy if legacy.is_file() else None
 
 
 def stage_reader_text_rendition(book_id: int, content_version: int, source: Path) -> tuple[str, int, str]:
     """Atomically stage a versioned text rendition before its metadata commits."""
-    target = LIBRARY_PATH / "audiobooks" / str(book_id) / "reader" / f"text-v{content_version}.epub"
+    target = book_audiobook_dir(book_id) / "reader" / f"text-v{content_version}.epub"
     _atomic_copy(source, target)
     return _relative(target), target.stat().st_size, sha256_file(target)
 
@@ -143,7 +144,7 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
         raise RuntimeError(f"Reader text rendition is missing for book {book_id}")
 
     content_version = book.audiobook_source_content_version or book.content_version or 1
-    publication_root = LIBRARY_PATH / "audiobooks" / str(book_id) / "reader"
+    publication_root = book_audiobook_dir(book_id) / "reader"
     text_target = publication_root / f"text-v{content_version}.epub"
     _atomic_copy(source_text, text_target)
     text_size = text_target.stat().st_size

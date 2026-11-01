@@ -26,7 +26,7 @@ from backend.app.services import (
     processing_queue,
     web_novel,
 )
-from backend.app.services import audiobook_queue
+from backend.app.services import audiobook_queue, library_paths
 from backend.app.services.audiobook_queue import AudiobookQueue
 from backend.app.services.processing_queue import ProcessingQueue
 
@@ -2169,7 +2169,7 @@ async def test_tts_requests_carry_drift_margin_and_the_other_cast_voices(db):
 async def test_tts_settings_invalidate_only_unfinished_books_below_eighty_percent(db, tmp_path, monkeypatch):
     library_path = tmp_path / "library"
     library_path.mkdir()
-    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
 
     async def seed_book(title: str, pipeline_status: str, generated: int):
         book = await _make_book(
@@ -2405,6 +2405,7 @@ async def test_ingestion_preserves_nested_markup_and_records_spine_file(db, tmp_
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -2444,6 +2445,7 @@ async def test_ingestion_groups_non_toc_spine_continuation_with_prior_chapter(db
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -2474,6 +2476,7 @@ async def test_incremental_ingestion_appends_chapter_without_invalidating_ready_
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -2525,6 +2528,7 @@ async def test_incremental_ingestion_invalidates_only_edited_chapter(db, tmp_pat
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -2571,6 +2575,7 @@ async def test_incremental_ingestion_removes_deleted_chapter_and_assets(db, tmp_
     )
     monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
     await audiobook_ingestion.ingest_epub(book.id, db)
@@ -2943,6 +2948,7 @@ async def test_manual_sentence_audio_queues_and_generates_only_that_sentence(db,
     queue = _FakeQueue()
     queue.install(monkeypatch)
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
 
     response = await audiobook_characters.generate_sentence_audio(book.id, sentence.id, db)
     await db.refresh(sentence)
@@ -2989,7 +2995,7 @@ async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, mon
     )
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_assembly, "LIBRARY_PATH", library_path)
-    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     packaged_epub = library_path / "audiobooks" / str(book.id) / "audiobook.epub"
     packaged_epub.parent.mkdir(parents=True)
     packaged_epub.write_bytes(b"stale package")
@@ -3030,7 +3036,7 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         immutable_path=str(epub_path.relative_to(library_path.parent)),
         current_path=str(epub_path.relative_to(library_path.parent)),
     )
-    for module in (audiobook_ingestion, audiobook_publication, audiobook_tts, audiobook_assembly):
+    for module in (audiobook_ingestion, audiobook_publication, audiobook_tts, audiobook_assembly, library_paths):
         monkeypatch.setattr(module, "LIBRARY_PATH", library_path)
     monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
 
@@ -3061,13 +3067,13 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         assert package.count('property="media:duration"') == 3
         assert 'property="media:duration">00:00:' in package
 
-    monkeypatch.setattr(audiobook_pipeline, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     response = await audiobook_pipeline.download_audiobook(book.id, db)
     assert Path(response.path) == output_path
     assert response.media_type == "application/epub+zip"
 
     output_path.unlink()
-    monkeypatch.setattr(crud.audiobook, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     assert await crud.audiobook.infer_audiobook_resume_status(db, book.id) == "assembling"
 
     await audiobook_assembly.assemble_book(book.id, db)

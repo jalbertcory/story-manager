@@ -46,6 +46,7 @@ from .routers import (
     web_novels,
 )
 from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
+from .services.library_paths import audiobooks_root
 from .services.processing_queue import get_processing_queue
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ app.mount(
     RasterCoverStaticFiles(directory=str((LIBRARY_PATH / "covers").resolve()), check_dir=False),
     name="cover-files",
 )
-_AUDIOBOOK_DIR = LIBRARY_PATH / "audiobooks"
+_AUDIOBOOK_DIR = audiobooks_root()
 _AUDIOBOOK_DIR.mkdir(parents=True, exist_ok=True)
 app.mount(
     "/library/audiobooks",

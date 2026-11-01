@@ -203,6 +203,7 @@ async def test_upgrades_legacy_tracks_from_immutable_source_and_cleans_old_revis
     library = tmp_path / "library"
     library.mkdir()
     monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     book, chapter = await _seed_book_text(db)
     edition = ImportedAudiobook(book_id=book.id, name="Legacy edition", status="ready")
     db.add(edition)
