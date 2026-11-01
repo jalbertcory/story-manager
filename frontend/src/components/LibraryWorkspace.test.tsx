@@ -234,14 +234,17 @@ it("loads series pages incrementally and fetches the complete list only for orga
 
 it("preserves all filters in group links, saved views, and subsequent filter changes", async () => {
   localStorage.clear();
-  const fetch = stubFetch(() =>
-    response({
-      items: [libraryGroup({ name: "Saga", author: "Writer" })],
-      next_cursor: null,
-      total_count: 1,
-      facets: facets({ genres: [{ name: "Fantasy", count: 1 }] }),
-    } satisfies components["schemas"]["LibraryGroupsPage"]),
-  );
+  const fetch = stubFetch((url) => {
+    if (url.startsWith("/api/library/groups"))
+      return response({
+        items: [libraryGroup({ name: "Saga", author: "Writer" })],
+        next_cursor: null,
+        total_count: 1,
+        facets: facets({ genres: [{ name: "Fantasy", count: 1 }] }),
+      } satisfies components["schemas"]["LibraryGroupsPage"]);
+    if (url.startsWith("/api/books/catalog")) return response(page([]));
+    return response([]);
+  });
   const onNavigate = vi.fn();
   const { unmount } = renderWithClient(
     <LibraryWorkspace
@@ -315,4 +318,76 @@ it("pages group summaries without discarding earlier groups", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Load more groups" }));
   await screen.findByRole("link", { name: /Second/ });
   expect(screen.getByRole("link", { name: /First/ })).toBeInTheDocument();
+});
+
+it("lists standalone search matches as books beside matching series", async () => {
+  const fetch = stubFetch((url) => {
+    if (url.startsWith("/api/library/groups"))
+      return response({
+        items: [
+          libraryGroup({ name: "Saga", book_count: 2 }),
+          libraryGroup({ name: null }),
+        ],
+        next_cursor: null,
+        total_count: 2,
+        facets: facets(),
+      } satisfies components["schemas"]["LibraryGroupsPage"]);
+    if (url.startsWith("/api/books/catalog"))
+      return response(page([catalogBook({ id: 7, title: "Saga Stories" })]));
+    return response([]);
+  });
+  const onEdit = vi.fn();
+  renderWithClient(
+    <LibraryWorkspace
+      search="?group=series&q=saga"
+      hash=""
+      onNavigate={vi.fn()}
+      onEdit={onEdit}
+    />,
+  );
+  expect(
+    await screen.findByRole("link", { name: /Saga.*2 books/ }),
+  ).toHaveAttribute("href", "/?group=series&series=Saga&q=saga");
+  fireEvent.click(await screen.findByRole("link", { name: /Saga Stories/ }));
+  expect(onEdit).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 7 }),
+    "/?group=series&q=saga",
+  );
+  expect(screen.queryByText("Standalone books")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Showing 1 of 1 series and 1 of 1 standalone book/),
+  ).toBeInTheDocument();
+  expect(
+    fetch.mock.calls.some(
+      ([url]) =>
+        url.startsWith("/api/books/catalog") &&
+        /[?&]series=(&|$)/.test(url) &&
+        url.includes("q=saga"),
+    ),
+  ).toBe(true);
+});
+
+it("keeps standalone books grouped when not searching", async () => {
+  const fetch = stubFetch(() =>
+    response({
+      items: [libraryGroup({ name: null, book_count: 3, author_count: 2 })],
+      next_cursor: null,
+      total_count: 1,
+      facets: facets(),
+    } satisfies components["schemas"]["LibraryGroupsPage"]),
+  );
+  renderWithClient(
+    <LibraryWorkspace
+      search=""
+      hash=""
+      onNavigate={vi.fn()}
+      onEdit={vi.fn()}
+    />,
+  );
+  expect(
+    await screen.findByRole("link", { name: /Standalone books/ }),
+  ).toBeInTheDocument();
+  expect(
+    fetch.mock.calls.some(([url]) => url.startsWith("/api/books/catalog")),
+  ).toBe(false);
 });

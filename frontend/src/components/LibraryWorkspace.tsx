@@ -129,20 +129,44 @@ export default function LibraryWorkspace({
     view: "all",
     enabled: !grouped,
   });
+  // Searching lists standalone matches directly instead of behind a group.
+  const flattenStandalone = grouped && groupBy === "series" && Boolean(query);
+  const standalone = useLibraryCatalog({
+    ...request,
+    series: "",
+    view: "all",
+    enabled: flattenStandalone,
+  });
   const active = grouped ? groups : catalog;
-  const groupItems = groups.data?.pages.flatMap((page) => page.items) || [];
+  const groupItems = (
+    groups.data?.pages.flatMap((page) => page.items) || []
+  ).filter((item) => !flattenStandalone || item.name != null);
   const bookItems = catalog.data?.pages.flatMap((page) => page.items) || [];
+  const standaloneItems = flattenStandalone
+    ? standalone.data?.pages.flatMap((page) => page.items) || []
+    : [];
   const items = grouped ? groupItems : bookItems;
   const facets = active.data?.pages[0]?.facets;
-  const total = active.data?.pages[0]?.total_count;
+  const groupTotal = active.data?.pages[0]?.total_count;
+  // The paged group total still counts the hidden standalone group.
+  const hasStandaloneGroup = Boolean(
+    groups.data?.pages.some((page) => page.items.some((g) => g.name == null)),
+  );
+  const total =
+    groupTotal != null && flattenStandalone && hasStandaloneGroup
+      ? groupTotal - 1
+      : groupTotal;
+  const standaloneTotal = standalone.data?.pages[0]?.total_count;
   const allSeries = useQuery({
     queryKey: queryKeys.series,
     queryFn: getSeries,
     enabled: assigningSeries,
   });
+  const loading =
+    active.isLoading || (flattenStandalone && standalone.isLoading);
   useEffect(() => {
-    if (!active.isLoading) onReady?.();
-  }, [active.isLoading, onReady]);
+    if (!loading) onReady?.();
+  }, [loading, onReady]);
   const base = {
     group,
     ...(universe != null ? { universe, universeName } : {}),
@@ -237,7 +261,7 @@ export default function LibraryWorkspace({
           audiobooks automatically.
         </p>
       )}
-      {active.isLoading && <p role="status">Loading library…</p>}
+      {loading && <p role="status">Loading library…</p>}
       {active.error && (
         <div className="error" role="alert">
           {active.error.message}
@@ -253,9 +277,17 @@ export default function LibraryWorkspace({
         </div>
       )}
       <div className="library-status-row">
-        {!active.isLoading && total != null && (
+        {!loading && total != null && (
           <p role="status">
-            Showing {items.length} of {total} {grouped ? "groups" : "books"}
+            Showing {items.length} of {total}{" "}
+            {grouped ? (flattenStandalone ? "series" : "groups") : "books"}
+            {flattenStandalone && Boolean(standaloneTotal) && (
+              <>
+                {" "}
+                and {standaloneItems.length} of {standaloneTotal} standalone{" "}
+                {standaloneTotal === 1 ? "book" : "books"}
+              </>
+            )}
           </p>
         )}
         <SavedLibraryViews
@@ -263,15 +295,59 @@ export default function LibraryWorkspace({
           onNavigate={onNavigate}
         />
       </div>
-      {!active.isLoading && grouped && (
+      {!loading && grouped && (
         <LibraryGroups
           items={groupItems}
           groupBy={groupBy}
           base={base}
           filters={filters}
+          hideEmpty={standaloneItems.length > 0}
         />
       )}
-      {!active.isLoading && !grouped && (
+      {!loading && grouped && active.hasNextPage && (
+        <button
+          className="load-more"
+          disabled={active.isFetchingNextPage}
+          onClick={() => {
+            void active.fetchNextPage();
+          }}
+        >
+          {active.isFetchingNextPage ? "Loading…" : "Load more groups"}
+        </button>
+      )}
+      {!loading && standaloneItems.length > 0 && (
+        <div className="library-book-list">
+          {standaloneItems.map((book) => (
+            <BookRow key={book.id} book={book} onEdit={openBook} />
+          ))}
+        </div>
+      )}
+      {!loading && flattenStandalone && standalone.error && (
+        <div className="error" role="alert">
+          {standalone.error.message}
+          <button
+            onClick={() => {
+              void (standalone.isFetchNextPageError
+                ? standalone.fetchNextPage()
+                : standalone.refetch());
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      {!loading && flattenStandalone && standalone.hasNextPage && (
+        <button
+          className="load-more"
+          disabled={standalone.isFetchingNextPage}
+          onClick={() => {
+            void standalone.fetchNextPage();
+          }}
+        >
+          {standalone.isFetchingNextPage ? "Loading…" : "Load more books"}
+        </button>
+      )}
+      {!loading && !grouped && (
         <>
           {series && !filteredSeries && (
             <details
@@ -326,7 +402,7 @@ export default function LibraryWorkspace({
           </div>
         </>
       )}
-      {active.hasNextPage && (
+      {!grouped && active.hasNextPage && (
         <button
           className="load-more"
           disabled={active.isFetchingNextPage}
@@ -334,11 +410,7 @@ export default function LibraryWorkspace({
             void active.fetchNextPage();
           }}
         >
-          {active.isFetchingNextPage
-            ? "Loading…"
-            : grouped
-              ? "Load more groups"
-              : "Load more books"}
+          {active.isFetchingNextPage ? "Loading…" : "Load more books"}
         </button>
       )}
     </section>
