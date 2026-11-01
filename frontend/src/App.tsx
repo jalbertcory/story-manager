@@ -6,17 +6,20 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import "./App.css";
 import "./Workspace.css";
 import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
-import { getProcessingJobs } from "./api/processing";
+import useActiveProcessingJobs from "./hooks/useActiveProcessingJobs";
 import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin";
+import ErrorBoundary from "./components/ErrorBoundary";
+import NotFound from "./components/NotFound";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
 import AttentionDashboard from "./components/AttentionDashboard";
@@ -44,6 +47,9 @@ import {
   SECTION_NAV,
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
+import { onUnauthorized } from "./lib/authSession";
+import { queryKeys } from "./lib/queryKeys";
+import { RouterContext } from "./lib/router";
 
 const NAV_ICONS: Record<string, IconName> = {
   library: "library",
@@ -61,12 +67,19 @@ function currentLocation() {
   };
 }
 
+function currentHref() {
+  const { pathname, search, hash } = window.location;
+  return `${pathname}${search}${hash}`;
+}
+
+type AuthStatus = Awaited<ReturnType<typeof getAuthStatus>>;
+
 export default function App() {
+  const queryClient = useQueryClient();
   const [location, setLocation] = useState(currentLocation);
-  const [authStatus, setAuthStatus] = useState<Awaited<
-    ReturnType<typeof getAuthStatus>
-  > | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [pendingImportEntries, setPendingImportEntries] = useState<
     FileSystemEntry[]
   >([]);
@@ -89,62 +102,109 @@ export default function App() {
     location.search,
   );
   const isBook = route.view === "book";
+  const notFound = route.view === "not-found";
   const activeTab = route.tab || "library";
-  const authenticated = Boolean(authStatus?.authenticated);
+  // A 401 from any request means the admin session expired. With app auth
+  // disabled (e.g. behind an auth proxy) a 401 is not ours to answer, so the
+  // UI is never blocked on a sign-in page.
+  const sessionLost = sessionExpired && authStatus?.mode !== "disabled";
+  const authenticated = Boolean(authStatus?.authenticated) && !sessionLost;
 
-  useEffect(() => {
+  const loadAuthStatus = useCallback(() => {
+    setAuthError("");
     getAuthStatus()
       .then(setAuthStatus)
       .catch((error: unknown) => setAuthError(errorMessage(error)));
   }, []);
-  const navigate = useCallback((href: string, state: NavigationState = {}) => {
-    if (!allowNavigation(href)) return;
-    window.history.replaceState(
-      {
-        ...parseNavigationState(window.history.state),
-        scrollY: window.scrollY,
-      },
-      "",
-    );
-    window.history.pushState(
-      { ...state, returnTo: state.returnTo || returnTo.current },
-      "",
-      href,
-    );
-    pendingScroll.current = state.scrollY ?? null;
+  useEffect(loadAuthStatus, [loadAuthStatus]);
+  useEffect(() => onUnauthorized(() => setSessionExpired(true)), []);
+  const signedIn = (status: AuthStatus) => {
+    setSessionExpired(false);
+    setAuthStatus(status);
+    // Requests that failed while signed out should run again now.
+    void queryClient.invalidateQueries();
+  };
+
+  // The location the app is showing and its history state, so a refused Back or
+  // Forward can put the address bar back.
+  const committed = useRef({
+    href: currentHref(),
+    state: window.history.state as unknown,
+  });
+  const commitLocation = useCallback(() => {
+    committed.current = {
+      href: currentHref(),
+      state: window.history.state as unknown,
+    };
     setLocation(currentLocation());
-    window.scrollTo(0, state.scrollY || 0);
   }, []);
+  const navigate = useCallback(
+    (href: string, state: NavigationState = {}) => {
+      if (!allowNavigation(href)) return;
+      window.history.replaceState(
+        {
+          ...parseNavigationState(window.history.state),
+          scrollY: window.scrollY,
+        },
+        "",
+      );
+      window.history.pushState(
+        { ...state, returnTo: state.returnTo || returnTo.current },
+        "",
+        href,
+      );
+      pendingScroll.current = state.scrollY ?? null;
+      commitLocation();
+      window.scrollTo(0, state.scrollY || 0);
+    },
+    [commitLocation],
+  );
+  const router = useMemo(() => ({ location, navigate }), [location, navigate]);
   useEffect(() => {
     const onPop = () => {
+      // The browser has already moved. If a page with unsaved work refuses to
+      // be left, push the page that is still on screen back onto history.
+      if (!allowNavigation(currentHref())) {
+        window.history.pushState(
+          committed.current.state,
+          "",
+          committed.current.href,
+        );
+        return;
+      }
       pendingScroll.current =
         parseNavigationState(window.history.state).scrollY ?? null;
       returnTo.current =
         parseNavigationState(window.history.state).returnTo || "/";
-      setLocation(currentLocation());
+      commitLocation();
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [commitLocation]);
   useEffect(() => {
     const parsed = parseLocation(
       location.pathname,
       location.hash,
       location.search,
     );
-    if (parsed.redirectPath)
+    if (parsed.redirectPath) {
       window.history.replaceState(
         window.history.state,
         "",
         `${parsed.redirectPath}${location.search}${location.hash}`,
       );
+      committed.current = {
+        href: currentHref(),
+        state: window.history.state as unknown,
+      };
+    }
   }, [location]);
 
   const bookQuery = useQuery({
-    queryKey: ["book", route.bookId],
-    queryFn: () => {
+    queryKey: queryKeys.books.detail(route.bookId),
+    queryFn: ({ signal }) => {
       if (route.bookId == null) throw new Error("No book selected");
-      return getBook(route.bookId);
+      return getBook(route.bookId, { signal });
     },
     enabled: authenticated && isBook,
     refetchInterval: ({ state }) =>
@@ -152,16 +212,10 @@ export default function App() {
         ? 2000
         : false,
   });
-  const { data: jobs = [] } = useQuery({
-    queryKey: ["active-processing-jobs"],
-    queryFn: () =>
-      getProcessingJobs({ statuses: "queued,running", limit: 100 }),
-    enabled: authenticated,
-    refetchInterval: 5000,
-  });
+  const { data: jobs = [] } = useActiveProcessingJobs(authenticated);
   const attention = useQuery({
-    queryKey: ["attention-dashboard"],
-    queryFn: () => getAttentionDashboard(5),
+    queryKey: queryKeys.attentionDashboard,
+    queryFn: ({ signal }) => getAttentionDashboard(5, { signal }),
     enabled: authenticated && activeTab === "attention",
     staleTime: 30000,
     refetchInterval: jobs.length ? 5000 : 60000,
@@ -243,12 +297,32 @@ export default function App() {
     return (
       <div className="app-loading">
         <h1>Story Manager</h1>
-        <p role={authError ? "alert" : "status"}>{authError || "Loading…"}</p>
+        {authError ? (
+          <p role="alert">
+            {authError}{" "}
+            <button type="button" onClick={loadAuthStatus}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p role="status">Loading…</p>
+        )}
       </div>
     );
-  if (!authenticated) return <AdminLogin onAuthenticated={setAuthStatus} />;
+  if (!authenticated)
+    return (
+      <AdminLogin
+        onAuthenticated={signedIn}
+        notice={
+          sessionLost && authStatus.authenticated
+            ? "Your session expired. Sign in again to continue."
+            : undefined
+        }
+      />
+    );
 
   const renderContent = () => {
+    if (notFound) return <NotFound />;
     if (isBook) {
       if (bookQuery.isLoading) return <p role="status">Loading book…</p>;
       // A failed background refetch keeps the last good data on screen; only a
@@ -314,7 +388,7 @@ export default function App() {
           />
         );
       case "processing":
-        return <ProcessingJobs />;
+        return <ProcessingJobs key={location.search} />;
       case "scheduler":
         return <SchedulerStatus />;
       case "configs":
@@ -322,7 +396,7 @@ export default function App() {
       case "audio-settings":
         return <AudiobookSettings />;
       case "utilities":
-        return <Utilities key={location.search} />;
+        return <Utilities />;
       case "logs":
         return <Logs />;
       case "import":
@@ -347,7 +421,11 @@ export default function App() {
         );
     }
   };
-  const activePrimary = isBook ? "library" : getPrimarySection(activeTab);
+  const activePrimary = isBook
+    ? "library"
+    : notFound
+      ? ""
+      : getPrimarySection(activeTab);
   const secondary =
     !isBook && activePrimary === "activity" ? SECTION_NAV.activity : [];
   const followInternalLink = (event: MouseEvent<HTMLDivElement>) => {
@@ -419,7 +497,10 @@ export default function App() {
               onClick={() => {
                 setAuthError("");
                 void logout()
-                  .then(setAuthStatus)
+                  .then((status) => {
+                    setSessionExpired(false);
+                    setAuthStatus(status);
+                  })
                   .catch((error: unknown) => setAuthError(errorMessage(error)));
               }}
             >
@@ -454,9 +535,15 @@ export default function App() {
               ))}
             </nav>
           )}
-          <Suspense fallback={<p role="status">Loading…</p>}>
-            {renderContent()}
-          </Suspense>
+          <ErrorBoundary
+            resetKey={`${location.pathname}${location.search}${location.hash}`}
+          >
+            <RouterContext.Provider value={router}>
+              <Suspense fallback={<p role="status">Loading…</p>}>
+                {renderContent()}
+              </Suspense>
+            </RouterContext.Provider>
+          </ErrorBoundary>
         </div>
       </main>
     </div>

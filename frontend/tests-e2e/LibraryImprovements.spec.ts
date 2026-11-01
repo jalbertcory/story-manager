@@ -9,7 +9,7 @@ function libraryArchive(series: string) {
 import io, sys, zipfile, xml.etree.ElementTree as ET
 series = sys.argv[1]
 archive = io.BytesIO()
-with zipfile.ZipFile('test.epub') as source, zipfile.ZipFile(archive, 'w') as target:
+with zipfile.ZipFile('tests-e2e/fixtures/test.epub') as source, zipfile.ZipFile(archive, 'w') as target:
     for i in range(32):
         book = io.BytesIO()
         with zipfile.ZipFile(book, 'w') as output:
@@ -142,11 +142,11 @@ test("filters, saves a view, pages a real series and preserves the return locati
       `/?q=${encodeURIComponent(series)}&sort=updated_at&order=desc`,
     );
     await expect(
-      page.getByText("Showing 30 of 32 groups", { exact: true }),
+      page.getByText("Showing 30 of 32 series", { exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Load more groups" }).click();
     await expect(
-      page.getByText("Showing 32 of 32 groups", { exact: true }),
+      page.getByText("Showing 32 of 32 series", { exact: true }),
     ).toBeVisible();
     const names = await page.locator(".library-group-row h3").allTextContents();
     expect(new Set(names).size).toBe(32);

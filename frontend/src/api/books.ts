@@ -1,5 +1,11 @@
-import { api, unwrap, unwrapEmpty, unwrapUnlessNotFound } from "./client";
-import type { Body, Query, Schemas } from "./client";
+import {
+  api,
+  unwrap,
+  unwrapEmpty,
+  unwrapUnlessNotFound,
+  requestInit,
+} from "./client";
+import type { Body, Query, Schemas, RequestOptions } from "./client";
 
 type CatalogQuery = Query<"/api/books/catalog">;
 export interface BookCatalogParams {
@@ -47,22 +53,26 @@ export function buildBookCatalogPath({
   return `/api/books/catalog?${params.join("&")}`;
 }
 
-export function getBookCatalog({
-  q = "",
-  view = "series",
-  review = "",
-  audiobook = "",
-  genre = "",
-  sortBy = "title",
-  sortOrder = "asc",
-  limit = 30,
-  cursor = "",
-  series,
-  universe,
-  source,
-}: BookCatalogParams = {}) {
+export function getBookCatalog(
+  {
+    q = "",
+    view = "series",
+    review = "",
+    audiobook = "",
+    genre = "",
+    sortBy = "title",
+    sortOrder = "asc",
+    limit = 30,
+    cursor = "",
+    series,
+    universe,
+    source,
+  }: BookCatalogParams = {},
+  options?: RequestOptions,
+) {
   return unwrap(
     api.GET("/api/books/catalog", {
+      ...requestInit(options),
       params: {
         query: {
           q,
@@ -84,25 +94,34 @@ export function getBookCatalog({
   );
 }
 
-export async function getAllBookCatalog(params: BookCatalogParams = {}) {
+export async function getAllBookCatalog(
+  params: BookCatalogParams = {},
+  options?: RequestOptions,
+) {
   const books: Schemas["BookCatalogEntry"][] = [];
   let cursor = "";
   do {
-    const page = await getBookCatalog({
-      ...params,
-      view: params.view ?? "all",
-      limit: 100,
-      cursor,
-    });
+    const page = await getBookCatalog(
+      {
+        ...params,
+        view: params.view ?? "all",
+        limit: 100,
+        cursor,
+      },
+      options,
+    );
     books.push(...(page.items ?? []));
     cursor = page.next_cursor ?? "";
   } while (cursor);
   return books;
 }
 
-export function getBook(bookId: number) {
+export function getBook(bookId: number, options?: RequestOptions) {
   return unwrapUnlessNotFound(
-    api.GET("/api/books/{book_id}", { params: { path: { book_id: bookId } } }),
+    api.GET("/api/books/{book_id}", {
+      ...requestInit(options),
+      params: { path: { book_id: bookId } },
+    }),
     "Could not load the book.",
   );
 }
@@ -129,8 +148,11 @@ export function deleteBook(bookId: number) {
   );
 }
 
-export function getRecycleBin() {
-  return unwrap(api.GET("/api/recycle-bin"), "Failed to load recycle bin");
+export function getRecycleBin(options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/recycle-bin", requestInit(options)),
+    "Failed to load recycle bin",
+  );
 }
 
 export function restoreRecycledBook(bookId: number) {
@@ -151,9 +173,10 @@ export function permanentlyDeleteRecycledBook(bookId: number) {
   );
 }
 
-export function getBookRevisions(bookId: number) {
+export function getBookRevisions(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/revisions", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to load change history",
@@ -205,27 +228,33 @@ export function detachBookSource(bookId: number) {
   );
 }
 
-export function getBookChapters(bookId: number) {
+export function getBookChapters(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/chapters", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch chapters",
   );
 }
 
-export function getBookCleanedChapters(bookId: number) {
+export function getBookCleanedChapters(
+  bookId: number,
+  options?: RequestOptions,
+) {
   return unwrap(
     api.GET("/api/books/{book_id}/cleaned-chapters", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch cleaned chapters",
   );
 }
 
-export function getBookUpdateHistory(bookId: number) {
+export function getBookUpdateHistory(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/update-history", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch update history",

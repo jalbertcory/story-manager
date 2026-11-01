@@ -12,7 +12,9 @@ import {
 } from "../api/processing";
 
 import { JOB_LABELS } from "../lib/processing";
+import { useLocation } from "../lib/router";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import { queryKeys } from "../lib/queryKeys";
 
 // Library-wide jobs touch every book, so they are confirmed before queueing.
 const LIBRARY_ACTIONS = {
@@ -99,10 +101,10 @@ function ProcessingJobs() {
       ),
     [processingLifecycle],
   );
-  const [statusFilter, setStatusFilter] = useState(() => {
-    const requested = new URLSearchParams(window.location.search).get("status");
-    return requested || "active";
-  });
+  const { search } = useLocation();
+  const [statusFilter, setStatusFilter] = useState(
+    () => new URLSearchParams(search).get("status") || "active",
+  );
   const [operation, setOperation] =
     useState<(typeof QUEUE_OPERATIONS)[number]["value"]>("clean_book");
   const [bookSearch, setBookSearch] = useState("");
@@ -123,22 +125,26 @@ function ProcessingJobs() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["processing-jobs", statuses],
-    queryFn: () => getProcessingJobs({ statuses, limit: 200 }),
+    queryKey: queryKeys.processingJobs.list(statuses),
+    queryFn: ({ signal }) =>
+      getProcessingJobs({ statuses, limit: 200 }, { signal }),
     enabled: Boolean(processingLifecycle),
     refetchInterval: ({ state }) =>
       state.data?.some((job) => activeStatuses.has(job.status)) ? 1500 : 5000,
   });
   const { data: catalogPage } = useQuery({
-    queryKey: ["processing-book-catalog", operation, debouncedBookSearch],
-    queryFn: () =>
-      getBookCatalog({
-        q: debouncedBookSearch,
-        view: operation === "refresh_book" ? "web" : "all",
-        sortBy: "title",
-        sortOrder: "asc",
-        limit: 100,
-      }),
+    queryKey: queryKeys.processingBookCatalog(operation, debouncedBookSearch),
+    queryFn: ({ signal }) =>
+      getBookCatalog(
+        {
+          q: debouncedBookSearch,
+          view: operation === "refresh_book" ? "web" : "all",
+          sortBy: "title",
+          sortOrder: "asc",
+          limit: 100,
+        },
+        { signal },
+      ),
     staleTime: 30_000,
   });
   const catalog = useMemo(() => catalogPage?.items ?? [], [catalogPage]);
@@ -158,9 +164,11 @@ function ProcessingJobs() {
   }, [catalog, debouncedBookSearch, operation]);
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
     void queryClient.invalidateQueries({
-      queryKey: ["active-processing-jobs"],
+      queryKey: queryKeys.processingJobs.all,
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.activeProcessingJobs,
     });
   };
   const queueMutation = useMutation({
@@ -359,7 +367,9 @@ function ProcessingJobs() {
         </div>
         {queueNotice && <p className="job-queued-notice">{queueNotice}</p>}
         {queueMutation.isError && (
-          <p className="error">{queueMutation.error.message}</p>
+          <p className="error" role="alert">
+            {queueMutation.error.message}
+          </p>
         )}
       </details>
 
@@ -387,7 +397,11 @@ function ProcessingJobs() {
           </label>
         </div>
         {isLoading && <p>Loading jobs…</p>}
-        {error && <p className="error">{error.message}</p>}
+        {error && (
+          <p className="error" role="alert">
+            {error.message}
+          </p>
+        )}
         {!isLoading && !jobs.length && (
           <p className="hint">No processing jobs in this view.</p>
         )}

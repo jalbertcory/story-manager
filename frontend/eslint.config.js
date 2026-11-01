@@ -53,8 +53,9 @@ export default defineConfig([
   },
   {
     files: ["src/**/*.{ts,tsx}"],
-    // Tests are outside the production TS project. The compile-only contract
-    // fixture deliberately contains unsafe calls that tsc must reject.
+    // Tests are typechecked by tsc but skip the type-aware lint rules. The
+    // compile-only contract fixture deliberately contains unsafe calls that tsc
+    // must reject.
     ignores: ["src/**/*.test.*", "src/api/api.contract-check.ts"],
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {

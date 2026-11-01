@@ -27,6 +27,7 @@ import {
   previewLibationBackup,
   uploadImportedAudiobook,
 } from "../api/audiobook";
+import { queryKeys } from "../lib/queryKeys";
 
 const AUDIO_EXTENSIONS = new Set([
   ".aac",
@@ -204,8 +205,10 @@ function LibationBackupImport() {
         done: index + 1 === matches.length,
       });
     }
-    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-    void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.processingJobs.all,
+    });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.bookCatalog.all });
   };
 
   const reset = () => {
@@ -316,7 +319,11 @@ function LibationBackupImport() {
           Inspecting backup…
         </p>
       )}
-      {previewError && <p className="error">{previewError}</p>}
+      {previewError && (
+        <p className="error" role="alert">
+          {previewError}
+        </p>
+      )}
 
       {preview && (
         <>
@@ -531,7 +538,7 @@ function LibationBackupImport() {
           {importState.results
             .filter((result) => result.result === "failed")
             .map((result) => (
-              <p className="error" key={result.source_key}>
+              <p className="error" role="alert" key={result.source_key}>
                 {result.source_title}: {result.error}
               </p>
             ))}

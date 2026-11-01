@@ -5,21 +5,14 @@ echo "🚀 Starting the setup process..."
 
 # Backend setup
 echo "🐍 Setting up the Python backend..."
-if ! command -v pyenv &> /dev/null
-then
-    echo "pyenv could not be found, please install it first."
-    exit 1
-fi
-pyenv install --skip-existing
-
 if ! command -v uv &> /dev/null
 then
     echo "uv could not be found, please install it first."
     exit 1
 fi
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+# Installs the Python version from .python-version if needed and the exact
+# dependency set recorded in uv.lock.
+uv sync --frozen --extra dev
 echo "✅ Backend setup complete."
 
 # Database setup
@@ -54,8 +47,7 @@ echo "DATABASE_URL=postgresql+psycopg://storyuser:storypass@localhost:5432/story
 echo "✅ .env file created."
 
 echo "⏳ Running database migrations..."
-source .venv/bin/activate
-alembic -c backend/alembic.ini upgrade head
+PYTHONPATH=. uv run --frozen --extra dev alembic -c backend/alembic.ini upgrade head
 echo "✅ Database migrations complete."
 
 # Frontend setup
@@ -74,7 +66,7 @@ fi
   nvm install
   nvm use
   cd frontend
-  npm install
+  npm ci
   npx playwright install-deps
   npx playwright install
 )

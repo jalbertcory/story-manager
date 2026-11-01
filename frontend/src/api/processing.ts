@@ -1,25 +1,30 @@
-import { api, unwrap } from "./client";
-import type { Body } from "./client";
+import { api, unwrap, requestInit } from "./client";
+import type { Body, RequestOptions } from "./client";
 type JobRequest = Body<"/api/processing/jobs", "post">;
-export const getProcessingJob = (jobId: number) =>
+export const getProcessingJob = (jobId: number, options?: RequestOptions) =>
   unwrap(
     api.GET("/api/processing/jobs/{job_id}", {
+      ...requestInit(options),
       params: { path: { job_id: jobId } },
     }),
   );
-export function getProcessingJobs({
-  statuses = "",
-  jobType = "",
-  bookId = "",
-  limit = 100,
-}: {
-  statuses?: string;
-  jobType?: string;
-  bookId?: number | "";
-  limit?: number;
-} = {}) {
+export function getProcessingJobs(
+  {
+    statuses = "",
+    jobType = "",
+    bookId = "",
+    limit = 100,
+  }: {
+    statuses?: string;
+    jobType?: string;
+    bookId?: number | "";
+    limit?: number;
+  } = {},
+  options?: RequestOptions,
+) {
   return unwrap(
     api.GET("/api/processing/jobs", {
+      ...requestInit(options),
       params: {
         query: {
           ...(statuses ? { statuses } : {}),

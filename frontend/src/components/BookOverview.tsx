@@ -9,6 +9,7 @@ import { sanitizeChapterHtml } from "../lib/chapterHtml";
 import UniverseMembership from "./UniverseMembership";
 import { libraryPath } from "../lib/library";
 import Icon from "./ui/Icon";
+import { queryKeys } from "../lib/queryKeys";
 
 export default function BookOverview({
   book,
@@ -25,19 +26,21 @@ export default function BookOverview({
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [chapterSearch, setChapterSearch] = useState("");
   const info = useQuery({
-    queryKey: ["library-book-info", book.id],
-    queryFn: () => getLibraryBookInfo(book.id),
+    queryKey: queryKeys.libraryBookInfo.detail(book.id),
+    queryFn: ({ signal }) => getLibraryBookInfo(book.id, { signal }),
   });
   const chapters = useQuery({
-    queryKey: ["cleaned-chapters", book.id],
-    queryFn: () => getBookCleanedChapters(book.id),
+    queryKey: queryKeys.cleanedChapters(book.id),
+    queryFn: ({ signal }) => getBookCleanedChapters(book.id, { signal }),
     enabled: chaptersOpen && Boolean(book.current_path),
   });
   const refresh = useMutation({
     mutationFn: () => refreshBook(book.id),
     onSuccess: (updated) => {
-      client.setQueryData(["book", book.id], updated);
-      void client.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      client.setQueryData(queryKeys.books.detail(book.id), updated);
+      void client.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
+      });
     },
   });
   const checking = ["queued", "processing"].includes(book.refresh_status || "");

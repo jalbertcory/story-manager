@@ -2,6 +2,8 @@ import type { Chapter, ImportedEdition } from "./types";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import ConfirmActionDialog from "../ConfirmActionDialog";
+
 import {
   alignImportedAudiobook,
   deleteImportedAudiobook,
@@ -12,6 +14,7 @@ import {
   upgradeImportedAudiobook,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
+import { queryKeys } from "../../lib/queryKeys";
 
 function durationLabel(durationMs: number | null | undefined) {
   if (!durationMs) return "—";
@@ -51,11 +54,21 @@ function AudiobookSources({
   const queryClient = useQueryClient();
   const [jobNotice, setJobNotice] = useState("");
   const [confirmAiTtsRebuild, setConfirmAiTtsRebuild] = useState(false);
+  const [editionToDelete, setEditionToDelete] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
 
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["audiobook-imports", bookId] });
-    void queryClient.invalidateQueries({ queryKey: ["audiobook-chapters", bookId] });
-    void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.audiobook.imports(bookId),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.audiobook.chapters(bookId),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.audiobook.status(bookId),
+    });
   };
   const retryMutation = useMutation({
     mutationFn: retryImportedAudiobook,
@@ -67,6 +80,7 @@ function AudiobookSources({
   const deleteMutation = useMutation({
     mutationFn: deleteImportedAudiobook,
     onSuccess: invalidate,
+    onSettled: () => setEditionToDelete(null),
   });
   const upgradeMutation = useMutation({
     mutationFn: upgradeImportedAudiobook,
@@ -189,7 +203,9 @@ function AudiobookSources({
             </div>
           )}
           {aiTtsMutation.isError && (
-            <p className="error">{aiTtsMutation.error.message}</p>
+            <p className="error" role="alert">
+              {aiTtsMutation.error.message}
+            </p>
           )}
         </section>
       )}
@@ -370,15 +386,9 @@ function AudiobookSources({
                 type="button"
                 className="btn-text imported-edition-delete"
                 disabled={active || deleteMutation.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `Delete imported edition “${edition.name}” and its stored audio?`,
-                    )
-                  ) {
-                    deleteMutation.mutate(edition.id);
-                  }
-                }}
+                onClick={() =>
+                  setEditionToDelete({ id: edition.id, name: edition.name })
+                }
               >
                 Delete imported edition
               </button>
@@ -386,6 +396,20 @@ function AudiobookSources({
           );
         })
       )}
+      <ConfirmActionDialog
+        open={editionToDelete != null}
+        title={`Delete imported edition “${editionToDelete?.name ?? ""}”?`}
+        confirmLabel="Delete edition"
+        busyLabel="Deleting…"
+        danger
+        isPending={deleteMutation.isPending}
+        onCancel={() => setEditionToDelete(null)}
+        onConfirm={() => {
+          if (editionToDelete) deleteMutation.mutate(editionToDelete.id);
+        }}
+      >
+        <p>Its stored audio files are deleted too. This cannot be undone.</p>
+      </ConfirmActionDialog>
       {jobNotice && (
         <p className="job-queued-notice" role="status">
           {jobNotice} <a href="/processing">View processing</a>
@@ -397,7 +421,7 @@ function AudiobookSources({
         upgradeMutation.isError ||
         deleteMutation.isError ||
         matchMutation.isError) && (
-        <p className="error">
+        <p className="error" role="alert">
           {(
             retryMutation.error ||
             alignMutation.error ||

@@ -1,36 +1,21 @@
-import { displayValue, stringValue } from "../lib/errors";
+import { displayValue } from "../lib/errors";
 import { parseLocation } from "../lib/navigation";
 import { setNavigationGuard } from "../lib/navigationGuard";
 import type { Book, BookSectionChange } from "../types";
 import type { components } from "../api/schema";
 import { useEffect, useRef, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import AudiobookPipeline from "./AudiobookPipeline";
-
 import {
-  deleteBook,
-  detachBookSource,
   getBook,
   getBookChapters,
   getBookCleanedChapters,
   getBookUpdateHistory,
-  getBookRevisions,
-  processBook,
-  refreshBook,
-  restoreBookRevision,
-  restoreOriginalEpub,
-  updateBook,
 } from "../api/books";
 import { getMatchedConfigs, previewCleaning } from "../api/cleaning";
-import {
-  getApiCoverUrl,
-  retryBookCover,
-  setBookCoverUrl,
-  uploadBookCover,
-} from "../api/covers";
-import { queueMetadataSync } from "../api/metadata";
 import { getSeries } from "../api/series";
 import BookSettingsChapters from "./BookSettingsChapters";
+import BookActionsSection from "./book-settings/BookActionsSection";
 import {
   BookIdentifiersSection,
   ChapterUpdateHistory,
@@ -38,67 +23,57 @@ import {
   SourceTagList,
   SyncedGenreTagList,
 } from "./book-settings/BookSettingsSections";
+import CoverSection from "./book-settings/CoverSection";
+import RecoverySection from "./book-settings/RecoverySection";
+import SourceSection from "./book-settings/SourceSection";
+import { useBookMutations } from "./book-settings/useBookMutations";
 import { useBookSettingsForm } from "./book-settings/useBookSettingsForm";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import { queryKeys } from "../lib/queryKeys";
 
 const fetchChapters = async ({
   queryKey,
+  signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookChapters(bookId);
+  return getBookChapters(bookId, { signal });
 };
 
 const fetchCleanedChapters = async ({
   queryKey,
+  signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookCleanedChapters(bookId);
+  return getBookCleanedChapters(bookId, { signal });
 };
 
 const fetchMatchedConfig = async ({
   queryKey,
+  signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getMatchedConfigs(bookId);
+  return getMatchedConfigs(bookId, { signal });
 };
 
 const fetchUpdateHistory = async ({
   queryKey,
+  signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
+  signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
-  return getBookUpdateHistory(bookId);
+  return getBookUpdateHistory(bookId, { signal });
 };
-
-function describeRevisionSnapshot(
-  revision: components["schemas"]["BookRevision"],
-) {
-  const snapshot = revision.snapshot || {};
-  if (
-    revision.action === "cleaning_rules_changed" ||
-    revision.action === "original_restored"
-  ) {
-    const removedCount = Array.isArray(snapshot.removed_chapters)
-      ? snapshot.removed_chapters.length
-      : 0;
-    const selectorCount = Array.isArray(snapshot.content_selectors)
-      ? snapshot.content_selectors.length
-      : 0;
-    return `Previous content rules: ${removedCount} removed chapter${removedCount === 1 ? "" : "s"}, ${selectorCount} selector${selectorCount === 1 ? "" : "s"}`;
-  }
-  if (revision.action === "series_changed") {
-    const seriesIndex = displayValue(snapshot.series_index);
-    return `Previous series: ${stringValue(snapshot.series) || "None"}${seriesIndex != null ? ` · order ${seriesIndex}` : ""}`;
-  }
-  return `Previous metadata: “${stringValue(snapshot.title) || "Untitled"}” by ${stringValue(snapshot.author) || "Unknown author"}`;
-}
 
 function BookSettings({
   book: initialBook,
@@ -113,17 +88,14 @@ function BookSettings({
   audiobookTab?: string | null | undefined;
   onNavigationChange?: BookSectionChange;
 }) {
-  const queryClient = useQueryClient();
-  const coverInputRef = useRef<HTMLInputElement>(null);
-
   // Poll the individual book while a refresh is in-flight so the UI reflects
   // backend state without the user navigating away. The query is seeded with
   // the book the parent passed so the page renders immediately; staleTime is
   // Infinity so we only hit the network when the refetchInterval fires or when
   // a mutation explicitly invalidates this key.
   const { data: polledBook } = useQuery({
-    queryKey: ["book", initialBook.id],
-    queryFn: () => getBook(initialBook.id),
+    queryKey: queryKeys.books.detail(initialBook.id),
+    queryFn: ({ signal }) => getBook(initialBook.id, { signal }),
     initialData: initialBook,
     staleTime: Infinity,
     refetchInterval: ({ state }) => {
@@ -145,11 +117,6 @@ function BookSettings({
   const isRefreshing =
     book.refresh_status === "queued" || book.refresh_status === "processing";
   const refreshErrored = book.refresh_status === "error";
-
-  // Cache-buster for the cover <img> — incremented whenever a cover mutation
-  // succeeds so the browser fetches the freshly-saved file instead of a stale
-  // copy at the same deterministic URL.
-  const [coverVersion, setCoverVersion] = useState(0);
 
   const {
     title,
@@ -247,20 +214,20 @@ function BookSettings({
   } | null>(null);
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
-    queryKey: ["chapters", book.id],
+    queryKey: queryKeys.chapters(book.id),
     queryFn: fetchChapters,
     enabled: Boolean(book.immutable_path),
   });
 
   const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } =
     useQuery({
-      queryKey: ["cleaned-chapters", book.id],
+      queryKey: queryKeys.cleanedChapters(book.id),
       queryFn: fetchCleanedChapters,
       enabled: chapterPreviewMode === "cleaned" && Boolean(book.current_path),
     });
 
   const { data: matchedConfigs = [] } = useQuery({
-    queryKey: ["matched-config", book.id],
+    queryKey: queryKeys.matchedConfig(book.id),
     queryFn: fetchMatchedConfig,
   });
 
@@ -270,155 +237,39 @@ function BookSettings({
     isError: updateHistoryIsError,
     error: updateHistoryError,
   } = useQuery({
-    queryKey: ["book-update-history", book.id, book.content_version],
+    queryKey: queryKeys.bookUpdateHistory.version(
+      book.id,
+      book.content_version,
+    ),
     queryFn: fetchUpdateHistory,
     enabled: book.source_type === "web",
     refetchInterval: isRefreshing ? 5000 : false,
   });
 
   const { data: allSeries = [] } = useQuery({
-    queryKey: ["series"],
+    queryKey: queryKeys.series,
     queryFn: getSeries,
     staleTime: 60_000,
   });
 
-  const { data: revisions = [] } = useQuery({
-    queryKey: ["book-revisions", book.id],
-    queryFn: () => getBookRevisions(book.id),
-  });
-
-  const saveMutation = useMutation({
-    mutationFn: (data: components["schemas"]["BookUpdate"]) =>
-      updateBook(book.id, data),
-    onSuccess: (updatedBook) => {
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-    },
-  });
-
-  const enableAudiobookMutation = useMutation({
-    mutationFn: () => updateBook(book.id, { audiobook_enabled: true }),
-    onSuccess: (updatedBook) => {
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      setBookTab("audiobook");
-    },
-  });
-
-  const processMutation = useMutation({
-    mutationFn: () => processBook(book.id),
-    onSuccess: () => {
-      setJobNotice("EPUB cleaning job queued.");
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["cleaned-chapters", book.id],
-      });
-    },
-  });
-
-  // Kicks off an async refresh job and returns immediately. The useQuery above
-  // polls until the book's refresh_status goes back to null (or "error"). We
-  // keep the user on the page so they can see the progress and the final result
-  // without having to rediscover the book in the catalog.
-  const refreshMutation = useMutation({
-    mutationFn: () => refreshBook(book.id),
-    onSuccess: (updatedBook) => {
-      setJobNotice("Source refresh job queued.");
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["book-update-history", book.id],
-      });
-    },
-  });
-
-  const detachSourceMutation = useMutation({
-    mutationFn: () => detachBookSource(book.id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
+  const {
+    save: saveMutation,
+    enableAudiobook: enableAudiobookMutation,
+    process: processMutation,
+    refresh: refreshMutation,
+    detachSource: detachSourceMutation,
+    remove: deleteMutation,
+    restoreOriginal: restoreOriginalMutation,
+    restoreRevision: restoreRevisionMutation,
+    metadataSync: metadataSyncMutation,
+  } = useBookMutations(book.id, {
+    onNotice: setJobNotice,
+    onLeave: () => {
       leavingDeliberately.current = true;
       onBack();
     },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => deleteBook(book.id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      leavingDeliberately.current = true;
-      onBack();
-    },
-  });
-
-  const restoreOriginalMutation = useMutation({
-    mutationFn: () => restoreOriginalEpub(book.id),
-    onSuccess: (updatedBook) => {
-      setConfirmAction(null);
-      setJobNotice("Original EPUB restored.");
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["book-revisions", book.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
-      void queryClient.invalidateQueries({
-        queryKey: ["cleaned-chapters", book.id],
-      });
-    },
-  });
-
-  const restoreRevisionMutation = useMutation({
-    mutationFn: (revisionId: number) =>
-      restoreBookRevision(book.id, revisionId),
-    onSuccess: (updatedBook) => {
-      setConfirmAction(null);
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["book-revisions", book.id],
-      });
-    },
+    onAudiobookEnabled: () => setBookTab("audiobook"),
+    onRestored: () => setConfirmAction(null),
   });
 
   const previewMutation = useMutation({
@@ -428,57 +279,6 @@ function BookSettings({
         removed_chapters: removedChapters,
       }),
     onSuccess: (data) => setPreviewResult(data),
-  });
-
-  const [coverUrl, setCoverUrl] = useState("");
-
-  // Cover files live at a deterministic URL (/api/covers/{book_id}), so the
-  // browser happily caches them. Whenever any cover mutation succeeds we bump
-  // `coverVersion` and append it as a cache-busting query param on the <img>,
-  // forcing the browser to fetch the freshly-written file.
-  const bumpCoverVersion = () => setCoverVersion((v) => v + 1);
-
-  const coverMutation = useMutation({
-    mutationFn: (file: File) => uploadBookCover(book.id, file),
-    onSuccess: () => {
-      bumpCoverVersion();
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
-    },
-  });
-
-  const retryCoverMutation = useMutation({
-    mutationFn: () => retryBookCover(book.id),
-    onSuccess: () => {
-      setJobNotice("Cover re-extraction job queued.");
-      void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
-      });
-    },
-  });
-
-  const coverUrlMutation = useMutation({
-    mutationFn: (url: string) => setBookCoverUrl(book.id, url),
-    onSuccess: () => {
-      bumpCoverVersion();
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
-      setCoverUrl("");
-    },
-  });
-
-  const metadataSyncMutation = useMutation({
-    mutationFn: () => queueMetadataSync([book.id], "manual"),
   });
 
   const handleSave = () => {
@@ -507,14 +307,6 @@ function BookSettings({
     setConfirmAction(action);
   };
 
-  const handleDelete = () => {
-    openConfirmAction({ type: "delete" });
-  };
-
-  const handleDetachSource = () => {
-    openConfirmAction({ type: "detach" });
-  };
-
   const toggleChapter = (filename: string) => {
     setRemovedChapters((prev) =>
       prev.includes(filename)
@@ -537,8 +329,6 @@ function BookSettings({
     restoreRevisionMutation.isPending ||
     enableAudiobookMutation.isPending ||
     isRefreshing;
-  const canDetachWebMarker =
-    book.source_type === "web" && book.immutable_path && book.current_path;
 
   return (
     <div
@@ -769,91 +559,18 @@ function BookSettings({
                   </button>
                 </div>
                 {metadataSyncMutation.isSuccess && (
-                  <p className="hint">Metadata recheck queued.</p>
+                  <p className="hint" role="status">
+                    Metadata recheck queued.
+                  </p>
+                )}
+                {metadataSyncMutation.isError && (
+                  <p className="error" role="alert">
+                    Metadata recheck failed:{" "}
+                    {metadataSyncMutation.error.message}
+                  </p>
                 )}
               </div>
-              <div className="settings-cover-aside">
-                {book.cover_path ? (
-                  <img
-                    src={`${getApiCoverUrl(book.id)}?v=${coverVersion}`}
-                    alt="Cover"
-                    className="settings-cover-img"
-                  />
-                ) : (
-                  <div className="settings-cover-placeholder">No cover</div>
-                )}
-                <input
-                  ref={coverInputRef}
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp"
-                  style={{ display: "none" }}
-                  onChange={(e) =>
-                    e.target.files?.[0] &&
-                    coverMutation.mutate(e.target.files[0])
-                  }
-                />
-                <button
-                  className="btn-sm"
-                  onClick={() => coverInputRef.current?.click()}
-                  disabled={
-                    coverMutation.isPending || coverUrlMutation.isPending
-                  }
-                >
-                  {coverMutation.isPending
-                    ? "Uploading…"
-                    : book.cover_path
-                      ? "Replace"
-                      : "Upload"}
-                </button>
-                {book.immutable_path && (
-                  <button
-                    className="btn-sm btn-secondary"
-                    onClick={() => retryCoverMutation.mutate()}
-                    disabled={
-                      retryCoverMutation.isPending ||
-                      coverMutation.isPending ||
-                      coverUrlMutation.isPending
-                    }
-                  >
-                    {retryCoverMutation.isPending
-                      ? "Queueing…"
-                      : "Queue re-extract"}
-                  </button>
-                )}
-                <div className="cover-url-row">
-                  <input
-                    type="text"
-                    placeholder="Image URL…"
-                    value={coverUrl}
-                    onChange={(e) => setCoverUrl(e.target.value)}
-                    onKeyDown={(e) =>
-                      e.key === "Enter" &&
-                      coverUrl.trim() &&
-                      coverUrlMutation.mutate(coverUrl.trim())
-                    }
-                  />
-                  <button
-                    className="btn-sm"
-                    onClick={() => coverUrlMutation.mutate(coverUrl.trim())}
-                    disabled={
-                      !coverUrl.trim() ||
-                      coverUrlMutation.isPending ||
-                      coverMutation.isPending
-                    }
-                  >
-                    {coverUrlMutation.isPending ? "…" : "Set"}
-                  </button>
-                </div>
-                {coverMutation.isError && (
-                  <p className="error">{coverMutation.error.message}</p>
-                )}
-                {coverUrlMutation.isError && (
-                  <p className="error">{coverUrlMutation.error.message}</p>
-                )}
-                {retryCoverMutation.isError && (
-                  <p className="error">{retryCoverMutation.error.message}</p>
-                )}
-              </div>
+              <CoverSection book={book} onNotice={setJobNotice} />
             </div>
           </section>
 
@@ -878,7 +595,7 @@ function BookSettings({
                 </button>
               </div>
               {enableAudiobookMutation.isError && (
-                <p className="error">
+                <p className="error" role="alert">
                   {enableAudiobookMutation.error?.message ||
                     "Could not enable AI narration"}
                 </p>
@@ -897,49 +614,12 @@ function BookSettings({
           </section>
 
           {(book.source_url || book.source_type === "web") && (
-            <section className="settings-section">
-              <h3>Source</h3>
-              {book.source_url ? (
-                <div className="source-info">
-                  <span className="badge-web">{book.source_type}</span>
-                  <a
-                    href={book.source_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="source-link"
-                  >
-                    {book.source_url}
-                  </a>
-                </div>
-              ) : (
-                <p className="hint">No source URL is currently attached.</p>
-              )}
-              {book.source_type === "web" && (
-                <div
-                  className="settings-actions"
-                  style={{ marginTop: "0.5rem" }}
-                >
-                  <button
-                    type="button"
-                    className="btn-danger btn-sm"
-                    onClick={handleDetachSource}
-                    disabled={isBusy || !canDetachWebMarker}
-                  >
-                    {detachSourceMutation.isPending
-                      ? "Converting…"
-                      : "Convert to EPUB-only"}
-                  </button>
-                  {!canDetachWebMarker && (
-                    <span
-                      className="hint"
-                      style={{ margin: 0, alignSelf: "center" }}
-                    >
-                      Requires EPUB files first
-                    </span>
-                  )}
-                </div>
-              )}
-            </section>
+            <SourceSection
+              book={book}
+              disabled={isBusy}
+              isDetaching={detachSourceMutation.isPending}
+              onDetach={() => openConfirmAction({ type: "detach" })}
+            />
           )}
 
           {book.source_type === "web" && (
@@ -1041,7 +721,9 @@ function BookSettings({
                 </span>
               )}
               {previewMutation.isError && (
-                <span className="error">{previewMutation.error.message}</span>
+                <span className="error" role="alert">
+                  {previewMutation.error.message}
+                </span>
               )}
             </div>
           </section>
@@ -1064,145 +746,42 @@ function BookSettings({
             toggleChapterPreview={toggleChapterPreview}
           />
 
-          <section className="settings-section">
-            <h3>Recovery &amp; change history</h3>
-            <p className="hint">
-              Restore the current EPUB from its immutable original, or roll
-              metadata and series fields back to a saved revision.
-            </p>
-            <div
-              className="settings-actions"
-              style={{ marginBottom: revisions.length ? "0.85rem" : 0 }}
-            >
-              <button
-                type="button"
-                onClick={() => openConfirmAction({ type: "original" })}
-                disabled={isBusy || !book.immutable_path || !book.current_path}
-              >
-                Restore original EPUB
-              </button>
-            </div>
-            {revisions.length > 0 ? (
-              <ul className="revision-list">
-                {revisions.map((revision) => (
-                  <li className="revision-item" key={revision.id}>
-                    <div>
-                      <strong>{revision.summary}</strong>
-                      <p className="hint">
-                        {new Date(revision.created_at).toLocaleString()} ·{" "}
-                        {revision.action.replace(/_/g, " ")}
-                      </p>
-                      <p className="hint">
-                        {describeRevisionSnapshot(revision)}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-text btn-sm"
-                      onClick={() =>
-                        openConfirmAction({ type: "revision", revision })
-                      }
-                      disabled={isBusy}
-                    >
-                      Restore
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">
-                No reversible changes have been recorded yet.
-              </p>
-            )}
-          </section>
+          <RecoverySection
+            book={book}
+            disabled={isBusy}
+            onRestoreOriginal={() => openConfirmAction({ type: "original" })}
+            onRestoreRevision={(revision) =>
+              openConfirmAction({ type: "revision", revision })
+            }
+          />
 
-          <section
-            className="settings-section actions-bar"
-            aria-label="Book actions"
-          >
-            <div className="actions-heading">
-              <h3>Book actions</h3>
-              <span className="hint">
-                Save edits before rebuilding or refreshing.
-              </span>
-            </div>
-            <div className="actions-primary">
-              <button
-                className="btn-primary"
-                onClick={handleSave}
-                disabled={isBusy}
-              >
-                {saveMutation.isPending ? "Saving..." : "Save Metadata"}
-              </button>
-              {book.current_path && (
-                <button
-                  onClick={() => {
-                    void handleProcess();
-                  }}
-                  disabled={isBusy}
-                  title="Save changes and rebuild the EPUB file with current cleaning rules"
-                >
-                  {processMutation.isPending
-                    ? "Queueing..."
-                    : "Queue EPUB rebuild from saved edits"}
-                </button>
-              )}
-              {book.source_type === "web" && (
-                <button
-                  onClick={() => refreshMutation.mutate()}
-                  disabled={isBusy}
-                >
-                  {refreshMutation.isPending
-                    ? "Queueing…"
-                    : book.refresh_status === "queued"
-                      ? "Queued for refresh…"
-                      : book.refresh_status === "processing"
-                        ? "Refreshing from source…"
-                        : "Refresh latest chapters"}
-                </button>
-              )}
-            </div>
-            {jobNotice && (
-              <p className="job-queued-notice" role="status">
-                {jobNotice} <a href="/activity/processing">View processing</a>
-              </p>
-            )}
-            <p className="hint actions-hint">
-              <strong>Save Metadata</strong> updates the database only.{" "}
-              <strong>Rebuild EPUB</strong> saves edits and regenerates the file
-              with your cleaning rules. Refreshing checks the original web
-              source for new chapters.
-            </p>
-            <div className="actions-secondary">
-              {book.current_path && (
-                <a
-                  href={`/api/books/${book.id}/download`}
-                  download
-                  className="btn btn-secondary btn-sm"
-                >
-                  Download EPUB
-                </a>
-              )}
-              <button
-                className="btn-danger btn-sm"
-                onClick={handleDelete}
-                disabled={isBusy}
-              >
-                Delete Book
-              </button>
-            </div>
-          </section>
+          <BookActionsSection
+            book={book}
+            disabled={isBusy}
+            saving={saveMutation.isPending}
+            processing={processMutation.isPending}
+            refreshing={refreshMutation.isPending}
+            jobNotice={jobNotice}
+            onSave={handleSave}
+            onProcess={() => {
+              void handleProcess();
+            }}
+            onRefresh={() => refreshMutation.mutate()}
+            onDelete={() => openConfirmAction({ type: "delete" })}
+          />
 
           {saveMutation.isError && (
-            <p className="error">Save failed: {saveMutation.error.message}</p>
+            <p className="error" role="alert">
+              Save failed: {saveMutation.error.message}
+            </p>
           )}
           {processMutation.isError && (
-            <p className="error">
+            <p className="error" role="alert">
               Process failed: {processMutation.error.message}
             </p>
           )}
           {refreshMutation.isError && (
-            <p className="error">
+            <p className="error" role="alert">
               Refresh failed: {refreshMutation.error.message}
             </p>
           )}

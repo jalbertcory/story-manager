@@ -17,7 +17,31 @@ The default `docker-compose.yml` stores persistent data under `./config`:
 - `config/fanficfare`: optional FanFicFare user configuration
 - `config/pgdata`: PostgreSQL data
 
-The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container.
+The production image runs PostgreSQL inside the app container for simple self-hosting. If you split PostgreSQL into a separate service, set `DATABASE_URL` for the app container (for example `postgresql+psycopg://user:pass@db:5432/story_manager`). When `DATABASE_URL` is set, the container skips the embedded PostgreSQL entirely and runs migrations against your server.
+
+### Container runtime
+
+- **Users.** The API runs as the unprivileged `storymanager` user; the embedded PostgreSQL runs as `postgres`. Set
+  `PUID`/`PGID` to match the host user that owns your bind-mounted folders, e.g. `99`/`100` on Unraid. When they are
+  unset, the container keeps the current owner of `/app/library` if that is not root, and uses `1000` only for a new or
+  root-owned library. At startup the container fixes the ownership of `/app/library`, `/app/backups`, `/app/logs`, and
+  any `STORY_MANAGER_BACKUP_DIR`/`STORY_MANAGER_LOG_DIR` override, touching only files that are owned by someone else,
+  so upgrading from an image that ran as root needs no manual `chown`. The FanFicFare `personal.ini` must be readable
+  by that user; the container logs a warning when it is not.
+- **Keeping root.** Set `PUID=0` to run the application as root, as images before this change did. Use this with
+  rootless Docker or Podman, where your host files appear root-owned inside the container and re-owning them to
+  `1000` would map them to a different host user.
+- **Database directory.** PostgreSQL is initialized only into an empty `/tmp/pgdata` (the `config/pgdata` mount). If that directory
+  contains files but no `PG_VERSION`, the container exits with an error instead of initializing over them; move the
+  unexpected files away or point the mount at the right folder. The container never deletes database files. When the
+  mount is a filesystem root that holds only `lost+found`, the cluster is created in a `pgdata` subdirectory instead.
+- **Health check.** The image declares a `HEALTHCHECK` that calls `/health` inside the container. Docker reports the
+  container as `healthy` once the API is up and the database is reachable; allow up to two minutes on first start.
+- **Shutdown.** `tini` runs as PID 1 and forwards `SIGTERM`, so `docker stop` gives in-flight requests up to 8
+  seconds and then stops PostgreSQL cleanly, inside Docker's default 10-second stop timeout. Compose sets
+  `stop_grace_period: 30s` for extra margin; `--stop-timeout 30` does the same for `docker run`.
+- **macOS bind mounts.** Docker Desktop on macOS presents bind-mounted files as root-owned, which PostgreSQL refuses
+  to use. Use a named volume for `pgdata` there (`- pgdata:/tmp/pgdata`); Linux hosts are unaffected.
 
 Story Manager keeps a single-container deployment by default: the API, scheduler, and processing workers start in
 the same application process. Processing ownership lives in PostgreSQL rather than process memory, so an interrupted
@@ -185,7 +209,7 @@ The handler also adapts legacy description markup for FanFicFare 4.62.0 until a 
 To check the workaround against Royal Road, run the opt-in smoke test:
 
 ```bash
-RUN_ROYALROAD_LIVE_TEST=1 .venv/bin/python -m pytest -m integration backend/tests/test_royalroad_anubis_live.py
+RUN_ROYALROAD_LIVE_TEST=1 PYTHONPATH=. uv run --frozen --extra dev python -m pytest -m integration backend/tests/test_royalroad_anubis_live.py
 ```
 
 The test downloads three public chapter bodies into a temporary EPUB.
