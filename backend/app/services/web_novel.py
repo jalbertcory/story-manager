@@ -10,7 +10,7 @@ import zipfile
 from dataclasses import dataclass
 from collections.abc import Hashable
 from pathlib import Path
-from typing import cast, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import cast, Callable, Dict, List, Mapping, Optional, Sequence, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from ebooklib import epub
@@ -47,7 +47,7 @@ from .fanficfare_types import (
     UpdateData,
     Writer,
 )
-from .library_paths import build_book_paths
+from .library_paths import library_staging_dir, reserve_book_paths
 from .metadata_jobs import queue_metadata_sync_job
 from .royalroad_anubis import is_royalroad, royalroad_access, royalroad_cli_options
 
@@ -421,8 +421,50 @@ def _run_fff_main(args: List[str]) -> int:
         return 1
 
 
-def _get_story_manager_output_filename() -> str:
-    return str((LIBRARY_PATH / "${title}-${siteabbrev}_${storyId}${formatext}").resolve())
+def _get_story_manager_output_filename(output_dir: Path) -> str:
+    return str((output_dir / "${title}-${siteabbrev}_${storyId}${formatext}").resolve())
+
+
+def is_fanficfare_running() -> bool:
+    """Whether a FanFicFare download or update currently holds the library lock."""
+    return _fff_lock.locked()
+
+
+_T = TypeVar("_T")
+
+
+async def _run_fff_thread(func: Callable[..., _T], *args: object) -> _T:
+    """Run FanFicFare in a worker thread, still waiting for it if the caller is cancelled.
+
+    The thread cannot be interrupted. Returning early on cancellation would release
+    ``_fff_lock`` while it keeps writing, letting a retry run a second FanFicFare
+    process against the same files.
+    """
+    future = asyncio.get_running_loop().run_in_executor(None, func, *args)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        await asyncio.wait({future})
+        raise
+
+
+def _discard_download(epub_path: Path) -> None:
+    """Remove a downloaded EPUB and its per-download staging directory."""
+    staging_root = library_staging_dir().resolve()
+    parent = epub_path.resolve().parent
+    if parent != staging_root and parent.is_relative_to(staging_root):
+        shutil.rmtree(parent, ignore_errors=True)
+    else:
+        epub_path.unlink(missing_ok=True)
+
+
+def _place_downloaded_epub(epub_path: Path, author: str) -> tuple[Path, Path]:
+    """Move a freshly downloaded EPUB into the library without replacing other books' files."""
+    immutable_path, current_path = reserve_book_paths(epub_path.name, author)
+    epub_path.replace(immutable_path)
+    shutil.copyfile(immutable_path, current_path)
+    _discard_download(epub_path)
+    return immutable_path, current_path
 
 
 def _read_epub_metadata(epub_path: Path) -> EpubMetadata:
@@ -567,10 +609,8 @@ async def download_web_novel(
             # Repair can rewrite the entire archive. Keep it off the API event
             # loop, including for checks that ultimately find no new chapters.
             await asyncio.to_thread(_sync_epub_source_url, updated_epub_path, source_url)
-            loop = asyncio.get_running_loop()
             try:
-                update_result = await loop.run_in_executor(
-                    None,
+                update_result = await _run_fff_thread(
                     _run_fff_lossless_update,
                     source_url,
                     updated_epub_path,
@@ -589,26 +629,27 @@ async def download_web_novel(
             for config_path in config_paths:
                 args.extend(["-c", str(config_path)])
             args.extend(["--non-interactive", "--debug"])
-            before_epubs = {f: f.stat().st_mtime for f in LIBRARY_PATH.iterdir() if f.suffix == ".epub"}
-            args.extend(["-o", f"output_filename={_get_story_manager_output_filename()}"])
+            # A private output directory per download: scanning the shared library
+            # root could pick up another upload's or download's EPUB.
+            output_dir = Path(tempfile.mkdtemp(prefix="fff-", dir=library_staging_dir()))
+            args.extend(["-o", f"output_filename={_get_story_manager_output_filename(output_dir)}"])
             if overwrite:
                 args.extend(["-o", "always_overwrite=true"])
             args.append(source_url)
 
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, _run_fff_main, args)
-
-            if result != 0:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"FanFicFare failed to download story. Error code: {result}.",
-                )
-
-            changed_epubs = [
-                f
-                for f in LIBRARY_PATH.iterdir()
-                if f.suffix == ".epub" and (f not in before_epubs or f.stat().st_mtime > before_epubs[f])
-            ]
+            try:
+                result = await _run_fff_thread(_run_fff_main, args)
+                if result != 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"FanFicFare failed to download story. Error code: {result}.",
+                    )
+                changed_epubs = sorted(output_dir.glob("*.epub"))
+            except BaseException:
+                shutil.rmtree(output_dir, ignore_errors=True)
+                raise
+            if not changed_epubs:
+                shutil.rmtree(output_dir, ignore_errors=True)
 
     if updated_epub_path is None and not changed_epubs:
         if not overwrite:
@@ -618,11 +659,12 @@ async def download_web_novel(
             detail="FanFicFare ran but no new or updated EPUB file was found.",
         )
     new_epub_path = updated_epub_path or changed_epubs[0]
-    await asyncio.to_thread(normalize_epub_prose_blocks, new_epub_path)
-
     try:
+        await asyncio.to_thread(normalize_epub_prose_blocks, new_epub_path)
         return new_epub_path, await asyncio.to_thread(_read_epub_metadata, new_epub_path)
     except Exception as e:
+        if updated_epub_path is None:
+            await asyncio.to_thread(_discard_download, new_epub_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to parse EPUB metadata: {e}",
@@ -650,15 +692,13 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
 
             existing = await crud.get_book_by_title_and_author(db, title=metadata["title"], author=metadata["author"])
             if existing and existing.id != book_id and existing.source_type == models.SourceType.web:
-                new_epub_path.unlink(missing_ok=True)
+                await asyncio.to_thread(_discard_download, new_epub_path)
                 transition_state(db_book, "download_status", WEB_IMPORT, WebImportStatus.ERROR, context=f"book {book_id}")
                 db_book.title = f"Conflict: '{metadata['title']}' already exists"
                 await db.commit()
                 return
 
-            immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
-            new_epub_path.rename(immutable_path)
-            await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
+            immutable_path, current_path = await asyncio.to_thread(_place_downloaded_epub, new_epub_path, metadata["author"])
 
             master_word_count = await asyncio.to_thread(epub_editor.get_word_count, str(immutable_path))
             _, chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
@@ -745,9 +785,9 @@ async def run_book_refresh(book_id: int) -> None:
                     raise RuntimeError("FanFicFare did not produce a refreshed EPUB.")
                 new_epub_path, metadata = result
 
-                immutable_path, current_path = build_book_paths(new_epub_path.name, metadata["author"])
-                new_epub_path.rename(immutable_path)
-                await asyncio.to_thread(shutil.copyfile, immutable_path, current_path)
+                immutable_path, current_path = await asyncio.to_thread(
+                    _place_downloaded_epub, new_epub_path, metadata["author"]
+                )
 
                 new_word_count, new_chapter_count = await asyncio.to_thread(get_epub_word_and_chapter_count, current_path)
                 update_data = schemas.BookUpdate(**metadata)

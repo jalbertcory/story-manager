@@ -173,6 +173,22 @@ async def readiness_check(db: AsyncSession = Depends(get_db)) -> JSONResponse:
 # simple JSON root response so the Vite dev server can be used via proxy.
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
+
+def resolve_frontend_file(full_path: str, dist_dir: Path = _FRONTEND_DIST) -> Path | None:
+    """Return the built frontend file for ``full_path`` if it exists inside ``dist_dir``."""
+    if not full_path:
+        return None
+    root = dist_dir.resolve()
+    try:
+        candidate = (root / full_path).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return None
+    except (OSError, ValueError):
+        # Null bytes and over-long names cannot be files we serve.
+        return None
+    return candidate
+
+
 if _FRONTEND_DIST.is_dir():
     # Serve static assets (JS, CSS, images) at /assets/
     app.mount(
@@ -184,9 +200,11 @@ if _FRONTEND_DIST.is_dir():
     @app.get("/{full_path:path}")
     async def serve_frontend(request: Request, full_path: str) -> FileResponse:
         """Serve the SPA index.html for any non-API, non-reader path."""
-        # Try to serve the exact file first (e.g. favicon.ico, robots.txt)
-        file_path = _FRONTEND_DIST / full_path
-        if full_path and file_path.is_file() and ".." not in full_path:
+        # Try to serve the exact file first (e.g. favicon.ico, robots.txt).
+        # Resolve and contain the path: an absolute full_path (e.g. from
+        # "/%2Fetc%2Fhosts") would otherwise replace the dist directory.
+        file_path = resolve_frontend_file(full_path)
+        if file_path is not None:
             return FileResponse(file_path)
         return FileResponse(_FRONTEND_DIST / "index.html")
 

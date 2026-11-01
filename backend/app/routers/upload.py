@@ -21,7 +21,7 @@ from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.epub_utils import get_and_save_epub_cover, get_epub_tag_metadata, get_epub_word_and_chapter_count
-from ..services.library_paths import build_book_paths
+from ..services.library_paths import build_book_paths, library_staging_dir, reserve_book_paths
 from ..services.book_matching import epub_identifiers, match_epub_to_audio_book
 from ..services.metadata_jobs import queue_metadata_sync_job
 from ..services.series import enrich_series_metadata
@@ -206,11 +206,11 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
     # Strip any path components from the filename — some browsers (or the FileSystem API)
     # may send a relative path like "folder/book.epub" instead of just "book.epub".
     safe_filename = PurePosixPath(filename or "upload.epub").name or "upload.epub"
-    LIBRARY_PATH.mkdir(exist_ok=True)
     # Unique temp names so concurrent uploads of the same filename cannot clobber each other.
+    staging = library_staging_dir()
     temp_token = uuid4().hex[:12]
-    temp_immutable_path = LIBRARY_PATH / f"tmp_immutable_{temp_token}_{safe_filename}"
-    temp_current_path = LIBRARY_PATH / f"tmp_{temp_token}_{safe_filename}"
+    temp_immutable_path = staging / f"tmp_immutable_{temp_token}_{safe_filename}"
+    temp_current_path = staging / f"tmp_{temp_token}_{safe_filename}"
     await asyncio.to_thread(temp_immutable_path.write_bytes, payload)
     await asyncio.to_thread(temp_current_path.write_bytes, payload)
 
@@ -266,7 +266,16 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
 
         # Restore missing files for the existing book record.
         logger.info("Restoring missing files for '%s' by '%s' (id=%s)", title, author, existing.id)
-        immutable_path, current_path = build_book_paths(f"{title} - {author}.epub", author)
+        # The upload replaces both of this book's files, so a surviving one must not
+        # push the restored pair onto suffixed names or be left behind as an orphan.
+        library_root = LIBRARY_PATH.resolve()
+        for surviving in (existing.immutable_path, existing.current_path):
+            if not surviving:
+                continue
+            surviving_path = (LIBRARY_PATH.parent / surviving).resolve()
+            if surviving_path.is_relative_to(library_root):
+                surviving_path.unlink(missing_ok=True)
+        immutable_path, current_path = await asyncio.to_thread(reserve_book_paths, f"{title} - {author}.epub", author)
         temp_immutable_path.replace(immutable_path)
         temp_current_path.replace(current_path)
 
@@ -287,7 +296,9 @@ async def _upload_epub_bytes(filename: str, payload: bytes, db: AsyncSession) ->
             await queue_audio_reconciliation(existing, db)
         return existing
 
-    immutable_path, current_path = build_book_paths(f"{title} - {author}.epub", author)
+    # Reserve fresh paths: a same-named file may belong to another book, such as
+    # a web novel with the same title and author, and must never be replaced.
+    immutable_path, current_path = await asyncio.to_thread(reserve_book_paths, f"{title} - {author}.epub", author)
     temp_immutable_path.replace(immutable_path)
     temp_current_path.replace(current_path)
 

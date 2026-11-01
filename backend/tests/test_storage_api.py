@@ -1,5 +1,8 @@
 """Storage cleanup and library validation routes."""
 
+import os
+import time
+
 import pytest
 
 from backend.app import crud, models, schemas
@@ -45,6 +48,8 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
     library_path.mkdir(parents=True, exist_ok=True)
     orphan_path = library_path / "orphan.epub"
     orphan_path.write_bytes(b"orphan")
+    old_mtime = time.time() - 2 * storage_router.RECENT_FILE_GRACE_SECONDS
+    os.utime(orphan_path, (old_mtime, old_mtime))
 
     valid_author_dir = library_path / "Valid Author"
     valid_author_dir.mkdir(parents=True, exist_ok=True)

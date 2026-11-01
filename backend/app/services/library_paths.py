@@ -14,6 +14,20 @@ def _safe_segment(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
+LIBRARY_STAGING_DIRNAME = ".staging"
+
+
+def library_staging_dir() -> Path:
+    """Directory for in-progress uploads and downloads.
+
+    It lives inside the library so finished files can be renamed into place on the
+    same filesystem, and is kept apart so nothing scans in-progress files as books.
+    """
+    staging = LIBRARY_PATH / LIBRARY_STAGING_DIRNAME
+    staging.mkdir(parents=True, exist_ok=True)
+    return staging
+
+
 def get_author_library_dir(author: str) -> Path:
     safe_name = _safe_segment(author, "Unknown Author")
     author_dir = LIBRARY_PATH / safe_name
@@ -39,6 +53,30 @@ def build_book_paths(filename: str, author: str) -> tuple[Path, Path]:
     current_path = author_dir / safe_filename
     immutable_path = author_dir / f"immutable_{safe_filename}"
     return immutable_path, current_path
+
+
+def reserve_book_paths(filename: str, author: str, max_attempts: int = 1000) -> tuple[Path, Path]:
+    """Return ``build_book_paths`` targets that no other file is using.
+
+    Both paths are created empty with an exclusive create so a concurrent caller
+    cannot claim the same names. Callers must replace them with real content and
+    may unlink them on failure. A numeric suffix is added when the plain name is taken.
+    """
+    stem = filename[:-5] if filename.lower().endswith(".epub") else filename
+    for attempt in range(1, max_attempts + 1):
+        candidate = filename if attempt == 1 else f"{stem} - {attempt}.epub"
+        immutable_path, current_path = build_book_paths(candidate, author)
+        try:
+            immutable_path.open("xb").close()
+        except FileExistsError:
+            continue
+        try:
+            current_path.open("xb").close()
+        except FileExistsError:
+            immutable_path.unlink(missing_ok=True)
+            continue
+        return immutable_path, current_path
+    raise FileExistsError(f"No free library path for {filename!r} after {max_attempts} attempts")
 
 
 def remove_empty_parent_dirs(path: Path) -> None:

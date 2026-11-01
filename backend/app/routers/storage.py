@@ -3,17 +3,23 @@
 from .. import api_schemas as contracts
 import asyncio
 import logging
+import time
+from pathlib import Path
 from typing import Optional, TypedDict
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import crud
+from .. import crud, models
 from ..config import LIBRARY_PATH
+from ..crud.processing import ACTIVE_PROCESSING_STATUSES
 from ..database import get_db
 from ..logging_config import is_quiet_successful_access_entry, read_persisted_logs
 from ..services.library_health import LibraryFileIssue, inspect_library_files, is_failed_web_import_placeholder
+from ..services.library_paths import LIBRARY_STAGING_DIRNAME
+from ..services.web_novel import is_fanficfare_running
 
 logger = logging.getLogger(__name__)
 _ui_logger = logging.getLogger("frontend")
@@ -24,6 +30,13 @@ router = APIRouter()
 class OrphanedFile(TypedDict):
     path: str
     size_bytes: int
+
+
+# Files this new may still be in the middle of an upload, download or rewrite
+# whose database row is not committed yet.
+RECENT_FILE_GRACE_SECONDS = 15 * 60
+# Staging leftovers older than this come from interrupted uploads or downloads.
+STALE_STAGING_SECONDS = 24 * 60 * 60
 
 
 class ClientLogEntry(BaseModel):
@@ -86,8 +99,8 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
     if not LIBRARY_PATH.exists():
         return {"dry_run": dry_run, "files": [], "books": [], "total_bytes": 0}
 
-    active_books = await crud.get_books(db, limit=100000)
     books = await crud.get_all_books_including_deleted(db)
+    active_books = [book for book in books if book.deleted_at is None]
     failed_import_books: list[LibraryFileIssue] = [
         {
             "book_id": book.id,
@@ -100,16 +113,16 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
         if is_failed_web_import_placeholder(book)
     ]
 
-    # Refuse to run if any downloads are still in progress — their files
-    # are not yet recorded in the DB and would be incorrectly flagged.
-    pending = [b for b in active_books if b.download_status == "pending"]
-    if pending:
+    # Refuse to run while anything may be writing library files that are not
+    # recorded in the database yet.
+    busy_reason = await _library_busy_reason(db)
+    if busy_reason:
         return {
             "dry_run": dry_run,
             "files": [],
             "books": [],
             "total_bytes": 0,
-            "skipped_reason": f"{len(pending)} book(s) are still downloading. " "Run cleanup after all downloads complete.",
+            "skipped_reason": busy_reason,
         }
 
     # Use case-folded paths for comparison so case-insensitive filesystems
@@ -126,24 +139,14 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
             tracked.add(str((LIBRARY_PATH.parent / book.cover_path).resolve()).casefold())
         tracked_directories.add(str((LIBRARY_PATH / "audiobooks" / str(book.id)).resolve()).casefold())
 
-    orphans: list[OrphanedFile] = []
-    for file in LIBRARY_PATH.rglob("*"):
-        if not file.is_file():
-            continue
-        resolved = file.resolve()
-        path_str = str(resolved)
-        owned_by_book = any(str(parent).casefold() in tracked_directories for parent in resolved.parents)
-        if path_str.casefold() not in tracked and not owned_by_book:
-            size = file.stat().st_size
-            orphans.append({"path": str(file.relative_to(LIBRARY_PATH.parent)), "size_bytes": size})
-
+    orphans = await asyncio.to_thread(_find_orphaned_files, tracked, tracked_directories, time.time())
     total_bytes = sum(f["size_bytes"] for f in orphans)
 
     if not dry_run:
-        for f in orphans:
-            full = LIBRARY_PATH.parent / f["path"]
-            logger.info("Storage cleanup: deleting %s", f["path"])
-            full.unlink(missing_ok=True)
+        deleted = await asyncio.to_thread(_delete_orphaned_files, orphans, time.time())
+        if len(deleted) != len(orphans):
+            orphans = deleted
+            total_bytes = sum(f["size_bytes"] for f in orphans)
         for book in active_books:
             if not is_failed_web_import_placeholder(book):
                 continue
@@ -154,3 +157,89 @@ async def cleanup_storage(dry_run: bool = True, db: AsyncSession = Depends(get_d
         logger.info(f"Storage cleanup: deleted {len(orphans)} orphaned files ({total_bytes} bytes)")
 
     return {"dry_run": dry_run, "files": orphans, "books": failed_import_books, "total_bytes": total_bytes}
+
+
+async def _library_busy_reason(db: AsyncSession) -> str | None:
+    # Web imports and refreshes run as processing jobs, so active jobs cover them.
+    # Book status columns are not checked: a cancelled or failed job can leave
+    # them set forever.
+    if is_fanficfare_running():
+        return "A web novel download or update is running. Run cleanup after it completes."
+    active_jobs = await db.scalar(
+        select(func.count(models.ProcessingJob.id)).where(models.ProcessingJob.status.in_(ACTIVE_PROCESSING_STATUSES))
+    )
+    if active_jobs:
+        return f"{active_jobs} processing job(s) are queued or running. Run cleanup after they finish."
+    return None
+
+
+def _is_temporary_write(name: str) -> bool:
+    """Whether ``name`` looks like the app's own ``.<file name>.<suffix>`` temp file."""
+    return name.startswith(".") and "." in name[1:]
+
+
+def _is_cleanup_candidate(relative: Path, mtime: float, now: float) -> bool:
+    """Whether an untracked file is old enough and outside protected areas to delete."""
+    age = now - mtime
+    if relative.parts[0] == LIBRARY_STAGING_DIRNAME:
+        return age >= STALE_STAGING_SECONDS
+    if any(part.startswith(".") for part in relative.parts[:-1]):
+        # Hidden directories hold restore safety copies or belong to other tools.
+        return False
+    if relative.name.startswith("."):
+        # Temp files left by interrupted atomic writes; other dotfiles such as
+        # .DS_Store or sync-tool markers are left alone.
+        return _is_temporary_write(relative.name) and age >= STALE_STAGING_SECONDS
+    return age >= RECENT_FILE_GRACE_SECONDS
+
+
+def _find_orphaned_files(tracked: set[str], tracked_directories: set[str], now: float) -> list[OrphanedFile]:
+    orphans: list[OrphanedFile] = []
+    for file in LIBRARY_PATH.rglob("*"):
+        try:
+            if file.is_symlink() or not file.is_file():
+                continue
+            stat = file.stat()
+        except OSError:
+            continue
+        resolved = file.resolve()
+        if str(resolved).casefold() in tracked:
+            continue
+        if any(str(parent).casefold() in tracked_directories for parent in resolved.parents):
+            continue
+        if not _is_cleanup_candidate(file.relative_to(LIBRARY_PATH), stat.st_mtime, now):
+            continue
+        orphans.append({"path": str(file.relative_to(LIBRARY_PATH.parent)), "size_bytes": stat.st_size})
+    return orphans
+
+
+def _delete_orphaned_files(orphans: list[OrphanedFile], now: float) -> list[OrphanedFile]:
+    """Delete the listed files, skipping any that changed since the scan."""
+    library_root = LIBRARY_PATH.resolve()
+    deleted: list[OrphanedFile] = []
+    for orphan in orphans:
+        full = LIBRARY_PATH.parent / orphan["path"]
+        try:
+            if not full.resolve().is_relative_to(library_root):
+                continue
+            if not _is_cleanup_candidate(full.relative_to(LIBRARY_PATH), full.stat().st_mtime, now):
+                continue
+            logger.info("Storage cleanup: deleting %s", orphan["path"])
+            full.unlink()
+        except FileNotFoundError:
+            continue
+        deleted.append(orphan)
+    _prune_empty_staging_dirs()
+    return deleted
+
+
+def _prune_empty_staging_dirs() -> None:
+    """Remove empty per-download directories left in the staging area."""
+    staging = LIBRARY_PATH / LIBRARY_STAGING_DIRNAME
+    if not staging.is_dir():
+        return
+    for directory in sorted((d for d in staging.rglob("*") if d.is_dir() and not d.is_symlink()), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            continue

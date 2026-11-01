@@ -9,7 +9,9 @@ from lxml import etree
 from httpx import ASGITransport, AsyncClient
 
 from backend.app.main import app
-from backend.app.services import fanficfare_config, web_novel
+from fastapi import HTTPException
+
+from backend.app.services import fanficfare_config, library_paths, web_novel
 
 
 def create_dummy_epub(filepath: Path, title: str, author: str):
@@ -253,19 +255,28 @@ async def test_download_web_novel_unchanged_lossless_update_returns_none(tmp_pat
     normalize_mock.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_download_web_novel_new_download_uses_story_manager_output_path(tmp_path, monkeypatch, mocker):
+def _output_path_from_args(args: list[str]) -> Path:
+    template = next(arg for arg in args if arg.startswith("output_filename="))
+    return Path(template.removeprefix("output_filename=").replace("${title}-${siteabbrev}_${storyId}${formatext}", ""))
+
+
+@pytest.fixture
+def web_library(tmp_path, monkeypatch):
     library_path = tmp_path / "library"
     library_path.mkdir()
     monkeypatch.setattr(web_novel, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
     monkeypatch.delenv("FFF_USER_CONFIG_PATH", raising=False)
+    return library_path
 
-    expected_output = library_path / "Fresh Title-rr_123.epub"
+
+@pytest.mark.asyncio
+async def test_download_web_novel_new_download_uses_private_staging_dir(web_library, mocker):
     captured_args = {}
 
     def fake_fff_main(args):
         captured_args["args"] = list(args)
-        create_dummy_epub(expected_output, "Fresh Title", "Fresh Author")
+        create_dummy_epub(_output_path_from_args(args) / "Fresh Title-rr_123.epub", "Fresh Title", "Fresh Author")
         return 0
 
     mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
@@ -275,14 +286,85 @@ async def test_download_web_novel_new_download_uses_story_manager_output_path(tm
 
     assert result is not None
     epub_path, metadata = result
-    assert epub_path == expected_output
+    output_dir = _output_path_from_args(captured_args["args"])
+    assert output_dir.parent == (web_library / ".staging").resolve()
+    assert epub_path == output_dir / "Fresh Title-rr_123.epub"
     assert metadata == {"title": "Fresh Title", "author": "Fresh Author", "series": None}
+    assert "https://www.royalroad.com/fiction/123" == captured_args["args"][-1]
+    normalize_mock.assert_called_once_with(epub_path)
 
-    args = captured_args["args"]
-    output_arg = f"output_filename={library_path.resolve()}/${{title}}-${{siteabbrev}}_${{storyId}}${{formatext}}"
-    assert output_arg in args
-    assert "https://www.royalroad.com/fiction/123" == args[-1]
-    normalize_mock.assert_called_once_with(expected_output)
+
+@pytest.mark.asyncio
+async def test_download_web_novel_ignores_epubs_written_elsewhere_in_library(web_library, mocker):
+    def fake_fff_main(args):
+        # Simulates a concurrent upload landing in the library while FanFicFare runs.
+        create_dummy_epub(web_library / "Someone Else.epub", "Other", "Other Author")
+        return 0
+
+    mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await web_novel.download_web_novel("https://www.royalroad.com/fiction/123", overwrite=True)
+
+    assert exc_info.value.status_code == 500
+    assert (web_library / "Someone Else.epub").exists()
+    assert list((web_library / ".staging").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_download_web_novel_failure_removes_staging_dir(web_library, mocker):
+    def fake_fff_main(args):
+        create_dummy_epub(_output_path_from_args(args) / "Partial.epub", "Partial", "Author")
+        return 1
+
+    mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+
+    with pytest.raises(HTTPException):
+        await web_novel.download_web_novel("https://www.royalroad.com/fiction/123")
+
+    assert list((web_library / ".staging").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_download_holds_lock_until_fanficfare_finishes(web_library, mocker):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_fff_main(args):
+        started.set()
+        release.wait(timeout=5)
+        return 1
+
+    mocker.patch("backend.app.services.web_novel._run_fff_main", side_effect=fake_fff_main)
+
+    task = asyncio.create_task(web_novel.download_web_novel("https://www.royalroad.com/fiction/123"))
+    await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0.05)
+
+    assert not task.done()
+    assert web_novel._fff_lock.locked()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not web_novel._fff_lock.locked()
+
+
+def test_place_downloaded_epub_keeps_existing_library_files(web_library):
+    immutable, current = library_paths.build_book_paths("Story-rr_1.epub", "Author")
+    current.write_bytes(b"existing book")
+    staging = Path(web_novel.tempfile.mkdtemp(prefix="fff-", dir=library_paths.library_staging_dir()))
+    downloaded = staging / "Story-rr_1.epub"
+    downloaded.write_bytes(b"new download")
+
+    new_immutable, new_current = web_novel._place_downloaded_epub(downloaded, "Author")
+
+    assert current.read_bytes() == b"existing book"
+    assert new_current.name == "Story-rr_1 - 2.epub"
+    assert new_immutable.read_bytes() == b"new download"
+    assert new_current.read_bytes() == b"new download"
+    assert not staging.exists()
 
 
 def test_get_fff_config_paths_prefers_local_repo_override(tmp_path, monkeypatch):
