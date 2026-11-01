@@ -1,10 +1,18 @@
-import { api, apiUrl, unwrap, unwrapEmpty, multipart } from "./client";
-import type { Body, Schemas } from "./client";
+import {
+  api,
+  apiUrl,
+  unwrap,
+  unwrapEmpty,
+  multipart,
+  requestInit,
+} from "./client";
+import type { Body, Schemas, RequestOptions } from "./client";
 
 // Pipeline control
-export function getAudiobookStatus(bookId: number) {
+export function getAudiobookStatus(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/audiobook/status", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch audiobook status",
@@ -104,9 +112,10 @@ export function generateChapterPreview(bookId: number, chapterId: number) {
 }
 
 // Characters
-export function getCharacters(bookId: number) {
+export function getCharacters(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/audiobook/characters", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch characters",
@@ -165,9 +174,11 @@ export function getSentences(
     chapterId?: number;
     reviewOnly?: boolean;
   } = {},
+  options?: RequestOptions,
 ) {
   return unwrap(
     api.GET("/api/books/{book_id}/audiobook/sentences", {
+      ...requestInit(options),
       params: {
         path: { book_id: bookId },
         query: {
@@ -186,11 +197,16 @@ export function getSentences(
 export async function getAllChapterSentences(
   bookId: number,
   chapterId: number,
+  options?: RequestOptions,
 ) {
   const limit = 1000;
   const items: Schemas["SentenceResponse"][] = [];
   for (let page = 1; ; page += 1) {
-    const result = await getSentences(bookId, { chapterId, page, limit });
+    const result = await getSentences(
+      bookId,
+      { chapterId, page, limit },
+      options,
+    );
     items.push(...result.items);
     if (!result.items.length || items.length >= result.total) return items;
   }
@@ -226,9 +242,10 @@ export function getSentenceAudioUrl(sentenceId: number) {
 }
 
 // Chapters
-export function getAudiobookChapters(bookId: number) {
+export function getAudiobookChapters(bookId: number, options?: RequestOptions) {
   return unwrap(
     api.GET("/api/books/{book_id}/audiobook/chapters", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch chapters",
@@ -247,9 +264,13 @@ export function getAudiobookDownloadUrl(bookId: number) {
 }
 
 // Human-narrated audiobook editions
-export function getImportedAudiobooks(bookId: number) {
+export function getImportedAudiobooks(
+  bookId: number,
+  options?: RequestOptions,
+) {
   return unwrap(
     api.GET("/api/books/{book_id}/audiobook/imports", {
+      ...requestInit(options),
       params: { path: { book_id: bookId } },
     }),
     "Failed to fetch imported audiobooks",
@@ -333,9 +354,9 @@ export function upgradeAllImportedAudiobooks() {
   );
 }
 
-export function previewHumanAudiobookRebuilds() {
+export function previewHumanAudiobookRebuilds(options?: RequestOptions) {
   return unwrap(
-    api.GET("/api/audiobook/imports/rebuild-preview"),
+    api.GET("/api/audiobook/imports/rebuild-preview", requestInit(options)),
     "Failed to inspect human audiobooks",
   );
 }
@@ -390,9 +411,14 @@ export function matchImportedAudiobookTrack(
   );
 }
 
-export function getImportedTrackCues(editionId: number, trackId: number) {
+export function getImportedTrackCues(
+  editionId: number,
+  trackId: number,
+  options?: RequestOptions,
+) {
   return unwrap(
     api.GET("/api/imported-audiobooks/{edition_id}/tracks/{track_id}/cues", {
+      ...requestInit(options),
       params: { path: { edition_id: editionId, track_id: trackId } },
     }),
     "Failed to fetch audiobook timing",
@@ -400,9 +426,9 @@ export function getImportedTrackCues(editionId: number, trackId: number) {
 }
 
 // Settings
-export function getAudiobookSettings() {
+export function getAudiobookSettings(options?: RequestOptions) {
   return unwrap(
-    api.GET("/api/audiobook/settings"),
+    api.GET("/api/audiobook/settings", requestInit(options)),
     "Failed to fetch audiobook settings",
   );
 }
@@ -416,9 +442,9 @@ export function updateAudiobookSettings(
   );
 }
 
-export function getAudiobookEndpointStats() {
+export function getAudiobookEndpointStats(options?: RequestOptions) {
   return unwrap(
-    api.GET("/api/audiobook/settings/endpoint-stats"),
+    api.GET("/api/audiobook/settings/endpoint-stats", requestInit(options)),
     "Failed to fetch AI endpoint metrics",
   );
 }

@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui audit-python pr-check install-hooks local-check test test-migrations e2e e2e-debug
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui audit-python pr-check install-hooks local-check test test-migrations e2e e2e-debug lock-check
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -12,6 +12,12 @@ GPU_SCHEDULER_URL ?= http://127.0.0.1:8765
 GPU_SCHEDULER_BUILD ?=
 MANAGED_AI_SERVICES ?= ollama omnivoice qwen3-tts transcription
 GPU_COMPOSE = docker compose -f $(GPU_SCHEDULER_COMPOSE_FILE)
+# Every backend command runs in the environment described by uv.lock.
+UV_RUN = uv run --frozen --extra dev
+ALEMBIC = PYTHONPATH=. $(UV_RUN) alembic -c backend/alembic.ini
+MIGRATION_TEST_CONTAINER = story-manager-migration-test
+MIGRATION_TEST_DATABASE_URL = postgresql+psycopg://postgres:postgres@localhost:5433/story_manager
+MIGRATION_PSQL = docker exec -i $(MIGRATION_TEST_CONTAINER) psql -v ON_ERROR_STOP=1 -U postgres -d story_manager
 
 help:
 	@echo "Story Manager commands:"
@@ -36,7 +42,7 @@ help:
 	@echo "  make typecheck        Check backend and service Python types"
 	@echo "  make install-hooks    Enable the local pre-push checks in this clone"
 	@echo "  make local-check      Run all checks locally (requires Docker and Playwright)"
-	@echo "  make pr-check         Run lint, type checks, API contract checks, and frontend dependency audits"
+	@echo "  make pr-check         Run lockfile, lint, type checks, API contract checks, and frontend dependency audits"
 	@echo "  make test             Run backend and frontend unit tests"
 	@echo "  make test-migrations  Run migrations against throwaway PostgreSQL"
 	@echo "  make e2e              Run Playwright E2E tests"
@@ -51,9 +57,7 @@ services-status:
 	./scripts/start-services.sh status
 
 setup:
-	pyenv install -s
-	uv venv
-	uv pip install -e ".[dev]"
+	uv sync --frozen --extra dev
 	cd frontend && npm ci
 	$(MAKE) install-hooks
 
@@ -137,7 +141,7 @@ run-ui:
 run-api:
 	$(MAKE) migrate
 	STORY_MANAGER_PG_DUMP_CONTAINER=story-manager-db \
-	PYTHONPATH=backend .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+	PYTHONPATH=backend $(UV_RUN) uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 run-db: ensure-db
 
@@ -164,19 +168,19 @@ ensure-db:
 	echo " Postgres is ready."
 
 migrate:
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head
+	$(ALEMBIC) upgrade head
 
 fmt:
-	.venv/bin/python3 -m black backend services
-	.venv/bin/python3 -m flake8 --extend-exclude=.venv backend services
+	$(UV_RUN) python -m black backend services
+	$(UV_RUN) python -m flake8 --extend-exclude=.venv backend services
 	cd frontend && npx prettier --write .
 
 lint: lint-backend lint-ui
 
 lint-backend:
-	.venv/bin/python3 -m black --check backend services
-	.venv/bin/python3 -m autoflake --check --remove-all-unused-imports --recursive --exclude .venv backend services
-	.venv/bin/python3 -m flake8 --extend-exclude=.venv backend services --count --statistics
+	$(UV_RUN) python -m black --check backend services
+	$(UV_RUN) python -m autoflake --check --remove-all-unused-imports --recursive --exclude .venv backend services
+	$(UV_RUN) python -m flake8 --extend-exclude=.venv backend services --count --statistics
 
 lint-ui:
 	cd frontend && npm run lint -- --max-warnings=0
@@ -186,11 +190,11 @@ audit-ui:
 	cd frontend && npm audit --audit-level=high
 
 audit-python:
-	@set -e; site_packages="$$(.venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
+	@set -e; site_packages="$$($(UV_RUN) python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
 	uvx pip-audit --path "$$site_packages"
 
 typecheck:
-	.venv/bin/python3 -m mypy
+	$(UV_RUN) python -m mypy
 
 typecheck-ui:
 	cd frontend && npm run typecheck
@@ -204,7 +208,10 @@ api-check:
 check-ui-install:
 	cd frontend && npm ci --dry-run --ignore-scripts --no-audit --no-fund --loglevel=error
 
-pr-check: check-ui-install lint typecheck typecheck-ui api-check audit-ui
+lock-check:
+	uv lock --check
+
+pr-check: lock-check check-ui-install lint typecheck typecheck-ui api-check audit-ui
 
 # Keep these sequential, even under make -j: migrations and E2E own test databases.
 local-check:
@@ -216,143 +223,116 @@ local-check:
 	$(MAKE) e2e
 
 test:
-	export PYTHONPATH=. && .venv/bin/python3 -m pytest -m "not integration" backend/tests
+	PYTHONPATH=. $(UV_RUN) python -m pytest -m "not integration" backend/tests
 	cd frontend && npm test -- --run
 
 test-migrations:
-	docker rm -f story-manager-migration-test >/dev/null 2>&1 || true
-	docker run --name story-manager-migration-test \
+	docker rm -f $(MIGRATION_TEST_CONTAINER) >/dev/null 2>&1 || true
+	docker run --name $(MIGRATION_TEST_CONTAINER) \
 	  -e POSTGRES_PASSWORD=postgres \
 	  -e POSTGRES_DB=story_manager \
 	  -p 5433:5432 \
 	  -d postgres:17 >/dev/null
-	@set -e; trap 'docker rm -f story-manager-migration-test >/dev/null 2>&1 || true' EXIT; \
-	until docker exec story-manager-migration-test pg_isready -U postgres -d story_manager >/dev/null 2>&1; do \
+	@set -e; trap 'docker rm -f $(MIGRATION_TEST_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
+	export DATABASE_URL="$(MIGRATION_TEST_DATABASE_URL)"; \
+	until docker exec $(MIGRATION_TEST_CONTAINER) pg_isready -U postgres -d story_manager >/dev/null 2>&1; do \
 		printf "."; \
 		sleep 1; \
 	done; \
 	echo " Postgres is ready."; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0016; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) downgrade 0016; \
+	$(MIGRATION_PSQL) \
 		-c "INSERT INTO books (title, author, source_type) VALUES ('Migration Test', 'Story Manager', 'epub');" \
 		-c "INSERT INTO book_metadata_matches (book_id, status) SELECT id, 'pending' FROM books WHERE title = 'Migration Test';"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		-c "INSERT INTO book_metadata_matches (book_id, status) SELECT id, 'pending' FROM books WHERE title = 'Migration Test';"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0016; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0016; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM book_metadata_matches) <> 1 THEN RAISE EXCEPTION 'downgrade did not preserve exactly one match'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0022; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) downgrade 0022; \
+	$(MIGRATION_PSQL) \
 		-c "UPDATE books SET audiobook_enabled = true, audiobook_pipeline_status = 'complete', content_version = 3 WHERE title = 'Migration Test';" \
 		-c "INSERT INTO audiobook_chapters (book_id, chapter_number, content_file_name, audio_file_path, smil_file_path, needs_reassembly) SELECT id, 1, 'Text/existing.xhtml', 'library/existing.mp3', 'library/existing.smil', false FROM books WHERE title = 'Migration Test';" \
 		-c "INSERT INTO audiobook_sentences (chapter_id, html_element_id, sequence_order, original_text, audio_duration_ms, status) SELECT id, 'existing-sentence', 0, 'Existing sentence.', 1250, 'audio_generated' FROM audiobook_chapters WHERE content_file_name = 'Text/existing.xhtml';"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE stable_chapter_key IS NOT NULL AND generation_state = 'ready' AND audio_revision = 1 AND duration_ms = 1250) THEN RAISE EXCEPTION 'existing audiobook chapter was not backfilled'; END IF; IF NOT EXISTS (SELECT 1 FROM books WHERE title = 'Migration Test' AND audiobook_publication_state = 'complete' AND audiobook_text_content_version = 3) THEN RAISE EXCEPTION 'existing audiobook book metadata was not backfilled'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0022; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0022; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE content_file_name = 'Text/existing.xhtml') THEN RAISE EXCEPTION 'audiobook downgrade removed existing chapter'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) downgrade 0023; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-preexisting-audiobook-setup.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Pre-existing imported edition' AND derived_revision = 0 AND derived_format_version = 0) THEN RAISE EXCEPTION '0036 did not backfill imported audiobook revision metadata'; END IF; IF NOT EXISTS (SELECT 1 FROM imported_audiobook_tracks WHERE title = 'Existing chapter' AND source_audio_file_path = audio_file_path AND source_clip_begin_ms = source_start_ms AND source_clip_end_ms = source_end_ms) THEN RAISE EXCEPTION '0036 did not preserve immutable imported track coordinates'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0023; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0023; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-preexisting-audiobook-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0032; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade 0032; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-lifecycle-setup.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-lifecycle-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0032; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0032; \
+	$(MIGRATION_PSQL) \
 		-c "UPDATE books SET refresh_status = 'constraint-removed' WHERE title = 'Migration Test';" \
 		-c "INSERT INTO processing_jobs (job_type) VALUES ('clean_all');"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM processing_jobs WHERE request_id LIKE 'legacy-%') THEN RAISE EXCEPTION 'processing request id was not backfilled'; END IF; IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'processing_jobs' AND indexname = 'ix_processing_jobs_request_id') THEN RAISE EXCEPTION 'processing request id index was not created'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0033; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0033; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'processing_jobs' AND column_name = 'request_id') THEN RAISE EXCEPTION 'processing request id column survived downgrade'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0036; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade 0036; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-consistency-setup.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-consistency-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0036; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0036; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-consistency-downgrade-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0037; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade 0037; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-tts-provider-lock-setup.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-tts-provider-lock-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0037; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0037; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-tts-provider-lock-downgrade-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0043; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade 0043; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-drift-margin-setup.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-drift-margin-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0043; \
-	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0043; \
+	$(MIGRATION_PSQL) \
 		< scripts/migration-voice-drift-margin-downgrade-verify.sql; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0045; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade 0045; \
+	$(MIGRATION_PSQL) \
 		-c "UPDATE audiobook_chapters SET generation_state = 'ready', audio_sha256 = NULL WHERE content_file_name = 'Text/existing.xhtml';" \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE generation_state = 'ready' AND audio_sha256 IS NULL) THEN RAISE EXCEPTION '0046 setup has no chapter missing checksums'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM processing_jobs WHERE job_type = 'backfill_reader_checksums' AND dedupe_key = 'backfill_reader_checksums:migration-0046' AND status = 'queued') <> 1 THEN RAISE EXCEPTION '0046 did not queue exactly one checksum backfill'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0045; \
-	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+	$(ALEMBIC) downgrade 0045; \
+	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'backfill_reader_checksums') THEN RAISE EXCEPTION '0046 downgrade left a checksum backfill queued'; END IF; END \$$\$$;"; \
-	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
-	STORY_MANAGER_TEST_POSTGRES_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-	PYTHONPATH=. .venv/bin/python3 -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py
+	$(ALEMBIC) upgrade head; \
+	STORY_MANAGER_TEST_POSTGRES_URL="$(MIGRATION_TEST_DATABASE_URL)" \
+		PYTHONPATH=. $(UV_RUN) python -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py
 
-e2e:
+e2e-debug: E2E_NPM_SCRIPT = test:e2e:debug
+e2e e2e-debug: E2E_NPM_SCRIPT ?= test:e2e
+e2e e2e-debug:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true
 	docker run --name $(E2E_DB_CONTAINER) \
 	  -e POSTGRES_PASSWORD=postgres \
@@ -366,20 +346,4 @@ e2e:
 	done; \
 	echo " E2E Postgres is ready."; \
 	export DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:$(E2E_DB_PORT)/story_manager"; \
-	cd frontend && npm run test:e2e
-
-e2e-debug:
-	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true
-	docker run --name $(E2E_DB_CONTAINER) \
-	  -e POSTGRES_PASSWORD=postgres \
-	  -e POSTGRES_DB=story_manager \
-	  -p $(E2E_DB_PORT):5432 \
-	  -d postgres:17 >/dev/null
-	@trap 'docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
-	until docker exec $(E2E_DB_CONTAINER) pg_isready -U postgres -d story_manager >/dev/null 2>&1; do \
-		printf "."; \
-		sleep 1; \
-	done; \
-	echo " E2E Postgres is ready."; \
-	export DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:$(E2E_DB_PORT)/story_manager"; \
-	cd frontend && npm run test:e2e:debug
+	cd frontend && npm run $(E2E_NPM_SCRIPT)

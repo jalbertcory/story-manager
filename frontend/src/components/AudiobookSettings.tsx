@@ -25,6 +25,7 @@ import {
   testAudiobookTts,
   updateAudiobookSettings,
 } from "../api/audiobook";
+import { queryKeys } from "../lib/queryKeys";
 
 const DEFAULT_ROSTER_PROMPT_HINT =
   "Leave blank to use the built-in roster extraction prompt.";
@@ -454,7 +455,7 @@ function EndpointMetrics({
         <p className="settings-hint">Loading connection metrics…</p>
       )}
       {error && (
-        <p className="error">
+        <p className="error" role="alert">
           {error.message || "Failed to load connection metrics"}
         </p>
       )}
@@ -536,11 +537,11 @@ function EndpointMetrics({
 function AudiobookSettings() {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useQuery({
-    queryKey: ["audiobook-settings"],
+    queryKey: queryKeys.audiobook.settings,
     queryFn: getAudiobookSettings,
   });
   const endpointStatsQuery = useQuery({
-    queryKey: ["audiobook-endpoint-stats"],
+    queryKey: queryKeys.audiobook.endpointStats,
     queryFn: getAudiobookEndpointStats,
     refetchInterval: 30_000,
   });
@@ -599,9 +600,11 @@ function AudiobookSettings() {
     setLlmEndpoints(clearTypedSecrets);
     setTtsEndpoints(clearTypedSecrets);
     setTranscriptionEndpoints(clearTypedSecrets);
-    void queryClient.invalidateQueries({ queryKey: ["audiobook-settings"] });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-endpoint-stats"],
+      queryKey: queryKeys.audiobook.settings,
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.audiobook.endpointStats,
     });
   };
 
@@ -716,14 +719,18 @@ function AudiobookSettings() {
                         : ""}
                     </span>
                   </div>
-                  {result.error && <p className="error">{result.error}</p>}
+                  {result.error && (
+                    <p className="error" role="alert">
+                      {result.error}
+                    </p>
+                  )}
                 </article>
               ))}
             </div>
           </div>
         )}
         {mutation.isError && (
-          <p className="error">
+          <p className="error" role="alert">
             {mutation.error?.message || `${label} test failed`}
           </p>
         )}
@@ -863,7 +870,7 @@ function AudiobookSettings() {
         </section>
 
         {saveMutation.isError && (
-          <p className="error">
+          <p className="error" role="alert">
             {saveMutation.error?.message || "Save failed"}
           </p>
         )}

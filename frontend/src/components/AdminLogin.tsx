@@ -6,8 +6,10 @@ import Icon from "./ui/Icon";
 
 function AdminLogin({
   onAuthenticated,
+  notice,
 }: {
   onAuthenticated: (status: Awaited<ReturnType<typeof login>>) => void;
+  notice?: string | undefined;
 }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -49,6 +51,11 @@ function AdminLogin({
           <div>
             <h2>Admin Login</h2>
             <p className="hint">Sign in to manage your library.</p>
+            {notice && (
+              <p className="hint" role="status">
+                {notice}
+              </p>
+            )}
           </div>
           <label className="field">
             Password

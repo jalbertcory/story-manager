@@ -1,6 +1,6 @@
 # Development
 
-This project uses Python 3.14.8, Node.js 24, PostgreSQL 17, `uv`, `pyenv`, and `nvm`.
+This project uses Python 3.14, Node.js 24, PostgreSQL 17, `uv`, and `nvm`.
 
 ## First-Time Setup
 
@@ -8,12 +8,10 @@ This project uses Python 3.14.8, Node.js 24, PostgreSQL 17, `uv`, `pyenv`, and `
 git clone https://github.com/jalbertcory/story-manager.git
 cd story-manager
 
-pyenv install
 nvm install
 
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+# Installs Python 3.14 if needed and the exact dependency set from uv.lock.
+uv sync --frozen --extra dev
 
 cd frontend
 npm ci
@@ -99,7 +97,7 @@ and hardware configuration.
 - Database: PostgreSQL
 - Frontend: React, Vite, TanStack Query
 - Packaging: Docker, Docker Compose
-- Tooling: `uv`, `pyenv`, `nvm`, npm, pytest, Vitest, Playwright
+- Tooling: `uv`, `nvm`, npm, pytest, Vitest, Playwright
 
 ## Database
 
@@ -120,12 +118,18 @@ Use Alembic migrations for database changes. Do not put one-time schema or data 
 
 ## Tests
 
-Automatic CI, E2E, PR preview images, and service-image PR builds are temporarily
-paused to conserve GitHub Actions minutes. The original triggers are commented
-out in `.github/workflows`; CI, E2E, and preview images can still be run manually
-with `workflow_dispatch`. To restore automatic runs, uncomment those triggers.
-Production container publishing still runs on pushes/merges to `main`, including
-the service images when their existing path filters match.
+GitHub Actions runs these checks automatically:
+
+- **CI** (`ci.yml`), on every pull request and push to `main`: `make pr-check`, backend and frontend unit tests,
+  GPU scheduler tests, and `make test-migrations` when migrations, models, the processing-job queue code, or the
+  PostgreSQL test files change. New pushes to a PR cancel its in-progress run.
+- **E2E** (`e2e.yml`), nightly, on demand with `workflow_dispatch`, and on pull requests labelled `e2e`.
+- **Container publishing** (`docker-publish.yml`) runs only after CI succeeds on `main`, and pushes `:main`,
+  `:latest`, and `:sha-<short>` tags. `preview-image.yml` builds a `:sha-<short>` image for any branch on demand.
+- AI service images publish from `main` when their path filters match; their PR builds remain manual.
+
+Dependabot opens weekly grouped updates for GitHub Actions, Docker base images, uv, and npm. Actions are pinned by
+commit SHA with the version in a trailing comment.
 
 Enable the versioned pre-push hook once in each existing clone:
 
@@ -155,9 +159,8 @@ make local-check
 ```
 
 Hooks run on this machine and can be bypassed with Git's `--no-verify`; they do
-not produce GitHub status checks. If branch protection requires the paused checks,
-remove those required checks in the repository settings while this pause is in
-effect, then restore them when re-enabling Actions.
+not produce GitHub status checks. CI covers most of the same ground on GitHub, but
+E2E only runs there nightly or with the `e2e` label, so keep the hook installed.
 
 Run the checks required before publishing a PR:
 

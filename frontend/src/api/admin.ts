@@ -1,7 +1,10 @@
-import { api, unwrap, unwrapEmpty } from "./client";
-import type { Query } from "./client";
-export const getReaderKeys = () =>
-  unwrap(api.GET("/api/reader-keys"), "Failed to load reader keys");
+import { api, unwrap, unwrapEmpty, requestInit } from "./client";
+import type { Query, RequestOptions } from "./client";
+export const getReaderKeys = (options?: RequestOptions) =>
+  unwrap(
+    api.GET("/api/reader-keys", requestInit(options)),
+    "Failed to load reader keys",
+  );
 export const createReaderKey = (label: string) =>
   unwrap(
     api.POST("/api/reader-keys", { body: { label } }),
@@ -14,13 +17,23 @@ export const revokeReaderKey = (id: number) =>
     }),
     "Failed to revoke reader key",
   );
-export const getLogs = (query: Query<"/api/logs"> = {}) =>
-  unwrap(api.GET("/api/logs", { params: { query } }), "Failed to load logs");
-export const getHealth = () =>
-  unwrap(api.GET("/api/observability/health"), "Failed to load service health");
-export const getJobMetrics = (windowHours = 24) =>
+export const getLogs = (
+  query: Query<"/api/logs"> = {},
+  options?: RequestOptions,
+) =>
+  unwrap(
+    api.GET("/api/logs", { ...requestInit(options), params: { query } }),
+    "Failed to load logs",
+  );
+export const getHealth = (options?: RequestOptions) =>
+  unwrap(
+    api.GET("/api/observability/health", requestInit(options)),
+    "Failed to load service health",
+  );
+export const getJobMetrics = (windowHours = 24, options?: RequestOptions) =>
   unwrap(
     api.GET("/api/observability/job-metrics", {
+      ...requestInit(options),
       params: { query: { window_hours: windowHours } },
     }),
     "Failed to load job metrics",
@@ -32,8 +45,11 @@ export const cleanupStorage = (dryRun = true) =>
     }),
     "Storage cleanup failed",
   );
-export const validateLibrary = () =>
-  unwrap(api.GET("/api/library/validate"), "Library validation failed");
+export const validateLibrary = (options?: RequestOptions) =>
+  unwrap(
+    api.GET("/api/library/validate", requestInit(options)),
+    "Library validation failed",
+  );
 export const postClientLog = (
   message: string,
   source?: string,
@@ -52,8 +68,8 @@ export const removeAllBooks = (dryRun = true) =>
     }),
     "Failed to remove books",
   );
-export const getWebChecks = () =>
+export const getWebChecks = (options?: RequestOptions) =>
   unwrap(
-    api.GET("/api/library/web-checks"),
+    api.GET("/api/library/web-checks", requestInit(options)),
     "Failed to load web update checks",
   );

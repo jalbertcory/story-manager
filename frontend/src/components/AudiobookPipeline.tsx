@@ -23,6 +23,7 @@ import ProgressDashboard from "./audiobook/ProgressDashboard";
 import AudiobookSources from "./audiobook/AudiobookSources";
 import { AUDIOBOOK_TABS } from "../lib/navigation";
 import useLifecycleDefinitions from "../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../lib/queryKeys";
 
 function PipelineProgress({
   status,
@@ -113,6 +114,10 @@ function JobInspector({
   );
 }
 
+// Pipeline work runs for minutes; three polled endpoints at this pace keep the
+// progress view current without hammering the API.
+const ACTIVE_POLL_MS = 3000;
+
 const AI_SUB_TAB_KEYS = new Set([
   "progress",
   "analysis",
@@ -167,11 +172,9 @@ function AudiobookPipeline({
     sentenceLifecycle?.groups?.audio_playable ?? [];
   const bookId = book.id;
   const audioOnly = book.source_type === "audiobook";
-  const aiEnabled = !audioOnly && book.audiobook_enabled !== false;
+  const aiEnabled = !audioOnly && book.audiobook_enabled;
   const queryClient = useQueryClient();
-  const [internalSubTab, setInternalSubTab] = useState(
-    book.audiobook_enabled === undefined ? "progress" : "sources",
-  );
+  const [internalSubTab, setInternalSubTab] = useState("sources");
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [lastQueuedJob, setLastQueuedJob] = useState<number | boolean | null>(
     null,
@@ -181,37 +184,37 @@ function AudiobookPipeline({
     activeStatuses.has(status ?? "");
 
   const { data: statusData } = useQuery({
-    queryKey: ["audiobook-status", bookId],
-    queryFn: () => getAudiobookStatus(bookId),
+    queryKey: queryKeys.audiobook.status(bookId),
+    queryFn: ({ signal }) => getAudiobookStatus(bookId, { signal }),
     enabled: aiEnabled,
     refetchInterval: ({ state }) => {
       const s = state.data?.pipeline_status;
       const audioStillFinishing =
         (state.data?.sentence_counts?.audio_generating ?? 0) > 0;
-      return (s && isActive(s)) || audioStillFinishing ? 1000 : false;
+      return (s && isActive(s)) || audioStillFinishing ? ACTIVE_POLL_MS : false;
     },
   });
 
   const { data: characters = [] } = useQuery({
-    queryKey: ["audiobook-characters", bookId],
-    queryFn: () => getCharacters(bookId),
+    queryKey: queryKeys.audiobook.characters(bookId),
+    queryFn: ({ signal }) => getCharacters(bookId, { signal }),
     enabled: aiEnabled,
   });
 
   const { data: imports = [] } = useQuery({
-    queryKey: ["audiobook-imports", bookId],
-    queryFn: () => getImportedAudiobooks(bookId),
+    queryKey: queryKeys.audiobook.imports(bookId),
+    queryFn: ({ signal }) => getImportedAudiobooks(bookId, { signal }),
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
       state.data.some((edition) => activeImportStatuses.has(edition.status))
-        ? 1000
+        ? ACTIVE_POLL_MS
         : false,
   });
   const importedAudiobooks = Array.isArray(imports) ? imports : [];
 
   const { data: chapters = [] } = useQuery({
-    queryKey: ["audiobook-chapters", bookId],
-    queryFn: () => getAudiobookChapters(bookId),
+    queryKey: queryKeys.audiobook.chapters(bookId),
+    queryFn: ({ signal }) => getAudiobookChapters(bookId, { signal }),
     refetchInterval: ({ state }) => {
       const s = statusData?.pipeline_status;
       const previewActive = state.data?.some((chapter) =>
@@ -220,20 +223,20 @@ function AudiobookPipeline({
       const audioStillFinishing =
         (statusData?.sentence_counts?.audio_generating ?? 0) > 0;
       return (s && isActive(s)) || previewActive || audioStillFinishing
-        ? 1000
+        ? ACTIVE_POLL_MS
         : false;
     },
   });
 
   const invalidateAll = () => {
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-status", bookId],
+      queryKey: queryKeys.audiobook.status(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-characters", bookId],
+      queryKey: queryKeys.audiobook.characters(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-chapters", bookId],
+      queryKey: queryKeys.audiobook.chapters(bookId),
     });
   };
 
@@ -301,10 +304,10 @@ function AudiobookPipeline({
   useEffect(() => {
     if (aiEnabled && pipelineStatus !== undefined) {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     }
   }, [aiEnabled, bookId, pipelineStatus, queryClient]);
@@ -467,7 +470,7 @@ function AudiobookPipeline({
             batchMutation.isError ||
             pauseMutation.isError ||
             rebuildMutation.isError) && (
-            <p className="error">
+            <p className="error" role="alert">
               {(
                 startMutation.error ||
                 stepMutation.error ||

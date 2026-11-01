@@ -1,16 +1,29 @@
 import { postClientLog } from "./api/admin";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 import App from "./App";
 import { applyThemePreference, readThemePreference } from "./lib/theme";
+import { createQueryClient } from "./lib/queryClient";
+import {
+  consumeStaleChunkMarker,
+  reloadAfterStaleChunk,
+} from "./lib/staleChunk";
+
+consumeStaleChunkMarker();
 
 // Apply the saved theme before the first render to avoid a flash of the
 // wrong colors.
 applyThemePreference(readThemePreference());
 
-const queryClient = new QueryClient();
+const queryClient = createQueryClient();
+
+// After a deploy, lazily loaded pages may point at chunks the server no longer
+// has. Reload once to pick up the new build instead of showing a broken page.
+window.addEventListener("vite:preloadError", (event) => {
+  if (reloadAfterStaleChunk()) event.preventDefault();
+});
 
 // Report uncaught JS errors and unhandled promise rejections to the backend
 // so they appear in container logs alongside server-side logs.

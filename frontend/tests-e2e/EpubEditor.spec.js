@@ -41,7 +41,7 @@ test("EpubEditor interactions", async ({ page }) => {
   await page.getByRole("link", { name: "Add books", exact: true }).click();
 
   // Upload a book
-  const filePath = path.resolve("test.epub");
+  const filePath = path.resolve("tests-e2e/fixtures/test.epub");
   await dragAndDropFile(
     page,
     "#drop-zone",

@@ -3,8 +3,11 @@ import type { Book } from "../../types";
 import type { components } from "../../api/schema";
 import type { previewCleaning } from "../../api/cleaning";
 import { useEffect, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 type EditableValues = ReturnType<typeof editableValues>;
+type EditableKey = keyof EditableValues;
+type BookUpdate = components["schemas"]["BookUpdate"];
 
 // The server-backed fields the form edits, in their form representation.
 function editableValues(book: Book) {
@@ -36,8 +39,106 @@ function editableValues(book: Book) {
   };
 }
 
-function sameValues(left: EditableValues, right: EditableValues): boolean {
+function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+const REMOTE_ID_KEYS = [
+  "isbn10",
+  "isbn13",
+  "asin",
+  "googleBooksVolumeId",
+  "openLibraryWorkKey",
+  "openLibraryEditionKey",
+  "openLibraryAuthorKey",
+  "otherRemoteIdsJson",
+] as const satisfies readonly EditableKey[];
+
+const EDITABLE_KEYS = [
+  "title",
+  "author",
+  "series",
+  "seriesIndex",
+  "notes",
+  ...REMOTE_ID_KEYS,
+  "userGenreTags",
+  "removedChapters",
+  "contentSelectors",
+] as const satisfies readonly EditableKey[];
+
+function remoteIdsUpdate(
+  values: EditableValues,
+): { ids: Record<string, unknown> | null } | { error: string } {
+  let extraRemoteIds: Record<string, unknown> = {};
+  if (values.otherRemoteIdsJson.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(values.otherRemoteIdsJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        return { error: "Other identifiers must be a JSON object." };
+      extraRemoteIds = Object.fromEntries(Object.entries(parsed));
+    } catch {
+      return { error: "Other identifiers must be valid JSON." };
+    }
+  }
+  const named = {
+    isbn_10: values.isbn10,
+    isbn_13: values.isbn13,
+    asin: values.asin,
+    google_books_volume_id: values.googleBooksVolumeId,
+    open_library_work_key: values.openLibraryWorkKey,
+    open_library_edition_key: values.openLibraryEditionKey,
+    open_library_author_key: values.openLibraryAuthorKey,
+  };
+  const ids = { ...extraRemoteIds };
+  for (const [key, value] of Object.entries(named))
+    if (value.trim()) ids[key] = value.trim();
+  return { ids: Object.keys(ids).length ? ids : null };
+}
+
+// The update for the fields the user changed since the form was seeded, so a
+// save never overwrites values the server changed meanwhile (a metadata
+// recheck, another tab) with the stale copies the form loaded.
+export function changedBookFields(
+  values: EditableValues,
+  seeded: EditableValues,
+): { update: BookUpdate } | { error: string } {
+  const changed = (key: EditableKey) => !sameValue(values[key], seeded[key]);
+  let remoteIds: BookUpdate = {};
+  if (REMOTE_ID_KEYS.some(changed)) {
+    const result = remoteIdsUpdate(values);
+    if ("error" in result) return result;
+    remoteIds = { metadata_remote_ids: result.ids };
+  }
+  return {
+    update: {
+      ...(changed("title") ? { title: values.title } : {}),
+      ...(changed("author") ? { author: values.author } : {}),
+      ...(changed("series") ? { series: values.series.trim() || null } : {}),
+      ...(changed("seriesIndex")
+        ? {
+            series_index: values.seriesIndex.trim()
+              ? Number.parseFloat(values.seriesIndex)
+              : null,
+          }
+        : {}),
+      ...(changed("userGenreTags")
+        ? {
+            user_genre_tags: values.userGenreTags
+              .split(",")
+              .map((tag) => tag.trim())
+              .filter(Boolean),
+          }
+        : {}),
+      ...remoteIds,
+      ...(changed("removedChapters")
+        ? { removed_chapters: values.removedChapters }
+        : {}),
+      ...(changed("contentSelectors")
+        ? { content_selectors: values.contentSelectors }
+        : {}),
+      ...(changed("notes") ? { notes: values.notes || null } : {}),
+    },
+  };
 }
 
 import { splitRemoteIds } from "./remoteIds";
@@ -114,30 +215,40 @@ export function useBookSettingsForm(initialBook: Book) {
   // polling, cover changes) replace the book object; they must not discard
   // edits the user has not saved yet.
   const [seededBook, setSeededBook] = useState(initialBook);
-  const isDirty = !sameValues(currentValues, editableValues(seededBook));
+  const seededValues = editableValues(seededBook);
+  const isDirty = !sameValue(currentValues, seededValues);
+  const setters: {
+    [K in EditableKey]: Dispatch<SetStateAction<EditableValues[K]>>;
+  } = {
+    title: setTitle,
+    author: setAuthor,
+    series: setSeries,
+    seriesIndex: setSeriesIndex,
+    notes: setNotes,
+    isbn10: setIsbn10,
+    isbn13: setIsbn13,
+    asin: setAsin,
+    googleBooksVolumeId: setGoogleBooksVolumeId,
+    openLibraryWorkKey: setOpenLibraryWorkKey,
+    openLibraryEditionKey: setOpenLibraryEditionKey,
+    openLibraryAuthorKey: setOpenLibraryAuthorKey,
+    otherRemoteIdsJson: setOtherRemoteIdsJson,
+    userGenreTags: setUserGenreTags,
+    removedChapters: setRemovedChapters,
+    contentSelectors: setContentSelectors,
+  };
 
   if (initialBook !== seededBook) {
     const differentBook = initialBook.id !== seededBook.id;
+    const next = editableValues(initialBook);
     setSeededBook(initialBook);
-    if (differentBook || !isDirty) {
-      const next = editableValues(initialBook);
-      setTitle(next.title);
-      setAuthor(next.author);
-      setSeries(next.series);
-      setSeriesIndex(next.seriesIndex);
-      setNotes(next.notes);
-      setIsbn10(next.isbn10);
-      setIsbn13(next.isbn13);
-      setAsin(next.asin);
-      setGoogleBooksVolumeId(next.googleBooksVolumeId);
-      setOpenLibraryWorkKey(next.openLibraryWorkKey);
-      setOpenLibraryEditionKey(next.openLibraryEditionKey);
-      setOpenLibraryAuthorKey(next.openLibraryAuthorKey);
-      setOtherRemoteIdsJson(next.otherRemoteIdsJson);
-      setUserGenreTags(next.userGenreTags);
-      setRemovedChapters(next.removedChapters);
-      setContentSelectors(next.contentSelectors);
-    }
+    // Fields the user has not edited follow the server; edited fields keep the
+    // user's value until they save or leave.
+    const rebase = <K extends EditableKey>(key: K) => {
+      if (differentBook || sameValue(currentValues[key], seededValues[key]))
+        setters[key](next[key]);
+    };
+    EDITABLE_KEYS.forEach(rebase);
     if (differentBook) {
       setIdentifierError("");
       setPreviewResult(null);
@@ -152,59 +263,14 @@ export function useBookSettingsForm(initialBook: Book) {
     setPreviewResult(null);
   }, [contentSelectors, removedChapters]);
 
-  const getUpdatedFields = (): components["schemas"]["BookUpdate"] | null => {
-    let extraRemoteIds: Record<string, unknown> = {};
-    if (otherRemoteIdsJson.trim()) {
-      try {
-        const parsed: unknown = JSON.parse(otherRemoteIdsJson);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setIdentifierError("Other identifiers must be a JSON object.");
-          return null;
-        }
-        extraRemoteIds = Object.fromEntries(Object.entries(parsed));
-      } catch {
-        setIdentifierError("Other identifiers must be valid JSON.");
-        return null;
-      }
+  const getUpdatedFields = (): BookUpdate | null => {
+    const result = changedBookFields(currentValues, seededValues);
+    if ("error" in result) {
+      setIdentifierError(result.error);
+      return null;
     }
-
     setIdentifierError("");
-
-    const metadataRemoteIds = {
-      ...extraRemoteIds,
-      ...(isbn10.trim() ? { isbn_10: isbn10.trim() } : {}),
-      ...(isbn13.trim() ? { isbn_13: isbn13.trim() } : {}),
-      ...(asin.trim() ? { asin: asin.trim() } : {}),
-      ...(googleBooksVolumeId.trim()
-        ? { google_books_volume_id: googleBooksVolumeId.trim() }
-        : {}),
-      ...(openLibraryWorkKey.trim()
-        ? { open_library_work_key: openLibraryWorkKey.trim() }
-        : {}),
-      ...(openLibraryEditionKey.trim()
-        ? { open_library_edition_key: openLibraryEditionKey.trim() }
-        : {}),
-      ...(openLibraryAuthorKey.trim()
-        ? { open_library_author_key: openLibraryAuthorKey.trim() }
-        : {}),
-    };
-
-    return {
-      title,
-      author,
-      series: series.trim() || null,
-      series_index: seriesIndex.trim() ? Number.parseFloat(seriesIndex) : null,
-      user_genre_tags: userGenreTags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-      metadata_remote_ids: Object.keys(metadataRemoteIds).length
-        ? metadataRemoteIds
-        : null,
-      removed_chapters: removedChapters,
-      content_selectors: contentSelectors,
-      notes: notes || null,
-    };
+    return result.update;
   };
 
   return {

@@ -17,12 +17,13 @@ import threading
 from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 import torch
 
 from services.omnivoice.audio_quality import AudioQualityError, validate_generated_audio
+from services.service_auth import bearer_auth
 from services.tts_consistency import seed_for_attempt, voice_instruction
 from services.voice_roster import (
     MAX_ROSTER_VOICE_IDS,
@@ -522,7 +523,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Story Manager Qwen3-TTS Adapter", lifespan=lifespan)
+app = FastAPI(
+    title="Story Manager Qwen3-TTS Adapter",
+    lifespan=lifespan,
+    dependencies=[Depends(bearer_auth())],
+)
 
 
 @app.get("/health")
@@ -541,10 +546,11 @@ async def design_voice(request: DesignVoiceRequest) -> DesignVoiceResponse:
     try:
         stored, max_similarity, attempts = await asyncio.to_thread(runtime.design, request)
     except AudioQualityError as exc:
+        # Quality rejections are messages this service writes for the user.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Qwen3 voice design failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Qwen3 voice design failed; see the service logs.") from exc
     return DesignVoiceResponse(
         id=stored.id,
         voice=stored.description,
@@ -562,10 +568,10 @@ async def materialize_preset_voice(request: PresetVoiceRequest) -> DesignVoiceRe
     except AudioQualityError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Preset voice not found.") from exc
     except Exception as exc:
         logger.exception("Qwen3 preset materialization failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Qwen3 preset voice creation failed; see the service logs.") from exc
     return DesignVoiceResponse(
         id=stored.id,
         voice=stored.description,
@@ -585,15 +591,15 @@ async def voice_sample(voice_id: str) -> Response:
                 GenerateRequest(text=DESIGN_TEXT, voice_id=voice_id, quality_attempts=1),
             )
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail="Voice not found.") from exc
         except Exception as exc:
             logger.exception("Qwen3 voice sample generation failed.")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail="Qwen3 voice sample generation failed; see the service logs.") from exc
         return Response(audio, media_type="audio/mpeg")
     try:
         path = runtime._voices.sample_path(voice_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Voice not found.") from exc
     return FileResponse(path, media_type="audio/wav", filename=f"{voice_id}.wav")
 
 
@@ -603,7 +609,7 @@ async def generate(request: GenerateRequest) -> Response:
         audio, duration, similarity, attempts = await asyncio.to_thread(runtime.generate, request)
     except Exception as exc:
         logger.exception("Qwen3 generation failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Qwen3 generation failed; see the service logs.") from exc
     return Response(
         audio,
         media_type="audio/mpeg",
@@ -621,7 +627,7 @@ async def generate_batch(request: BatchGenerateRequest) -> BatchGenerateResponse
         generated = await asyncio.to_thread(runtime.generate_batch, request.requests)
     except Exception as exc:
         logger.exception("Qwen3 batch generation failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Qwen3 batch generation failed; see the service logs.") from exc
     return BatchGenerateResponse(
         items=[
             BatchGenerateItem(

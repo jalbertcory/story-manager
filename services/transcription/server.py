@@ -12,8 +12,10 @@ import tempfile
 import threading
 from typing import TYPE_CHECKING
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+
+from services.service_auth import bearer_auth
 
 if TYPE_CHECKING:
     from torch.nn import Module
@@ -27,7 +29,6 @@ DEVICE_SETTING = os.getenv("WHISPER_DEVICE", "auto")
 COMPUTE_TYPE_SETTING = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
 BATCH_SIZE = max(1, int(os.getenv("WHISPER_BATCH_SIZE", "4")))
 MODEL_CACHE = os.getenv("WHISPER_MODEL_CACHE", "/models")
-API_KEY = os.getenv("TRANSCRIPTION_API_KEY")
 MAX_UPLOAD_BYTES = int(os.getenv("TRANSCRIPTION_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
@@ -43,11 +44,6 @@ class TranscriptionResponse(BaseModel):
     language: str | None
     duration: float
     words: list[WordTimestamp]
-
-
-def authorize(authorization: str | None = Header(default=None)) -> None:
-    if API_KEY and authorization != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Invalid transcription service API key.")
 
 
 class WhisperXRuntime:
@@ -154,7 +150,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Story Manager WhisperX Transcription", lifespan=lifespan)
+# TRANSCRIPTION_API_KEY predates the shared AI_SERVICE_API_KEY and still works.
+app = FastAPI(
+    title="Story Manager WhisperX Transcription",
+    lifespan=lifespan,
+    dependencies=[Depends(bearer_auth("TRANSCRIPTION_API_KEY"))],
+)
 
 
 @app.get("/health")
@@ -169,11 +170,7 @@ async def health() -> dict[str, object]:
     }
 
 
-@app.post(
-    "/transcribe",
-    response_model=TranscriptionResponse,
-    dependencies=[Depends(authorize)],
-)
+@app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe(
     file: UploadFile = File(...),
     model: str | None = Form(default=None),
@@ -200,7 +197,7 @@ async def transcribe(
         raise
     except Exception as exc:
         logger.exception("WhisperX transcription failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="WhisperX transcription failed; see the service logs.") from exc
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)

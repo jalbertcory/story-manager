@@ -601,15 +601,14 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 ## Dependencies Added
 
 **`pyproject.toml`** (core):
-- `spacy>=3.7,<4` — sentence tokenization
+- `spacy>=3.8,<3.9` — sentence tokenization
+- `en-core-web-sm` — the spaCy English model, pinned to the 3.8.0 wheel URL in `[tool.uv.sources]` and recorded in
+  `uv.lock`, so every environment installs the same model without a `spacy download` step
 - `httpx==0.28.1` — HTTP client for LLM and TTS provider calls (`import httpx`)
-- `httpx2` — required by Starlette's `TestClient`; it installs only the `httpx2` module
-- `mutagen>=1.47` — MP3 duration extraction
+- `mutagen>=1.47,<2` — MP3 duration extraction
+
+**`pyproject.toml`** (`dev` extra):
+- `httpx2` — required by Starlette's `TestClient` in tests; it installs only the `httpx2` module
 
 **`Dockerfile`**:
 - `ffmpeg` — placeholder MP3 generation and chapter concatenation
-
-The application image also downloads the optional higher-quality spaCy English model after installing Python dependencies:
-```dockerfile
-RUN python -m spacy download en_core_web_sm
-```

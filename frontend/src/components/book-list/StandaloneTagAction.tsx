@@ -2,6 +2,7 @@ import type { CatalogBook } from "../../types";
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateBook } from "../../api/books";
+import { invalidateBookViews } from "../../lib/queryKeys";
 
 export default function StandaloneTagAction({
   book,
@@ -21,13 +22,7 @@ export default function StandaloneTagAction({
     mutationFn: (nextSeries: string) =>
       updateBook(book.id, { series: nextSeries.trim() || null }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
+      invalidateBookViews(queryClient, book.id);
     },
   });
 

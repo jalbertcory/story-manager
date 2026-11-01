@@ -9,6 +9,7 @@ import {
 import { getProcessingJobs } from "../../api/processing";
 import { formatBytes } from "../../lib/format";
 import ConfirmActionDialog from "../ConfirmActionDialog";
+import { queryKeys } from "../../lib/queryKeys";
 
 export default function BackupsPanel() {
   const queryClient = useQueryClient();
@@ -17,8 +18,8 @@ export default function BackupsPanel() {
     | null
   >(null);
   const { data: backupJobs = [] } = useQuery({
-    queryKey: ["backup-jobs"],
-    queryFn: () => getProcessingJobs({ limit: 100 }),
+    queryKey: queryKeys.backupJobs,
+    queryFn: ({ signal }) => getProcessingJobs({ limit: 100 }, { signal }),
     select: (jobs) =>
       jobs.filter((job) =>
         ["create_backup", "verify_backup"].includes(job.job_type),
@@ -36,7 +37,7 @@ export default function BackupsPanel() {
   const latestBackupJob = backupJobs[0];
 
   const { data: backupInventory, isLoading: backupsLoading } = useQuery({
-    queryKey: ["backups"],
+    queryKey: queryKeys.backups,
     queryFn: getBackups,
     refetchInterval: activeBackupJob ? 3000 : false,
   });
@@ -44,26 +45,26 @@ export default function BackupsPanel() {
 
   useEffect(() => {
     if (latestBackupJob?.completed_at)
-      void queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups });
   }, [latestBackupJob?.completed_at, queryClient]);
 
   const createBackupMutation = useMutation({
     mutationFn: createBackup,
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.backupJobs }),
   });
 
   const verifyBackupMutation = useMutation({
     mutationFn: verifyBackup,
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["backup-jobs"] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.backupJobs }),
   });
 
   const deleteBackupMutation = useMutation({
     mutationFn: deleteBackup,
     onSuccess: () => {
       setBackupDeleteTarget(null);
-      void queryClient.invalidateQueries({ queryKey: ["backups"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.backups });
     },
   });
 
@@ -89,7 +90,7 @@ export default function BackupsPanel() {
         </div>
 
         {latestBackupJob?.status === "error" && (
-          <p className="error">
+          <p className="error" role="alert">
             {latestBackupJob.error || latestBackupJob.progress_detail}
           </p>
         )}
@@ -101,7 +102,7 @@ export default function BackupsPanel() {
         {(createBackupMutation.isError ||
           verifyBackupMutation.isError ||
           deleteBackupMutation.isError) && (
-          <p className="error">
+          <p className="error" role="alert">
             {
               (
                 createBackupMutation.error ||

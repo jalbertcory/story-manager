@@ -1,5 +1,5 @@
-import { api, unwrap } from "./client";
-import type { Body, Query } from "./client";
+import { api, unwrap, requestInit } from "./client";
+import type { Body, Query, RequestOptions } from "./client";
 export { getWebChecks } from "./admin";
 
 type GroupQuery = Query<"/api/library/groups">;
@@ -16,21 +16,25 @@ export interface LibraryGroupParams {
   cursor?: string;
   limit?: number;
 }
-export async function getLibraryGroups({
-  groupBy,
-  q = "",
-  universe,
-  source,
-  genre,
-  audiobook,
-  review,
-  sortBy = "title",
-  sortOrder = "asc",
-  cursor = "",
-  limit = 30,
-}: LibraryGroupParams) {
+export async function getLibraryGroups(
+  {
+    groupBy,
+    q = "",
+    universe,
+    source,
+    genre,
+    audiobook,
+    review,
+    sortBy = "title",
+    sortOrder = "asc",
+    cursor = "",
+    limit = 30,
+  }: LibraryGroupParams,
+  options?: RequestOptions,
+) {
   const data = await unwrap(
     api.GET("/api/library/groups", {
+      ...requestInit(options),
       params: {
         query: {
           group_by: groupBy,
@@ -58,10 +62,12 @@ export async function getLibraryGroups({
       }
     : data;
 }
-export const getUniverses = () => unwrap(api.GET("/api/library/universes"));
-export const getLibraryBookInfo = (id: number) =>
+export const getUniverses = (options?: RequestOptions) =>
+  unwrap(api.GET("/api/library/universes", requestInit(options)));
+export const getLibraryBookInfo = (id: number, options?: RequestOptions) =>
   unwrap(
     api.GET("/api/library/books/{book_id}/info", {
+      ...requestInit(options),
       params: { path: { book_id: id } },
     }),
   );

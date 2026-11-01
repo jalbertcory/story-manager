@@ -1,9 +1,11 @@
 name: preview-image
 
 on:
-  # Automatic runs paused to conserve Actions minutes; checks run in pre-push.
+  # Manual only: builds an image for any branch without publishing :latest.
   workflow_dispatch:
-  # pull_request:
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -15,60 +17,34 @@ jobs:
     permissions:
       contents: read
       packages: write
-      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set image tag
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "tag=pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
+          echo "image=${REGISTRY}/${IMAGE_NAME,,}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build and cache base image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.base
-          tags: story-manager-base:latest
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build image
-        run: docker build --build-arg BASE_IMAGE=story-manager-base:latest -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image
-        run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
-
-      - name: Comment image
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          script: |
-            const tag = process.env.TAG;
-            const image = `${process.env.REGISTRY}/${process.env.IMAGE_NAME}:${tag}`;
-            const url = `https://${process.env.REGISTRY}/${process.env.IMAGE_NAME}:${tag}`;
-            const body = `Preview image available: \`${image}\`\n\n[View image in registry](${url})`;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
-            });
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha,scope=story-manager
+
+      - name: Summarize image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: echo "Preview image available at \`${IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
