@@ -17,8 +17,10 @@ make pr-check
 
 Do not publish the PR update until this command passes. The target covers formatting, unused-import, Python lint/type checks, frontend lint/type checks, API contract drift, and frontend dependency audits.
 
-Automatic CI/E2E and PR image builds are temporarily paused to save Actions minutes;
-production images still publish on pushes to `main`. Run `make install-hooks` once
+GitHub Actions CI (`ci.yml`) runs `make pr-check`, unit tests, GPU scheduler tests, and
+(when `backend/alembic/**` changes) migration tests on every PR and push to `main`.
+E2E runs nightly or on PRs labelled `e2e`, and the production image publishes only
+after CI passes on `main`. Run `make install-hooks` once
 per clone (also included in `make setup`). The pre-push hook requires a clean working
 tree and refs pointing at the checked-out commit, then runs `make local-check`,
 which includes `make pr-check`, Python dependency auditing, unit tests, GPU scheduler
@@ -139,7 +141,7 @@ until docker exec pg-migration-test pg_isready -U postgres; do sleep 1; done
 
 # Run all migrations
 DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
-  PYTHONPATH=. uv run alembic -c backend/alembic.ini upgrade head
+  PYTHONPATH=. uv run --frozen --extra dev alembic -c backend/alembic.ini upgrade head
 
 # Tear down
 docker rm -f pg-migration-test
@@ -149,14 +151,14 @@ Also test the **existing-data path**: roll back to the previous revision, insert
 
 ```bash
 # Roll back one step
-DATABASE_URL="..." PYTHONPATH=. uv run alembic -c backend/alembic.ini downgrade -1
+DATABASE_URL="..." PYTHONPATH=. uv run --frozen --extra dev alembic -c backend/alembic.ini downgrade -1
 
 # Insert existing data that would be present on a live user's database
 docker exec pg-migration-test psql -U postgres -d story_manager \
   -c "INSERT INTO my_table (...) VALUES (...);"
 
 # Re-apply the migration and verify
-DATABASE_URL="..." PYTHONPATH=. uv run alembic -c backend/alembic.ini upgrade head
+DATABASE_URL="..." PYTHONPATH=. uv run --frozen --extra dev alembic -c backend/alembic.ini upgrade head
 docker exec pg-migration-test psql -U postgres -d story_manager \
   -c "SELECT * FROM my_table;"
 ```
@@ -176,7 +178,7 @@ Before running tests for your migration, you should reset your local database to
 
 3.  **Upgrade your database to the head of `main`:**
     ```bash
-    export PYTHONPATH=. && .venv/bin/alembic upgrade head
+    make migrate
     ```
 
 4.  **Switch back to your feature branch:**
@@ -185,29 +187,25 @@ Before running tests for your migration, you should reset your local database to
     ```
 
 5.  **Run your tests:**
-    Now that your database is at the same state as `main`, you can run your tests. The `run-backend` command will automatically apply the new migrations from your feature branch. You can then run the test suite.
+    Now that your database is at the same state as `main`, apply your branch's new migrations and run the test suite.
+    `make test-migrations` also exercises the migrations against a throwaway PostgreSQL container.
     ```bash
+    make migrate
     make test
+    make test-migrations
     ```
 
 ## End-to-End (E2E) Testing
 
-To run the Playwright end-to-end tests, you first need to ensure the backend and frontend servers are running.
+`make e2e` is self-contained: it starts a throwaway PostgreSQL container on port `5434`, and Playwright starts its own
+API (port `18000`) and UI (port `15173`) servers against it. Keep those ports free; you do not need `make run-api` or
+`make run-ui` running first.
 
-1.  **Start the servers:**
-    In separate terminals, run the following commands:
-    ```bash
-    make run-api
-    make run-ui
-    ```
+```bash
+make e2e
+```
 
-2.  **Run the E2E tests:**
-    Once the servers are running, you can execute the E2E tests with the following command:
-    ```bash
-    make e2e
-    ```
-
-    To run in debug mode, use:
-    ```bash
-    make e2e-debug
-    ```
+To run in debug mode, use:
+```bash
+make e2e-debug
+```

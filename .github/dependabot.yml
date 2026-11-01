@@ -1,0 +1,48 @@
+version: 2
+
+# Weekly, grouped updates keep the review load to a few PRs a week. Every PR
+# runs CI, so a broken update is caught before it reaches a published image.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /services/gpu_scheduler
+      - /services/omnivoice
+      - /services/qwen3_tts
+      - /services/transcription
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      # Major Python and Debian releases change the PostgreSQL major available
+      # in the image; upgrade those deliberately.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: uv
+    directories:
+      - /
+      - /services/gpu_scheduler
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]

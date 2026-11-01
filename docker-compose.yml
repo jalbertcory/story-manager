@@ -10,8 +10,13 @@ services:
       - ./config/pgdata:/tmp/pgdata
     environment:
       STORY_MANAGER_BACKUP_DIR: /app/backups
+      # The application runs as this user/group; PostgreSQL runs as postgres.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       GOOGLE_BOOKS_API_KEY: ${GOOGLE_BOOKS_API_KEY:-}
       GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED: ${GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED:-true}
       AMAZON_METADATA_ENABLED: ${AMAZON_METADATA_ENABLED:-false}
       AMAZON_METADATA_DOMAIN: ${AMAZON_METADATA_DOMAIN:-com}
     restart: unless-stopped
+    # Give uvicorn and PostgreSQL time to shut down cleanly on `docker stop`.
+    stop_grace_period: 30s

@@ -81,8 +81,9 @@ It returns:
 }
 ```
 
-Set `TRANSCRIPTION_API_KEY` to require
-`Authorization: Bearer <value>` on transcription requests. The health endpoint
+Set `AI_SERVICE_API_KEY` (or the legacy `TRANSCRIPTION_API_KEY`) to require
+`Authorization: Bearer <value>` on transcription requests, and enter the same
+value as the transcription API key in Story Manager's audiobook settings. The health endpoint
 does not expose audio or credentials and remains available to container health
 checks.
 
@@ -96,5 +97,6 @@ checks.
 | `WHISPER_COMPUTE_TYPE` | `auto` | `float16` on CUDA, otherwise `int8` |
 | `WHISPER_BATCH_SIZE` | `4` | Reduce when GPU memory is limited |
 | `WHISPER_MODEL_CACHE` | `/models` | Persistent model directory |
-| `TRANSCRIPTION_API_KEY` | unset | Optional bearer token |
+| `AI_SERVICE_API_KEY` | unset | Optional bearer token shared by the AI services |
+| `TRANSCRIPTION_API_KEY` | unset | Legacy bearer token, used when `AI_SERVICE_API_KEY` is unset |
 | `TRANSCRIPTION_MAX_UPLOAD_BYTES` | `2147483648` | Maximum chapter clip size |
