@@ -3,8 +3,10 @@
 import logging
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
-from backend.app import auth
+from backend.app import admin_auth_middleware, auth
+from backend.app.routers import auth as auth_router
 from backend.app.auth import (
     LoginThrottle,
     create_admin_session_token,
@@ -121,14 +123,58 @@ class TestLoginThrottle:
             throttle.record_failure(f"client-{index}", now=index)
         assert len(throttle._failures) <= 3
 
+    def test_locked_client_gets_one_check_per_interval(self):
+        throttle = LoginThrottle(free_attempts=0, base_lockout_seconds=60, locked_check_interval_seconds=2)
+        assert throttle.admit_check("client", now=0) == 0
+        throttle.record_failure("client", now=0)
+
+        assert throttle.admit_check("client", now=0) == 0
+        assert throttle.admit_check("client", now=0) == 2
+        assert throttle.admit_check("client", now=1.5) == 1
+        assert throttle.admit_check("client", now=2) == 0
+        assert throttle.admit_check("other", now=2) == 0
+
     def test_login_endpoint_returns_429_with_retry_after(self, app_client, password_auth):
         for _ in range(auth.admin_login_throttle.free_attempts):
             assert app_client.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
         assert app_client.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
 
-        locked = app_client.post("/api/auth/login", json={"password": "sécret-密码"})
+        locked = app_client.post("/api/auth/login", json={"password": "wrong"})
         assert locked.status_code == 429
         assert int(locked.headers["Retry-After"]) >= 1
+        # Only one check per interval while locked, whatever the password.
+        assert app_client.post("/api/auth/login", json={"password": "sécret-密码"}).status_code == 429
+
+    def test_correct_password_signs_in_while_address_is_locked(self, app_client, password_auth, monkeypatch):
+        # Behind a proxy without forwarded headers every visitor shares one address;
+        # a stranger's bad guesses must not lock the admin out.
+        throttle = LoginThrottle(free_attempts=1, base_lockout_seconds=600, locked_check_interval_seconds=0)
+        monkeypatch.setattr(auth_router, "admin_login_throttle", throttle)
+        for _ in range(4):
+            app_client.post("/api/auth/login", json={"password": "wrong"})
+        assert throttle.retry_after("testclient") > 0
+
+        login = app_client.post("/api/auth/login", json={"password": "sécret-密码"})
+
+        assert login.status_code == 200
+        assert login.json()["authenticated"] is True
+        assert throttle.retry_after("testclient") == 0
+        assert app_client.get("/api/books").status_code == 200
+
+
+class TestSessionCheckFailure:
+    def test_database_error_during_session_check_is_503(self, app_client, password_auth, monkeypatch, caplog):
+        async def unavailable(db, token):
+            raise OperationalError("SELECT admin_auth_state", {}, ConnectionRefusedError())
+
+        monkeypatch.setattr(admin_auth_middleware, "is_admin_session_valid", unavailable)
+        app_client.cookies.set(auth.ADMIN_AUTH_COOKIE, create_admin_session_token())
+
+        with caplog.at_level(logging.ERROR, logger="backend.app.admin_auth_middleware"):
+            response = app_client.get("/api/books")
+
+        assert response.status_code == 503
+        assert "Could not check the admin session" in caplog.text
 
 
 class TestDisabledMode:

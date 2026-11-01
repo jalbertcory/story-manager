@@ -37,6 +37,14 @@ def _login_client_key(request: Request) -> str:
     return request.client.host if request.client is not None else "unknown"
 
 
+def _too_many_attempts(retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many failed login attempts; try again later",
+        headers={"Retry-After": str(max(1, retry_after))},
+    )
+
+
 @router.get("/api/auth/status", response_model=AdminAuthStatus)
 async def auth_status(request: Request, db: AsyncSession = Depends(get_db)) -> AdminAuthStatus:
     mode = get_admin_auth_mode()
@@ -58,16 +66,17 @@ async def login(
         return AdminAuthStatus(mode=ADMIN_AUTH_DISABLED, authenticated=True)
 
     client = _login_client_key(request)
-    retry_after = admin_login_throttle.retry_after(client)
-    if retry_after:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many failed login attempts; try again later",
-            headers={"Retry-After": str(retry_after)},
-        )
+    wait = admin_login_throttle.admit_check(client)
+    if wait:
+        raise _too_many_attempts(wait)
 
+    # A locked-out client is still checked so a correct password signs in even
+    # when other visitors share its address (see LoginThrottle).
+    was_locked = admin_login_throttle.retry_after(client) > 0
     if not verify_admin_password(payload.password):
         admin_login_throttle.record_failure(client)
+        if was_locked:
+            raise _too_many_attempts(admin_login_throttle.retry_after(client))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
 
     admin_login_throttle.record_success(client)

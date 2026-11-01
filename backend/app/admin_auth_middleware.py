@@ -1,13 +1,17 @@
 """Middleware that protects admin API routes when password auth is enabled."""
 
+import logging
 from contextlib import aclosing
 
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .auth import ADMIN_AUTH_COOKIE, is_admin_auth_enabled, is_admin_session_valid
 from .database import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
@@ -19,6 +23,9 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             authenticated = await self._session_is_valid(request)
         except RuntimeError as exc:
             return JSONResponse(status_code=500, content={"detail": str(exc)})
+        except (SQLAlchemyError, OSError):
+            logger.exception("Could not check the admin session for %s", request.url.path)
+            return JSONResponse(status_code=503, content={"detail": "Admin session check unavailable; try again"})
 
         if not authenticated:
             return JSONResponse(status_code=401, content={"detail": "Admin authentication required"})

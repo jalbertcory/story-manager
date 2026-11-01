@@ -189,6 +189,7 @@ class _LoginFailures:
     count: int
     last_failure: float
     locked_until: float
+    next_locked_check: float = 0.0
 
 
 class LoginThrottle:
@@ -197,6 +198,12 @@ class LoginThrottle:
     The first ``free_attempts`` failures are not delayed; each later failure
     doubles the lockout up to ``max_lockout_seconds``. A successful login, or
     ``reset_after_seconds`` without failures, clears the client's history.
+
+    A locked-out client is not refused outright: its password is still checked,
+    at most once per ``locked_check_interval_seconds``, and a correct one signs
+    in. Behind a reverse proxy whose forwarded headers are not trusted every
+    visitor shares the proxy's address, so a hard lockout would let anyone lock
+    the admin out with a few bad guesses.
     """
 
     def __init__(
@@ -205,12 +212,14 @@ class LoginThrottle:
         free_attempts: int = 5,
         base_lockout_seconds: float = 1.0,
         max_lockout_seconds: float = 15 * 60,
+        locked_check_interval_seconds: float = 1.0,
         reset_after_seconds: float = 60 * 60,
         max_tracked_clients: int = 10_000,
     ) -> None:
         self.free_attempts = free_attempts
         self.base_lockout_seconds = base_lockout_seconds
         self.max_lockout_seconds = max_lockout_seconds
+        self.locked_check_interval_seconds = locked_check_interval_seconds
         self.reset_after_seconds = reset_after_seconds
         self.max_tracked_clients = max_tracked_clients
         self._failures: dict[str, _LoginFailures] = {}
@@ -224,6 +233,22 @@ class LoginThrottle:
             if entry is None or entry.locked_until <= now:
                 return 0
             return max(1, int(entry.locked_until - now + 0.999))
+
+    def admit_check(self, client: str, now: float | None = None) -> int:
+        """Claim a password check for the client: 0 when allowed, else seconds to wait.
+
+        Unlocked clients are always admitted; a locked-out client gets one check
+        per ``locked_check_interval_seconds``.
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            entry = self._current(client, now)
+            if entry is None or entry.locked_until <= now:
+                return 0
+            if entry.next_locked_check > now:
+                return max(1, int(entry.next_locked_check - now + 0.999))
+            entry.next_locked_check = now + self.locked_check_interval_seconds
+            return 0
 
     def record_failure(self, client: str, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now

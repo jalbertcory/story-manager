@@ -131,8 +131,14 @@ STORY_MANAGER_ADMIN_SESSION_SECRET=long-random-value
 
 Sessions last 14 days. Logging out revokes every session issued before it (not only the current browser's), and
 changing `STORY_MANAGER_ADMIN_PASSWORD` revokes all sessions as well. After five failed logins from one client address,
-further attempts are delayed with exponential backoff (HTTP 429 with `Retry-After`, up to 15 minutes). Behind a reverse
-proxy, run uvicorn with forwarded-header support so the backoff sees real client addresses.
+that address goes into exponential backoff (up to 15 minutes): wrong passwords get HTTP 429 with `Retry-After`, and its
+passwords are checked at most once per second. A correct password still signs in during backoff, so a stranger's bad
+guesses cannot lock you out.
+
+Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address (for example `FORWARDED_ALLOW_IPS=172.18.0.2`,
+or a comma-separated list) so the app trusts the proxy's `X-Forwarded-For` header and throttles each visitor separately.
+Without it, every visitor appears to come from the proxy and shares one backoff. Only list addresses that are your proxy:
+a trusted address can claim any client IP.
 
 Admin cookies automatically use the `Secure` flag when the request is HTTPS. Set `STORY_MANAGER_ADMIN_COOKIE_SECURE=true` to require secure cookies explicitly, or `false` only for a trusted HTTP-only local deployment.
 
