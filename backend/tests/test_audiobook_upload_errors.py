@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.app.models import Book, ImportedAudiobook, ProcessingJob
-from backend.app.routers import audiobook as audiobook_router
+from backend.app.services import audiobook_import, audiobook_uploads
 
 
 async def _seed_book(sqlite_sessionmaker) -> int:
@@ -25,7 +25,7 @@ async def _only_edition(sqlite_sessionmaker, book_id: int) -> ImportedAudiobook:
 @pytest.fixture
 def edition_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        audiobook_router,
+        audiobook_import,
         "imported_audiobook_dir",
         lambda book_id, edition_id: tmp_path / str(book_id) / str(edition_id),
     )
@@ -35,7 +35,7 @@ def edition_dirs(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_upload_over_size_limit_returns_413(app_client, sqlite_sessionmaker, edition_dirs, monkeypatch):
     book_id = await _seed_book(sqlite_sessionmaker)
-    monkeypatch.setattr(audiobook_router, "MAX_AUDIOBOOK_UPLOAD_BYTES", 4)
+    monkeypatch.setattr(audiobook_import, "MAX_AUDIOBOOK_UPLOAD_BYTES", 4)
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",
@@ -58,7 +58,7 @@ async def test_upload_failure_unrelated_to_size_is_not_reported_as_413(
     async def broken_queue_processing_job(**_kwargs):
         raise RuntimeError("processing queue unavailable")
 
-    monkeypatch.setattr(audiobook_router, "queue_processing_job", broken_queue_processing_job)
+    monkeypatch.setattr(audiobook_uploads, "queue_processing_job", broken_queue_processing_job)
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",
@@ -85,7 +85,7 @@ async def test_upload_write_failure_returns_500_and_discards_partial_files(
     async def failing_stream(_upload, _destination, _remaining):
         raise OSError("No space left on device")
 
-    monkeypatch.setattr(audiobook_router, "stream_upload_to_path", failing_stream)
+    monkeypatch.setattr(audiobook_import, "stream_upload_to_path", failing_stream)
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",

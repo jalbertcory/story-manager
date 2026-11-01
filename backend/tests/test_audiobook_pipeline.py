@@ -8,12 +8,14 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from bs4 import BeautifulSoup
 from ebooklib import epub
 from mutagen.mp3 import MP3
 
 from backend.app import crud, models
-from backend.app.routers import audiobook as audiobook_router
+from backend.app import audiobook_schemas
+from backend.app.routers import audiobook_characters, audiobook_pipeline, audiobook_settings
 from backend.app.services import (
     audiobook_assembly,
     audiobook_ingestion,
@@ -101,7 +103,7 @@ class _FakeQueue:
         return book_id in self.active_book_ids
 
     def install(self, monkeypatch) -> "_FakeQueue":
-        real_queue_processing_job = audiobook_router.queue_processing_job
+        real_queue_processing_job = processing_queue.queue_processing_job
 
         async def recording_queue_processing_job(**kwargs):
             job = await real_queue_processing_job(**kwargs)
@@ -114,7 +116,8 @@ class _FakeQueue:
                 self.sentence_enqueued.append((kwargs["book_id"], kwargs["target_id"]))
             return job
 
-        monkeypatch.setattr(audiobook_router, "queue_processing_job", recording_queue_processing_job)
+        for module in (audiobook_pipeline, audiobook_characters):
+            monkeypatch.setattr(module, "queue_processing_job", recording_queue_processing_job)
         return self
 
 
@@ -822,8 +825,8 @@ async def test_books_default_audiobook_pipeline_disabled(db, monkeypatch):
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    with pytest.raises(audiobook_router.HTTPException) as exc_info:
-        await audiobook_router.start_pipeline(book.id, db)
+    with pytest.raises(HTTPException) as exc_info:
+        await audiobook_pipeline.start_pipeline(book.id, db)
 
     await db.refresh(book)
     assert book.audiobook_enabled is False
@@ -919,7 +922,7 @@ async def test_paused_pipeline_resumes_from_persisted_audio_state(db, monkeypatc
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.start_pipeline(book.id, db)
+    response = await audiobook_pipeline.start_pipeline(book.id, db)
 
     await db.refresh(book)
     assert response == {"status": "audio_gen", "queued": True}
@@ -935,9 +938,9 @@ async def test_error_pipeline_resets_failed_sentences_before_retry(db, monkeypat
     queue = _FakeQueue()
     reset_capabilities = []
     queue.install(monkeypatch)
-    monkeypatch.setattr(audiobook_router, "reset_cooldowns", reset_capabilities.append)
+    monkeypatch.setattr(audiobook_pipeline, "reset_cooldowns", reset_capabilities.append)
 
-    response = await audiobook_router.start_pipeline(book.id, db)
+    response = await audiobook_pipeline.start_pipeline(book.id, db)
 
     await db.refresh(book)
     await db.refresh(chapter)
@@ -956,8 +959,8 @@ async def test_rebuild_rejects_an_active_pipeline(db, monkeypatch):
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    with pytest.raises(audiobook_router.HTTPException) as exc_info:
-        await audiobook_router.rebuild_pipeline(book.id, db)
+    with pytest.raises(HTTPException) as exc_info:
+        await audiobook_pipeline.rebuild_pipeline(book.id, db)
 
     assert exc_info.value.status_code == 409
     assert queue.enqueued == []
@@ -979,8 +982,8 @@ async def test_rebuild_waits_for_a_paused_worker_to_exit(db, monkeypatch):
     await db.commit()
     queue = _FakeQueue().install(monkeypatch)
 
-    with pytest.raises(audiobook_router.HTTPException) as exc_info:
-        await audiobook_router.rebuild_pipeline(book.id, db)
+    with pytest.raises(HTTPException) as exc_info:
+        await audiobook_pipeline.rebuild_pipeline(book.id, db)
 
     assert exc_info.value.status_code == 409
     assert queue.enqueued == []
@@ -995,10 +998,10 @@ async def test_sentence_speaker_must_belong_to_the_same_book(db, monkeypatch):
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    with pytest.raises(audiobook_router.HTTPException) as exc_info:
-        await audiobook_router.update_sentence(
+    with pytest.raises(HTTPException) as exc_info:
+        await audiobook_characters.update_sentence(
             sentence.id,
-            audiobook_router.SentenceUpdate(character_id=other_character.id, tagged_text=sentence.original_text),
+            audiobook_schemas.SentenceUpdate(character_id=other_character.id, tagged_text=sentence.original_text),
             db,
         )
 
@@ -1014,7 +1017,7 @@ async def test_step_pipeline_runs_only_next_recoverable_phase(db, monkeypatch):
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.step_pipeline(book.id, db)
+    response = await audiobook_pipeline.step_pipeline(book.id, db)
 
     await db.refresh(book)
     assert response == {
@@ -1035,7 +1038,7 @@ async def test_run_batch_persists_one_unit_limit(db, monkeypatch):
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.run_pipeline_batch(book.id, db)
+    response = await audiobook_pipeline.run_pipeline_batch(book.id, db)
 
     await db.refresh(book)
     assert response == {
@@ -1135,7 +1138,7 @@ async def test_roster_rebuild_preserves_ingestion_and_clears_derived_analysis(db
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.rebuild_character_roster(book.id, db)
+    response = await audiobook_pipeline.rebuild_character_roster(book.id, db)
 
     await db.refresh(book)
     await db.refresh(chapter)
@@ -1204,7 +1207,7 @@ async def test_audio_only_rebuild_preserves_speakers_and_human_audiobook(db, mon
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.rebuild_audio_only(book.id, db)
+    response = await audiobook_pipeline.rebuild_audio_only(book.id, db)
 
     await db.refresh(book)
     await db.refresh(chapter)
@@ -1381,7 +1384,7 @@ async def test_pause_is_cooperative_and_status_exposes_error_context(db):
         audiobook_last_error="Previous failure",
     )
 
-    response = await audiobook_router.pause_pipeline(book.id, db)
+    response = await audiobook_pipeline.pause_pipeline(book.id, db)
     await db.refresh(book)
 
     assert response == {"status": "audio_gen", "pause_requested": True}
@@ -1389,7 +1392,7 @@ async def test_pause_is_cooperative_and_status_exposes_error_context(db):
     assert book.audiobook_pause_requested is True
 
     await crud.audiobook.pause_book_pipeline_if_requested(db, book.id)
-    status = await audiobook_router.get_pipeline_status(book.id, db)
+    status = await audiobook_pipeline.get_pipeline_status(book.id, db)
 
     assert status.pipeline_status == "paused"
     assert status.pause_requested is False
@@ -1438,8 +1441,8 @@ async def test_provider_change_clears_stored_tts_api_key(db):
     db.add(settings)
     await db.commit()
 
-    response = await audiobook_router.update_settings(
-        audiobook_router.SettingsUpdate(
+    response = await audiobook_settings.update_settings(
+        audiobook_schemas.SettingsUpdate(
             tts_provider="openai-compatible",
             tts_base_url="http://127.0.0.1:8880",
             tts_model="kokoro",
@@ -1483,17 +1486,17 @@ async def test_endpoint_reorder_preserves_secrets_and_syncs_primary_columns(db):
     db.add(settings)
     await db.commit()
 
-    response = await audiobook_router.update_settings(
-        audiobook_router.SettingsUpdate(
+    response = await audiobook_settings.update_settings(
+        audiobook_schemas.SettingsUpdate(
             llm_endpoints=[
-                audiobook_router.EndpointUpdate(
+                audiobook_schemas.EndpointUpdate(
                     id="gaming",
                     name="Gaming PC",
                     provider="ollama",
                     base_url="http://gaming:11434",
                     model="qwen3.5:27b",
                 ),
-                audiobook_router.EndpointUpdate(
+                audiobook_schemas.EndpointUpdate(
                     id="mini",
                     name="Always-on mini PC",
                     provider="ollama",
@@ -1538,9 +1541,9 @@ async def test_character_voice_id_is_tagged_and_used_only_for_its_provider(db):
     db.add(settings)
     await db.commit()
 
-    updated = await audiobook_router.update_character(
+    updated = await audiobook_characters.update_character(
         character.id,
-        audiobook_router.CharacterUpdate(tts_voice_id="character-id"),
+        audiobook_schemas.CharacterUpdate(tts_voice_id="character-id"),
         db,
     )
     await db.refresh(character)
@@ -1937,9 +1940,9 @@ async def test_editing_omnivoice_profile_discards_old_reference_id(db):
     db.add(settings)
     await db.commit()
 
-    await audiobook_router.update_character(
+    await audiobook_characters.update_character(
         character.id,
-        audiobook_router.CharacterUpdate(voice_prompt="[gender-female][pitch-low]"),
+        audiobook_schemas.CharacterUpdate(voice_prompt="[gender-female][pitch-low]"),
         db,
     )
     await db.refresh(character)
@@ -1985,15 +1988,15 @@ async def test_manual_omnivoice_design_can_be_auditioned(db, monkeypatch):
         assert voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
         return SimpleNamespace(audio_bytes=b"sample-wav", media_type="audio/wav")
 
-    monkeypatch.setattr(audiobook_router, "design_omnivoice_voice", design_voice)
-    monkeypatch.setattr(audiobook_router, "get_omnivoice_voice_sample", get_sample)
+    monkeypatch.setattr(audiobook_characters, "design_omnivoice_voice", design_voice)
+    monkeypatch.setattr(audiobook_characters, "get_omnivoice_voice_sample", get_sample)
 
-    updated = await audiobook_router.design_character_voice(
+    updated = await audiobook_characters.design_character_voice(
         character.id,
-        audiobook_router.CharacterVoiceDesign(voice_prompt=character.voice_prompt),
+        audiobook_schemas.CharacterVoiceDesign(voice_prompt=character.voice_prompt),
         db,
     )
-    sample = await audiobook_router.get_character_voice_sample(character.id, db)
+    sample = await audiobook_characters.get_character_voice_sample(character.id, db)
 
     assert updated.tts_voice_id == "omnivoice-0123456789abcdef0123456789abcdef"
     assert updated.tts_voice_provider == "omnivoice"
@@ -2849,9 +2852,9 @@ async def test_series_tts_provider_switch_is_atomic_and_invalidates_incompatible
     )
     await db.commit()
 
-    response = await audiobook_router.update_book_tts_provider(
+    response = await audiobook_pipeline.update_book_tts_provider(
         first.id,
-        audiobook_router.BookTTSProviderUpdate(provider="omnivoice"),
+        audiobook_schemas.BookTTSProviderUpdate(provider="omnivoice"),
         db,
     )
     await db.refresh(first)
@@ -2912,7 +2915,7 @@ async def test_manual_chapter_preview_requires_analysis_and_queues_work(db, monk
     queue = _FakeQueue()
     queue.install(monkeypatch)
 
-    response = await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
+    response = await audiobook_pipeline.generate_chapter_preview(book.id, chapter.id, db)
     await db.refresh(chapter)
 
     assert response == {"status": "queued", "queued": True, "chapter_id": chapter.id}
@@ -2922,8 +2925,8 @@ async def test_manual_chapter_preview_requires_analysis_and_queues_work(db, monk
     sentence.status = "pending_diarization"
     chapter.preview_status = None
     await db.commit()
-    with pytest.raises(audiobook_router.HTTPException) as exc_info:
-        await audiobook_router.generate_chapter_preview(book.id, chapter.id, db)
+    with pytest.raises(HTTPException) as exc_info:
+        await audiobook_pipeline.generate_chapter_preview(book.id, chapter.id, db)
     assert exc_info.value.status_code == 409
 
 
@@ -2941,7 +2944,7 @@ async def test_manual_sentence_audio_queues_and_generates_only_that_sentence(db,
     queue.install(monkeypatch)
     monkeypatch.setattr(audiobook_tts, "LIBRARY_PATH", library_path)
 
-    response = await audiobook_router.generate_sentence_audio(book.id, sentence.id, db)
+    response = await audiobook_characters.generate_sentence_audio(book.id, sentence.id, db)
     await db.refresh(sentence)
 
     assert response == {
@@ -3058,8 +3061,8 @@ async def test_offline_harness_builds_downloadable_media_overlay_epub(db, tmp_pa
         assert package.count('property="media:duration"') == 3
         assert 'property="media:duration">00:00:' in package
 
-    monkeypatch.setattr(audiobook_router, "LIBRARY_PATH", library_path)
-    response = await audiobook_router.download_audiobook(book.id, db)
+    monkeypatch.setattr(audiobook_pipeline, "LIBRARY_PATH", library_path)
+    response = await audiobook_pipeline.download_audiobook(book.id, db)
     assert Path(response.path) == output_path
     assert response.media_type == "application/epub+zip"
 
@@ -3102,7 +3105,7 @@ async def test_list_chapters_aggregates_sentence_progress(db):
         db, book_id=book.id, chapter_number=2, content_file_name="Text/chapter_2.xhtml"
     )
 
-    chapters = await audiobook_router.list_chapters(book.id, db)
+    chapters = await audiobook_pipeline.list_chapters(book.id, db)
 
     by_id = {item.id: item for item in chapters}
     assert [item.id for item in chapters] == [chapter.id, empty_chapter.id]

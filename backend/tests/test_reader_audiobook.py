@@ -11,7 +11,7 @@ import pytest
 
 from backend.app import models
 from backend.app.routers import reader
-from backend.app.services import audiobook_publication
+from backend.app.services import audiobook_publication, library_paths
 
 
 def _relative(root: Path, path: Path) -> str:
@@ -44,7 +44,7 @@ async def test_reader_audiobook_capability_and_assets(
     reader_smil = audiobook_publication.reader_smil_bytes(smil_content, "Text/chapter.xhtml")
 
     monkeypatch.setattr(reader, "LIBRARY_PATH", library)
-    monkeypatch.setattr(reader.audiobook_router, "LIBRARY_PATH", library)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library)
 
     async with sqlite_sessionmaker() as db:
@@ -430,7 +430,7 @@ async def test_human_only_audiobook_exposes_cues_and_downloads_anchored_text(
     audio_path.write_bytes(b"human-audio")
 
     monkeypatch.setattr(reader, "LIBRARY_PATH", library)
-    monkeypatch.setattr(reader.audiobook_router, "LIBRARY_PATH", library)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library)
 
     async with sqlite_sessionmaker() as db:

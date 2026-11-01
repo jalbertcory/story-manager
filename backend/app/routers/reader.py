@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
 from ..auth import get_reader_api_key
+from ..audiobook_schemas import ChapterResponse, ImportedAudiobookResponse
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.audiobook_publication import (
@@ -28,7 +29,8 @@ from ..services.audiobook_publication import (
     stable_chapter_key,
     text_reader_path,
 )
-from . import audiobook as audiobook_router
+from ..services import audiobook_views
+from ..services.audiobook_views import AudiobookViewNotFoundError
 
 router = APIRouter(dependencies=[Depends(get_reader_api_key)])
 
@@ -447,9 +449,12 @@ async def _reader_audiobook_book(book_id: int, db: AsyncSession) -> models.Book:
 async def get_reader_human_audiobooks(
     book_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[audiobook_router.ImportedAudiobookResponse]:
+) -> list[ImportedAudiobookResponse]:
     """Reader-key-safe metadata for ready human-narrated audiobook editions."""
-    editions = await audiobook_router.list_imported_audiobooks(book_id, db)
+    try:
+        editions = await audiobook_views.list_imported_audiobook_responses(book_id, db)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
     return [
         edition.model_copy(
             update={
@@ -478,9 +483,12 @@ async def get_reader_human_audiobooks(
 async def get_reader_human_audiobook_chapters(
     book_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[audiobook_router.ChapterResponse]:
+) -> list[ChapterResponse]:
     """Chapter ids and hrefs used to match imported tracks to publication resources."""
-    return await audiobook_router.list_chapters(book_id, db)
+    try:
+        return await audiobook_views.chapter_responses(book_id, db)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
 
 
 @router.get(
@@ -493,7 +501,12 @@ async def get_reader_human_audiobook_audio(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    return await audiobook_router.get_imported_track_audio(edition_id, track_id, db)
+    try:
+        _edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        full_path = audiobook_views.imported_track_audio_path(track)
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    return FileResponse(str(full_path), media_type=track.media_type)
 
 
 @router.get(
@@ -506,11 +519,12 @@ async def get_reader_human_audiobook_smil(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    response = await audiobook_router.get_imported_track_smil(edition_id, track_id, db)
-    text = bytes(response.body).decode("utf-8")
-    admin_audio_prefix = f"/api/imported-audiobooks/{edition_id}/tracks/"
-    reader_audio_prefix = f"/reader/human-audiobooks/{edition_id}/tracks/"
-    return Response(text.replace(admin_audio_prefix, reader_audio_prefix), media_type="application/smil+xml")
+    try:
+        edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        payload = await audiobook_views.imported_track_smil(edition, track, db, audio_url_prefix="/reader/human-audiobooks")
+    except AudiobookViewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    return Response(payload, media_type="application/smil+xml")
 
 
 def _etag(value: str) -> str:
