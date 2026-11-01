@@ -333,7 +333,24 @@ test-migrations:
 	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
 	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0043; \
 	docker exec -i story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
-		< scripts/migration-voice-drift-margin-downgrade-verify.sql
+		< scripts/migration-voice-drift-margin-downgrade-verify.sql; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade 0045; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "UPDATE audiobook_chapters SET generation_state = 'ready', audio_sha256 = NULL WHERE content_file_name = 'Text/existing.xhtml';" \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM audiobook_chapters WHERE generation_state = 'ready' AND audio_sha256 IS NULL) THEN RAISE EXCEPTION '0046 setup has no chapter missing checksums'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF (SELECT COUNT(*) FROM processing_jobs WHERE job_type = 'backfill_reader_checksums' AND dedupe_key = 'backfill_reader_checksums:migration-0046' AND status = 'queued') <> 1 THEN RAISE EXCEPTION '0046 did not queue exactly one checksum backfill'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini downgrade 0045; \
+	docker exec story-manager-migration-test psql -v ON_ERROR_STOP=1 -U postgres -d story_manager \
+		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'backfill_reader_checksums') THEN RAISE EXCEPTION '0046 downgrade left a checksum backfill queued'; END IF; END \$$\$$;"; \
+	DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/alembic -c backend/alembic.ini upgrade head; \
+	STORY_MANAGER_TEST_POSTGRES_URL="postgresql+psycopg://postgres:postgres@localhost:5433/story_manager" \
+	PYTHONPATH=. .venv/bin/python3 -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py
 
 e2e:
 	docker rm -f $(E2E_DB_CONTAINER) >/dev/null 2>&1 || true
