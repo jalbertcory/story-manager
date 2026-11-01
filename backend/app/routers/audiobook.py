@@ -56,6 +56,7 @@ from ..services.audiobook_import import (
     libation_backup_groups,
     rematch_track,
     safe_import_filename,
+    AudiobookUploadTooLargeError,
     stream_upload_to_path,
 )
 from ..services.audiobook_metadata import filename_metadata
@@ -934,7 +935,9 @@ async def upload_imported_audiobook(
             shutil.rmtree(incoming_dir, ignore_errors=True)
             incoming_dir.mkdir(parents=True, exist_ok=True)
         await db.commit()
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
+        if isinstance(exc, AudiobookUploadTooLargeError):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=f"Audiobook upload failed: {exc}") from exc
     return await _imported_audiobook_response(edition, db)
 
 

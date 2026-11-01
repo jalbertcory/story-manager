@@ -57,6 +57,12 @@ SOURCE_MANIFEST_FORMAT = "story-manager-audiobook-source"
 SOURCE_MANIFEST_VERSION = 1
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+class AudiobookUploadTooLargeError(ValueError):
+    """Raised when a streamed audiobook upload exceeds the per-import byte limit."""
+
+
 _ASIN_RE = re.compile(r"\[((?:B[0-9A-Z]{9})|(?:[0-9]{9}[0-9X]))\]", re.IGNORECASE)
 _CUE_TRACK_RE = re.compile(r"^\s*TRACK\s+(\d+)\s+AUDIO\s*$", re.IGNORECASE)
 _CUE_TITLE_RE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$', re.IGNORECASE)
@@ -600,7 +606,7 @@ async def stream_upload_to_path(upload: UploadFile, destination: Path, remaining
                     break
                 written += len(chunk)
                 if written > remaining_bytes:
-                    raise ValueError("Audiobook upload exceeds the 8 GB per-import limit.")
+                    raise AudiobookUploadTooLargeError("Audiobook upload exceeds the 8 GB per-import limit.")
                 handle.write(chunk)
         partial.replace(destination)
     except BaseException:
