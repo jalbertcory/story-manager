@@ -2210,6 +2210,9 @@ async def test_remove_all_books_preview_and_delete(db_session):
 
 @pytest.mark.asyncio
 async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphans(db_session, tmp_path, monkeypatch):
+    import os
+    import time
+
     from backend.app.routers import storage as storage_router
 
     library_path = (tmp_path / "library").resolve()
@@ -2217,6 +2220,8 @@ async def test_storage_cleanup_removes_failed_web_import_placeholders_and_orphan
     library_path.mkdir(parents=True, exist_ok=True)
     orphan_path = library_path / "orphan.epub"
     orphan_path.write_bytes(b"orphan")
+    old_mtime = time.time() - 2 * storage_router.RECENT_FILE_GRACE_SECONDS
+    os.utime(orphan_path, (old_mtime, old_mtime))
 
     valid_author_dir = library_path / "Valid Author"
     valid_author_dir.mkdir(parents=True, exist_ok=True)
