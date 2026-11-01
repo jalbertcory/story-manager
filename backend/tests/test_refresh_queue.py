@@ -1,11 +1,8 @@
-"""Tests for RefreshQueue, run_book_refresh, and crud.get_pending_refresh_books."""
-
-import asyncio
+"""Tests for run_book_refresh and crud.get_pending_refresh_books."""
 
 import pytest
 
 from backend.app import crud, models, schemas
-from backend.app.services import refresh_queue as refresh_queue_mod
 from backend.app.services import web_novel as web_novel_mod
 
 
@@ -51,121 +48,6 @@ async def test_get_pending_refresh_books_returns_queued_and_processing(db):
     assert errored.id not in ids
     assert idle.id not in ids
     assert non_web.id not in ids
-
-
-class _RecordingQueue:
-    """Captures book_ids as run_book_refresh is invoked from the worker."""
-
-    def __init__(self):
-        self.calls: list[int] = []
-        self.started = asyncio.Event()
-
-    async def __call__(self, book_id: int) -> None:
-        self.calls.append(book_id)
-        self.started.set()
-
-
-@pytest.mark.asyncio
-async def test_refresh_queue_enqueue_is_idempotent(monkeypatch):
-    recorder = _RecordingQueue()
-    # Block the worker so we can observe set membership mid-flight.
-    block = asyncio.Event()
-
-    async def slow_refresh(book_id: int) -> None:
-        recorder.calls.append(book_id)
-        await block.wait()
-
-    monkeypatch.setattr(refresh_queue_mod, "run_book_refresh", slow_refresh)
-    queue = refresh_queue_mod.RefreshQueue()
-    await queue.start()
-    try:
-        assert await queue.enqueue(42) is True
-        # While the worker is blocked on the first item, a second enqueue for
-        # the same id should short-circuit.
-        assert await queue.enqueue(42) is False
-        # A different id should still be accepted.
-        assert await queue.enqueue(43) is True
-    finally:
-        block.set()
-        await queue.stop()
-
-    # Both unique ids were eventually processed.
-    assert sorted(recorder.calls) == [42, 43]
-
-
-@pytest.mark.asyncio
-async def test_refresh_queue_worker_invokes_run_book_refresh(monkeypatch):
-    done = asyncio.Event()
-    processed: list[int] = []
-
-    async def fake_refresh(book_id: int) -> None:
-        processed.append(book_id)
-        done.set()
-
-    monkeypatch.setattr(refresh_queue_mod, "run_book_refresh", fake_refresh)
-    queue = refresh_queue_mod.RefreshQueue()
-    await queue.start()
-    try:
-        await queue.enqueue(7)
-        await asyncio.wait_for(done.wait(), timeout=1)
-    finally:
-        await queue.stop()
-
-    assert processed == [7]
-
-
-@pytest.mark.asyncio
-async def test_refresh_queue_continues_after_worker_exception(monkeypatch):
-    """An exception inside run_book_refresh must not kill the worker loop."""
-    second_done = asyncio.Event()
-    seen: list[int] = []
-
-    async def fake_refresh(book_id: int) -> None:
-        seen.append(book_id)
-        if book_id == 1:
-            raise RuntimeError("boom")
-        second_done.set()
-
-    monkeypatch.setattr(refresh_queue_mod, "run_book_refresh", fake_refresh)
-    queue = refresh_queue_mod.RefreshQueue()
-    await queue.start()
-    try:
-        await queue.enqueue(1)
-        await queue.enqueue(2)
-        await asyncio.wait_for(second_done.wait(), timeout=1)
-    finally:
-        await queue.stop()
-
-    assert seen == [1, 2]
-
-
-@pytest.mark.asyncio
-async def test_refresh_queue_requeue_pending_books_uses_crud(monkeypatch, db, sqlite_sessionmaker):
-    queued = await _make_web_book(db, source_url="https://example.com/q")
-    queued.refresh_status = "queued"
-    processing = await _make_web_book(db, source_url="https://example.com/p")
-    processing.refresh_status = "processing"
-    idle = await _make_web_book(db, source_url="https://example.com/i")
-    await db.commit()
-
-    # Point the queue module's SessionLocal at the test database so
-    # requeue_pending_books sees our fixture rows.
-    monkeypatch.setattr(refresh_queue_mod, "SessionLocal", sqlite_sessionmaker)
-
-    enqueued: list[int] = []
-
-    async def fake_enqueue(self, book_id):
-        enqueued.append(book_id)
-        return True
-
-    queue = refresh_queue_mod.RefreshQueue()
-    monkeypatch.setattr(refresh_queue_mod.RefreshQueue, "enqueue", fake_enqueue)
-
-    count = await queue.requeue_pending_books()
-
-    assert count == 2
-    assert sorted(enqueued) == sorted([queued.id, processing.id])
-    assert idle.id not in enqueued
 
 
 @pytest.mark.asyncio

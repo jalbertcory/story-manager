@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
+from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookSentence
 from .subprocesses import communicate_bounded
 from .audiobook_publication import publish_reader_audiobook
@@ -322,7 +323,7 @@ async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSessi
     sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter_id)
     if not sentences or any(sentence.status != "audio_generated" for sentence in sentences):
         raise RuntimeError("Every sentence in the chapter needs audio before preview assembly.")
-    output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
+    output_dir = book_audiobook_dir(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     await crud.audiobook.invalidate_packaged_audiobook(db, book_id)
     await _assemble_chapter(book_id, chapter, sentences, output_dir, db)
@@ -330,7 +331,7 @@ async def assemble_chapter_preview(book_id: int, chapter_id: int, db: AsyncSessi
 
 async def assemble_book(book_id: int, db: AsyncSession) -> None:
     """Phase 5: assemble all chapters that need reassembly and repackage the EPUB."""
-    output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
+    output_dir = book_audiobook_dir(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if await crud.audiobook.pause_book_pipeline_if_requested(db, book_id):

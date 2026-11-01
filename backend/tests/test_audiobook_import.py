@@ -19,8 +19,8 @@ from backend.app.models import (
     ImportedAudiobookTrack,
     ProcessingJob,
 )
-from backend.app.routers import audiobook as audiobook_router
-from backend.app.services import audiobook_import
+from backend.app.routers import audiobook_imports
+from backend.app.services import audiobook_import, audiobook_views, library_paths
 
 
 async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
@@ -100,7 +100,7 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     library = tmp_path / "library"
     library.mkdir()
     monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
-    monkeypatch.setattr(audiobook_router, "LIBRARY_PATH", library)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     book, chapter = await _seed_book_text(db)
     edition = ImportedAudiobook(
         book_id=book.id,
@@ -175,11 +175,11 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     assert cues[0].clip_begin_ms == 0
     assert cues[-1].clip_end_ms == tracks[0].source_end_ms
 
-    response = await audiobook_router._imported_audiobook_response(edition, db)
+    response = await audiobook_views.imported_audiobook_response(edition, db)
     assert {track.audio_url for track in response.tracks} == {
         f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/audio" for track in tracks
     }
-    smil = await audiobook_router.get_imported_track_smil(edition.id, tracks[0].id, db)
+    smil = await audiobook_imports.get_imported_track_smil(edition.id, tracks[0].id, db)
     assert f'src="/api/imported-audiobooks/{edition.id}/tracks/{tracks[0].id}/audio"'.encode() in smil.body
     assert b'clipBegin="0.000s"' in smil.body
     assert edition.source_manifest_sha256
@@ -203,6 +203,7 @@ async def test_upgrades_legacy_tracks_from_immutable_source_and_cleans_old_revis
     library = tmp_path / "library"
     library.mkdir()
     monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     book, chapter = await _seed_book_text(db)
     edition = ImportedAudiobook(book_id=book.id, name="Legacy edition", status="ready")
     db.add(edition)
@@ -462,8 +463,8 @@ async def test_logical_chapter_cues_span_multiple_epub_files(db):
     await db.commit()
 
     cue_count = await audiobook_import.rebuild_estimated_cues(track, db)
-    cues = await audiobook_router.get_imported_track_cues(edition.id, track.id, db)
-    smil = await audiobook_router.get_imported_track_smil(edition.id, track.id, db)
+    cues = await audiobook_imports.get_imported_track_cues(edition.id, track.id, db)
+    smil = await audiobook_imports.get_imported_track_smil(edition.id, track.id, db)
 
     assert cue_count == 3
     assert [cue.text for cue in cues] == ["1", "The body starts here.", "It continues in the same audio track."]
@@ -672,19 +673,14 @@ async def test_upload_endpoint_streams_large_format_to_staging(
     tmp_path,
     monkeypatch,
 ):
-    class FakeQueue:
-        async def enqueue(self, _edition_id):
-            return True
-
     async with sqlite_sessionmaker() as db:
         book, _chapter = await _seed_book_text(db)
         book_id = book.id
     monkeypatch.setattr(
-        audiobook_router,
+        audiobook_import,
         "imported_audiobook_dir",
         lambda selected_book_id, edition_id: tmp_path / str(selected_book_id) / str(edition_id),
     )
-    monkeypatch.setattr(audiobook_router, "get_audiobook_import_queue", lambda: FakeQueue())
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",
@@ -720,15 +716,6 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     sqlite_sessionmaker,
     monkeypatch,
 ):
-    class FakeAlignmentQueue:
-        queued = []
-
-        async def enqueue(self, edition_id):
-            self.queued.append(edition_id)
-            return True
-
-    queue = FakeAlignmentQueue()
-    monkeypatch.setattr(audiobook_router, "get_audiobook_alignment_queue", lambda: queue)
     async with sqlite_sessionmaker() as db:
         book, chapter = await _seed_book_text(db)
         db.add(
@@ -768,7 +755,20 @@ async def test_alignment_endpoint_durably_queues_ready_edition(
     assert response.status_code == 200
     assert response.json()["status"] == "aligning"
     assert response.json()["progress_total"] == 1
-    assert queue.queued == [edition_id]
+    async with sqlite_sessionmaker() as db:
+        jobs = (
+            (
+                await db.execute(
+                    select(ProcessingJob).where(
+                        ProcessingJob.job_type == "align_imported_audiobook",
+                        ProcessingJob.target_id == edition_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(jobs) == 1
 
 
 @pytest.mark.asyncio
@@ -924,7 +924,7 @@ async def test_delete_imported_edition_removes_source_and_derived_files(
         book_id = book.id
 
     monkeypatch.setattr(
-        audiobook_router,
+        audiobook_import,
         "imported_audiobook_dir",
         lambda selected_book_id, selected_edition_id: tmp_path / str(selected_book_id) / str(selected_edition_id),
     )
@@ -1059,11 +1059,11 @@ async def test_failed_multi_file_upload_discards_already_received_tracks(
         book, _chapter = await _seed_book_text(db)
         book_id = book.id
     monkeypatch.setattr(
-        audiobook_router,
+        audiobook_import,
         "imported_audiobook_dir",
         lambda selected_book_id, edition_id: tmp_path / str(selected_book_id) / str(edition_id),
     )
-    monkeypatch.setattr(audiobook_router, "MAX_AUDIOBOOK_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(audiobook_import, "MAX_AUDIOBOOK_UPLOAD_BYTES", 8)
 
     response = app_client.post(
         f"/api/books/{book_id}/audiobook/imports",

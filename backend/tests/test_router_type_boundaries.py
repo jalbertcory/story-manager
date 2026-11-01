@@ -1,6 +1,5 @@
 """Regression coverage for nullable data exposed by static checking."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from datetime import datetime, timezone
 
@@ -8,8 +7,9 @@ import pytest
 from fastapi import HTTPException
 
 from backend.app.job_payloads import RefreshBookRequest
-from backend.app import models
-from backend.app.routers import audiobook, cleaning, dashboard, processing, reader, scheduler
+from backend.app import audiobook_schemas, crud, models
+from backend.app.routers import audiobook_characters, audiobook_imports, cleaning, dashboard, processing, reader, scheduler
+from backend.app.services import audiobook_views
 
 
 def test_dashboard_handles_missing_book_metadata():
@@ -82,11 +82,11 @@ async def test_cleaning_preview_rejects_book_without_original_epub(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_locked_provider_requires_settings_for_non_stub_provider(monkeypatch):
-    monkeypatch.setattr(audiobook.crud.audiobook, "get_audiobook_settings", AsyncMock(return_value=None))
-    monkeypatch.setattr(audiobook.crud.audiobook, "lock_book_tts_provider", AsyncMock(return_value="qwen3"))
+    monkeypatch.setattr(crud.audiobook, "get_audiobook_settings", AsyncMock(return_value=None))
+    monkeypatch.setattr(crud.audiobook, "lock_book_tts_provider", AsyncMock(return_value="qwen3"))
 
     with pytest.raises(HTTPException) as error:
-        await audiobook._settings_for_locked_book_provider(AsyncMock(), 1)
+        await audiobook_characters._settings_for_locked_book_provider(AsyncMock(), 1)
 
     assert error.value.status_code == 409
     assert "settings are required" in error.value.detail
@@ -94,23 +94,23 @@ async def test_locked_provider_requires_settings_for_non_stub_provider(monkeypat
 
 @pytest.mark.asyncio
 async def test_locked_stub_provider_still_works_without_settings(monkeypatch):
-    monkeypatch.setattr(audiobook.crud.audiobook, "get_audiobook_settings", AsyncMock(return_value=None))
-    monkeypatch.setattr(audiobook.crud.audiobook, "lock_book_tts_provider", AsyncMock(return_value="stub"))
+    monkeypatch.setattr(crud.audiobook, "get_audiobook_settings", AsyncMock(return_value=None))
+    monkeypatch.setattr(crud.audiobook, "lock_book_tts_provider", AsyncMock(return_value="stub"))
 
-    assert await audiobook._settings_for_locked_book_provider(AsyncMock(), 1) == ("stub", None)
+    assert await audiobook_characters._settings_for_locked_book_provider(AsyncMock(), 1) == ("stub", None)
 
 
 @pytest.mark.asyncio
 async def test_character_deleted_during_update_returns_not_found(monkeypatch):
     existing = models.AudiobookCharacter(id=1, book_id=1)
-    monkeypatch.setattr(audiobook.crud.audiobook, "get_character", AsyncMock(return_value=existing))
-    monkeypatch.setattr(audiobook.crud.audiobook, "update_character", AsyncMock(return_value=None))
-    monkeypatch.setattr(audiobook, "_get_audiobook_book_or_404", AsyncMock(return_value=models.Book(id=1)))
+    monkeypatch.setattr(crud.audiobook, "get_character", AsyncMock(return_value=existing))
+    monkeypatch.setattr(crud.audiobook, "update_character", AsyncMock(return_value=None))
+    monkeypatch.setattr(audiobook_characters, "get_audiobook_book_or_404", AsyncMock(return_value=models.Book(id=1)))
     propagate = AsyncMock()
-    monkeypatch.setattr(audiobook.crud.audiobook, "propagate_character_profile_across_series", propagate)
+    monkeypatch.setattr(crud.audiobook, "propagate_character_profile_across_series", propagate)
 
     with pytest.raises(HTTPException) as error:
-        await audiobook.update_character(1, audiobook.CharacterUpdate(), AsyncMock())
+        await audiobook_characters.update_character(1, audiobook_schemas.CharacterUpdate(), AsyncMock())
 
     assert error.value.status_code == 404
     propagate.assert_not_called()
@@ -122,8 +122,8 @@ async def test_smil_rejects_cue_chapter_without_content_file(monkeypatch):
     track = models.ImportedAudiobookTrack(id=1, matched_chapter_id=1)
     edition = models.ImportedAudiobook(id=1)
     sentence = models.AudiobookSentence(chapter_id=1)
-    monkeypatch.setattr(audiobook, "_get_imported_track_or_404", AsyncMock(return_value=(edition, track)))
-    monkeypatch.setattr(audiobook, "_canonical_audio_track_id", AsyncMock(return_value=1))
+    monkeypatch.setattr(audiobook_imports, "_get_imported_track_or_404", AsyncMock(return_value=(edition, track)))
+    monkeypatch.setattr(audiobook_views, "find_canonical_audio_track_id", AsyncMock(return_value=1))
     rows = Mock()
     rows.all.return_value = [(models.ImportedAudiobookCue(), sentence)]
     chapters = Mock()
@@ -133,20 +133,21 @@ async def test_smil_rejects_cue_chapter_without_content_file(monkeypatch):
     db.execute.side_effect = [rows, chapters]
 
     with pytest.raises(HTTPException) as error:
-        await audiobook.get_imported_track_smil(1, 1, db)
+        await audiobook_imports.get_imported_track_smil(1, 1, db)
 
     assert error.value.status_code == 404
     assert error.value.detail == "Matched chapter has no EPUB content file"
 
 
 @pytest.mark.asyncio
-async def test_reader_smil_accepts_memoryview_response_body(monkeypatch):
-    monkeypatch.setattr(
-        reader.audiobook_router,
-        "get_imported_track_smil",
-        AsyncMock(return_value=SimpleNamespace(body=memoryview(b"/api/imported-audiobooks/1/tracks/2/audio"))),
-    )
+async def test_reader_smil_points_audio_at_reader_routes(monkeypatch):
+    edition = models.ImportedAudiobook(id=1)
+    track = models.ImportedAudiobookTrack(id=2)
+    monkeypatch.setattr(audiobook_views, "find_imported_track", AsyncMock(return_value=(edition, track)))
+    build_smil = AsyncMock(return_value="<smil/>")
+    monkeypatch.setattr(audiobook_views, "imported_track_smil", build_smil)
 
     response = await reader.get_reader_human_audiobook_smil(1, 2, AsyncMock())
 
-    assert response.body == b"/reader/human-audiobooks/1/tracks/2/audio"
+    assert response.body == b"<smil/>"
+    assert build_smil.await_args.kwargs == {"audio_url_prefix": "/reader/human-audiobooks"}

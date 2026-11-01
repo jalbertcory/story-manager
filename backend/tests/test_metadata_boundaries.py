@@ -14,7 +14,8 @@ from backend.app.services.metadata_jobs import (
     create_metadata_sync_job_request,
     process_metadata_sync_job,
 )
-from backend.app.services.metadata_sync import MetadataSuggestion, apply_suggestion_to_book
+from backend.app.services.metadata.suggestion import MetadataSuggestion
+from backend.app.services.metadata_sync import apply_suggestion_to_book
 
 
 @pytest.mark.parametrize(

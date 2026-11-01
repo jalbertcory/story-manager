@@ -36,6 +36,7 @@ VALID_PAYLOADS = {
     "retry_cover": {},
     "create_backup": {},
     "verify_backup": {"filename": "test.story-manager.zip"},
+    "backfill_reader_checksums": {},
 }
 
 
@@ -140,7 +141,7 @@ async def test_worker_rejects_invalid_legacy_payload_before_side_effects(monkeyp
 def test_http_contract_discriminates_payloads_by_job_type():
     schema = TypeAdapter(ProcessingJobRequest).json_schema()
     assert schema["discriminator"]["propertyName"] == "job_type"
-    assert set(schema["discriminator"]["mapping"]) == VALID_PAYLOADS.keys() - {"import_web_book"}
+    assert set(schema["discriminator"]["mapping"]) == VALID_PAYLOADS.keys() - {"import_web_book", "backfill_reader_checksums"}
 
 
 @pytest.mark.asyncio

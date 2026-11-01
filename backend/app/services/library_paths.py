@@ -101,3 +101,20 @@ def write_file_atomically(path: Path, data: bytes) -> None:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def resolve_library_file(relative_path: str | None) -> Path | None:
+    """Resolve a stored ``library/...`` path, refusing anything outside the library."""
+    if not relative_path:
+        return None
+    path = (LIBRARY_PATH.parent / relative_path).resolve()
+    return path if path.is_relative_to(LIBRARY_PATH.resolve()) else None
+
+
+def audiobooks_root() -> Path:
+    """Directory holding every book's generated, imported and reader audiobook files."""
+    return LIBRARY_PATH / "audiobooks"
+
+
+def book_audiobook_dir(book_id: int) -> Path:
+    return audiobooks_root() / str(book_id)

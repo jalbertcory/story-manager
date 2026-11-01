@@ -10,8 +10,8 @@ from sqlalchemy import select
 
 from backend.app import crud
 from backend.app.models import Book, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob, SourceType
-from backend.app.routers import audiobook as audiobook_router, reader
-from backend.app.services import audiobook_import
+from backend.app.routers import audiobook_imports, reader
+from backend.app.services import audiobook_import, library_paths
 from backend.app.services.library_health import inspect_library_files
 
 
@@ -21,7 +21,7 @@ async def test_audio_only_upload_split_and_reader_access(app_client, sqlite_sess
         pytest.skip("ffmpeg and ffprobe are required")
     library = tmp_path / "library"
     library.mkdir()
-    for module in (audiobook_router, audiobook_import, reader):
+    for module in (library_paths, audiobook_import, reader):
         monkeypatch.setattr(module, "LIBRARY_PATH", library)
     ingest = AsyncMock(side_effect=AssertionError("Audio-only books must not ingest EPUBs"))
     monkeypatch.setattr(audiobook_import, "ingest_epub", ingest)
@@ -128,7 +128,7 @@ async def test_audio_only_upload_explains_missing_migration(missing_migration):
     db.commit = AsyncMock(side_effect=DataError(None, None, error))
     db.rollback = AsyncMock()
     with pytest.raises(HTTPException if missing_migration else DataError) as caught:
-        await audiobook_router.upload_audio_only_book(
+        await audiobook_imports.upload_audio_only_book(
             files=[UploadFile(filename="book.m4b", file=BytesIO(b"audio"))],
             title="Audio book",
             author="Author",

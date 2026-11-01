@@ -336,7 +336,7 @@ async def test_tts_pool_test_api_returns_each_endpoint_result(
             raise RuntimeError("Qwen model is not loaded")
         return b"mp3"
 
-    monkeypatch.setattr("backend.app.routers.audiobook._synthesize_speech_endpoint", synthesize)
+    monkeypatch.setattr("backend.app.routers.audiobook_settings._synthesize_speech_endpoint", synthesize)
 
     response = app_client.post("/api/audiobook/settings/test-tts")
 

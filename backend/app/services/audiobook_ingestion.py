@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
 from ..config import LIBRARY_PATH
+from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookSentence, Book
 from ..lifecycle import (
     AUDIOBOOK_PIPELINE,
@@ -308,7 +309,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     ingested_content_version = book.content_version or 1
     logger.info("Ingesting EPUB for book %s from %s", book_id, epub_path)
 
-    output_dir = LIBRARY_PATH.parent / "library" / "audiobooks" / str(book_id)
+    output_dir = book_audiobook_dir(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     snippets_dir = output_dir / "snippets"
     snippets_dir.mkdir(exist_ok=True)

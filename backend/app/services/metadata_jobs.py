@@ -13,10 +13,10 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
+from .metadata.suggestion import MetadataSuggestion
 from .metadata_sync import (
     AUTO_APPROVE_THRESHOLD,
     PROPOSAL_THRESHOLD,
-    MetadataSuggestion,
     apply_suggestion_to_book,
     generate_candidate_suggestions,
 )
@@ -72,13 +72,6 @@ async def queue_metadata_sync_job(
         dedupe_key=f"metadata_sync:metadata_sync_job:{job.id}",
         progress_detail=f"Queued metadata sync ({trigger})",
     )
-    # Keep the former queue getter as a compatibility extension hook without
-    # running the retired in-memory worker in production.
-    from .metadata_sync_queue import MetadataSyncQueue, get_metadata_sync_queue
-
-    legacy_queue = get_metadata_sync_queue()
-    if not isinstance(legacy_queue, MetadataSyncQueue):
-        await legacy_queue.enqueue(job.id)
     return job
 
 
