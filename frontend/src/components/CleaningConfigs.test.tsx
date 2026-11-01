@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../api/schema";
 import CleaningConfigs from "./CleaningConfigs";
@@ -6,11 +6,14 @@ import { renderWithClient } from "../test-utils";
 
 type ReprocessStatus = components["schemas"]["ReprocessStatus"];
 
-function mockApi(statuses: ReprocessStatus[]) {
+type Config = components["schemas"]["CleaningConfig"];
+
+function mockApi(statuses: ReprocessStatus[], configs: Config[] = []) {
   let call = 0;
-  const fetchMock = vi.fn((input: Request | string | URL) => {
-    const url = input instanceof Request ? input.url : String(input);
-    let body: unknown = [];
+  const fetchMock = vi.fn((url: string, init?: Parameters<typeof fetch>[1]) => {
+    let body: unknown = configs;
+    if (init?.method === "DELETE")
+      return Promise.resolve(new Response(null, { status: 204 }));
     if (url.includes("/api/books/reprocess-all/status")) {
       body = statuses[Math.min(call, statuses.length - 1)];
       call += 1;
@@ -22,7 +25,7 @@ function mockApi(statuses: ReprocessStatus[]) {
       }),
     );
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = fetchMock as typeof fetch;
   return fetchMock;
 }
 
@@ -59,4 +62,37 @@ describe("CleaningConfigs", () => {
     );
     expect(screen.getByText("Cleaning job completed.")).toBeInTheDocument();
   }, 10_000);
+  it("confirms in a dialog before deleting a config", async () => {
+    const fetchMock = mockApi(
+      [{ running: false, total: 0, processed: 0 }],
+      [
+        {
+          id: 3,
+          name: "Royal Road notes",
+          url_pattern: "royalroad",
+          chapter_selectors: [],
+          content_selectors: ["div.author-note"],
+        } satisfies Config,
+      ],
+    );
+    const deletes = () =>
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE");
+    renderWithClient(<CleaningConfigs />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Delete cleaning config “Royal Road notes”?",
+    });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(deletes()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete config" }));
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
 });

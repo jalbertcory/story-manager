@@ -53,7 +53,9 @@ function CharacterCard({
       void queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
     },
   });
 
@@ -69,7 +71,9 @@ function CharacterCard({
       void queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
     },
   });
 
@@ -211,12 +215,14 @@ function CharacterCard({
         </div>
       )}
       {designMutation.isError && (
-        <p className="error">
+        <p className="error" role="alert">
           {designMutation.error?.message || "Voice design failed"}
         </p>
       )}
       {mutation.isError && (
-        <p className="error">{mutation.error?.message || "Save failed"}</p>
+        <p className="error" role="alert">
+          {mutation.error?.message || "Save failed"}
+        </p>
       )}
       {saved && (
         <p className="success">
@@ -268,7 +274,9 @@ function CharacterRoster({
     mutationFn: () => setBookTtsProvider(bookId, selectedProvider),
     onSuccess: () => {
       setConfirmProviderChange(false);
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
@@ -281,11 +289,15 @@ function CharacterRoster({
     mutationFn: () => rebuildCharacterRoster(bookId),
     onSuccess: () => {
       setConfirmRegenerate(false);
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-status", bookId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["audiobook-status", bookId],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["audiobook-characters", bookId],
       });
-      void queryClient.invalidateQueries({ queryKey: ["active-processing-jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["active-processing-jobs"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["audiobook-chapters", bookId],
       });
@@ -373,7 +385,9 @@ function CharacterRoster({
             </span>
           ))}
         {providerMutation.isError && (
-          <span className="error">{providerMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {providerMutation.error?.message}
+          </span>
         )}
       </div>
       <div className="roster-controls">
@@ -418,7 +432,9 @@ function CharacterRoster({
           </span>
         )}
         {regenerateMutation.isError && (
-          <span className="error">{regenerateMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {regenerateMutation.error?.message}
+          </span>
         )}
         {regenerateMutation.isSuccess && (
           <span className="success">
@@ -432,7 +448,9 @@ function CharacterRoster({
           </span>
         )}
         {shareMutation.isError && (
-          <span className="error">{shareMutation.error?.message}</span>
+          <span className="error" role="alert">
+            {shareMutation.error?.message}
+          </span>
         )}
       </div>
       <div className="character-roster">

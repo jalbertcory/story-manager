@@ -316,7 +316,11 @@ function LibationBackupImport() {
           Inspecting backup…
         </p>
       )}
-      {previewError && <p className="error">{previewError}</p>}
+      {previewError && (
+        <p className="error" role="alert">
+          {previewError}
+        </p>
+      )}
 
       {preview && (
         <>
@@ -531,7 +535,7 @@ function LibationBackupImport() {
           {importState.results
             .filter((result) => result.result === "failed")
             .map((result) => (
-              <p className="error" key={result.source_key}>
+              <p className="error" role="alert" key={result.source_key}>
                 {result.source_title}: {result.error}
               </p>
             ))}

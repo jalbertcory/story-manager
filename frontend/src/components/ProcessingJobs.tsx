@@ -363,7 +363,9 @@ function ProcessingJobs() {
         </div>
         {queueNotice && <p className="job-queued-notice">{queueNotice}</p>}
         {queueMutation.isError && (
-          <p className="error">{queueMutation.error.message}</p>
+          <p className="error" role="alert">
+            {queueMutation.error.message}
+          </p>
         )}
       </details>
 
@@ -391,7 +393,11 @@ function ProcessingJobs() {
           </label>
         </div>
         {isLoading && <p>Loading jobs…</p>}
-        {error && <p className="error">{error.message}</p>}
+        {error && (
+          <p className="error" role="alert">
+            {error.message}
+          </p>
+        )}
         {!isLoading && !jobs.length && (
           <p className="hint">No processing jobs in this view.</p>
         )}

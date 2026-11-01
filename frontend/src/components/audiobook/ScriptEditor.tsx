@@ -107,11 +107,18 @@ function SentenceRow({
             value={tags}
             onChange={(e) => setTags(e.target.value)}
             className="sentence-tags-input"
+            aria-label={`Tags for sentence ${sentence.sequence_order}`}
           />
         ) : (
-          <span onClick={() => setEditing(true)} title="Click to edit">
-            {tags}
-          </span>
+          <button
+            type="button"
+            className="sentence-tags-edit"
+            onClick={() => setEditing(true)}
+            aria-label={`Edit tags for sentence ${sentence.sequence_order}`}
+            title="Edit tags"
+          >
+            {tags || "Add tags"}
+          </button>
         )}
       </td>
       <td className="sentence-speaker">
@@ -209,7 +216,7 @@ function SentenceRow({
           </span>
         ) : null}
         {audioMutation.isError && (
-          <span className="error sentence-audio-error">
+          <span className="error sentence-audio-error" role="alert">
             {audioMutation.error?.message}
           </span>
         )}
@@ -237,7 +244,9 @@ function SentenceRow({
           </>
         )}
         {mutation.isError && (
-          <span className="error">{mutation.error?.message}</span>
+          <span className="error" role="alert">
+            {mutation.error?.message}
+          </span>
         )}
       </td>
     </tr>
@@ -317,7 +326,9 @@ function ScriptEditor({
   if (isLoading) return <p>Loading sentences…</p>;
   if (isError)
     return (
-      <p className="error">{error?.message || "Failed to load sentences"}</p>
+      <p className="error" role="alert">
+        {error?.message || "Failed to load sentences"}
+      </p>
     );
 
   const { items = [], total = 0 } = data || {};

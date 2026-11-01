@@ -162,7 +162,9 @@ function ChapterAssembly({
         paused.
       </p>
       {previewMutation.isError && (
-        <p className="error">{previewMutation.error?.message}</p>
+        <p className="error" role="alert">
+          {previewMutation.error?.message}
+        </p>
       )}
     </div>
   );

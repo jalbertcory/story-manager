@@ -454,7 +454,7 @@ function EndpointMetrics({
         <p className="settings-hint">Loading connection metrics…</p>
       )}
       {error && (
-        <p className="error">
+        <p className="error" role="alert">
           {error.message || "Failed to load connection metrics"}
         </p>
       )}
@@ -716,14 +716,18 @@ function AudiobookSettings() {
                         : ""}
                     </span>
                   </div>
-                  {result.error && <p className="error">{result.error}</p>}
+                  {result.error && (
+                    <p className="error" role="alert">
+                      {result.error}
+                    </p>
+                  )}
                 </article>
               ))}
             </div>
           </div>
         )}
         {mutation.isError && (
-          <p className="error">
+          <p className="error" role="alert">
             {mutation.error?.message || `${label} test failed`}
           </p>
         )}
@@ -863,7 +867,7 @@ function AudiobookSettings() {
         </section>
 
         {saveMutation.isError && (
-          <p className="error">
+          <p className="error" role="alert">
             {saveMutation.error?.message || "Save failed"}
           </p>
         )}

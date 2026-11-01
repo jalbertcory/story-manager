@@ -358,7 +358,7 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
                   {scheduleMutation.isPending ? "Saving..." : "Save Schedule"}
                 </button>
                 {scheduleMutation.isError && (
-                  <p className="error">
+                  <p className="error" role="alert">
                     Failed: {scheduleMutation.error.message}
                   </p>
                 )}
@@ -409,7 +409,9 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
           {triggerMutation.isPending ? "Queueing..." : "Queue Run Now"}
         </button>
         {triggerMutation.isError && (
-          <p className="error">Failed: {triggerMutation.error.message}</p>
+          <p className="error" role="alert">
+            Failed: {triggerMutation.error.message}
+          </p>
         )}
         {triggerMutation.isSuccess && !isRunning && (
           <p className="job-queued-notice">

@@ -471,7 +471,7 @@ function AudiobookPipeline({
             batchMutation.isError ||
             pauseMutation.isError ||
             rebuildMutation.isError) && (
-            <p className="error">
+            <p className="error" role="alert">
               {(
                 startMutation.error ||
                 stepMutation.error ||

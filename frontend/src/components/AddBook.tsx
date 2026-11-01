@@ -335,8 +335,13 @@ const AddBook = forwardRef<
 
   useImperativeHandle(ref, () => ({ addFilesFromEntries: addEntryFiles }));
 
+  // StrictMode runs effects twice on mount; remember the drop already taken
+  // so its files are not appended twice.
+  const consumedEntries = useRef<typeof initialEntries | null>(null);
   useEffect(() => {
-    if (!initialEntries.length) return;
+    if (!initialEntries.length || consumedEntries.current === initialEntries)
+      return;
+    consumedEntries.current = initialEntries;
     void addEntryFiles(initialEntries).finally(() => onEntriesConsumed?.());
     // The parent clears the consumed entries; this effect should only rerun for
     // a genuinely new browser drop, not because a callback identity changed.
@@ -750,7 +755,7 @@ const AddBook = forwardRef<
                 <p className="hint">Checking for a library match…</p>
               )}
               {catalogFailed && (
-                <p className="error">
+                <p className="error" role="alert">
                   Could not check your library.{" "}
                   <button
                     type="button"
@@ -860,7 +865,11 @@ const AddBook = forwardRef<
                   : "Inspect selection"}
             </button>
           </div>
-          {previewError && <p className="error">{previewError}</p>}
+          {previewError && (
+            <p className="error" role="alert">
+              {previewError}
+            </p>
+          )}
         </section>
       )}
 

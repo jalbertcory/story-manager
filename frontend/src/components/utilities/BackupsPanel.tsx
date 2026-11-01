@@ -89,7 +89,7 @@ export default function BackupsPanel() {
         </div>
 
         {latestBackupJob?.status === "error" && (
-          <p className="error">
+          <p className="error" role="alert">
             {latestBackupJob.error || latestBackupJob.progress_detail}
           </p>
         )}
@@ -101,7 +101,7 @@ export default function BackupsPanel() {
         {(createBackupMutation.isError ||
           verifyBackupMutation.isError ||
           deleteBackupMutation.isError) && (
-          <p className="error">
+          <p className="error" role="alert">
             {
               (
                 createBackupMutation.error ||

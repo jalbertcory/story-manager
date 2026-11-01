@@ -777,7 +777,15 @@ function BookSettings({
                   </button>
                 </div>
                 {metadataSyncMutation.isSuccess && (
-                  <p className="hint">Metadata recheck queued.</p>
+                  <p className="hint" role="status">
+                    Metadata recheck queued.
+                  </p>
+                )}
+                {metadataSyncMutation.isError && (
+                  <p className="error" role="alert">
+                    Metadata recheck failed:{" "}
+                    {metadataSyncMutation.error.message}
+                  </p>
                 )}
               </div>
               <div className="settings-cover-aside">
@@ -853,13 +861,19 @@ function BookSettings({
                   </button>
                 </div>
                 {coverMutation.isError && (
-                  <p className="error">{coverMutation.error.message}</p>
+                  <p className="error" role="alert">
+                    {coverMutation.error.message}
+                  </p>
                 )}
                 {coverUrlMutation.isError && (
-                  <p className="error">{coverUrlMutation.error.message}</p>
+                  <p className="error" role="alert">
+                    {coverUrlMutation.error.message}
+                  </p>
                 )}
                 {retryCoverMutation.isError && (
-                  <p className="error">{retryCoverMutation.error.message}</p>
+                  <p className="error" role="alert">
+                    {retryCoverMutation.error.message}
+                  </p>
                 )}
               </div>
             </div>
@@ -886,7 +900,7 @@ function BookSettings({
                 </button>
               </div>
               {enableAudiobookMutation.isError && (
-                <p className="error">
+                <p className="error" role="alert">
                   {enableAudiobookMutation.error?.message ||
                     "Could not enable AI narration"}
                 </p>
@@ -1049,7 +1063,9 @@ function BookSettings({
                 </span>
               )}
               {previewMutation.isError && (
-                <span className="error">{previewMutation.error.message}</span>
+                <span className="error" role="alert">
+                  {previewMutation.error.message}
+                </span>
               )}
             </div>
           </section>
@@ -1202,15 +1218,17 @@ function BookSettings({
           </section>
 
           {saveMutation.isError && (
-            <p className="error">Save failed: {saveMutation.error.message}</p>
+            <p className="error" role="alert">
+              Save failed: {saveMutation.error.message}
+            </p>
           )}
           {processMutation.isError && (
-            <p className="error">
+            <p className="error" role="alert">
               Process failed: {processMutation.error.message}
             </p>
           )}
           {refreshMutation.isError && (
-            <p className="error">
+            <p className="error" role="alert">
               Refresh failed: {refreshMutation.error.message}
             </p>
           )}

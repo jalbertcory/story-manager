@@ -340,7 +340,7 @@ export default function SeriesSummaryRow({
                 Cancel
               </button>
               {renameMutation.isError && (
-                <span className="error-text">
+                <span className="error-text" role="alert">
                   {renameMutation.error.message}
                 </span>
               )}
@@ -385,7 +385,7 @@ export default function SeriesSummaryRow({
                 Cancel
               </button>
               {mergeMutation.isError && (
-                <span className="error-text">
+                <span className="error-text" role="alert">
                   {mergeMutation.error.message}
                 </span>
               )}
@@ -427,7 +427,7 @@ export default function SeriesSummaryRow({
                 Cancel
               </button>
               {genresMutation.isError && (
-                <span className="error-text">
+                <span className="error-text" role="alert">
                   {genresMutation.error.message}
                 </span>
               )}

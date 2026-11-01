@@ -2475,6 +2475,22 @@
   width: 100%;
 }
 
+.sentence-tags-edit {
+  width: 100%;
+  padding: 0.2rem 0.3rem;
+  border: 1px dashed transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.sentence-tags-edit:hover,
+.sentence-tags-edit:focus-visible {
+  border-color: var(--border);
+}
+
 .confidence-badge {
   display: inline-flex;
   padding: 0.18rem 0.4rem;

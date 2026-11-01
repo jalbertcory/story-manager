@@ -335,7 +335,7 @@ function Utilities({
               )}
             </div>
             {validateMutation.isError && (
-              <p className="error" style={{ marginTop: "0.5rem" }}>
+              <p className="error" role="alert" style={{ marginTop: "0.5rem" }}>
                 {validateMutation.error?.message}
               </p>
             )}
@@ -478,7 +478,7 @@ function Utilities({
             {(queueMetadataMutation.isError ||
               approveMatchMutation.isError ||
               rejectMatchMutation.isError) && (
-              <p className="error" style={{ marginTop: "0.5rem" }}>
+              <p className="error" role="alert" style={{ marginTop: "0.5rem" }}>
                 {
                   (
                     queueMetadataMutation.error ||
@@ -783,7 +783,9 @@ function Utilities({
               {audiobookRebuildPreviewLoading ? (
                 <p className="hint">Inspecting imported audiobooks…</p>
               ) : audiobookRebuildPreviewError ? (
-                <p className="error">{audiobookRebuildPreviewError.message}</p>
+                <p className="error" role="alert">
+                  {audiobookRebuildPreviewError.message}
+                </p>
               ) : audiobookRebuildPreview ? (
                 <p className="hint">
                   {audiobookRebuildPreview.rebuild_count} of{" "}
@@ -836,7 +838,7 @@ function Utilities({
                 <p className="success">{audiobookRebuildNotice}</p>
               )}
               {audiobookRebuildMutation.isError && (
-                <p className="error">
+                <p className="error" role="alert">
                   {audiobookRebuildMutation.error.message}
                 </p>
               )}
@@ -911,7 +913,7 @@ function Utilities({
             )}
             {(restoreBookMutation.isError ||
               permanentDeleteMutation.isError) && (
-              <p className="error">
+              <p className="error" role="alert">
                 {
                   (restoreBookMutation.error || permanentDeleteMutation.error)
                     ?.message
@@ -971,7 +973,7 @@ function Utilities({
             </div>
 
             {(previewMutation.isError || deleteMutation.isError) && (
-              <p className="error">
+              <p className="error" role="alert">
                 {(previewMutation.error || deleteMutation.error)?.message}
               </p>
             )}

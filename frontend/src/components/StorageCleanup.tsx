@@ -108,7 +108,7 @@ function StorageCleanup({ onBack }: { onBack: () => void }) {
         </div>
 
         {(previewMutation.isError || deleteMutation.isError) && (
-          <p className="error">
+          <p className="error" role="alert">
             {(previewMutation.error || deleteMutation.error)?.message}
           </p>
         )}

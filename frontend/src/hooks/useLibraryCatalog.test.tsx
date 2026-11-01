@@ -18,18 +18,14 @@ describe("useLibraryCatalog", () => {
 
   it("refreshes the catalog when an active processing job finishes", async () => {
     let jobs = [{ id: 7, status: "running" }];
-    const fetchMock = vi.fn((input: Request | string | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
+    const fetchMock = vi.fn((url: string) => {
       if (url.includes("/api/processing/jobs")) return json(jobs);
       return json({ items: [], next_cursor: null });
     });
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as typeof fetch;
     const catalogCalls = () =>
-      fetchMock.mock.calls.filter(([input]) =>
-        String(input instanceof Request ? input.url : input).includes(
-          "/api/books/catalog",
-        ),
-      ).length;
+      fetchMock.mock.calls.filter(([url]) => url.includes("/api/books/catalog"))
+        .length;
 
     const client = createQueryClient();
     client.setDefaultOptions({ queries: { retry: false } });

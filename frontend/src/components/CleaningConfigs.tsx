@@ -11,6 +11,7 @@ import {
   reprocessAllBooks,
   getReprocessAllStatus,
 } from "../api/cleaning";
+import ConfirmActionDialog from "./ConfirmActionDialog";
 type Config = components["schemas"]["CleaningConfig"];
 type ConfigInput = components["schemas"]["CleaningConfigCreate"];
 
@@ -104,6 +105,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [jobNotice, setJobNotice] = useState("");
+  const [configToDelete, setConfigToDelete] = useState<Config | null>(null);
 
   // A query (rather than component-local polling) so progress resumes after
   // leaving the page and coming back while a library clean is still running.
@@ -169,6 +171,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
 
   const deleteMutation = useMutation({
     mutationFn: deleteCleaningConfig,
+    onSettled: () => setConfigToDelete(null),
     onSuccess: () => {
       setJobNotice(
         "Cleaning config deleted; restoring affected books is queued.",
@@ -198,7 +201,11 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
         </button>
       </div>
       {isLoading && <p>Loading...</p>}
-      {error && <p className="error">{error.message}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error.message}
+        </p>
+      )}
 
       <section className="settings-section">
         <h3>Clean All Books</h3>
@@ -227,7 +234,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
             </p>
           )}
         {reprocessMutation.isError && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>
+          <p className="error" role="alert" style={{ marginTop: "0.5rem" }}>
             {reprocessMutation.error?.message}
           </p>
         )}
@@ -240,7 +247,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
             </p>
           )}
         {reprocessStatus?.error && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>
+          <p className="error" role="alert" style={{ marginTop: "0.5rem" }}>
             {reprocessStatus.error}
           </p>
         )}
@@ -255,7 +262,9 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
             isSaving={createMutation.isPending}
           />
           {createMutation.isError && (
-            <p className="error">{createMutation.error.message}</p>
+            <p className="error" role="alert">
+              {createMutation.error.message}
+            </p>
           )}
         </div>
       )}
@@ -274,7 +283,9 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
                   isSaving={updateMutation.isPending}
                 />
                 {updateMutation.isError && (
-                  <p className="error">{updateMutation.error.message}</p>
+                  <p className="error" role="alert">
+                    {updateMutation.error.message}
+                  </p>
                 )}
               </div>
             ) : (
@@ -288,11 +299,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
                     </button>
                     <button
                       className="btn-danger"
-                      onClick={() => {
-                        if (window.confirm(`Delete config "${config.name}"?`)) {
-                          deleteMutation.mutate(config.id);
-                        }
-                      }}
+                      onClick={() => setConfigToDelete(config)}
                     >
                       Delete
                     </button>
@@ -318,6 +325,25 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
         ))}
         {configs.length === 0 && !isLoading && <p>No cleaning configs yet.</p>}
       </div>
+      {deleteMutation.isError && (
+        <p className="error" role="alert">
+          {deleteMutation.error.message}
+        </p>
+      )}
+      <ConfirmActionDialog
+        open={configToDelete != null}
+        title={`Delete cleaning config “${configToDelete?.name ?? ""}”?`}
+        confirmLabel="Delete config"
+        busyLabel="Deleting…"
+        danger
+        isPending={deleteMutation.isPending}
+        onCancel={() => setConfigToDelete(null)}
+        onConfirm={() => {
+          if (configToDelete) deleteMutation.mutate(configToDelete.id);
+        }}
+      >
+        <p>Books it applied to are queued to be cleaned again without it.</p>
+      </ConfirmActionDialog>
     </div>
   );
 }

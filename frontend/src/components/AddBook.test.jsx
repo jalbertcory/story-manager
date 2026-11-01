@@ -1,12 +1,17 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AddBook from "./AddBook.jsx";
 import { renderWithClient } from "../test-utils.jsx";
 
 function catalogResponse(items) {
-  return jsonResponse({ items, next_cursor: null, total_count: items.length,
-    facets: { series: 0, standalone: items.length, web: 0, genres: [] } });
+  return jsonResponse({
+    items,
+    next_cursor: null,
+    total_count: items.length,
+    facets: { series: 0, standalone: items.length, web: 0, genres: [] },
+  });
 }
 
 function jsonResponse(payload, status = 200) {
@@ -381,5 +386,26 @@ describe("AddBook", () => {
         ),
       ).toBe(true),
     );
+  });
+  it("adds dropped files once under StrictMode", async () => {
+    const file = new File(["epub"], "Dropped.epub");
+    const entry = {
+      isFile: true,
+      isDirectory: false,
+      name: "Dropped.epub",
+      file: (resolve) => resolve(file),
+    };
+    const onEntriesConsumed = vi.fn();
+    renderWithClient(
+      <StrictMode>
+        <AddBook
+          initialEntries={[entry]}
+          onEntriesConsumed={onEntriesConsumed}
+        />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(onEntriesConsumed).toHaveBeenCalled());
+    expect(screen.getAllByText("Dropped.epub")).toHaveLength(1);
   });
 });
