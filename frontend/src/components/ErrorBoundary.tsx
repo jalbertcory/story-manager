@@ -2,16 +2,22 @@ import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { postClientLog } from "../api/admin";
 
-type Props = { children: ReactNode };
+type Props = { children: ReactNode; resetKey?: string };
 type State = { error: Error | null };
 
-// Keeps a render error in one page from blanking the whole app. App keys this
-// on the location, so navigating elsewhere clears the error.
+// Keeps a render error in one page from blanking the whole app. App passes the
+// location as resetKey, so navigating elsewhere clears the error.
 export default class ErrorBoundary extends Component<Props, State> {
   override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
+  }
+
+  override componentDidUpdate(prevProps: Props): void {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {

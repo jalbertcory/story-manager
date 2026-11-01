@@ -12,6 +12,7 @@ import {
 } from "../api/processing";
 
 import { JOB_LABELS } from "../lib/processing";
+import { useLocation } from "../lib/router";
 import ConfirmActionDialog from "./ConfirmActionDialog";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -100,10 +101,10 @@ function ProcessingJobs() {
       ),
     [processingLifecycle],
   );
-  const [statusFilter, setStatusFilter] = useState(() => {
-    const requested = new URLSearchParams(window.location.search).get("status");
-    return requested || "active";
-  });
+  const { search } = useLocation();
+  const [statusFilter, setStatusFilter] = useState(
+    () => new URLSearchParams(search).get("status") || "active",
+  );
   const [operation, setOperation] =
     useState<(typeof QUEUE_OPERATIONS)[number]["value"]>("clean_book");
   const [bookSearch, setBookSearch] = useState("");

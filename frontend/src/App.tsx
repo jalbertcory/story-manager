@@ -6,6 +6,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,6 +19,7 @@ import useActiveProcessingJobs from "./hooks/useActiveProcessingJobs";
 import { getAttentionDashboard } from "./api/dashboard";
 import AdminLogin from "./components/AdminLogin";
 import ErrorBoundary from "./components/ErrorBoundary";
+import NotFound from "./components/NotFound";
 import BookOverview from "./components/BookOverview";
 import LibraryWorkspace from "./components/LibraryWorkspace";
 import AttentionDashboard from "./components/AttentionDashboard";
@@ -47,6 +49,7 @@ import {
 import { allowNavigation } from "./lib/navigationGuard";
 import { onUnauthorized } from "./lib/authSession";
 import { queryKeys } from "./lib/queryKeys";
+import { RouterContext } from "./lib/router";
 
 const NAV_ICONS: Record<string, IconName> = {
   library: "library",
@@ -99,6 +102,7 @@ export default function App() {
     location.search,
   );
   const isBook = route.view === "book";
+  const notFound = route.view === "not-found";
   const activeTab = route.tab || "library";
   // A 401 from any request means the admin session expired. With app auth
   // disabled (e.g. behind an auth proxy) a 401 is not ours to answer, so the
@@ -155,6 +159,7 @@ export default function App() {
     },
     [commitLocation],
   );
+  const router = useMemo(() => ({ location, navigate }), [location, navigate]);
   useEffect(() => {
     const onPop = () => {
       // The browser has already moved. If a page with unsaved work refuses to
@@ -317,6 +322,7 @@ export default function App() {
     );
 
   const renderContent = () => {
+    if (notFound) return <NotFound />;
     if (isBook) {
       if (bookQuery.isLoading) return <p role="status">Loading book…</p>;
       // A failed background refetch keeps the last good data on screen; only a
@@ -382,7 +388,7 @@ export default function App() {
           />
         );
       case "processing":
-        return <ProcessingJobs />;
+        return <ProcessingJobs key={location.search} />;
       case "scheduler":
         return <SchedulerStatus />;
       case "configs":
@@ -390,7 +396,7 @@ export default function App() {
       case "audio-settings":
         return <AudiobookSettings />;
       case "utilities":
-        return <Utilities key={location.search} />;
+        return <Utilities />;
       case "logs":
         return <Logs />;
       case "import":
@@ -415,7 +421,11 @@ export default function App() {
         );
     }
   };
-  const activePrimary = isBook ? "library" : getPrimarySection(activeTab);
+  const activePrimary = isBook
+    ? "library"
+    : notFound
+      ? ""
+      : getPrimarySection(activeTab);
   const secondary =
     !isBook && activePrimary === "activity" ? SECTION_NAV.activity : [];
   const followInternalLink = (event: MouseEvent<HTMLDivElement>) => {
@@ -526,11 +536,13 @@ export default function App() {
             </nav>
           )}
           <ErrorBoundary
-            key={`${location.pathname}${location.search}${location.hash}`}
+            resetKey={`${location.pathname}${location.search}${location.hash}`}
           >
-            <Suspense fallback={<p role="status">Loading…</p>}>
-              {renderContent()}
-            </Suspense>
+            <RouterContext.Provider value={router}>
+              <Suspense fallback={<p role="status">Loading…</p>}>
+                {renderContent()}
+              </Suspense>
+            </RouterContext.Provider>
           </ErrorBoundary>
         </div>
       </main>

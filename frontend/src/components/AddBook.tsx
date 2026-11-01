@@ -5,6 +5,7 @@ import { addWebNovel, previewBookImports, uploadEpubs } from "../api/imports";
 import { errorMessage } from "../lib/errors";
 import { extractEpubsFromEntries } from "../lib/importFiles";
 import { invalidateBookViews, queryKeys } from "../lib/queryKeys";
+import { useLocation, useNavigate } from "../lib/router";
 import LibationBackupImport from "./LibationBackupImport";
 import AudiobookInput from "./add-book/AudiobookInput";
 import BookFilesInput from "./add-book/BookFilesInput";
@@ -22,17 +23,16 @@ const SELECTION_HEADINGS: Record<string, string> = {
   audiobook: "Import an audiobook",
 };
 
-function requestedImportType() {
-  const requested =
-    new URLSearchParams(window.location.search).get("type") || "books";
+function requestedImportType(search: string) {
+  const requested = new URLSearchParams(search).get("type") || "books";
   return IMPORT_TYPES.some((item) => item.key === requested)
     ? requested
     : "books";
 }
 
-function requestedBookId() {
+function requestedBookId(search: string) {
   const value = Number.parseInt(
-    new URLSearchParams(window.location.search).get("book_id") || "",
+    new URLSearchParams(search).get("book_id") || "",
     10,
   );
   return Number.isInteger(value) ? value : null;
@@ -101,7 +101,11 @@ export default function AddBook({
   onEntriesConsumed?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [importType, setImportType] = useState(requestedImportType);
+  const { search } = useLocation();
+  const navigate = useNavigate();
+  const [importType, setImportType] = useState(() =>
+    requestedImportType(search),
+  );
   const [files, setFiles] = useState<File[]>([]);
   const [urls, setUrls] = useState([""]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -120,7 +124,7 @@ export default function AddBook({
 
   const audio = useAudiobookSelection({
     enabled: importType === "audiobook",
-    initialBookId: requestedBookId(),
+    initialBookId: requestedBookId(search),
     onChange: resetInspection,
   });
 
@@ -158,29 +162,25 @@ export default function AddBook({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEntries]);
 
+  // Follow the address bar when it changes (Back/Forward, a link, or a drop
+  // anywhere in the app); what the user already picked is kept.
+  const seenSearch = useRef(search);
   useEffect(() => {
-    const onPopState = () => {
-      setImportType(requestedImportType());
-      audio.requestBook(requestedBookId());
-      setPreview(null);
-      setResults(null);
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    if (seenSearch.current === search) return;
+    seenSearch.current = search;
+    setImportType(requestedImportType(search));
+    audio.requestBook(requestedBookId(search));
+    setPreview(null);
+    setResults(null);
+    // `audio` is a new object each render; only a new location matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [search]);
 
   const chooseType = (type: string) => {
     if (type === importType) return;
-    const params = new URLSearchParams();
-    params.set("type", type);
-    window.history.pushState(
-      { view: "tab", tab: "import" },
-      "",
-      `/import?${params}`,
-    );
     setImportType(type);
     resetInspection();
+    navigate(`/import?${new URLSearchParams({ type })}`);
   };
 
   const inspect = async () => {

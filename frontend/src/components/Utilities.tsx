@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLocation } from "../lib/router";
 import ReaderKeys from "./ReaderKeys";
 import AuditPanel from "./utilities/AuditPanel";
 import AudiobookToolsPanel from "./utilities/AudiobookToolsPanel";
@@ -19,8 +19,8 @@ const utilityPages = [
   { key: "reader-access", label: "Reader API Keys" },
 ];
 
-function getRequestedUtilityTab() {
-  const requested = new URLSearchParams(window.location.search).get("section");
+function getRequestedUtilityTab(search: string) {
+  const requested = new URLSearchParams(search).get("section");
   return utilityPages.some((tab) => tab.key === requested)
     ? requested
     : "audit";
@@ -35,15 +35,8 @@ function Utilities({
   section?: string;
   reviewOnly?: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState(
-    () => section || getRequestedUtilityTab(),
-  );
-
-  useEffect(() => {
-    const onPopState = () => setActiveTab(section || getRequestedUtilityTab());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [section]);
+  const { search } = useLocation();
+  const activeTab = section || getRequestedUtilityTab(search);
 
   return (
     <div className={`${onBack ? "book-settings " : ""}utilities-page`}>

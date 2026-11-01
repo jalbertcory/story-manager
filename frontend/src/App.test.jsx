@@ -251,6 +251,18 @@ describe("App workspaces", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
+  it("shows a not-found page for unknown addresses", async () => {
+    window.history.replaceState(null, "", "/no-such-page");
+    mockApi();
+    renderWithClient(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Page not found" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Go to the library" }));
+    expect(window.location.pathname).toBe("/");
+    expect(await screen.findByAltText("Saga cover")).toBeInTheDocument();
+  });
+
   it("opens each maintenance tool from Settings without a second navigation menu", async () => {
     window.history.replaceState(null, "", "/settings");
     mockApi();

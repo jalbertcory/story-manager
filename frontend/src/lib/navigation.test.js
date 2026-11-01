@@ -78,6 +78,13 @@ describe("application navigation", () => {
     });
   });
 
+  it.each(["/nope", "/books/abc", "/books/12/unknown", "/settings/nope"])(
+    "reports %s as not found",
+    (path) => {
+      expect(parseLocation(path, "", "")).toEqual({ view: "not-found" });
+    },
+  );
+
   it("builds stable canonical URLs and rejects unknown tabs", () => {
     expect(buildBookPath(12, "details")).toBe("/books/12/details");
     expect(buildBookPath(12, "audiobooks", "listen-read")).toBe(

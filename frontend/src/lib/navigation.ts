@@ -31,7 +31,7 @@ export function parseNavigationState(value: unknown): NavigationState {
 }
 
 export interface ParsedLocation {
-  view: "book" | "tab";
+  view: "book" | "tab" | "not-found";
   bookId?: number;
   bookSection?: string;
   audiobookTab?: string | null;
@@ -188,7 +188,8 @@ export function parseLocation(
   const legacyTab = LEGACY_ROUTES[normalizedPath];
   const route = legacyTab
     ? getRoute(legacyTab)
-    : ROUTES.find((item) => item.path === normalizedPath) || DEFAULT_ROUTE;
+    : ROUTES.find((item) => item.path === normalizedPath);
+  if (!route) return { view: "not-found" };
   const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1))
     ? hash.slice(1)
     : "series";
