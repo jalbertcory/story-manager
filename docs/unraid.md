@@ -24,8 +24,9 @@ In the Unraid web UI, open **Docker**, choose **Add Container**, switch to **Adv
 | Variable `PGID` | `100` (Unraid's `users` group)                                            |
 
 The application runs as an unprivileged user whose IDs come from `PUID`/`PGID`; on startup it fixes ownership of the
-library, backup, and log folders, so existing appdata from older root-run images keeps working. The database folder
-stays owned by the container's `postgres` user.
+library, backup, and log folders, so existing appdata from older root-run images keeps working. If you leave
+`PUID`/`PGID` out, an existing library keeps its current non-root owner; set `PUID=0` to keep running the application
+as root. The database folder stays owned by the container's `postgres` user.
 
 The FanFicFare mapping is optional. If it is present, put custom settings in
 `/mnt/user/appdata/story-manager/fanficfare/personal.ini`. The production image always starts one application worker

@@ -118,11 +118,11 @@ Use Alembic migrations for database changes. Do not put one-time schema or data 
 
 ## Tests
 
-GitHub Actions runs these checks automatically (documentation-only changes are skipped):
+GitHub Actions runs these checks automatically:
 
 - **CI** (`ci.yml`), on every pull request and push to `main`: `make pr-check`, backend and frontend unit tests,
-  GPU scheduler tests, and PostgreSQL migration tests when `backend/alembic/**` changed. New pushes to a PR cancel
-  its in-progress run.
+  GPU scheduler tests, and `make test-migrations` when migrations, models, the processing-job queue code, or the
+  PostgreSQL test files change. New pushes to a PR cancel its in-progress run.
 - **E2E** (`e2e.yml`), nightly, on demand with `workflow_dispatch`, and on pull requests labelled `e2e`.
 - **Container publishing** (`docker-publish.yml`) runs only after CI succeeds on `main`, and pushes `:main`,
   `:latest`, and `:sha-<short>` tags. `preview-image.yml` builds a `:sha-<short>` image for any branch on demand.

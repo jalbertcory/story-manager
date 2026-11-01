@@ -1,25 +1,22 @@
 name: CI
 
+# No paths-ignore: a docs-only PR still reports this check (so it can be made
+# required), and every main commit gets a CI result for the publish workflow.
 on:
   pull_request:
     branches: [ main ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
   push:
     branches: [ main ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Superseded PR pushes are cancelled; every main commit finishes so the
-  # publish workflow sees a result for it.
+  # Superseded PR pushes are cancelled. Main runs get their own group: a shared
+  # group would let a newer push replace an older pending run, and that commit
+  # would never get a CI result or a published image.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -61,14 +58,23 @@ jobs:
       - name: GPU scheduler tests
         run: make test-gpu-scheduler
 
-      - name: Detect migration changes
+      # SQLite cannot show migration or row-locking behaviour, so the
+      # PostgreSQL suite runs whenever the schema or the job-queue code changes.
+      - name: Detect PostgreSQL-sensitive changes
         id: changes
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
-            migrations:
+            postgres:
               - 'backend/alembic/**'
+              - 'backend/app/models.py'
+              - 'backend/app/crud/processing.py'
+              - 'backend/app/services/*queue*.py'
+              - 'backend/tests/*postgres*.py'
+              - 'scripts/migration-*.sql'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
 
-      - name: PostgreSQL migration tests
-        if: steps.changes.outputs.migrations == 'true'
+      - name: PostgreSQL migration and queue tests
+        if: steps.changes.outputs.postgres == 'true' || github.event_name == 'workflow_dispatch'
         run: make test-migrations

@@ -18,7 +18,8 @@ make pr-check
 Do not publish the PR update until this command passes. The target covers formatting, unused-import, Python lint/type checks, frontend lint/type checks, API contract drift, and frontend dependency audits.
 
 GitHub Actions CI (`ci.yml`) runs `make pr-check`, unit tests, GPU scheduler tests, and
-(when `backend/alembic/**` changes) migration tests on every PR and push to `main`.
+(when migrations, models, or the processing-job queue code change) PostgreSQL migration
+tests on every PR and push to `main`.
 E2E runs nightly or on PRs labelled `e2e`, and the production image publishes only
 after CI passes on `main`. Run `make install-hooks` once
 per clone (also included in `make setup`). The pre-push hook requires a clean working

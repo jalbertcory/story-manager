@@ -5,10 +5,14 @@ echo "--- Starting container setup ---"
 
 PGDATA="${PGDATA:-/tmp/pgdata}"
 APP_USER=storymanager
-PUID="${PUID:-1000}"
-PGID="${PGID:-1000}"
 # Directories the application writes to. Everything else in /app is read-only code.
 APP_WRITABLE_DIRS=(/app/library /app/backups /app/logs)
+# Overridden backup or log locations must be writable too (see backend/app/config.py).
+for dir in "${STORY_MANAGER_BACKUP_DIR:-}" "${STORY_MANAGER_LOG_DIR:-}"; do
+  if [ -n "$dir" ]; then
+    APP_WRITABLE_DIRS+=("$dir")
+  fi
+done
 
 EMBEDDED_POSTGRES=false
 PG_BIN=""
@@ -44,10 +48,38 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+# Without PUID/PGID, keep whatever non-root owner an existing library already
+# has (Unraid uses 99:100; rootless Docker and Podman map IDs differently), so an
+# upgrade never re-owns it. Only a new or root-owned library falls back to 1000.
+resolve_app_ids() {
+  local owner_uid=0 owner_gid=0
+  if [ -d /app/library ]; then
+    owner_uid=$(stat -c %u /app/library)
+    owner_gid=$(stat -c %g /app/library)
+  fi
+  if [ -z "${PUID:-}" ]; then
+    if [ "$owner_uid" != "0" ]; then PUID=$owner_uid; else PUID=1000; fi
+  fi
+  if [ -z "${PGID:-}" ]; then
+    if [ "$owner_uid" != "0" ]; then PGID=$owner_gid; else PGID=1000; fi
+  fi
+}
+
+# FanFicFare reads personal.ini as the application user, and /app/config is
+# usually mounted read-only, so ownership cannot be fixed here; say so instead.
+warn_unreadable_fanficfare_config() {
+  local ini="${FFF_USER_CONFIG_PATH:-/app/config/personal.ini}"
+  if [ -f "$ini" ] && ! "${AS_APP[@]}" test -r "$ini"; then
+    echo "WARNING: $ini is not readable by UID $PUID / GID $PGID; FanFicFare will ignore it." >&2
+    echo "Make it readable (for example chmod a+r) or set PUID/PGID to its owner." >&2
+  fi
+}
+
 prepare_app_user() {
   if [ "$(id -u)" -ne 0 ]; then
     return
   fi
+  resolve_app_ids
   if [ "$PUID" = "0" ]; then
     echo "--- PUID=0: running the application as root ---"
     return
@@ -69,6 +101,7 @@ prepare_app_user() {
     fi
   done
   echo "--- Application will run as UID $PUID / GID $PGID ---"
+  warn_unreadable_fanficfare_config
 }
 
 start_embedded_postgres() {
@@ -87,6 +120,16 @@ start_embedded_postgres() {
   echo "--- Using PostgreSQL binaries at $PG_BIN ---"
 
   mkdir -p "$PGDATA"
+
+  # A volume that is a filesystem root holds lost+found, and initdb refuses to
+  # use a mount point directly. Keep the cluster in a subdirectory instead.
+  if [ ! -f "$PGDATA/PG_VERSION" ] && { [ -f "$PGDATA/pgdata/PG_VERSION" ] || [ "$(ls -A "$PGDATA")" = "lost+found" ]; }; then
+    chown postgres:postgres "$PGDATA"
+    chmod 0700 "$PGDATA"
+    PGDATA="$PGDATA/pgdata"
+    echo "--- $(dirname "$PGDATA") is a mount point; using $PGDATA for the database ---"
+    mkdir -p "$PGDATA"
+  fi
 
   # Only initialise a brand-new, empty data directory. A non-empty directory
   # without PG_VERSION is most likely a mis-mapped volume (for example the
@@ -188,8 +231,10 @@ echo "--- Database migrations complete ---"
 # APScheduler and the in-process queues require exactly one application process.
 # This is an application invariant, not a deployment setting.
 echo "--- Starting application (workers=1) ---"
+# The graceful timeout stays under Docker's default 10-second stop timeout so a
+# plain `docker stop` still leaves time to shut PostgreSQL down cleanly.
 "${AS_APP[@]}" uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1 \
-  --timeout-graceful-shutdown 20 &
+  --timeout-graceful-shutdown 8 &
 APP_PID=$!
 echo "--- Application started (PID: $APP_PID) ---"
 

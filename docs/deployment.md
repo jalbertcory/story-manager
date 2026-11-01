@@ -22,17 +22,24 @@ The production image runs PostgreSQL inside the app container for simple self-ho
 ### Container runtime
 
 - **Users.** The API runs as the unprivileged `storymanager` user; the embedded PostgreSQL runs as `postgres`. Set
-  `PUID`/`PGID` (default `1000`) to match the host user that owns your bind-mounted folders, e.g. `99`/`100` on
-  Unraid. At startup the container fixes the ownership of `/app/library`, `/app/backups`, and `/app/logs`, touching
-  only files that are owned by someone else, so upgrading from an image that ran as root needs no manual `chown`.
+  `PUID`/`PGID` to match the host user that owns your bind-mounted folders, e.g. `99`/`100` on Unraid. When they are
+  unset, the container keeps the current owner of `/app/library` if that is not root, and uses `1000` only for a new or
+  root-owned library. At startup the container fixes the ownership of `/app/library`, `/app/backups`, `/app/logs`, and
+  any `STORY_MANAGER_BACKUP_DIR`/`STORY_MANAGER_LOG_DIR` override, touching only files that are owned by someone else,
+  so upgrading from an image that ran as root needs no manual `chown`. The FanFicFare `personal.ini` must be readable
+  by that user; the container logs a warning when it is not.
+- **Keeping root.** Set `PUID=0` to run the application as root, as images before this change did. Use this with
+  rootless Docker or Podman, where your host files appear root-owned inside the container and re-owning them to
+  `1000` would map them to a different host user.
 - **Database directory.** PostgreSQL is initialized only into an empty `/tmp/pgdata` (the `config/pgdata` mount). If that directory
   contains files but no `PG_VERSION`, the container exits with an error instead of initializing over them; move the
-  unexpected files away or point the mount at the right folder. The container never deletes database files.
+  unexpected files away or point the mount at the right folder. The container never deletes database files. When the
+  mount is a filesystem root that holds only `lost+found`, the cluster is created in a `pgdata` subdirectory instead.
 - **Health check.** The image declares a `HEALTHCHECK` that calls `/health` inside the container. Docker reports the
   container as `healthy` once the API is up and the database is reachable; allow up to two minutes on first start.
-- **Shutdown.** `tini` runs as PID 1 and forwards `SIGTERM`, so `docker stop` gives in-flight requests up to 20
-  seconds and then stops PostgreSQL cleanly. Compose sets `stop_grace_period: 30s`; use `--stop-timeout 30` with
-  `docker run`.
+- **Shutdown.** `tini` runs as PID 1 and forwards `SIGTERM`, so `docker stop` gives in-flight requests up to 8
+  seconds and then stops PostgreSQL cleanly, inside Docker's default 10-second stop timeout. Compose sets
+  `stop_grace_period: 30s` for extra margin; `--stop-timeout 30` does the same for `docker run`.
 - **macOS bind mounts.** Docker Desktop on macOS presents bind-mounted files as root-owned, which PostgreSQL refuses
   to use. Use a named volume for `pgdata` there (`- pgdata:/tmp/pgdata`); Linux hosts are unaffected.
 
