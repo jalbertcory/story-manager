@@ -75,25 +75,6 @@ _BOOKKEEPING_ATTEMPTS = 3
 _Result = TypeVar("_Result")
 
 RESOURCE_LANES = ("cpu", "maintenance", "llm", "tts", "transcription")
-JOB_POLICIES: dict[str, tuple[str, int]] = {
-    "clean_book": ("cpu", 3),
-    "clean_all": ("cpu", 3),
-    "refresh_book": ("maintenance", 3),
-    "refresh_all": ("maintenance", 3),
-    "import_web_book": ("maintenance", 3),
-    "retry_cover": ("maintenance", 3),
-    "metadata_sync": ("llm", 3),
-    "audiobook_pipeline": ("llm", 3),
-    "generate_sentence_audio": ("tts", 3),
-    "generate_chapter_preview": ("tts", 3),
-    "import_audiobook": ("cpu", 3),
-    "upgrade_imported_audiobook": ("cpu", 3),
-    "rebuild_imported_audiobook": ("cpu", 3),
-    "rematch_imported_audiobook": ("cpu", 3),
-    "align_imported_audiobook": ("transcription", 3),
-    "create_backup": ("maintenance", 1),
-    "verify_backup": ("maintenance", 1),
-}
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -117,6 +98,7 @@ class ProcessingQueue:
 
     def __init__(self) -> None:
         self._worker_tasks: list[asyncio.Task[None]] = []
+        self._reaper_task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._instance_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._lease_seconds = _positive_int_env("PROCESSING_LEASE_SECONDS", 60)
@@ -126,10 +108,11 @@ class ProcessingQueue:
         )
         self._poll_seconds = _positive_float_env("PROCESSING_POLL_SECONDS", 1)
         self._retry_backoff_seconds = _positive_int_env("PROCESSING_RETRY_BACKOFF_SECONDS", 5)
+        self._reaper_seconds = _positive_float_env("PROCESSING_REAPER_SECONDS", 15)
 
     async def start(self) -> None:
         if self._worker_tasks:
-            if all(not task.done() for task in self._worker_tasks):
+            if self.is_running:
                 return
             await self.stop()
         for lane in RESOURCE_LANES:
@@ -141,12 +124,19 @@ class ProcessingQueue:
                 )
                 task.add_done_callback(self._worker_finished)
                 self._worker_tasks.append(task)
+        # One reaper per process recovers expired leases; workers only claim.
+        self._reaper_task = asyncio.create_task(self._reap_abandoned_jobs(), name="processing-reaper")
+        self._reaper_task.add_done_callback(self._worker_finished)
         await get_audiobook_queue().start_background_audio()
         self._wake.set()
 
     @property
     def is_running(self) -> bool:
-        return bool(self._worker_tasks) and all(not task.done() for task in self._worker_tasks)
+        return (
+            bool(self._worker_tasks)
+            and all(not task.done() for task in self._worker_tasks)
+            and (self._reaper_task is None or not self._reaper_task.done())
+        )
 
     @staticmethod
     def _worker_finished(task: asyncio.Task[None]) -> None:
@@ -178,10 +168,12 @@ class ProcessingQueue:
     async def stop(self) -> None:
         if not self._worker_tasks:
             return
-        for task in self._worker_tasks:
+        tasks = [*self._worker_tasks, *([self._reaper_task] if self._reaper_task is not None else [])]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._worker_tasks.clear()
+        self._reaper_task = None
         await get_audiobook_queue().stop_background_audio()
         self._wake = asyncio.Event()
 
@@ -192,10 +184,27 @@ class ProcessingQueue:
         return True
 
     async def requeue_pending(self) -> int:
+        recovered = await self._recover_abandoned_jobs()
+        self._wake.set()
+        return recovered
+
+    async def _recover_abandoned_jobs(self) -> int:
         async with SessionLocal() as db:
             canceled, exhausted = await crud.recover_abandoned_processing_jobs(db)
-        self._wake.set()
         return canceled + exhausted
+
+    async def _reap_abandoned_jobs(self) -> None:
+        """Periodically return expired leases to the queue (or fail exhausted ones)."""
+        while True:
+            await asyncio.sleep(self._reaper_seconds)
+            try:
+                await backup_barrier.wait_until_writes_allowed()
+                if await self._recover_abandoned_jobs():
+                    self._wake.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Processing reaper could not recover abandoned jobs.")
 
     async def _run(self, lane: str, worker_number: int) -> None:
         lease_owner = f"{self._instance_id}:{lane}:{worker_number}"
@@ -203,7 +212,6 @@ class ProcessingQueue:
             try:
                 await backup_barrier.wait_until_writes_allowed()
                 async with SessionLocal() as db:
-                    await crud.recover_abandoned_processing_jobs(db)
                     job = await crud.claim_processing_job(
                         db,
                         resource_lane=lane,
@@ -349,263 +357,282 @@ class ProcessingQueue:
 
     async def _execute(self, job: ProcessingJob) -> str:
         validate_job_payload(job.job_type, job.payload)
-        if job.job_type == "create_backup":
-            async with backup_barrier.backup():
-                async with SessionLocal() as db:
-                    running_jobs = await db.scalar(
-                        select(func.count(ProcessingJob.id)).where(
-                            ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
-                            ProcessingJob.id != job.id,
-                        )
-                    )
-                if running_jobs:
-                    raise RuntimeError(
-                        f"Backup paused because {running_jobs} other processing job(s) are still running. "
-                        "Try again when Activity is idle."
-                    )
-                await self._update_progress(job.id, 0, 2, "Creating database and library snapshot")
-                summary = await asyncio.to_thread(
-                    create_backup_archive,
-                    database_url=DATABASE_URL,
-                    library_path=LIBRARY_PATH,
-                    backup_path=BACKUP_PATH,
-                    retention_count=BACKUP_RETENTION_COUNT,
-                )
-                await self._update_progress(job.id, 2, 2, f"Verified {summary['filename']}")
-                return f"Backup created and verified: {summary['filename']}"
-        if job.job_type == "verify_backup":
-            filename = VerifyBackupPayload.model_validate(job.payload or {}).filename
-            archive = resolve_backup(BACKUP_PATH, filename)
-            await self._update_progress(job.id, 0, 1, f"Verifying {filename}")
-            await asyncio.to_thread(verify_backup_archive, archive)
-            await self._update_progress(job.id, 1, 1, f"Verified {filename}")
-            return f"Backup verified: {filename}"
-        if job.job_type == "clean_book":
-            return await self._clean_book(job.id, job.book_id)
-        if job.job_type == "clean_all":
-            return await self._clean_all(job.id)
-        if job.job_type == "refresh_book":
-            if job.book_id is None:
-                raise ValueError("Refresh job has no book.")
-            await self._update_progress(job.id, 0, 1, "Downloading and rebuilding the web book")
-            await run_book_refresh(job.book_id)
-            async with SessionLocal() as db:
-                book = await db.get(Book, job.book_id)
-                if book is not None and book.refresh_status == "error":
-                    raise RuntimeError("Book refresh failed; check the application logs.")
-                await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book refreshed")
-            return "Book refresh completed"
-        if job.job_type == "import_web_book":
-            if job.book_id is None:
-                raise ValueError("Web import job has no book.")
-            source_url = ImportWebBookPayload.model_validate(job.payload or {}).source_url
-            if not source_url:
-                raise ValueError("Web import job has no source URL.")
-            await self._update_progress(job.id, 0, 1, "Downloading web book")
-            await finish_web_novel_download(job.book_id, source_url)
-            async with SessionLocal() as db:
-                book = await db.get(Book, job.book_id)
-                if book is None:
-                    raise ValueError("Web import book no longer exists.")
-                if book.download_status == "error":
-                    raise RuntimeError(f"Web import failed: {book.title}")
-                await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book imported")
-            return "Web book import completed"
-        if job.job_type == "refresh_all":
+        handler = JOB_HANDLERS.get(job.job_type)
+        if handler is None:
+            raise ValueError(f"Unsupported processing job type: {job.job_type}")
+        return await handler(self, job)
 
-            async def refresh_all() -> bool:
-                return await run_web_novel_update(RefreshAllPayload.model_validate(job.payload or {}).trigger)
-
-            await self._run_with_progress_mirror(
-                job.id,
-                refresh_all,
-                self._library_refresh_progress,
-            )
+    async def _handle_create_backup(self, job: ProcessingJob) -> str:
+        async with backup_barrier.backup():
             async with SessionLocal() as db:
-                refresh_task = await crud.get_latest_update_task(db)
-                if refresh_task is not None and refresh_task.status == "failed":
-                    raise RuntimeError("One or more web books failed to refresh; check the job history.")
-            return "Library refresh completed"
-        if job.job_type == "audiobook_pipeline":
-            return await self._run_audiobook_pipeline(job)
-        if job.job_type == "import_audiobook":
-            target_id = _required_target(job)
-
-            async def import_audio() -> None:
-                async with SessionLocal() as db:
-                    await process_import(target_id, db)
-
-            await self._run_with_progress_mirror(
-                job.id,
-                import_audio,
-                lambda: self._imported_audio_progress(target_id),
-            )
-            async with SessionLocal() as db:
-                edition = await db.get(ImportedAudiobook, target_id)
-                if edition is not None and edition.status == "error":
-                    raise RuntimeError(edition.error or "Human audiobook import failed.")
-                settings = await crud.audiobook.get_audiobook_settings(db)
-                matched_count = await db.scalar(
-                    select(func.count(ImportedAudiobookTrack.id)).where(
-                        ImportedAudiobookTrack.imported_audiobook_id == target_id,
-                        ImportedAudiobookTrack.matched_chapter_id.is_not(None),
+                running_jobs = await db.scalar(
+                    select(func.count(ProcessingJob.id)).where(
+                        ProcessingJob.status == ProcessingJobStatus.RUNNING.value,
+                        ProcessingJob.id != job.id,
                     )
                 )
-            if (
-                ImportAudiobookPayload.model_validate(job.payload or {}).auto_align
-                and edition is not None
-                and matched_count
-                and transcription_provider_name(settings) != "none"
-            ):
-                child = await queue_processing_job(
-                    job_type="align_imported_audiobook",
-                    book_id=job.book_id,
-                    target_type="imported_audiobook",
-                    target_id=target_id,
-                    target_content_version=edition.matched_content_version,
-                    parent_job_id=job.id,
-                    dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
-                    progress_detail="Queued automatically after audiobook import",
+            if running_jobs:
+                raise RuntimeError(
+                    f"Backup paused because {running_jobs} other processing job(s) are still running. "
+                    "Try again when Activity is idle."
                 )
-                await self.enqueue(child.id)
-                return "Human audiobook import completed; timestamp alignment queued"
-            return "Human audiobook import completed"
-        if job.job_type == "upgrade_imported_audiobook":
-            target_id = _required_target(job)
-
-            async def upgrade_audio() -> int:
-                async with SessionLocal() as db:
-                    return await upgrade_imported_audiobook(target_id, db)
-
-            revision = await self._run_with_progress_mirror(
-                job.id,
-                upgrade_audio,
-                lambda: self._imported_audio_progress(target_id),
+            await self._update_progress(job.id, 0, 2, "Creating database and library snapshot")
+            summary = await asyncio.to_thread(
+                create_backup_archive,
+                database_url=DATABASE_URL,
+                library_path=LIBRARY_PATH,
+                backup_path=BACKUP_PATH,
+                retention_count=BACKUP_RETENTION_COUNT,
             )
-            return f"Human audiobook chapter assets upgraded to revision {revision}"
-        if job.job_type == "rebuild_imported_audiobook":
-            target_id = _required_target(job)
+            await self._update_progress(job.id, 2, 2, f"Verified {summary['filename']}")
+            return f"Backup created and verified: {summary['filename']}"
 
-            async def rebuild_audio() -> HumanAudiobookRebuildResult:
-                async with SessionLocal() as db:
-                    return await rebuild_imported_audiobook(target_id, db)
+    async def _handle_verify_backup(self, job: ProcessingJob) -> str:
+        filename = VerifyBackupPayload.model_validate(job.payload or {}).filename
+        archive = resolve_backup(BACKUP_PATH, filename)
+        await self._update_progress(job.id, 0, 1, f"Verifying {filename}")
+        await asyncio.to_thread(verify_backup_archive, archive)
+        await self._update_progress(job.id, 1, 1, f"Verified {filename}")
+        return f"Backup verified: {filename}"
 
-            result = await self._run_with_progress_mirror(
-                job.id,
-                rebuild_audio,
-                lambda: self._imported_audio_progress(target_id),
-            )
-            if result.realign:
-                child = await queue_processing_job(
-                    job_type="align_imported_audiobook",
-                    book_id=job.book_id,
-                    target_type="imported_audiobook",
-                    target_id=target_id,
-                    target_content_version=job.target_content_version,
-                    parent_job_id=job.id,
-                    dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
-                    progress_detail="Queued after human-audiobook rebuild",
+    async def _handle_clean_book(self, job: ProcessingJob) -> str:
+        return await self._clean_book(job.id, job.book_id)
+
+    async def _handle_clean_all(self, job: ProcessingJob) -> str:
+        return await self._clean_all(job.id)
+
+    async def _handle_refresh_book(self, job: ProcessingJob) -> str:
+        if job.book_id is None:
+            raise ValueError("Refresh job has no book.")
+        await self._update_progress(job.id, 0, 1, "Downloading and rebuilding the web book")
+        await run_book_refresh(job.book_id)
+        async with SessionLocal() as db:
+            book = await db.get(Book, job.book_id)
+            if book is not None and book.refresh_status == "error":
+                raise RuntimeError("Book refresh failed; check the application logs.")
+            await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book refreshed")
+        return "Book refresh completed"
+
+    async def _handle_import_web_book(self, job: ProcessingJob) -> str:
+        if job.book_id is None:
+            raise ValueError("Web import job has no book.")
+        source_url = ImportWebBookPayload.model_validate(job.payload or {}).source_url
+        if not source_url:
+            raise ValueError("Web import job has no source URL.")
+        await self._update_progress(job.id, 0, 1, "Downloading web book")
+        await finish_web_novel_download(job.book_id, source_url)
+        async with SessionLocal() as db:
+            book = await db.get(Book, job.book_id)
+            if book is None:
+                raise ValueError("Web import book no longer exists.")
+            if book.download_status == "error":
+                raise RuntimeError(f"Web import failed: {book.title}")
+            await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Web book imported")
+        return "Web book import completed"
+
+    async def _handle_refresh_all(self, job: ProcessingJob) -> str:
+        async def refresh_all() -> bool:
+            return await run_web_novel_update(RefreshAllPayload.model_validate(job.payload or {}).trigger)
+
+        await self._run_with_progress_mirror(
+            job.id,
+            refresh_all,
+            self._library_refresh_progress,
+        )
+        async with SessionLocal() as db:
+            refresh_task = await crud.get_latest_update_task(db)
+            if refresh_task is not None and refresh_task.status == "failed":
+                raise RuntimeError("One or more web books failed to refresh; check the job history.")
+        return "Library refresh completed"
+
+    async def _handle_audiobook_pipeline(self, job: ProcessingJob) -> str:
+        return await self._run_audiobook_pipeline(job)
+
+    async def _handle_import_audiobook(self, job: ProcessingJob) -> str:
+        target_id = _required_target(job)
+
+        async def import_audio() -> None:
+            async with SessionLocal() as db:
+                await process_import(target_id, db)
+
+        await self._run_with_progress_mirror(
+            job.id,
+            import_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        async with SessionLocal() as db:
+            edition = await db.get(ImportedAudiobook, target_id)
+            if edition is not None and edition.status == "error":
+                raise RuntimeError(edition.error or "Human audiobook import failed.")
+            settings = await crud.audiobook.get_audiobook_settings(db)
+            matched_count = await db.scalar(
+                select(func.count(ImportedAudiobookTrack.id)).where(
+                    ImportedAudiobookTrack.imported_audiobook_id == target_id,
+                    ImportedAudiobookTrack.matched_chapter_id.is_not(None),
                 )
-                await self.enqueue(child.id)
-                return (
-                    f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks); "
-                    "timestamp alignment queued"
-                )
-            return f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks)"
-        if job.job_type == "rematch_imported_audiobook":
-            target_id = _required_target(job)
-
-            async def rematch_audio() -> int:
-                async with SessionLocal() as db:
-                    return await rematch_imported_audiobook(target_id, db)
-
-            matched = await self._run_with_progress_mirror(
-                job.id,
-                rematch_audio,
-                lambda: self._imported_audio_progress(target_id),
             )
-            if RematchImportedAudiobookPayload.model_validate(job.payload or {}).realign:
-                child = await queue_processing_job(
-                    job_type="align_imported_audiobook",
-                    book_id=job.book_id,
-                    target_type="imported_audiobook",
-                    target_id=job.target_id,
-                    parent_job_id=job.id,
-                    dedupe_key=f"align_imported_audiobook:imported_audiobook:{job.target_id}",
-                    progress_detail="Queued after human-audio rematch",
-                )
-                await self.enqueue(child.id)
-            return f"Human audiobook rematched ({matched} tracks)"
-        if job.job_type == "align_imported_audiobook":
-            target_id = _required_target(job)
-
-            async def align_audio() -> None:
-                async with SessionLocal() as db:
-                    await process_alignment(target_id, db)
-
-            await self._run_with_progress_mirror(
-                job.id,
-                align_audio,
-                lambda: self._imported_audio_progress(target_id),
+        if (
+            ImportAudiobookPayload.model_validate(job.payload or {}).auto_align
+            and edition is not None
+            and matched_count
+            and transcription_provider_name(settings) != "none"
+        ):
+            child = await queue_processing_job(
+                job_type="align_imported_audiobook",
+                book_id=job.book_id,
+                target_type="imported_audiobook",
+                target_id=target_id,
+                target_content_version=edition.matched_content_version,
+                parent_job_id=job.id,
+                dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
+                progress_detail="Queued automatically after audiobook import",
             )
+            await self.enqueue(child.id)
+            return "Human audiobook import completed; timestamp alignment queued"
+        return "Human audiobook import completed"
+
+    async def _handle_upgrade_imported_audiobook(self, job: ProcessingJob) -> str:
+        target_id = _required_target(job)
+
+        async def upgrade_audio() -> int:
             async with SessionLocal() as db:
-                edition = await db.get(ImportedAudiobook, target_id)
-                if edition is not None and edition.alignment_error:
-                    raise RuntimeError(edition.alignment_error)
-            return "Human audiobook timing alignment completed"
-        if job.job_type == "metadata_sync":
-            metadata_job_id = MetadataSyncPayload.model_validate(job.payload or {}).metadata_job_id or job.target_id
-            if metadata_job_id is None:
-                raise ValueError("Metadata processing job has no metadata job.")
-            metadata_job_id = int(metadata_job_id)
+                return await upgrade_imported_audiobook(target_id, db)
 
-            async def sync_metadata() -> None:
-                async with SessionLocal() as db:
-                    await process_metadata_sync_job(db, metadata_job_id)
+        revision = await self._run_with_progress_mirror(
+            job.id,
+            upgrade_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        return f"Human audiobook chapter assets upgraded to revision {revision}"
 
-            await self._run_with_progress_mirror(
-                job.id,
-                sync_metadata,
-                lambda: self._metadata_progress(metadata_job_id),
+    async def _handle_rebuild_imported_audiobook(self, job: ProcessingJob) -> str:
+        target_id = _required_target(job)
+
+        async def rebuild_audio() -> HumanAudiobookRebuildResult:
+            async with SessionLocal() as db:
+                return await rebuild_imported_audiobook(target_id, db)
+
+        result = await self._run_with_progress_mirror(
+            job.id,
+            rebuild_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        if result.realign:
+            child = await queue_processing_job(
+                job_type="align_imported_audiobook",
+                book_id=job.book_id,
+                target_type="imported_audiobook",
+                target_id=target_id,
+                target_content_version=job.target_content_version,
+                parent_job_id=job.id,
+                dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
+                progress_detail="Queued after human-audiobook rebuild",
             )
+            await self.enqueue(child.id)
+            return (
+                f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks); "
+                "timestamp alignment queued"
+            )
+        return f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks)"
+
+    async def _handle_rematch_imported_audiobook(self, job: ProcessingJob) -> str:
+        target_id = _required_target(job)
+
+        async def rematch_audio() -> int:
             async with SessionLocal() as db:
-                metadata_job = await crud.get_metadata_sync_job(db, int(metadata_job_id))
-                if metadata_job is not None and metadata_job.status == "failed":
-                    raise RuntimeError(metadata_job.error or "Metadata sync failed.")
-            return "Metadata sync completed"
-        if job.job_type == "generate_sentence_audio":
-            sentence_id = _required_target(job)
-            book_id = _required_book(job)
+                return await rematch_imported_audiobook(target_id, db)
+
+        matched = await self._run_with_progress_mirror(
+            job.id,
+            rematch_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        if RematchImportedAudiobookPayload.model_validate(job.payload or {}).realign:
+            child = await queue_processing_job(
+                job_type="align_imported_audiobook",
+                book_id=job.book_id,
+                target_type="imported_audiobook",
+                target_id=job.target_id,
+                parent_job_id=job.id,
+                dedupe_key=f"align_imported_audiobook:imported_audiobook:{job.target_id}",
+                progress_detail="Queued after human-audio rematch",
+            )
+            await self.enqueue(child.id)
+        return f"Human audiobook rematched ({matched} tracks)"
+
+    async def _handle_align_imported_audiobook(self, job: ProcessingJob) -> str:
+        target_id = _required_target(job)
+
+        async def align_audio() -> None:
             async with SessionLocal() as db:
-                await crud.update_processing_job_progress(db, job.id, current=0, total=1, detail="Generating sentence audio")
-                await crud.audiobook.set_sentence_status(db, sentence_id, "audio_generating")
-                await generate_audio_for_sentence(book_id, sentence_id, db)
-                await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Sentence audio generated")
-            return "Sentence audio generated"
-        if job.job_type == "generate_chapter_preview":
-            chapter_id = _required_target(job)
-            book_id = _required_book(job)
+                await process_alignment(target_id, db)
+
+        await self._run_with_progress_mirror(
+            job.id,
+            align_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        async with SessionLocal() as db:
+            edition = await db.get(ImportedAudiobook, target_id)
+            if edition is not None and edition.alignment_error:
+                raise RuntimeError(edition.alignment_error)
+        return "Human audiobook timing alignment completed"
+
+    async def _handle_metadata_sync(self, job: ProcessingJob) -> str:
+        metadata_job_id = MetadataSyncPayload.model_validate(job.payload or {}).metadata_job_id or job.target_id
+        if metadata_job_id is None:
+            raise ValueError("Metadata processing job has no metadata job.")
+        metadata_job_id = int(metadata_job_id)
+
+        async def sync_metadata() -> None:
             async with SessionLocal() as db:
-                await crud.update_processing_job_progress(db, job.id, current=0, total=2, detail="Generating preview audio")
-                await crud.audiobook.set_chapter_preview_status(db, chapter_id, "generating")
-                await generate_audio_for_chapter_preview(book_id, chapter_id, db)
-                await crud.update_processing_job_progress(db, job.id, current=1, total=2, detail="Assembling chapter preview")
-                await assemble_chapter_preview(book_id, chapter_id, db)
-                await crud.audiobook.set_chapter_preview_status(db, chapter_id, "ready")
-                await crud.update_processing_job_progress(db, job.id, current=2, total=2, detail="Chapter preview ready")
-            return "Chapter preview generated"
-        if job.job_type == "retry_cover":
-            async with SessionLocal() as db:
-                book = await db.get(Book, job.book_id)
-                if book is None:
-                    raise ValueError("Book no longer exists.")
-                await crud.update_processing_job_progress(
-                    db, job.id, current=0, total=1, detail="Extracting or finding a book cover"
-                )
-                await reextract_book_cover(book, db)
-                await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Book cover updated")
-            return "Book cover re-extracted"
-        raise ValueError(f"Unsupported processing job type: {job.job_type}")
+                await process_metadata_sync_job(db, metadata_job_id)
+
+        await self._run_with_progress_mirror(
+            job.id,
+            sync_metadata,
+            lambda: self._metadata_progress(metadata_job_id),
+        )
+        async with SessionLocal() as db:
+            metadata_job = await crud.get_metadata_sync_job(db, int(metadata_job_id))
+            if metadata_job is not None and metadata_job.status == "failed":
+                raise RuntimeError(metadata_job.error or "Metadata sync failed.")
+        return "Metadata sync completed"
+
+    async def _handle_generate_sentence_audio(self, job: ProcessingJob) -> str:
+        sentence_id = _required_target(job)
+        book_id = _required_book(job)
+        async with SessionLocal() as db:
+            await crud.update_processing_job_progress(db, job.id, current=0, total=1, detail="Generating sentence audio")
+            await crud.audiobook.set_sentence_status(db, sentence_id, "audio_generating")
+            await generate_audio_for_sentence(book_id, sentence_id, db)
+            await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Sentence audio generated")
+        return "Sentence audio generated"
+
+    async def _handle_generate_chapter_preview(self, job: ProcessingJob) -> str:
+        chapter_id = _required_target(job)
+        book_id = _required_book(job)
+        async with SessionLocal() as db:
+            await crud.update_processing_job_progress(db, job.id, current=0, total=2, detail="Generating preview audio")
+            await crud.audiobook.set_chapter_preview_status(db, chapter_id, "generating")
+            await generate_audio_for_chapter_preview(book_id, chapter_id, db)
+            await crud.update_processing_job_progress(db, job.id, current=1, total=2, detail="Assembling chapter preview")
+            await assemble_chapter_preview(book_id, chapter_id, db)
+            await crud.audiobook.set_chapter_preview_status(db, chapter_id, "ready")
+            await crud.update_processing_job_progress(db, job.id, current=2, total=2, detail="Chapter preview ready")
+        return "Chapter preview generated"
+
+    async def _handle_retry_cover(self, job: ProcessingJob) -> str:
+        async with SessionLocal() as db:
+            book = await db.get(Book, job.book_id)
+            if book is None:
+                raise ValueError("Book no longer exists.")
+            await crud.update_processing_job_progress(
+                db, job.id, current=0, total=1, detail="Extracting or finding a book cover"
+            )
+            await reextract_book_cover(book, db)
+            await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail="Book cover updated")
+        return "Book cover re-extracted"
 
     async def _clean_book(self, job_id: int, book_id: int | None) -> str:
         if book_id is None:
@@ -854,6 +881,50 @@ class ProcessingQueue:
                 task.total_books or 0,
                 f"Refreshed {task.completed_books or 0} of {task.total_books or 0} web books",
             )
+
+
+# Each job type's resource lane and attempt budget, and the coroutine that runs it.
+# test_processing_queue_registry keeps the two tables' keys in step.
+JOB_POLICIES: dict[str, tuple[str, int]] = {
+    "clean_book": ("cpu", 3),
+    "clean_all": ("cpu", 3),
+    "refresh_book": ("maintenance", 3),
+    "refresh_all": ("maintenance", 3),
+    "import_web_book": ("maintenance", 3),
+    "retry_cover": ("maintenance", 3),
+    "metadata_sync": ("llm", 3),
+    "audiobook_pipeline": ("llm", 3),
+    "generate_sentence_audio": ("tts", 3),
+    "generate_chapter_preview": ("tts", 3),
+    "import_audiobook": ("cpu", 3),
+    "upgrade_imported_audiobook": ("cpu", 3),
+    "rebuild_imported_audiobook": ("cpu", 3),
+    "rematch_imported_audiobook": ("cpu", 3),
+    "align_imported_audiobook": ("transcription", 3),
+    "create_backup": ("maintenance", 1),
+    "verify_backup": ("maintenance", 1),
+}
+
+JobHandler = Callable[[ProcessingQueue, ProcessingJob], Awaitable[str]]
+JOB_HANDLERS: dict[str, JobHandler] = {
+    "create_backup": ProcessingQueue._handle_create_backup,
+    "verify_backup": ProcessingQueue._handle_verify_backup,
+    "clean_book": ProcessingQueue._handle_clean_book,
+    "clean_all": ProcessingQueue._handle_clean_all,
+    "refresh_book": ProcessingQueue._handle_refresh_book,
+    "import_web_book": ProcessingQueue._handle_import_web_book,
+    "refresh_all": ProcessingQueue._handle_refresh_all,
+    "audiobook_pipeline": ProcessingQueue._handle_audiobook_pipeline,
+    "import_audiobook": ProcessingQueue._handle_import_audiobook,
+    "upgrade_imported_audiobook": ProcessingQueue._handle_upgrade_imported_audiobook,
+    "rebuild_imported_audiobook": ProcessingQueue._handle_rebuild_imported_audiobook,
+    "rematch_imported_audiobook": ProcessingQueue._handle_rematch_imported_audiobook,
+    "align_imported_audiobook": ProcessingQueue._handle_align_imported_audiobook,
+    "metadata_sync": ProcessingQueue._handle_metadata_sync,
+    "generate_sentence_audio": ProcessingQueue._handle_generate_sentence_audio,
+    "generate_chapter_preview": ProcessingQueue._handle_generate_chapter_preview,
+    "retry_cover": ProcessingQueue._handle_retry_cover,
+}
 
 
 def _required_book(job: ProcessingJob) -> int:

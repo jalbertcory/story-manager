@@ -34,7 +34,8 @@ Each kind of constrained work has its own concurrency setting. All values defaul
 | `PROCESSING_TRANSCRIPTION_CONCURRENCY` | Human-audiobook timestamp alignment |
 
 Operational tuning is also available through `PROCESSING_LEASE_SECONDS` (default `60`),
-`PROCESSING_HEARTBEAT_SECONDS` (default `15`), `PROCESSING_POLL_SECONDS` (default `1`), and
+`PROCESSING_HEARTBEAT_SECONDS` (default `15`), `PROCESSING_POLL_SECONDS` (default `1`),
+`PROCESSING_REAPER_SECONDS` (default `15`; how often one background reaper cancels or fails expired leases), and
 `PROCESSING_RETRY_BACKOFF_SECONDS` (default `5`). A failed job is attempted at most three times with exponential
 backoff. User-triggered retry resets that attempt budget. Cancellation is immediate for queued jobs and cooperative
 at heartbeat/progress boundaries for running jobs.
