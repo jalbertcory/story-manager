@@ -2,7 +2,14 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AudiobookSettings from "./AudiobookSettings";
-import { renderWithClient } from "../test-utils";
+import type { components } from "../api/schema";
+import { mockFetch, renderWithClient } from "../test-utils";
+import type { FixtureFetch } from "../test-utils";
+
+type SettingsUpdate = components["schemas"]["SettingsUpdate"];
+
+const parseUpdate = (init: Parameters<FixtureFetch>[1]): SettingsUpdate =>
+  JSON.parse(String(init?.body));
 
 describe("AudiobookSettings", () => {
   beforeEach(() => {
@@ -10,8 +17,8 @@ describe("AudiobookSettings", () => {
   });
 
   it("does not carry a typed API key to a newly selected TTS provider", async () => {
-    const updates = [];
-    const fetchMock = vi.fn((url, options) => {
+    const updates: SettingsUpdate[] = [];
+    mockFetch((url, options) => {
       if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
@@ -27,7 +34,7 @@ describe("AudiobookSettings", () => {
         });
       }
       if (url === "/api/audiobook/settings" && options?.method === "PUT") {
-        const body = JSON.parse(options.body);
+        const body = parseUpdate(options);
         updates.push(body);
         return Promise.resolve({
           ok: true,
@@ -55,11 +62,11 @@ describe("AudiobookSettings", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(<AudiobookSettings />);
 
     const providerSelect = (await screen.findAllByRole("combobox"))[1];
+    if (!providerSelect) throw new Error("TTS provider select not rendered");
     const ttsApiKeyInput = screen.getByLabelText("API Key");
     fireEvent.change(ttsApiKeyInput, { target: { value: "openai-secret" } });
     fireEvent.change(providerSelect, {
@@ -68,12 +75,12 @@ describe("AudiobookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save & Test TTS" }));
 
     await waitFor(() => expect(updates).toHaveLength(1));
-    expect(updates[0].tts_endpoints[0].provider).toBe("openai-compatible");
-    expect(updates[0].tts_endpoints[0].api_key).toBeNull();
+    expect(updates[0]?.tts_endpoints?.[0]?.provider).toBe("openai-compatible");
+    expect(updates[0]?.tts_endpoints?.[0]?.api_key).toBeNull();
   });
 
   it("shows the result of every endpoint tested in a fallback pool", async () => {
-    globalThis.fetch = vi.fn((url, options) => {
+    mockFetch((url, options) => {
       if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
@@ -153,8 +160,8 @@ describe("AudiobookSettings", () => {
   });
 
   it("reorders endpoint priority before saving", async () => {
-    const updates = [];
-    globalThis.fetch = vi.fn((url, options) => {
+    const updates: SettingsUpdate[] = [];
+    mockFetch((url, options) => {
       if (url === "/api/audiobook/settings" && options?.method === "GET") {
         return Promise.resolve({
           ok: true,
@@ -182,7 +189,7 @@ describe("AudiobookSettings", () => {
         });
       }
       if (url === "/api/audiobook/settings" && options?.method === "PUT") {
-        updates.push(JSON.parse(options.body));
+        updates.push(parseUpdate(options));
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
@@ -194,14 +201,14 @@ describe("AudiobookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => expect(updates).toHaveLength(1));
-    expect(updates[0].llm_endpoints.map((endpoint) => endpoint.id)).toEqual([
+    expect(updates[0]?.llm_endpoints?.map((endpoint) => endpoint.id)).toEqual([
       "gaming-pc",
       "always-on",
     ]);
   });
 
   it("compares request counts and speed metrics for LLM endpoints", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/audiobook/settings") {
         return Promise.resolve({
           ok: true,

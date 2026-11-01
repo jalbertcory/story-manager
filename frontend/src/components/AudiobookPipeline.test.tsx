@@ -1,8 +1,28 @@
+import type { ComponentProps } from "react";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AudiobookPipeline from "./AudiobookPipeline";
-import { renderWithClient } from "../test-utils";
+import type { Chapter } from "./audiobook/types";
+import { mockFetch, renderWithClient } from "../test-utils";
+
+type PipelineBook = ComponentProps<typeof AudiobookPipeline>["book"];
+
+const pipelineBook = (overrides: Partial<PipelineBook> = {}): PipelineBook => ({
+  id: 11,
+  source_type: "epub",
+  series: null,
+  audiobook_enabled: true,
+  ...overrides,
+});
+
+// Production books always carry audiobook_enabled, so the workspace opens on
+// Editions; these tests start from the production progress view.
+const openProgressView = async () => {
+  fireEvent.change(await screen.findByLabelText("AI production view"), {
+    target: { value: "progress" },
+  });
+};
 
 vi.mock("../hooks/useLifecycleDefinitions", () => ({
   default: () => ({
@@ -83,7 +103,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("shows the actionable error and can run only the next stage", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -120,9 +140,9 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
+    await openProgressView();
 
     expect(
       await screen.findAllByText("EPUB contains no narratable text."),
@@ -132,14 +152,17 @@ describe("AudiobookPipeline", () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/books/11/audiobook/step", expect.objectContaining({
-        method: "POST",
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/books/11/audiobook/step",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
     });
   });
 
   it("clearly separates AI audio regeneration from an AI analysis rebuild", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -176,11 +199,8 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(
-      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
-    );
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -223,7 +243,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("shows import times and identifies the reader app default edition", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/imports") {
         return Promise.resolve({
           ok: true,
@@ -289,11 +309,8 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(
-      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
-    );
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
 
     const newestHeading = await screen.findByRole("heading", {
       name: "Newest narration",
@@ -302,6 +319,7 @@ describe("AudiobookPipeline", () => {
     const olderCard = screen
       .getByRole("heading", { name: "Older narration" })
       .closest("section");
+    if (!newestCard || !olderCard) throw new Error("Edition cards not found");
     expect(
       within(newestCard).getByText("Reader app default"),
     ).toBeInTheDocument();
@@ -339,7 +357,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("routes human audiobook imports through the guided workflow with book context", async () => {
-    const fetchMock = vi.fn((url) => {
+    mockFetch((url) => {
       if (
         url === "/api/books/11/audiobook/status" ||
         url === "/api/books/11/audiobook/characters" ||
@@ -356,11 +374,8 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(
-      <AudiobookPipeline book={{ id: 11, audiobook_enabled: true }} />,
-    );
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
 
     expect(
       await screen.findByRole("link", {
@@ -370,7 +385,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("shows model progress and can run exactly one diarization batch", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -435,9 +450,9 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
+    await openProgressView();
 
     expect(await screen.findByText("ollama / qwen3.5:27b")).toBeInTheDocument();
     expect(screen.getByText("Speaker analysis")).toBeInTheDocument();
@@ -464,20 +479,23 @@ describe("AudiobookPipeline", () => {
   it("queues a manual chapter preview and exposes playable text and audio", async () => {
     const chapter = {
       id: 9,
+      book_id: 11,
       chapter_number: 1,
       title: "Opening Night",
+      content_file_name: "chapter_1.xhtml",
       sentence_count: 2,
       processed_sentence_count: 2,
       audio_generated_count: 0,
       low_confidence_count: 0,
       summary: "The opening scene.",
+      summary_updated_at: null,
       preview_status: null,
       preview_error: null,
       audio_file_path: "audiobooks/11/chapter_1.mp3",
       smil_file_path: "audiobooks/11/chapter_1.smil",
       needs_reassembly: false,
-    };
-    const fetchMock = vi.fn((url, options) => {
+    } satisfies Chapter;
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -537,10 +555,9 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
     const { container } = renderWithClient(
-      <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
+      <AudiobookPipeline book={pipelineBook({ series: "The Saga" })} />,
     );
 
     fireEvent.change(await screen.findByLabelText("AI production view"), {
@@ -570,7 +587,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("queues one ready sentence from the Script Editor and shows its state", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -604,8 +621,10 @@ describe("AudiobookPipeline", () => {
         });
       }
       if (
-        url === "/api/books/11/audiobook/sentences?page=1&limit=50&review_only=false" ||
-        url === "/api/books/11/audiobook/sentences?page=1&limit=50&chapter_id=9&review_only=false"
+        url ===
+          "/api/books/11/audiobook/sentences?page=1&limit=50&review_only=false" ||
+        url ===
+          "/api/books/11/audiobook/sentences?page=1&limit=50&chapter_id=9&review_only=false"
       ) {
         return Promise.resolve({
           ok: true,
@@ -644,9 +663,8 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
-    renderWithClient(<AudiobookPipeline book={{ id: 11 }} />);
+    renderWithClient(<AudiobookPipeline book={pipelineBook()} />);
 
     fireEvent.change(await screen.findByLabelText("AI production view"), {
       target: { value: "script-editor" },
@@ -663,7 +681,7 @@ describe("AudiobookPipeline", () => {
   });
 
   it("requires confirmation before changing the TTS engine for a series", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve({
           ok: true,
@@ -699,10 +717,9 @@ describe("AudiobookPipeline", () => {
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
-      <AudiobookPipeline book={{ id: 11, series: "The Saga" }} />,
+      <AudiobookPipeline book={pipelineBook({ series: "The Saga" })} />,
     );
 
     fireEvent.change(await screen.findByLabelText("AI production view"), {
@@ -722,7 +739,9 @@ describe("AudiobookPipeline", () => {
         "/api/books/11/audiobook/tts-provider",
         expect.objectContaining({
           method: "PUT",
-          headers: expect.objectContaining({ "content-type": "application/json" }),
+          headers: expect.objectContaining({
+            "content-type": "application/json",
+          }),
           body: JSON.stringify({ provider: "omnivoice" }),
         }),
       );

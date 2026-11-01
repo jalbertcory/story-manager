@@ -1,7 +1,12 @@
 import { screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { components } from "../api/schema";
 import SchedulerStatus from "./SchedulerStatus";
-import { renderWithClient } from "../test-utils";
+import { mockFetch, renderWithClient } from "../test-utils";
+
+type SchedulerJob = components["schemas"]["SchedulerJobStatus"];
+type UpdateTask = components["schemas"]["UpdateTask"];
+type BookLog = components["schemas"]["BookLogWithTitle"];
 
 const mockJob = {
   job_id: "update_web_novels",
@@ -15,7 +20,7 @@ const mockJob = {
   last_run_started_at: new Date(Date.now() - 3600000).toISOString(),
   last_run_completed_at: new Date(Date.now() - 3500000).toISOString(),
   last_run_status: "completed",
-};
+} satisfies SchedulerJob;
 
 const mockTask = {
   id: 1,
@@ -24,7 +29,7 @@ const mockTask = {
   status: "completed",
   started_at: new Date(Date.now() - 3600000).toISOString(),
   completed_at: new Date(Date.now() - 3500000).toISOString(),
-};
+} satisfies UpdateTask;
 
 const mockHistory = [
   {
@@ -43,7 +48,7 @@ const mockHistory = [
     started_at: new Date(Date.now() - 90000000).toISOString(),
     completed_at: new Date(Date.now() - 89900000).toISOString(),
   },
-];
+] satisfies UpdateTask[];
 
 const mockLogs = [
   {
@@ -76,7 +81,7 @@ const mockLogs = [
     words_added: 0,
     timestamp: new Date().toISOString(),
   },
-];
+] satisfies BookLog[];
 
 describe("SchedulerStatus", () => {
   beforeEach(() => {
@@ -84,9 +89,12 @@ describe("SchedulerStatus", () => {
   });
 
   it("shows no-runs message when status and history are empty", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
@@ -106,12 +114,18 @@ describe("SchedulerStatus", () => {
   });
 
   it("displays current run status", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTask),
+        });
       }
       // Return empty history so the current run section is unambiguous
       if (url.includes("/api/scheduler/history") && !url.includes("/logs")) {
@@ -131,15 +145,24 @@ describe("SchedulerStatus", () => {
   });
 
   it("displays run history list", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTask),
+        });
       }
       if (url.includes("/api/scheduler/history") && !url.includes("/logs")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockHistory) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockHistory),
+        });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     });
@@ -156,18 +179,30 @@ describe("SchedulerStatus", () => {
   });
 
   it("expands a run to show per-book log entries", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTask),
+        });
       }
       if (url.includes("/api/scheduler/history") && url.includes("/logs")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockLogs) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockLogs),
+        });
       }
       if (url.includes("/api/scheduler/history")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockHistory) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockHistory),
+        });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     });
@@ -180,8 +215,9 @@ describe("SchedulerStatus", () => {
     });
 
     // Click the first history row to expand it
-    const expandButtons = screen.getAllByText(/▸/);
-    fireEvent.click(expandButtons[0]);
+    const [firstExpandButton] = screen.getAllByText(/▸/);
+    // getAllByText throws when nothing matches, so the first entry exists.
+    fireEvent.click(firstExpandButton!);
 
     // Logs should now load and display
     await waitFor(() => {
@@ -197,12 +233,18 @@ describe("SchedulerStatus", () => {
   });
 
   it("shows the configured schedule and next run timing", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTask),
+        });
       }
       if (url.includes("/api/scheduler/history")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -226,19 +268,25 @@ describe("SchedulerStatus", () => {
       ...mockJob,
       run_in_progress: true,
       last_run_status: "running",
-    };
+    } satisfies SchedulerJob;
     const runningTask = {
       ...mockTask,
       status: "running",
       completed_at: null,
-    };
+    } satisfies UpdateTask;
 
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(runningJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(runningTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(runningTask),
+        });
       }
       if (url.includes("/api/scheduler/history")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -261,20 +309,29 @@ describe("SchedulerStatus", () => {
       schedule_mode: "daily_time",
       schedule_time_local: "06:30",
       schedule_timezone: "America/New_York",
-    };
+    } satisfies SchedulerJob;
 
-    globalThis.fetch = vi.fn((url, options) => {
+    mockFetch((url, options) => {
       if (url === "/api/scheduler/config") {
-        expect(options.method).toBe("PUT");
-        expect(options.body).toContain("\"time_local\":\"06:30\"");
-        expect(options.body).toContain("\"timezone\":");
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(savedJob) });
+        expect(options?.method).toBe("PUT");
+        expect(options?.body).toContain('"time_local":"06:30"');
+        expect(options?.body).toContain('"timezone":');
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(savedJob),
+        });
       }
       if (url.includes("/api/scheduler/job")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockJob) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockJob),
+        });
       }
       if (url.includes("/api/scheduler/status")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(mockTask) });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTask),
+        });
       }
       if (url.includes("/api/scheduler/history")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -290,7 +347,9 @@ describe("SchedulerStatus", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Daily schedule updated.")).toBeInTheDocument();
-      expect(screen.getByText("Daily at 6:30 AM (America/New_York)")).toBeInTheDocument();
+      expect(
+        screen.getByText("Daily at 6:30 AM (America/New_York)"),
+      ).toBeInTheDocument();
     });
   });
 });

@@ -1,9 +1,50 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { components } from "../api/schema";
+import type { Book } from "../types";
 import BookSettings from "./BookSettings";
 import { allowNavigation } from "../lib/navigationGuard";
-import { renderWithClient } from "../test-utils";
+import { mockFetch, renderWithClient } from "../test-utils";
+
+type UpdateHistory = components["schemas"]["BookChapterUpdateHistory"];
+
+const makeBook = (overrides: Partial<Book> = {}): Book => ({
+  id: 1,
+  title: "Book",
+  author: "Author",
+  series: null,
+  series_index: null,
+  notes: null,
+  source_type: "epub",
+  source_url: null,
+  immutable_path: "library/original.epub",
+  current_path: "library/current.epub",
+  cover_path: null,
+  removed_chapters: [],
+  content_selectors: [],
+  genre_tags: null,
+  source_tags: null,
+  user_genre_tags: null,
+  metadata_details: null,
+  metadata_remote_ids: null,
+  metadata_sync_source: null,
+  metadata_synced_at: null,
+  master_word_count: null,
+  current_word_count: null,
+  download_status: null,
+  refresh_status: null,
+  created_at: "2026-03-17T00:00:00Z",
+  content_updated_at: "2026-03-17T00:00:00Z",
+  content_version: 1,
+  updated_at: null,
+  deleted_at: null,
+  purge_after: null,
+  audiobook_enabled: false,
+  audiobook_pipeline_status: null,
+  audiobook_tts_provider: null,
+  ...overrides,
+});
 
 describe("BookSettings", () => {
   beforeEach(() => {
@@ -12,7 +53,7 @@ describe("BookSettings", () => {
 
   it("shows the source URL and can remove the web marker", async () => {
     const onBack = vi.fn();
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/7/chapters") {
         return Promise.resolve({
           ok: true,
@@ -35,28 +76,30 @@ describe("BookSettings", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 7,
-              title: "Imported Story",
-              author: "Author",
-              series: null,
-              series_index: null,
-              source_type: "epub",
-              source_url: null,
-              immutable_path: "library/original.epub",
-              current_path: "library/current.epub",
-              removed_chapters: [],
-              content_selectors: [],
-              created_at: "2026-03-17T00:00:00Z",
-              content_updated_at: "2026-03-17T00:00:00Z",
-              content_version: 1,
-              updated_at: null,
-              cover_path: null,
-              notes: null,
-              master_word_count: null,
-              current_word_count: null,
-              download_status: null,
-            }),
+            Promise.resolve(
+              makeBook({
+                id: 7,
+                title: "Imported Story",
+                author: "Author",
+                series: null,
+                series_index: null,
+                source_type: "epub",
+                source_url: null,
+                immutable_path: "library/original.epub",
+                current_path: "library/current.epub",
+                removed_chapters: [],
+                content_selectors: [],
+                created_at: "2026-03-17T00:00:00Z",
+                content_updated_at: "2026-03-17T00:00:00Z",
+                content_version: 1,
+                updated_at: null,
+                cover_path: null,
+                notes: null,
+                master_word_count: null,
+                current_word_count: null,
+                download_status: null,
+              }),
+            ),
         });
       }
       return Promise.resolve({
@@ -64,11 +107,10 @@ describe("BookSettings", () => {
         json: () => Promise.resolve([]),
       });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 7,
           title: "Imported Story",
           author: "Author",
@@ -83,7 +125,7 @@ describe("BookSettings", () => {
           created_at: "2026-03-17T00:00:00Z",
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 1,
-        }}
+        })}
         onBack={onBack}
       />,
     );
@@ -115,7 +157,7 @@ describe("BookSettings", () => {
 
   it("allows removing the web marker when a web book has epub files but no source URL", async () => {
     const onBack = vi.fn();
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/8/chapters") {
         return Promise.resolve({
           ok: true,
@@ -138,28 +180,30 @@ describe("BookSettings", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 8,
-              title: "Imported Story",
-              author: "Author",
-              series: null,
-              series_index: null,
-              source_type: "epub",
-              source_url: null,
-              immutable_path: "library/original.epub",
-              current_path: "library/current.epub",
-              removed_chapters: [],
-              content_selectors: [],
-              created_at: "2026-03-17T00:00:00Z",
-              content_updated_at: "2026-03-17T00:00:00Z",
-              content_version: 1,
-              updated_at: null,
-              cover_path: null,
-              notes: null,
-              master_word_count: null,
-              current_word_count: null,
-              download_status: null,
-            }),
+            Promise.resolve(
+              makeBook({
+                id: 8,
+                title: "Imported Story",
+                author: "Author",
+                series: null,
+                series_index: null,
+                source_type: "epub",
+                source_url: null,
+                immutable_path: "library/original.epub",
+                current_path: "library/current.epub",
+                removed_chapters: [],
+                content_selectors: [],
+                created_at: "2026-03-17T00:00:00Z",
+                content_updated_at: "2026-03-17T00:00:00Z",
+                content_version: 1,
+                updated_at: null,
+                cover_path: null,
+                notes: null,
+                master_word_count: null,
+                current_word_count: null,
+                download_status: null,
+              }),
+            ),
         });
       }
       return Promise.resolve({
@@ -167,11 +211,10 @@ describe("BookSettings", () => {
         json: () => Promise.resolve([]),
       });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 8,
           title: "Imported Story",
           author: "Author",
@@ -186,7 +229,7 @@ describe("BookSettings", () => {
           created_at: "2026-03-17T00:00:00Z",
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 1,
-        }}
+        })}
         onBack={onBack}
       />,
     );
@@ -216,7 +259,7 @@ describe("BookSettings", () => {
   });
 
   it("shows synced genre tags in metadata", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (
         url === "/api/books/9/chapters" ||
         url === "/api/books/9/matched-config" ||
@@ -235,7 +278,7 @@ describe("BookSettings", () => {
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 9,
           title: "Tagged Book",
           author: "Author",
@@ -262,7 +305,7 @@ describe("BookSettings", () => {
           created_at: "2026-03-17T00:00:00Z",
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 1,
-        }}
+        })}
         onBack={() => {}}
       />,
     );
@@ -282,7 +325,7 @@ describe("BookSettings", () => {
   });
 
   it("shows chapter update history for web books", async () => {
-    const fetchMock = vi.fn((url) => {
+    const fetchMock = mockFetch((url) => {
       if (
         url === "/api/books/11/chapters" ||
         url === "/api/books/11/matched-config" ||
@@ -311,6 +354,7 @@ describe("BookSettings", () => {
                   average_words_per_chapter: 1000,
                   included_in_stats: false,
                   is_initial_sync: true,
+                  is_catch_up_sync: false,
                 },
                 {
                   id: 1,
@@ -362,7 +406,7 @@ describe("BookSettings", () => {
                 predicted_next_update_at: "2026-01-15T00:00:00Z",
                 last_update_at: "2026-01-08T00:00:00Z",
               },
-            }),
+            } satisfies UpdateHistory),
         });
       }
       return Promise.resolve({
@@ -370,11 +414,10 @@ describe("BookSettings", () => {
         json: () => Promise.resolve([]),
       });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 11,
           title: "Growing Story",
           author: "Author",
@@ -389,7 +432,7 @@ describe("BookSettings", () => {
           created_at: "2026-03-17T00:00:00Z",
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 3,
-        }}
+        })}
         onBack={() => {}}
       />,
     );
@@ -408,7 +451,7 @@ describe("BookSettings", () => {
   });
 
   it("saves manual metadata identifiers", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (
         url === "/api/books/10/chapters" ||
         url === "/api/books/10/matched-config"
@@ -428,34 +471,36 @@ describe("BookSettings", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 10,
-              title: "Identifier Book",
-              author: "Author",
-              series: "Saga",
-              series_index: 1,
-              source_type: "epub",
-              source_url: null,
-              immutable_path: "library/original.epub",
-              current_path: "library/current.epub",
-              metadata_remote_ids: {
-                isbn_13: "9780316339158",
-                open_library_work_key: "/works/OL500W",
-                goodreads_id: "12345",
-              },
-              user_genre_tags: ["Fantasy", "Romance"],
-              removed_chapters: [],
-              content_selectors: [],
-              created_at: "2026-03-17T00:00:00Z",
-              content_updated_at: "2026-03-17T00:00:00Z",
-              content_version: 1,
-              updated_at: null,
-              cover_path: null,
-              notes: null,
-              master_word_count: null,
-              current_word_count: null,
-              download_status: null,
-            }),
+            Promise.resolve(
+              makeBook({
+                id: 10,
+                title: "Identifier Book",
+                author: "Author",
+                series: "Saga",
+                series_index: 1,
+                source_type: "epub",
+                source_url: null,
+                immutable_path: "library/original.epub",
+                current_path: "library/current.epub",
+                metadata_remote_ids: {
+                  isbn_13: "9780316339158",
+                  open_library_work_key: "/works/OL500W",
+                  goodreads_id: "12345",
+                },
+                user_genre_tags: ["Fantasy", "Romance"],
+                removed_chapters: [],
+                content_selectors: [],
+                created_at: "2026-03-17T00:00:00Z",
+                content_updated_at: "2026-03-17T00:00:00Z",
+                content_version: 1,
+                updated_at: null,
+                cover_path: null,
+                notes: null,
+                master_word_count: null,
+                current_word_count: null,
+                download_status: null,
+              }),
+            ),
         });
       }
       return Promise.resolve({
@@ -463,11 +508,10 @@ describe("BookSettings", () => {
         json: () => Promise.resolve([]),
       });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 10,
           title: "Identifier Book",
           author: "Author",
@@ -484,7 +528,7 @@ describe("BookSettings", () => {
           created_at: "2026-03-17T00:00:00Z",
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 1,
-        }}
+        })}
         onBack={() => {}}
       />,
     );
@@ -511,16 +555,16 @@ describe("BookSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Metadata" }));
 
     await waitFor(() => {
-      const saveCall = fetchMock.mock.calls.find(
+      const saveOptions = fetchMock.mock.calls.find(
         ([url, options]) =>
           url === "/api/books/10" && options?.method === "PUT",
-      );
-      expect(saveCall).toBeTruthy();
-      expect(saveCall[1].headers).toEqual({
+      )?.[1];
+      expect(saveOptions).toBeTruthy();
+      expect(saveOptions?.headers).toEqual({
         "content-type": "application/json",
       });
       // Only the edited fields are sent.
-      expect(JSON.parse(saveCall[1].body)).toEqual({
+      expect(JSON.parse(String(saveOptions?.body))).toEqual({
         user_genre_tags: ["Fantasy", "Romance"],
         metadata_remote_ids: {
           isbn_13: "9780316339158",
@@ -533,7 +577,7 @@ describe("BookSettings", () => {
   });
 
   it("keeps the Audiobooks label stable when AI generation is enabled", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (
         url === "/api/books/11/chapters" ||
         url === "/api/books/11/matched-config" ||
@@ -560,24 +604,26 @@ describe("BookSettings", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 11,
-              title: "Audio Candidate",
-              author: "Author",
-              series: null,
-              series_index: null,
-              source_type: "epub",
-              source_url: null,
-              immutable_path: "library/original.epub",
-              current_path: "library/current.epub",
-              removed_chapters: [],
-              content_selectors: [],
-              created_at: "2026-03-17T00:00:00Z",
-              content_updated_at: "2026-03-17T00:00:00Z",
-              content_version: 1,
-              audiobook_enabled: true,
-              audiobook_pipeline_status: null,
-            }),
+            Promise.resolve(
+              makeBook({
+                id: 11,
+                title: "Audio Candidate",
+                author: "Author",
+                series: null,
+                series_index: null,
+                source_type: "epub",
+                source_url: null,
+                immutable_path: "library/original.epub",
+                current_path: "library/current.epub",
+                removed_chapters: [],
+                content_selectors: [],
+                created_at: "2026-03-17T00:00:00Z",
+                content_updated_at: "2026-03-17T00:00:00Z",
+                content_version: 1,
+                audiobook_enabled: true,
+                audiobook_pipeline_status: null,
+              }),
+            ),
         });
       }
       return Promise.resolve({
@@ -585,11 +631,10 @@ describe("BookSettings", () => {
         json: () => Promise.resolve([]),
       });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 11,
           title: "Audio Candidate",
           author: "Author",
@@ -605,7 +650,7 @@ describe("BookSettings", () => {
           content_updated_at: "2026-03-17T00:00:00Z",
           content_version: 1,
           audiobook_enabled: false,
-        }}
+        })}
         onBack={() => {}}
       />,
     );
@@ -619,12 +664,12 @@ describe("BookSettings", () => {
     );
 
     await waitFor(() => {
-      const enableCall = fetchMock.mock.calls.find(
+      const enableOptions = fetchMock.mock.calls.find(
         ([url, options]) =>
           url === "/api/books/11" && options?.method === "PUT",
-      );
-      expect(enableCall).toBeTruthy();
-      expect(JSON.parse(enableCall[1].body)).toEqual({
+      )?.[1];
+      expect(enableOptions).toBeTruthy();
+      expect(JSON.parse(String(enableOptions?.body))).toEqual({
         audiobook_enabled: true,
       });
     });
@@ -635,13 +680,13 @@ describe("BookSettings", () => {
   });
 
   it("asks before in-app navigation discards unsaved edits", async () => {
-    globalThis.fetch = vi.fn(() =>
+    mockFetch(() =>
       Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
     );
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderWithClient(
       <BookSettings
-        book={{
+        book={makeBook({
           id: 12,
           title: "Draft Book",
           author: "Author",
@@ -653,7 +698,7 @@ describe("BookSettings", () => {
           current_path: "library/current.epub",
           removed_chapters: [],
           content_selectors: [],
-        }}
+        })}
         onBack={() => {}}
       />,
     );

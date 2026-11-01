@@ -7,6 +7,10 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+import type { components } from "../api/schema";
+import { jsonResponse, mockFetch } from "../test-utils";
+import type { FixtureFetch } from "../test-utils";
 import ProcessingJobs from "./ProcessingJobs";
 
 vi.mock("../hooks/useLifecycleDefinitions", () => ({
@@ -40,50 +44,78 @@ function renderPage() {
   );
 }
 
+type CatalogBook = components["schemas"]["BookCatalogEntry"];
+type ProcessingJob = components["schemas"]["ProcessingJob"];
+
+const catalogBook = {
+  id: 7,
+  title: "Queued Story",
+  author: "Test Author",
+  source_type: "epub",
+  audiobook_enabled: true,
+  audio_playable: false,
+  audiobook_pipeline_status: null,
+  audiobook_types: [],
+  cover_path: null,
+  current_word_count: null,
+  download_status: null,
+  effective_genre_tags: null,
+  effective_series_genre_tags: null,
+  genre_tags: null,
+  has_epub: true,
+  refresh_status: null,
+  series: null,
+  series_index: null,
+  series_user_genre_tags: null,
+  source_url: null,
+  universe_id: null,
+  universe_name: null,
+  updated_at: null,
+  user_genre_tags: null,
+} satisfies CatalogBook;
+
+const runningJob = {
+  id: 42,
+  job_type: "clean_book",
+  status: "running",
+  resource_lane: "cpu",
+  book_id: 7,
+  book_title: "Queued Story",
+  target_type: "book",
+  target_id: 7,
+  target_content_version: 2,
+  parent_job_id: null,
+  request_id: "request-42",
+  payload: {},
+  progress_current: 1,
+  progress_total: 3,
+  progress_detail: "Cleaning chapters",
+  attempt_count: 1,
+  max_attempts: 3,
+  cancel_requested: false,
+  error: null,
+  available_at: "2026-07-31T12:00:00Z",
+  created_at: "2026-07-31T12:00:00Z",
+  started_at: "2026-07-31T12:00:01Z",
+  heartbeat_at: "2026-07-31T12:00:02Z",
+  lease_expires_at: "2026-07-31T12:05:01Z",
+  completed_at: null,
+} satisfies ProcessingJob;
+
 describe("ProcessingJobs", () => {
+  let listFetch: Mock<FixtureFetch>;
+
   beforeEach(() => {
-    globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).startsWith("/api/books/catalog")) {
-        return {
-          ok: true,
-          json: async () => [
-            {
-              id: 7,
-              title: "Queued Story",
-              author: "Test Author",
-              source_type: "epub",
-              audiobook_enabled: true,
-            },
-          ],
-        };
+    listFetch = mockFetch(async (url) => {
+      if (url.startsWith("/api/books/catalog")) {
+        return jsonResponse({
+          items: [catalogBook],
+          next_cursor: null,
+          total_count: 1,
+          facets: null,
+        } satisfies components["schemas"]["BookCatalogPage"]);
       }
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: 42,
-            job_type: "clean_book",
-            status: "running",
-            book_id: 7,
-            book_title: "Queued Story",
-            target_type: "book",
-            target_id: 7,
-            target_content_version: 2,
-            parent_job_id: null,
-            request_id: "request-42",
-            payload: {},
-            progress_current: 1,
-            progress_total: 3,
-            progress_detail: "Cleaning chapters",
-            attempt_count: 1,
-            cancel_requested: false,
-            error: null,
-            created_at: "2026-07-31T12:00:00Z",
-            started_at: "2026-07-31T12:00:01Z",
-            completed_at: null,
-          },
-        ],
-      };
+      return jsonResponse([runningJob]);
     });
   });
 
@@ -109,16 +141,17 @@ describe("ProcessingJobs", () => {
     const panel = summary.closest("details");
 
     expect(panel).not.toHaveAttribute("open");
-    fireEvent.click(summary.closest("summary"));
+    const toggle = summary.closest("summary");
+    expect(toggle).not.toBeNull();
+    fireEvent.click(toggle!);
     expect(panel).toHaveAttribute("open");
   });
 
   it("confirms library-wide jobs before queueing them", async () => {
-    const posts = [];
-    const listFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async (url, options) => {
+    const posts: unknown[] = [];
+    mockFetch(async (url, options) => {
       if (options?.method === "POST") {
-        posts.push(JSON.parse(options.body));
+        posts.push(JSON.parse(String(options.body)));
         return Response.json({ jobs: [] });
       }
       return listFetch(url, options);
@@ -164,8 +197,7 @@ describe("ProcessingJobs", () => {
   });
 
   it("shows why cancelling a job failed", async () => {
-    const listFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async (url, options) => {
+    mockFetch(async (url, options) => {
       if (options?.method === "DELETE") {
         return Response.json(
           { detail: "Job already finished" },

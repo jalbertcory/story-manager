@@ -1,9 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import type { Book } from "../../types";
 import { useBookSettingsForm } from "./useBookSettingsForm";
 
-const book = (overrides = {}) => ({
+const book = (overrides: Partial<Book> = {}): Book => ({
   id: 1,
   title: "Original Title",
   author: "Author",
@@ -11,10 +12,32 @@ const book = (overrides = {}) => ({
   series_index: null,
   notes: null,
   metadata_remote_ids: null,
+  metadata_details: null,
+  metadata_sync_source: null,
+  metadata_synced_at: null,
+  genre_tags: null,
+  source_tags: null,
   user_genre_tags: [],
   removed_chapters: [],
   content_selectors: [],
   refresh_status: "processing",
+  download_status: null,
+  source_type: "web",
+  source_url: "https://example.com/story",
+  immutable_path: "books/original.epub",
+  current_path: "books/current.epub",
+  cover_path: null,
+  master_word_count: null,
+  current_word_count: null,
+  content_version: 1,
+  content_updated_at: "2026-01-01T00:00:00Z",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: null,
+  deleted_at: null,
+  purge_after: null,
+  audiobook_enabled: false,
+  audiobook_pipeline_status: null,
+  audiobook_tts_provider: null,
   ...overrides,
 });
 

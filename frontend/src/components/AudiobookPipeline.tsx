@@ -172,11 +172,9 @@ function AudiobookPipeline({
     sentenceLifecycle?.groups?.audio_playable ?? [];
   const bookId = book.id;
   const audioOnly = book.source_type === "audiobook";
-  const aiEnabled = !audioOnly && book.audiobook_enabled !== false;
+  const aiEnabled = !audioOnly && book.audiobook_enabled;
   const queryClient = useQueryClient();
-  const [internalSubTab, setInternalSubTab] = useState(
-    book.audiobook_enabled === undefined ? "progress" : "sources",
-  );
+  const [internalSubTab, setInternalSubTab] = useState("sources");
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [lastQueuedJob, setLastQueuedJob] = useState<number | boolean | null>(
     null,

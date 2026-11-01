@@ -25,25 +25,23 @@ describe("audiobook metadata suggestions", () => {
     ).toEqual({ title: "The Book", author: "Author" });
   });
   it("suggests CUE metadata without uploading audio", async () => {
-    const cue = {
-      name: "book.cue",
-      slice: () => ({
-        text: async () => 'TITLE "Tagged Book"\nPERFORMER "Tagged Author"',
-      }),
-    };
-    expect(await suggestAudiobookMetadata([cue, { name: "book.m4b" }])).toEqual(
-      { title: "Tagged Book", author: "Tagged Author" },
+    const cue = new File(
+      ['TITLE "Tagged Book"\nPERFORMER "Tagged Author"'],
+      "book.cue",
     );
+    const audio = new File([], "book.m4b");
+    expect(await suggestAudiobookMetadata([cue, audio])).toEqual({
+      title: "Tagged Book",
+      author: "Tagged Author",
+    });
   });
   it("keeps the filename fallback if a CUE cannot be read", async () => {
-    const cue = {
-      name: "My Book.cue",
-      slice: () => ({
-        text: async () => {
-          throw new Error("unreadable");
-        },
-      }),
-    };
+    const cue = Object.assign(new File([], "My Book.cue"), {
+      slice: () =>
+        Object.assign(new Blob(), {
+          text: () => Promise.reject(new Error("unreadable")),
+        }),
+    });
     expect(await suggestAudiobookMetadata([cue])).toEqual({
       title: "My Book",
       author: "",

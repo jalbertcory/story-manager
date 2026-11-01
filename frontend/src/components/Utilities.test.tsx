@@ -6,10 +6,37 @@ import {
   within,
 } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { components } from "../api/schema";
 import Utilities from "./Utilities";
-import { renderWithClient } from "../test-utils";
+import { mockFetch, renderWithClient } from "../test-utils";
 
-function openUtility(section) {
+type Schemas = components["schemas"];
+type MetadataMatch = Schemas["MetadataMatch"];
+
+const metadataMatch = (
+  overrides: Partial<MetadataMatch> = {},
+): MetadataMatch => ({
+  id: 1,
+  book_id: 1,
+  status: "pending",
+  source: "open_library",
+  match_confidence: null,
+  remote_title: null,
+  remote_author: null,
+  remote_url: null,
+  remote_ids: {},
+  remote_metadata: null,
+  match_issues: null,
+  note: null,
+  proposed_genre_tags: null,
+  possible_missing_series_books: null,
+  last_checked_at: null,
+  approved_at: null,
+  rejected_at: null,
+  ...overrides,
+});
+
+function openUtility(section: string) {
   act(() => {
     window.history.pushState(
       null,
@@ -32,7 +59,7 @@ describe("Utilities", () => {
   });
 
   it("opens tools directly from their URLs and follows browser navigation", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -92,7 +119,7 @@ describe("Utilities", () => {
       "",
       "/settings/library-tools?section=audiobooks",
     );
-    globalThis.fetch = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -110,7 +137,7 @@ describe("Utilities", () => {
               realign_count: 1,
               up_to_date_count: 1,
               unavailable_count: 1,
-            }),
+            } satisfies Schemas["HumanAudiobookRebuildPreview"]),
         });
       }
       if (
@@ -124,7 +151,7 @@ describe("Utilities", () => {
               queued_count: 2,
               skipped_count: 2,
               pipeline_version: 1,
-            }),
+            } satisfies Schemas["RebuiltImports"]),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
@@ -152,7 +179,7 @@ describe("Utilities", () => {
     );
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(
+      expect(fetchMock).toHaveBeenCalledWith(
         "/api/audiobook/imports/rebuild-all?force=false",
         expect.objectContaining({ method: "POST" }),
       );
@@ -175,8 +202,8 @@ describe("Utilities", () => {
       verified_at_creation: true,
       error: null,
       download_url: `/api/backups/${filename}/download`,
-    };
-    globalThis.fetch = vi.fn((url, options) => {
+    } satisfies Schemas["BackupArchive"];
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/metadata/jobs/latest")
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       if (url.startsWith("/api/metadata/inbox?"))
@@ -188,7 +215,10 @@ describe("Utilities", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({ retention_count: 10, backups: [backup] }),
+            Promise.resolve({
+              retention_count: 10,
+              backups: [backup],
+            } satisfies Schemas["BackupInventory"]),
         });
       }
       if (url === `/api/backups/${filename}` && options?.method === "DELETE") {
@@ -217,14 +247,20 @@ describe("Utilities", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create backup" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith("/api/backups", expect.objectContaining({ method: "POST" })),
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/backups",
+        expect.objectContaining({ method: "POST" }),
+      ),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Verify now" }));
     await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}/verify`, expect.objectContaining({
-        method: "POST",
-      })),
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/backups/${filename}/verify`,
+        expect.objectContaining({
+          method: "POST",
+        }),
+      ),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -234,14 +270,17 @@ describe("Utilities", () => {
       within(dialog).getByRole("button", { name: "Delete backup" }),
     );
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(`/api/backups/${filename}`, expect.objectContaining({
-        method: "DELETE",
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/backups/${filename}`,
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
     });
   });
 
   it("runs library audit and shows results", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -264,7 +303,7 @@ describe("Utilities", () => {
                   path: "library/Author A/immutable_Broken Book.epub",
                 },
               ],
-            }),
+            } satisfies Schemas["LibraryValidation"]),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
@@ -283,7 +322,7 @@ describe("Utilities", () => {
   });
 
   it("shows failed web imports distinctly in the audit", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -306,7 +345,7 @@ describe("Utilities", () => {
                   source_url: "https://example.com/story/failed",
                 },
               ],
-            }),
+            } satisfies Schemas["LibraryValidation"]),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
@@ -327,7 +366,7 @@ describe("Utilities", () => {
   });
 
   it("shows healthy message when audit finds no issues", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -342,7 +381,7 @@ describe("Utilities", () => {
               total_books: 5,
               issues_count: 0,
               issues: [],
-            }),
+            } satisfies Schemas["LibraryValidation"]),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
@@ -362,7 +401,7 @@ describe("Utilities", () => {
   });
 
   it("queues metadata sync and lets you approve a pending match", async () => {
-    globalThis.fetch = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({
           ok: true,
@@ -380,7 +419,7 @@ describe("Utilities", () => {
               created_at: "2026-03-29T00:00:00Z",
               started_at: "2026-03-29T00:00:01Z",
               completed_at: null,
-            }),
+            } satisfies Schemas["MetadataSyncJob"]),
         });
       }
       if (url.startsWith("/api/metadata/inbox?")) {
@@ -395,7 +434,7 @@ describe("Utilities", () => {
                 book_author: "Author A",
                 book_series: "Dragon Saga",
                 book_series_index: 7,
-                match: {
+                match: metadataMatch({
                   id: 7,
                   book_id: 1,
                   status: "pending",
@@ -408,9 +447,9 @@ describe("Utilities", () => {
                   last_checked_at: "2026-03-29T00:00:02Z",
                   approved_at: null,
                   rejected_at: null,
-                },
+                }),
                 candidate_matches: [
-                  {
+                  metadataMatch({
                     id: 7,
                     book_id: 1,
                     status: "pending",
@@ -423,8 +462,8 @@ describe("Utilities", () => {
                     last_checked_at: "2026-03-29T00:00:02Z",
                     approved_at: null,
                     rejected_at: null,
-                  },
-                  {
+                  }),
+                  metadataMatch({
                     id: 8,
                     book_id: 1,
                     status: "pending",
@@ -444,7 +483,7 @@ describe("Utilities", () => {
                     last_checked_at: "2026-03-29T00:00:02Z",
                     approved_at: null,
                     rejected_at: null,
-                  },
+                  }),
                 ],
                 proposed_genre_tags: ["Fantasy"],
                 possible_missing_series_books: ["Dragon Two"],
@@ -453,7 +492,7 @@ describe("Utilities", () => {
                 created_at: "2026-03-29T00:00:02Z",
                 reviewed_at: null,
               },
-            ]),
+            ] satisfies Schemas["MetadataProposalSummary"][]),
         });
       }
       if (url === "/api/metadata/jobs" && options?.method === "POST") {
@@ -473,7 +512,7 @@ describe("Utilities", () => {
               created_at: "2026-03-29T00:00:00Z",
               started_at: null,
               completed_at: null,
-            }),
+            } satisfies Schemas["MetadataSyncJob"]),
         });
       }
       if (
@@ -483,12 +522,14 @@ describe("Utilities", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 7,
-              book_id: 1,
-              status: "approved",
-              source: "open_library",
-            }),
+            Promise.resolve(
+              metadataMatch({
+                id: 7,
+                book_id: 1,
+                status: "approved",
+                source: "open_library",
+              }),
+            ),
         });
       }
       if (
@@ -498,12 +539,14 @@ describe("Utilities", () => {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve({
-              id: 8,
-              book_id: 1,
-              status: "approved",
-              source: "open_library",
-            }),
+            Promise.resolve(
+              metadataMatch({
+                id: 8,
+                book_id: 1,
+                status: "approved",
+                source: "open_library",
+              }),
+            ),
         });
       }
 
@@ -545,17 +588,22 @@ describe("Utilities", () => {
     );
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/metadata/jobs", expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ "content-type": "application/json" }),
-        body: JSON.stringify({ book_ids: null, trigger: "manual" }),
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/metadata/jobs",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "content-type": "application/json",
+          }),
+          body: JSON.stringify({ book_ids: null, trigger: "manual" }),
+        }),
+      );
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Approve Match" }));
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect(fetchMock).toHaveBeenCalledWith(
         "/api/metadata/matches/8/approve",
         expect.objectContaining({
           method: "POST",
@@ -565,7 +613,7 @@ describe("Utilities", () => {
   });
 
   it("calls detect-series and shows results", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -579,7 +627,7 @@ describe("Utilities", () => {
             Promise.resolve({
               updated: 2,
               series_detected: ["Dragon Saga", "Iron Path"],
-            }),
+            } satisfies Schemas["SeriesDetected"]),
         });
       }
       return Promise.resolve({
@@ -604,7 +652,7 @@ describe("Utilities", () => {
   });
 
   it("shows 'No new series found' when detect-series finds nothing", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -614,7 +662,11 @@ describe("Utilities", () => {
       if (url.includes("detect-series")) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ updated: 0, series_detected: [] }),
+          json: () =>
+            Promise.resolve({
+              updated: 0,
+              series_detected: [],
+            } satisfies Schemas["SeriesDetected"]),
         });
       }
       return Promise.resolve({
@@ -637,7 +689,7 @@ describe("Utilities", () => {
   });
 
   it("shows orphaned files after scanning", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -651,8 +703,9 @@ describe("Utilities", () => {
             Promise.resolve({
               dry_run: true,
               files: [{ path: "library/orphan.epub", size_bytes: 1024 }],
+              books: [],
               total_bytes: 1024,
-            }),
+            } satisfies Schemas["StorageCleanup"]),
         });
       }
       return Promise.resolve({
@@ -675,7 +728,7 @@ describe("Utilities", () => {
   });
 
   it("shows failed imports in storage cleanup results", async () => {
-    globalThis.fetch = vi.fn((url) => {
+    mockFetch((url) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -699,7 +752,7 @@ describe("Utilities", () => {
                 },
               ],
               total_bytes: 0,
-            }),
+            } satisfies Schemas["StorageCleanup"]),
         });
       }
       return Promise.resolve({
@@ -730,7 +783,7 @@ describe("Utilities", () => {
   });
 
   it("restores books and confirms permanent recycle-bin deletion", async () => {
-    const fetchMock = vi.fn((url, options) => {
+    const fetchMock = mockFetch((url, options) => {
       if (url === "/api/metadata/jobs/latest") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(null) });
       }
@@ -750,17 +803,49 @@ describe("Utilities", () => {
                   author: "Author",
                   purge_after: "2026-09-08T00:00:00Z",
                   recovery_files_available: true,
+                  deleted_at: "2026-08-09T00:00:00Z",
+                  series: null,
+                  series_index: null,
+                  notes: null,
+                  source_type: "epub",
+                  source_url: null,
+                  immutable_path: "library/original.epub",
+                  current_path: "library/current.epub",
+                  cover_path: null,
+                  removed_chapters: null,
+                  content_selectors: null,
+                  genre_tags: null,
+                  source_tags: null,
+                  user_genre_tags: null,
+                  metadata_details: null,
+                  metadata_remote_ids: null,
+                  metadata_sync_source: null,
+                  metadata_synced_at: null,
+                  master_word_count: null,
+                  current_word_count: null,
+                  download_status: null,
+                  refresh_status: null,
+                  created_at: "2026-03-17T00:00:00Z",
+                  content_updated_at: "2026-03-17T00:00:00Z",
+                  content_version: 1,
+                  updated_at: null,
+                  audiobook_enabled: false,
+                  audiobook_pipeline_status: null,
+                  audiobook_tts_provider: null,
                 },
               ],
-            }),
+            } satisfies Schemas["RecycleBin"]),
         });
       }
       if (url === "/api/recycle-bin/41" && options?.method === "DELETE") {
-        return Promise.resolve({ ok: true, status: 204 });
+        return Promise.resolve({
+          ok: true,
+          status: 204,
+          json: () => Promise.resolve(null),
+        });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
-    globalThis.fetch = fetchMock;
 
     renderWithClient(<Utilities onBack={() => {}} />);
     openUtility("recycle-bin");
@@ -774,9 +859,12 @@ describe("Utilities", () => {
     );
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/recycle-bin/41", expect.objectContaining({
-        method: "DELETE",
-      }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/recycle-bin/41",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
     });
   });
 });
