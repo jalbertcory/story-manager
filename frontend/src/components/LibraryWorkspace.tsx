@@ -277,7 +277,7 @@ export default function LibraryWorkspace({
           <p role="status">
             Showing {items.length} of {total}{" "}
             {grouped ? (flattenStandalone ? "series" : "groups") : "books"}
-            {flattenStandalone && standaloneTotal != null && (
+            {flattenStandalone && Boolean(standaloneTotal) && (
               <>
                 {" "}
                 and {standaloneItems.length} of {standaloneTotal} standalone{" "}
