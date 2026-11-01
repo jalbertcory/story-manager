@@ -20,6 +20,7 @@ import { uploadImportedAudiobook } from "../api/audiobook";
 import { addWebNovel, previewBookImports, uploadEpubs } from "../api/imports";
 import { suggestAudiobookMetadata } from "../lib/audiobookMetadata";
 import LibationBackupImport from "./LibationBackupImport";
+import { invalidateBookViews, queryKeys } from "../lib/queryKeys";
 
 const IMPORT_TYPES = [
   {
@@ -303,7 +304,7 @@ const AddBook = forwardRef<
     isError: catalogFailed,
     refetch: reloadCatalog,
   } = useQuery({
-    queryKey: ["import-book-catalog"],
+    queryKey: queryKeys.importBookCatalog,
     queryFn: ({ signal }) =>
       getAllBookCatalog(
         { q: "", sortBy: "title", sortOrder: "asc" },
@@ -553,14 +554,16 @@ const AddBook = forwardRef<
           );
       }
       setResults(completed);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({ queryKey: ["import-book-catalog"] });
+      invalidateBookViews(queryClient);
       void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
+        queryKey: queryKeys.importBookCatalog,
       });
-      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.attentionDashboard,
+      });
     } finally {
       setImporting(false);
     }

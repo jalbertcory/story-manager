@@ -14,6 +14,7 @@ import {
   upgradeImportedAudiobook,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
+import { queryKeys } from "../../lib/queryKeys";
 
 function durationLabel(durationMs: number | null | undefined) {
   if (!durationMs) return "—";
@@ -60,13 +61,13 @@ function AudiobookSources({
 
   const invalidate = () => {
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-imports", bookId],
+      queryKey: queryKeys.audiobook.imports(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-chapters", bookId],
+      queryKey: queryKeys.audiobook.chapters(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-status", bookId],
+      queryKey: queryKeys.audiobook.status(bookId),
     });
   };
   const retryMutation = useMutation({

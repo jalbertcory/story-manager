@@ -11,6 +11,7 @@ import {
 } from "../../api/series";
 import { BookCard, GenreTagList } from "./BookCards";
 import { getCoverUrl, getSeriesGenreTags } from "./catalogDisplay";
+import { invalidateBookViews } from "../../lib/queryKeys";
 
 export default function SeriesSummaryRow({
   series,
@@ -64,11 +65,7 @@ export default function SeriesSummaryRow({
     onSuccess: (_, newName) => {
       onSeriesChange?.(newName);
       setEditing(null);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      invalidateBookViews(queryClient);
     },
   });
 
@@ -78,11 +75,7 @@ export default function SeriesSummaryRow({
       onSeriesChange?.(target);
       setEditing(null);
       setMergeTarget("");
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      invalidateBookViews(queryClient);
     },
   });
 
@@ -92,11 +85,7 @@ export default function SeriesSummaryRow({
     onSuccess: () => {
       setDraggedBookId(null);
       setDragOverBookId(null);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      invalidateBookViews(queryClient);
     },
     onError: () => {
       setOrderedBooks(books);
@@ -110,11 +99,7 @@ export default function SeriesSummaryRow({
       updateSeriesGenres(series, userGenreTags),
     onSuccess: () => {
       setEditing(null);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-book-info"] });
+      invalidateBookViews(queryClient);
     },
   });
 

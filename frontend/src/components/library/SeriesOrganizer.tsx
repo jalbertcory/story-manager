@@ -4,6 +4,7 @@ import { getAllBookCatalog } from "../../api/books";
 import { getSeries } from "../../api/series";
 import SeriesSummaryRow from "../book-list/SeriesSummaryRow";
 import UniverseMembership from "../UniverseMembership";
+import { queryKeys } from "../../lib/queryKeys";
 
 export default function SeriesOrganizer({
   series,
@@ -16,11 +17,14 @@ export default function SeriesOrganizer({
 }) {
   // Only mounted by an explicit organizer action; never reorder a filtered page.
   const books = useQuery({
-    queryKey: ["series-books", series],
+    queryKey: queryKeys.seriesBooks.list(series),
     queryFn: ({ signal }) =>
       getAllBookCatalog({ series, sortBy: "series_index" }, { signal }),
   });
-  const allSeries = useQuery({ queryKey: ["series"], queryFn: getSeries });
+  const allSeries = useQuery({
+    queryKey: queryKeys.series,
+    queryFn: getSeries,
+  });
   if (books.isLoading || allSeries.isLoading)
     return <p role="status">Loading complete series for organizing…</p>;
   if (books.error || allSeries.error)

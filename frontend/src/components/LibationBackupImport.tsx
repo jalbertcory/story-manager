@@ -27,6 +27,7 @@ import {
   previewLibationBackup,
   uploadImportedAudiobook,
 } from "../api/audiobook";
+import { queryKeys } from "../lib/queryKeys";
 
 const AUDIO_EXTENSIONS = new Set([
   ".aac",
@@ -204,8 +205,10 @@ function LibationBackupImport() {
         done: index + 1 === matches.length,
       });
     }
-    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-    void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.processingJobs.all,
+    });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.bookCatalog.all });
   };
 
   const reset = () => {

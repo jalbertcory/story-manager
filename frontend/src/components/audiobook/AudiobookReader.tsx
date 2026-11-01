@@ -9,6 +9,7 @@ import {
   getAllChapterSentences,
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
+import { queryKeys } from "../../lib/queryKeys";
 
 function findActiveCue(cues: ReadingCue[], currentMs: number) {
   let low = 0;
@@ -136,12 +137,11 @@ function ImportedEditionReader({
   const selectedIndex = playable.findIndex((track) => track.id === trackId);
   const selected = selectedIndex >= 0 ? playable[selectedIndex] : null;
   const { data: cues = [], isLoading } = useQuery({
-    queryKey: [
-      "imported-audiobook-cues",
+    queryKey: queryKeys.audiobook.importedCues(
       edition.id,
       trackId,
       selected?.alignment_score ?? "estimated",
-    ],
+    ),
     queryFn: ({ signal }) =>
       trackId == null
         ? Promise.resolve([])
@@ -316,7 +316,7 @@ function GeneratedEditionReader({
   );
   const selected = selectedIndex >= 0 ? playable[selectedIndex] : null;
   const { data: sentences, isLoading } = useQuery({
-    queryKey: ["audiobook-reader-sentences", bookId, chapterId],
+    queryKey: queryKeys.audiobook.readerSentences(bookId, chapterId),
     queryFn: ({ signal }) => {
       if (chapterId == null) throw new Error("Choose a chapter first.");
       return getAllChapterSentences(bookId, chapterId, { signal });

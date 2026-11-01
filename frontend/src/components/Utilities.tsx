@@ -45,6 +45,7 @@ import {
   validateLibrary as runLibraryValidation,
 } from "../api/admin";
 import { detectSeries } from "../api/imports";
+import { queryKeys } from "../lib/queryKeys";
 type CleanupPreview = Awaited<ReturnType<typeof runCleanup>>;
 type MetadataEntry = NonNullable<
   Awaited<ReturnType<typeof getMetadataInbox>>[number]["candidate_matches"]
@@ -170,7 +171,7 @@ function Utilities({
   });
 
   const { data: latestMetadataJob } = useQuery({
-    queryKey: ["metadata-job-latest"],
+    queryKey: queryKeys.metadataJobLatest,
     queryFn: getLatestMetadataJob,
     staleTime: 5000,
     refetchOnWindowFocus: false,
@@ -185,7 +186,7 @@ function Utilities({
     isLoading: inboxLoading,
     error: inboxError,
   } = useQuery({
-    queryKey: ["metadata-inbox", metadataPage],
+    queryKey: queryKeys.metadataInbox.page(metadataPage),
     queryFn: ({ signal }) =>
       getMetadataInbox({ offset: metadataPage * 20, limit: 21 }, { signal }),
     staleTime: 15000,
@@ -200,32 +201,46 @@ function Utilities({
   const queueMetadataMutation = useMutation({
     mutationFn: () => queueMetadataSync(null, "manual"),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.metadataJobLatest,
+      });
     },
   });
 
   const approveMatchMutation = useMutation({
     mutationFn: (matchId: number) => approveMetadataMatch(matchId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
-      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
-      void queryClient.invalidateQueries({ queryKey: ["metadata-job-latest"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.bookCatalog.all,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.metadataInbox.all,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.attentionDashboard,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.metadataJobLatest,
+      });
     },
   });
 
   const rejectMatchMutation = useMutation({
     mutationFn: (matchId: number) => rejectMetadataMatch(matchId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["metadata-inbox"] });
-      void queryClient.invalidateQueries({ queryKey: ["attention-dashboard"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.metadataInbox.all,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.attentionDashboard,
+      });
     },
   });
 
   const validationResult = validateMutation.data;
 
   const { data: recycleBin, isLoading: recycleBinLoading } = useQuery({
-    queryKey: ["recycle-bin"],
+    queryKey: queryKeys.recycleBin,
     queryFn: getRecycleBin,
     enabled: activeTab === "recycle-bin",
   });
@@ -233,9 +248,11 @@ function Utilities({
   const restoreBookMutation = useMutation({
     mutationFn: restoreRecycledBook,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.recycleBin });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.bookCatalog.all,
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.series });
     },
   });
 
@@ -243,7 +260,7 @@ function Utilities({
     mutationFn: permanentlyDeleteRecycledBook,
     onSuccess: () => {
       setPermanentDeleteTarget(null);
-      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.recycleBin });
     },
   });
 
@@ -252,7 +269,7 @@ function Utilities({
     isLoading: audiobookRebuildPreviewLoading,
     error: audiobookRebuildPreviewError,
   } = useQuery({
-    queryKey: ["human-audiobook-rebuild-preview"],
+    queryKey: queryKeys.humanAudiobookRebuildPreview,
     queryFn: previewHumanAudiobookRebuilds,
     enabled: activeTab === "audiobooks",
   });
@@ -267,11 +284,13 @@ function Utilities({
         `${data.queued_count} human audiobook rebuild${data.queued_count === 1 ? "" : "s"} queued; ${data.skipped_count} skipped.`,
       );
       void queryClient.invalidateQueries({
-        queryKey: ["human-audiobook-rebuild-preview"],
+        queryKey: queryKeys.humanAudiobookRebuildPreview,
       });
-      void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
       void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
+        queryKey: queryKeys.processingJobs.all,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
       });
     },
   });
@@ -285,7 +304,9 @@ function Utilities({
     try {
       const data = await detectSeries();
       if (data.updated > 0) {
-        void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.bookCatalog.all,
+        });
       }
       setDetectState(data);
     } catch {

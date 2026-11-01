@@ -12,10 +12,9 @@ import {
   getReprocessAllStatus,
 } from "../api/cleaning";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import { queryKeys } from "../lib/queryKeys";
 type Config = components["schemas"]["CleaningConfig"];
 type ConfigInput = components["schemas"]["CleaningConfigCreate"];
-
-const REPROCESS_STATUS_KEY = ["reprocess-all-status"] as const;
 
 function ConfigForm({
   initial,
@@ -110,7 +109,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
   // A query (rather than component-local polling) so progress resumes after
   // leaving the page and coming back while a library clean is still running.
   const reprocessQuery = useQuery({
-    queryKey: REPROCESS_STATUS_KEY,
+    queryKey: queryKeys.reprocessAllStatus,
     queryFn: getReprocessAllStatus,
     refetchInterval: ({ state }) => (state.data?.running ? 2000 : false),
   });
@@ -119,7 +118,9 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     const running = Boolean(reprocessStatus?.running);
     if (wasRunning.current && !running)
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.bookCatalog.all,
+      });
     wasRunning.current = running;
   }, [queryClient, reprocessStatus?.running]);
 
@@ -127,12 +128,14 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
     mutationFn: reprocessAllBooks,
     onSuccess: () => {
       setJobNotice("Library cleaning job queued.");
-      queryClient.setQueryData(REPROCESS_STATUS_KEY, {
+      queryClient.setQueryData(queryKeys.reprocessAllStatus, {
         running: true,
         total: 0,
         processed: 0,
       });
-      void queryClient.invalidateQueries({ queryKey: REPROCESS_STATUS_KEY });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.reprocessAllStatus,
+      });
     },
   });
 
@@ -143,7 +146,7 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["cleaning-configs"],
+    queryKey: queryKeys.cleaningConfigs,
     queryFn: fetchConfigs,
   });
 
@@ -151,7 +154,9 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
     mutationFn: createCleaningConfig,
     onSuccess: () => {
       setJobNotice("Cleaning config saved; affected book cleaning is queued.");
-      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.cleaningConfigs,
+      });
       setCreating(false);
     },
   });
@@ -163,9 +168,13 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       setJobNotice(
         "Cleaning config updated; affected book cleaning is queued.",
       );
-      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.cleaningConfigs,
+      });
       setEditingId(null);
-      void queryClient.invalidateQueries({ queryKey: REPROCESS_STATUS_KEY });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.reprocessAllStatus,
+      });
     },
   });
 
@@ -176,9 +185,11 @@ function CleaningConfigs({ onBack }: { onBack?: () => void }) {
       setJobNotice(
         "Cleaning config deleted; restoring affected books is queued.",
       );
-      void queryClient.invalidateQueries({ queryKey: ["cleaning-configs"] });
       void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
+        queryKey: queryKeys.cleaningConfigs,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.activeProcessingJobs,
       });
     },
   });

@@ -40,12 +40,13 @@ import {
 } from "./book-settings/BookSettingsSections";
 import { useBookSettingsForm } from "./book-settings/useBookSettingsForm";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import { invalidateBookViews, queryKeys } from "../lib/queryKeys";
 
 const fetchChapters = async ({
   queryKey,
   signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
   signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
@@ -56,7 +57,7 @@ const fetchCleanedChapters = async ({
   queryKey,
   signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
   signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
@@ -67,7 +68,7 @@ const fetchMatchedConfig = async ({
   queryKey,
   signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
   signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
@@ -78,7 +79,7 @@ const fetchUpdateHistory = async ({
   queryKey,
   signal,
 }: {
-  queryKey: readonly [string, number, ...number[]];
+  queryKey: readonly [string, number, ...unknown[]];
   signal: AbortSignal;
 }) => {
   const [_key, bookId] = queryKey;
@@ -130,7 +131,7 @@ function BookSettings({
   // Infinity so we only hit the network when the refetchInterval fires or when
   // a mutation explicitly invalidates this key.
   const { data: polledBook } = useQuery({
-    queryKey: ["book", initialBook.id],
+    queryKey: queryKeys.books.detail(initialBook.id),
     queryFn: ({ signal }) => getBook(initialBook.id, { signal }),
     initialData: initialBook,
     staleTime: Infinity,
@@ -255,20 +256,20 @@ function BookSettings({
   } | null>(null);
 
   const { data: chapters = [], isLoading: chaptersLoading } = useQuery({
-    queryKey: ["chapters", book.id],
+    queryKey: queryKeys.chapters(book.id),
     queryFn: fetchChapters,
     enabled: Boolean(book.immutable_path),
   });
 
   const { data: cleanedChapters = [], isLoading: cleanedChaptersLoading } =
     useQuery({
-      queryKey: ["cleaned-chapters", book.id],
+      queryKey: queryKeys.cleanedChapters(book.id),
       queryFn: fetchCleanedChapters,
       enabled: chapterPreviewMode === "cleaned" && Boolean(book.current_path),
     });
 
   const { data: matchedConfigs = [] } = useQuery({
-    queryKey: ["matched-config", book.id],
+    queryKey: queryKeys.matchedConfig(book.id),
     queryFn: fetchMatchedConfig,
   });
 
@@ -278,20 +279,23 @@ function BookSettings({
     isError: updateHistoryIsError,
     error: updateHistoryError,
   } = useQuery({
-    queryKey: ["book-update-history", book.id, book.content_version],
+    queryKey: queryKeys.bookUpdateHistory.version(
+      book.id,
+      book.content_version,
+    ),
     queryFn: fetchUpdateHistory,
     enabled: book.source_type === "web",
     refetchInterval: isRefreshing ? 5000 : false,
   });
 
   const { data: allSeries = [] } = useQuery({
-    queryKey: ["series"],
+    queryKey: queryKeys.series,
     queryFn: getSeries,
     staleTime: 60_000,
   });
 
   const { data: revisions = [] } = useQuery({
-    queryKey: ["book-revisions", book.id],
+    queryKey: queryKeys.bookRevisions(book.id),
     queryFn: ({ signal }) => getBookRevisions(book.id, { signal }),
   });
 
@@ -299,27 +303,16 @@ function BookSettings({
     mutationFn: (data: components["schemas"]["BookUpdate"]) =>
       updateBook(book.id, data),
     onSuccess: (updatedBook) => {
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["series"] });
+      queryClient.setQueryData(queryKeys.books.detail(book.id), updatedBook);
+      invalidateBookViews(queryClient, book.id);
     },
   });
 
   const enableAudiobookMutation = useMutation({
     mutationFn: () => updateBook(book.id, { audiobook_enabled: true }),
     onSuccess: (updatedBook) => {
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
+      queryClient.setQueryData(queryKeys.books.detail(book.id), updatedBook);
+      invalidateBookViews(queryClient, book.id);
       setBookTab("audiobook");
     },
   });
@@ -328,14 +321,9 @@ function BookSettings({
     mutationFn: () => processBook(book.id),
     onSuccess: () => {
       setJobNotice("EPUB cleaning job queued.");
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["cleaned-chapters", book.id],
+        queryKey: queryKeys.cleanedChapters(book.id),
       });
     },
   });
@@ -348,15 +336,10 @@ function BookSettings({
     mutationFn: () => refreshBook(book.id),
     onSuccess: (updatedBook) => {
       setJobNotice("Source refresh job queued.");
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.setQueryData(queryKeys.books.detail(book.id), updatedBook);
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["book-update-history", book.id],
+        queryKey: queryKeys.bookUpdateHistory.all(book.id),
       });
     },
   });
@@ -364,12 +347,7 @@ function BookSettings({
   const detachSourceMutation = useMutation({
     mutationFn: () => detachBookSource(book.id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
+      invalidateBookViews(queryClient, book.id);
       leavingDeliberately.current = true;
       onBack();
     },
@@ -378,12 +356,7 @@ function BookSettings({
   const deleteMutation = useMutation({
     mutationFn: () => deleteBook(book.id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
+      invalidateBookViews(queryClient, book.id);
       leavingDeliberately.current = true;
       onBack();
     },
@@ -394,19 +367,16 @@ function BookSettings({
     onSuccess: (updatedBook) => {
       setConfirmAction(null);
       setJobNotice("Original EPUB restored.");
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.setQueryData(queryKeys.books.detail(book.id), updatedBook);
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
+        queryKey: queryKeys.bookRevisions(book.id),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["book-revisions", book.id],
+        queryKey: queryKeys.chapters(book.id),
       });
-      void queryClient.invalidateQueries({ queryKey: ["chapters", book.id] });
       void queryClient.invalidateQueries({
-        queryKey: ["cleaned-chapters", book.id],
+        queryKey: queryKeys.cleanedChapters(book.id),
       });
     },
   });
@@ -416,15 +386,10 @@ function BookSettings({
       restoreBookRevision(book.id, revisionId),
     onSuccess: (updatedBook) => {
       setConfirmAction(null);
-      queryClient.setQueryData(["book", book.id], updatedBook);
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      queryClient.setQueryData(queryKeys.books.detail(book.id), updatedBook);
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["book-revisions", book.id],
+        queryKey: queryKeys.bookRevisions(book.id),
       });
     },
   });
@@ -450,13 +415,10 @@ function BookSettings({
     mutationFn: (file: File) => uploadBookCover(book.id, file),
     onSuccess: () => {
       bumpCoverVersion();
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
+        queryKey: queryKeys.books.detail(book.id),
       });
-      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
     },
   });
 
@@ -465,7 +427,7 @@ function BookSettings({
     onSuccess: () => {
       setJobNotice("Cover re-extraction job queued.");
       void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
+        queryKey: queryKeys.activeProcessingJobs,
       });
     },
   });
@@ -474,13 +436,10 @@ function BookSettings({
     mutationFn: (url: string) => setBookCoverUrl(book.id, url),
     onSuccess: () => {
       bumpCoverVersion();
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
-      void queryClient.invalidateQueries({ queryKey: ["library-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["series-books"] });
+      invalidateBookViews(queryClient, book.id);
       void queryClient.invalidateQueries({
-        queryKey: ["library-book-info", book.id],
+        queryKey: queryKeys.books.detail(book.id),
       });
-      void queryClient.invalidateQueries({ queryKey: ["book", book.id] });
       setCoverUrl("");
     },
   });

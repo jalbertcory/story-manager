@@ -1,6 +1,7 @@
 import { getLogs, getHealth, getJobMetrics } from "../api/admin";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../lib/queryKeys";
 
 const LEVELS = ["ALL", "ERROR", "WARNING", "INFO", "DEBUG"];
 
@@ -43,7 +44,7 @@ function Logs({ onBack }: { onBack?: () => void }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const logsQuery = useQuery({
-    queryKey: ["logs", level],
+    queryKey: queryKeys.logs(level),
     queryFn: ({ signal }) =>
       getLogs(
         { limit: 500, ...(level !== "ALL" ? { level } : {}) },
@@ -52,12 +53,12 @@ function Logs({ onBack }: { onBack?: () => void }) {
     refetchInterval: autoRefresh ? 3000 : false,
   });
   const healthQuery = useQuery({
-    queryKey: ["observability-health"],
+    queryKey: queryKeys.observabilityHealth,
     queryFn: getHealth,
     refetchInterval: autoRefresh ? 10000 : false,
   });
   const metricsQuery = useQuery({
-    queryKey: ["observability-job-metrics"],
+    queryKey: queryKeys.observabilityJobMetrics,
     queryFn: ({ signal }) => getJobMetrics(24, { signal }),
     refetchInterval: autoRefresh ? 10000 : false,
   });

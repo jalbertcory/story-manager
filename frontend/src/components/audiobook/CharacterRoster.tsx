@@ -11,6 +11,7 @@ import {
   updateCharacter,
 } from "../../api/audiobook";
 import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../../lib/queryKeys";
 
 function CharacterCard({
   character,
@@ -51,10 +52,10 @@ function CharacterCard({
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
     },
   });
@@ -69,10 +70,10 @@ function CharacterCard({
       setVoiceIdDirty(false);
       setSampleRevision(Date.now());
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
     },
   });
@@ -275,13 +276,13 @@ function CharacterRoster({
     onSuccess: () => {
       setConfirmProviderChange(false);
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     },
   });
@@ -290,16 +291,16 @@ function CharacterRoster({
     onSuccess: () => {
       setConfirmRegenerate(false);
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["active-processing-jobs"],
+        queryKey: queryKeys.activeProcessingJobs,
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     },
   });
@@ -307,7 +308,7 @@ function CharacterRoster({
     mutationFn: () => shareCharacterRosterWithSeries(bookId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
     },
   });

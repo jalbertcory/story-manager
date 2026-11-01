@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 
 import { getBookCatalog } from "../api/books";
 import useActiveProcessingJobs from "./useActiveProcessingJobs";
+import { queryKeys } from "../lib/queryKeys";
 
 type CatalogEntry = Awaited<ReturnType<typeof getBookCatalog>>["items"][number];
 
@@ -17,7 +18,7 @@ function useLibraryCatalog({
 }: Parameters<typeof getBookCatalog>[0] & { enabled?: boolean }) {
   const queryClient = useQueryClient();
   const catalog = useInfiniteQuery({
-    queryKey: ["book-catalog", params],
+    queryKey: queryKeys.bookCatalog.list(params),
     queryFn: ({ pageParam, signal }) =>
       getBookCatalog({ ...params, cursor: pageParam }, { signal }),
     initialPageParam: "",
@@ -42,7 +43,9 @@ function useLibraryCatalog({
     );
     previousJobIds.current = ids;
     if (finished)
-      void queryClient.invalidateQueries({ queryKey: ["book-catalog"] });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.bookCatalog.all,
+      });
   }, [jobs, queryClient]);
 
   return catalog;

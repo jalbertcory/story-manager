@@ -6,6 +6,7 @@ import {
 } from "../../api/audiobook";
 import { chapterLabel } from "../../lib/audiobook";
 import useLifecycleDefinitions from "../../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../../lib/queryKeys";
 
 function ChapterAssembly({
   chapters,
@@ -32,10 +33,10 @@ function ChapterAssembly({
       generateChapterPreview(bookId, chapterId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-status", bookId],
+        queryKey: queryKeys.audiobook.status(bookId),
       });
     },
   });

@@ -13,6 +13,7 @@ import {
 
 import { JOB_LABELS } from "../lib/processing";
 import ConfirmActionDialog from "./ConfirmActionDialog";
+import { queryKeys } from "../lib/queryKeys";
 
 // Library-wide jobs touch every book, so they are confirmed before queueing.
 const LIBRARY_ACTIONS = {
@@ -123,7 +124,7 @@ function ProcessingJobs() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["processing-jobs", statuses],
+    queryKey: queryKeys.processingJobs.list(statuses),
     queryFn: ({ signal }) =>
       getProcessingJobs({ statuses, limit: 200 }, { signal }),
     enabled: Boolean(processingLifecycle),
@@ -131,7 +132,7 @@ function ProcessingJobs() {
       state.data?.some((job) => activeStatuses.has(job.status)) ? 1500 : 5000,
   });
   const { data: catalogPage } = useQuery({
-    queryKey: ["processing-book-catalog", operation, debouncedBookSearch],
+    queryKey: queryKeys.processingBookCatalog(operation, debouncedBookSearch),
     queryFn: ({ signal }) =>
       getBookCatalog(
         {
@@ -162,9 +163,11 @@ function ProcessingJobs() {
   }, [catalog, debouncedBookSearch, operation]);
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
     void queryClient.invalidateQueries({
-      queryKey: ["active-processing-jobs"],
+      queryKey: queryKeys.processingJobs.all,
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.activeProcessingJobs,
     });
   };
   const queueMutation = useMutation({

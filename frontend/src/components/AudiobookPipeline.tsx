@@ -23,6 +23,7 @@ import ProgressDashboard from "./audiobook/ProgressDashboard";
 import AudiobookSources from "./audiobook/AudiobookSources";
 import { AUDIOBOOK_TABS } from "../lib/navigation";
 import useLifecycleDefinitions from "../hooks/useLifecycleDefinitions";
+import { queryKeys } from "../lib/queryKeys";
 
 function PipelineProgress({
   status,
@@ -185,7 +186,7 @@ function AudiobookPipeline({
     activeStatuses.has(status ?? "");
 
   const { data: statusData } = useQuery({
-    queryKey: ["audiobook-status", bookId],
+    queryKey: queryKeys.audiobook.status(bookId),
     queryFn: ({ signal }) => getAudiobookStatus(bookId, { signal }),
     enabled: aiEnabled,
     refetchInterval: ({ state }) => {
@@ -197,13 +198,13 @@ function AudiobookPipeline({
   });
 
   const { data: characters = [] } = useQuery({
-    queryKey: ["audiobook-characters", bookId],
+    queryKey: queryKeys.audiobook.characters(bookId),
     queryFn: ({ signal }) => getCharacters(bookId, { signal }),
     enabled: aiEnabled,
   });
 
   const { data: imports = [] } = useQuery({
-    queryKey: ["audiobook-imports", bookId],
+    queryKey: queryKeys.audiobook.imports(bookId),
     queryFn: ({ signal }) => getImportedAudiobooks(bookId, { signal }),
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
@@ -214,7 +215,7 @@ function AudiobookPipeline({
   const importedAudiobooks = Array.isArray(imports) ? imports : [];
 
   const { data: chapters = [] } = useQuery({
-    queryKey: ["audiobook-chapters", bookId],
+    queryKey: queryKeys.audiobook.chapters(bookId),
     queryFn: ({ signal }) => getAudiobookChapters(bookId, { signal }),
     refetchInterval: ({ state }) => {
       const s = statusData?.pipeline_status;
@@ -231,13 +232,13 @@ function AudiobookPipeline({
 
   const invalidateAll = () => {
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-status", bookId],
+      queryKey: queryKeys.audiobook.status(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-characters", bookId],
+      queryKey: queryKeys.audiobook.characters(bookId),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["audiobook-chapters", bookId],
+      queryKey: queryKeys.audiobook.chapters(bookId),
     });
   };
 
@@ -305,10 +306,10 @@ function AudiobookPipeline({
   useEffect(() => {
     if (aiEnabled && pipelineStatus !== undefined) {
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-characters", bookId],
+        queryKey: queryKeys.audiobook.characters(bookId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["audiobook-chapters", bookId],
+        queryKey: queryKeys.audiobook.chapters(bookId),
       });
     }
   }, [aiEnabled, bookId, pipelineStatus, queryClient]);

@@ -21,6 +21,7 @@ import LibraryToolbar from "./library/LibraryToolbar";
 import SavedLibraryViews from "./library/SavedLibraryViews";
 import SeriesOrganizer from "./library/SeriesOrganizer";
 import Icon from "./ui/Icon";
+import { queryKeys } from "../lib/queryKeys";
 
 export default function LibraryWorkspace({
   search,
@@ -104,7 +105,7 @@ export default function LibraryWorkspace({
     sortOrder: order,
   };
   const groups = useInfiniteQuery({
-    queryKey: ["library-groups", { groupBy, ...request }],
+    queryKey: queryKeys.libraryGroups.list({ groupBy, ...request }),
     queryFn: ({ pageParam, signal }) =>
       getLibraryGroups(
         {
@@ -135,7 +136,7 @@ export default function LibraryWorkspace({
   const facets = active.data?.pages[0]?.facets;
   const total = active.data?.pages[0]?.total_count;
   const allSeries = useQuery({
-    queryKey: ["series"],
+    queryKey: queryKeys.series,
     queryFn: getSeries,
     enabled: assigningSeries,
   });

@@ -46,6 +46,7 @@ import {
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
 import { onUnauthorized } from "./lib/authSession";
+import { queryKeys } from "./lib/queryKeys";
 
 const NAV_ICONS: Record<string, IconName> = {
   library: "library",
@@ -195,7 +196,7 @@ export default function App() {
   }, [location]);
 
   const bookQuery = useQuery({
-    queryKey: ["book", route.bookId],
+    queryKey: queryKeys.books.detail(route.bookId),
     queryFn: ({ signal }) => {
       if (route.bookId == null) throw new Error("No book selected");
       return getBook(route.bookId, { signal });
@@ -208,7 +209,7 @@ export default function App() {
   });
   const { data: jobs = [] } = useActiveProcessingJobs(authenticated);
   const attention = useQuery({
-    queryKey: ["attention-dashboard"],
+    queryKey: queryKeys.attentionDashboard,
     queryFn: ({ signal }) => getAttentionDashboard(5, { signal }),
     enabled: authenticated && activeTab === "attention",
     staleTime: 30000,
