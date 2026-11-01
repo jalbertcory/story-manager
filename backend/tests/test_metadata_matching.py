@@ -20,12 +20,11 @@ from backend.app.services.metadata.scoring import (
     title_similarity,
 )
 from backend.app.services.metadata_jobs import _sync_one_book, approve_metadata_match
-from backend.app.services.metadata_sync import MetadataSuggestion
+from backend.app.services.metadata.providers.google_books import GoogleBooksMatch, _google_books_metadata_details
+from backend.app.services.metadata.suggestion import MetadataSuggestion
 from backend.app.services.metadata_sync import (
-    GoogleBooksMatch,
     _annotate_duplicate_assignments,
     _build_suggestions_for_book,
-    _google_books_metadata_details,
     allocate_unique_candidate_suggestions,
 )
 from backend.app.services.series import enrich_series_metadata
@@ -499,8 +498,8 @@ def test_provider_candidates_compete_in_one_ranked_pool(mocker):
     )
     mocker.patch("backend.app.services.metadata_sync._collect_google_books_matches", return_value=[google_match])
     mocker.patch("backend.app.services.metadata_sync._collect_amazon_matches", return_value=[])
-    mocker.patch("backend.app.services.metadata_sync._fetch_work_data", return_value={})
-    mocker.patch("backend.app.services.metadata_sync._fetch_author_work_entries", return_value=[])
+    mocker.patch("backend.app.services.metadata.providers.open_library._fetch_work_data", return_value={})
+    mocker.patch("backend.app.services.metadata.providers.open_library._fetch_author_work_entries", return_value=[])
 
     suggestions = _build_suggestions_for_book(book, {"elodie martin": [book]}, {}, max_candidates=5)
 
@@ -534,8 +533,8 @@ def test_two_independent_providers_create_near_perfect_corroborated_match(mocker
     )
     mocker.patch("backend.app.services.metadata_sync._collect_google_books_matches", return_value=[google_match])
     mocker.patch("backend.app.services.metadata_sync._collect_amazon_matches", return_value=[])
-    mocker.patch("backend.app.services.metadata_sync._fetch_work_data", return_value={})
-    mocker.patch("backend.app.services.metadata_sync._fetch_author_work_entries", return_value=[])
+    mocker.patch("backend.app.services.metadata.providers.open_library._fetch_work_data", return_value={})
+    mocker.patch("backend.app.services.metadata.providers.open_library._fetch_author_work_entries", return_value=[])
 
     suggestions = _build_suggestions_for_book(book, {"elodie martin": [book]}, {}, max_candidates=5)
 

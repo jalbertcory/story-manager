@@ -13,10 +13,10 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, models, schemas
+from .metadata.suggestion import MetadataSuggestion
 from .metadata_sync import (
     AUTO_APPROVE_THRESHOLD,
     PROPOSAL_THRESHOLD,
-    MetadataSuggestion,
     apply_suggestion_to_book,
     generate_candidate_suggestions,
 )
