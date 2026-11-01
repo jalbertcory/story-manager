@@ -6,7 +6,12 @@ import "./index.css";
 import App from "./App";
 import { applyThemePreference, readThemePreference } from "./lib/theme";
 import { createQueryClient } from "./lib/queryClient";
-import { reloadAfterStaleChunk } from "./lib/staleChunk";
+import {
+  consumeStaleChunkMarker,
+  reloadAfterStaleChunk,
+} from "./lib/staleChunk";
+
+consumeStaleChunkMarker();
 
 // Apply the saved theme before the first render to avoid a flash of the
 // wrong colors.
