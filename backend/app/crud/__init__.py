@@ -23,6 +23,7 @@ from .books import (  # noqa: F401
     get_pending_refresh_books as get_pending_refresh_books,
     get_pending_web_books as get_pending_web_books,
     get_web_books as get_web_books,
+    lock_book_for_update as lock_book_for_update,
     reset_failed_web_book_for_retry as reset_failed_web_book_for_retry,
     recycle_all_books as recycle_all_books,
     recycle_book as recycle_book,
