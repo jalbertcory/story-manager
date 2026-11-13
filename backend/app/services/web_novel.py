@@ -755,7 +755,13 @@ def _failure_reason(exc: BaseException) -> str:
     return (reason or type(exc).__name__)[:300]
 
 
-async def _log_failed_check(db: AsyncSession, book_id: int, reason: str, chapter_count: int | None = None) -> None:
+async def _log_failed_check(
+    db: AsyncSession,
+    book_id: int,
+    reason: str,
+    chapter_count: int | None = None,
+    update_task_id: int | None = None,
+) -> None:
     await crud.create_book_log(
         db,
         schemas.BookLogCreate(
@@ -766,6 +772,7 @@ async def _log_failed_check(db: AsyncSession, book_id: int, reason: str, chapter
             words_added=0,
             detail=reason,
         ),
+        update_task_id=update_task_id,
     )
 
 
@@ -966,7 +973,7 @@ async def update_web_novels() -> None:
                         new_chapter_count=old_chapter_count,
                         words_added=0,
                     )
-                    await crud.create_book_log(db, log_entry)
+                    await crud.create_book_log(db, log_entry, update_task_id=task.id)
                     continue
 
                 new_epub_path, _ = result
@@ -1000,13 +1007,13 @@ async def update_web_novels() -> None:
                 book.current_word_count = new_word_count
                 await crud.touch_book_content(db, book)
                 await db.commit()
-                await crud.create_book_log(db, log_entry)
+                await crud.create_book_log(db, log_entry, update_task_id=task.id)
                 await epub_editor.apply_book_cleaning(book, db)
                 await _enqueue_audiobook_refresh(book, db)
             except Exception as e:
                 had_book_failures = True
                 logger.error(f"Failed to update {book.title}: {e}\n{traceback.format_exc()}")
-                await _log_failed_check(db, book.id, _failure_reason(e), old_chapter_count)
+                await _log_failed_check(db, book.id, _failure_reason(e), old_chapter_count, task.id)
             finally:
                 await crud.increment_update_task(db, task)
     except Exception as e:

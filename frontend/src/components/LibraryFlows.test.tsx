@@ -233,6 +233,35 @@ describe("Library workflow actions", () => {
     expect(screen.getByText("A changed novel")).toBeInTheDocument();
   });
 
+  it("does not present an interrupted run as a full check", async () => {
+    mockFetch((url) => {
+      if (url.startsWith("/api/scheduler/history"))
+        return ok([
+          {
+            id: 10,
+            status: "interrupted",
+            total_books: 100,
+            completed_books: 2,
+            started_at: new Date(Date.now() - 3600000).toISOString(),
+            completed_at: new Date(Date.now() - 3500000).toISOString(),
+            updated_count: 0,
+            unchanged_count: 2,
+            failed_count: 0,
+          },
+        ] satisfies components["schemas"]["UpdateTaskSummary"][]);
+      if (url.startsWith("/api/books/catalog?"))
+        return ok({ items: [], next_cursor: null, total_count: 0 });
+      return ok([]);
+    });
+    renderWithClient(<WebUpdates onEdit={vi.fn()} />);
+    expect(
+      await screen.findByText(
+        /Last check was interrupted .* after 2 of 100 stories · 0 updated · 2 unchanged · 0 failed/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Last full check/)).not.toBeInTheDocument();
+  });
+
   it("only offers pending match decisions in the review queue", async () => {
     const pending = metadataMatch({
       id: 1,

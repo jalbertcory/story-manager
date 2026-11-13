@@ -123,7 +123,10 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
             <p className="hint">
               {lastRun.status === "running"
                 ? `Checking every story now (${lastRun.completed_books} of ${lastRun.total_books})`
-                : `Last full check ${timeAgo(lastRun.completed_at || lastRun.started_at)}`}
+                : lastRun.status === "interrupted" ||
+                    lastRun.completed_books < lastRun.total_books
+                  ? `Last check was interrupted ${timeAgo(lastRun.completed_at || lastRun.started_at)} after ${lastRun.completed_books} of ${lastRun.total_books} stories`
+                  : `Last full check ${timeAgo(lastRun.completed_at || lastRun.started_at)}`}
               {" · "}
               {lastRun.updated_count} updated · {lastRun.unchanged_count}{" "}
               unchanged · {lastRun.failed_count} failed
