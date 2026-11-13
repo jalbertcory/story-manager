@@ -64,6 +64,7 @@ export const queryKeys = {
   schedulerStatus: ["scheduler-status"] as const,
   schedulerJob: ["scheduler-job"] as const,
   schedulerHistory: ["scheduler-history"] as const,
+  schedulerLatestRun: ["scheduler-history", "latest"] as const,
   taskLogs: (taskId: number) => ["task-logs", taskId] as const,
   webUpdateSchedule: ["web-update-schedule"] as const,
   webChecks: ["web-checks"] as const,

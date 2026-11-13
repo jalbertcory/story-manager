@@ -91,13 +91,12 @@ function TaskLogsList({ taskId }: { taskId: number }) {
 
   return (
     <div className="task-logs">
-      <p>
-        {updatedLogs.length} updated · {checkedLogs.length} unchanged ·{" "}
-        {errorLogs.length} failed
-      </p>
       {errorLogs.length > 0 && (
         <div>
-          <p className="task-logs-group-label">Errors ({errorLogs.length})</p>
+          <p className="task-logs-group-label">
+            Failed ({errorLogs.length}) ·{" "}
+            <a href="/updates?show=error">Retry on Web updates</a>
+          </p>
           <ul className="task-logs-list">
             {errorLogs.map((log) => (
               <li key={log.id} className="task-log-entry">
@@ -107,9 +106,9 @@ function TaskLogsList({ taskId }: { taskId: number }) {
                 >
                   {log.book_title}
                 </a>
-                <a className="task-log-detail" href="/updates">
-                  Review failed check
-                </a>
+                <span className="task-log-detail">
+                  {log.detail || "No reason was recorded"}
+                </span>
               </li>
             ))}
           </ul>
@@ -200,6 +199,17 @@ function TaskHistoryRow({
           {task.status}
         </span>
         <span className="task-history-date">{formatDate(task.started_at)}</span>
+        <span className="task-history-outcome">
+          <span className={task.updated_count ? "task-outcome-updated" : ""}>
+            {task.updated_count} updated
+          </span>
+          {" · "}
+          {task.unchanged_count} unchanged
+          {" · "}
+          <span className={task.failed_count ? "task-outcome-failed" : ""}>
+            {task.failed_count} failed
+          </span>
+        </span>
         <span className="hint">
           {task.completed_books} / {task.total_books} books
         </span>
@@ -303,9 +313,20 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
           <h2>Scheduler</h2>
         </div>
       )}
+      {!onBack && (
+        <div className="workspace-heading">
+          <div>
+            <h2>Scheduled update checks</h2>
+            <p className="hint">
+              When web stories are checked for new chapters, and what each check
+              found. <a href="/updates">See results by story</a>
+            </p>
+          </div>
+        </div>
+      )}
 
       <section className="settings-section">
-        <h3>Automatic Schedule</h3>
+        <h3>Automatic schedule</h3>
         {jobLoading && <p>Loading...</p>}
         {job && (
           <>
@@ -413,7 +434,7 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
           onClick={() => triggerMutation.mutate()}
           disabled={isRunning || triggerMutation.isPending}
         >
-          {triggerMutation.isPending ? "Queueing..." : "Queue Run Now"}
+          {triggerMutation.isPending ? "Queueing..." : "Check for updates now"}
         </button>
         {triggerMutation.isError && (
           <p className="error" role="alert">
@@ -422,13 +443,14 @@ function SchedulerStatus({ onBack }: { onBack?: () => void }) {
         )}
         {triggerMutation.isSuccess && !isRunning && (
           <p className="job-queued-notice">
-            Library refresh queued. <a href="/processing">View processing</a>
+            Update check queued.{" "}
+            <a href="/activity/processing">View processing</a>
           </p>
         )}
       </section>
 
       <section className="settings-section">
-        <h3>Run History</h3>
+        <h3>Previous checks</h3>
         {historyLoading && <p>Loading...</p>}
         {!historyLoading && (!history || history.length === 0) && (
           <p className="hint">No history yet.</p>

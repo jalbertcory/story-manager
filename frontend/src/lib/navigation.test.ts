@@ -16,7 +16,7 @@ describe("application navigation", () => {
     ).toEqual([
       { key: "library", label: "Library", path: "/" },
       { key: "updates", label: "Web updates", path: "/updates" },
-      { key: "review", label: "Review suggestions", path: "/review" },
+      { key: "review", label: "Metadata review", path: "/review" },
       { key: "activity", label: "Background activity", path: "/activity" },
       { key: "settings", label: "Settings", path: "/settings" },
     ]);

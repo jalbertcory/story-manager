@@ -155,27 +155,68 @@ describe("Library workflow actions", () => {
       if (url === "/api/library/web-checks")
         return ok([
           {
-            id: 1,
             book_id: 1,
-            book_title: "A changed novel",
-            entry_type: "updated",
-            timestamp: "2026-09-04T12:00:00Z",
-            previous_chapter_count: 10,
+            entry_type: "checked",
+            detail: null,
+            timestamp: new Date().toISOString(),
+            previous_chapter_count: 12,
             new_chapter_count: 12,
-            words_added: null,
+            words_added: 0,
+            last_update_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+            last_update_chapters_added: 2,
+            last_update_words_added: 4000,
           },
-        ] satisfies components["schemas"]["BookLogWithTitle"][]);
+          {
+            book_id: 2,
+            entry_type: "error",
+            detail: "Source site returned 404",
+            timestamp: new Date().toISOString(),
+            previous_chapter_count: 5,
+            new_chapter_count: 5,
+            words_added: 0,
+            last_update_at: null,
+            last_update_chapters_added: null,
+            last_update_words_added: null,
+          },
+        ] satisfies components["schemas"]["WebCheck"][]);
+      if (url.startsWith("/api/scheduler/history"))
+        return ok([
+          {
+            id: 9,
+            status: "failed",
+            total_books: 2,
+            completed_books: 2,
+            started_at: new Date(Date.now() - 3600000).toISOString(),
+            completed_at: new Date(Date.now() - 3500000).toISOString(),
+            updated_count: 0,
+            unchanged_count: 1,
+            failed_count: 1,
+          },
+        ] satisfies components["schemas"]["UpdateTaskSummary"][]);
       return ok([]);
     });
     renderWithClient(<WebUpdates onEdit={vi.fn()} />);
     expect(
-      await screen.findByText("1 novel needs attention"),
+      await screen.findByText("1 update check failed"),
+    ).toBeInTheDocument();
+    // The failure says why, and the run summary is visible without expanding anything.
+    expect(
+      screen.getByText("Update check failed: Source site returned 404"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/0 updated · 1 unchanged · 1 failed/),
     ).toBeInTheDocument();
     const bookLinks = screen
       .getAllByRole("link")
       .filter((link) => link.getAttribute("href")?.startsWith("/books/"));
     expect(bookLinks[0]).toHaveTextContent("Z failed novel");
-    expect(screen.getByText(/2 chapters added/)).toBeInTheDocument();
+    // A later "nothing new" check does not hide the last real update.
+    expect(
+      screen.getByText("Checked, nothing new · just now"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Last update: 2 new chapters · 2d ago"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry check" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -186,10 +227,39 @@ describe("Library workflow actions", () => {
       ),
     );
     fireEvent.change(screen.getByLabelText("Filter web updates"), {
-      target: { value: "updated" },
+      target: { value: "recent" },
     });
     expect(screen.queryByText("Z failed novel")).not.toBeInTheDocument();
     expect(screen.getByText("A changed novel")).toBeInTheDocument();
+  });
+
+  it("does not present an interrupted run as a full check", async () => {
+    mockFetch((url) => {
+      if (url.startsWith("/api/scheduler/history"))
+        return ok([
+          {
+            id: 10,
+            status: "interrupted",
+            total_books: 100,
+            completed_books: 2,
+            started_at: new Date(Date.now() - 3600000).toISOString(),
+            completed_at: new Date(Date.now() - 3500000).toISOString(),
+            updated_count: 0,
+            unchanged_count: 2,
+            failed_count: 0,
+          },
+        ] satisfies components["schemas"]["UpdateTaskSummary"][]);
+      if (url.startsWith("/api/books/catalog?"))
+        return ok({ items: [], next_cursor: null, total_count: 0 });
+      return ok([]);
+    });
+    renderWithClient(<WebUpdates onEdit={vi.fn()} />);
+    expect(
+      await screen.findByText(
+        /Last check was interrupted .* after 2 of 100 stories · 0 updated · 2 unchanged · 0 failed/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Last full check/)).not.toBeInTheDocument();
   });
 
   it("only offers pending match decisions in the review queue", async () => {

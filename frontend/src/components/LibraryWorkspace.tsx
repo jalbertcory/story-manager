@@ -10,8 +10,13 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { BookCatalogParams } from "../api/books";
 import { getSeries } from "../api/series";
-import { getLibraryGroups } from "../api/library";
-import { libraryPath } from "../lib/library";
+import { getLibraryGroups, getWebChecks } from "../api/library";
+import {
+  isRecentUpdate,
+  lastUpdateLabel,
+  libraryPath,
+  RECENT_UPDATE_DAYS,
+} from "../lib/library";
 import useLibraryCatalog from "../hooks/useLibraryCatalog";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { BookRow } from "./book-list/BookCards";
@@ -162,6 +167,20 @@ export default function LibraryWorkspace({
     queryFn: getSeries,
     enabled: assigningSeries,
   });
+  const webChecks = useQuery({
+    queryKey: queryKeys.webChecks,
+    queryFn: getWebChecks,
+    staleTime: 60000,
+  });
+  const recentUpdates = new Map(
+    (webChecks.data || [])
+      .filter((check) => isRecentUpdate(check))
+      .map((check) => [check.book_id, check]),
+  );
+  const updateStatus = (bookId: number) => {
+    const label = lastUpdateLabel(recentUpdates.get(bookId));
+    return label ? { tone: "success", label } : null;
+  };
   const loading =
     active.isLoading || (flattenStandalone && standalone.isLoading);
   useEffect(() => {
@@ -245,6 +264,14 @@ export default function LibraryWorkspace({
           Add books
         </a>
       </div>
+      {series == null && universe == null && recentUpdates.size > 0 && (
+        <p className="hint library-updates-hint">
+          {recentUpdates.size}{" "}
+          {recentUpdates.size === 1 ? "story has" : "stories have"} new chapters
+          from the last {RECENT_UPDATE_DAYS} days.{" "}
+          <a href="/updates?show=recent">See what changed</a>
+        </p>
+      )}
       <LibraryToolbar
         filtersOpen={filtersOpen}
         onFiltersToggle={onFiltersToggle}
@@ -318,7 +345,12 @@ export default function LibraryWorkspace({
       {!loading && standaloneItems.length > 0 && (
         <div className="library-book-list">
           {standaloneItems.map((book) => (
-            <BookRow key={book.id} book={book} onEdit={openBook} />
+            <BookRow
+              key={book.id}
+              book={book}
+              onEdit={openBook}
+              status={updateStatus(book.id)}
+            />
           ))}
         </div>
       )}
@@ -379,6 +411,7 @@ export default function LibraryWorkspace({
                 key={book.id}
                 book={book}
                 onEdit={openBook}
+                status={updateStatus(book.id)}
                 actions={
                   assigningSeries && allSeries.data ? (
                     <StandaloneTagAction

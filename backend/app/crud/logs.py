@@ -10,9 +10,9 @@ from .. import models, schemas
 from ..lifecycle import UPDATE_TASK, UpdateTaskStatus, transition_state
 
 
-async def create_book_log(db: AsyncSession, log: schemas.BookLogCreate) -> models.BookLog:
-    """Create a new book log entry in the database."""
-    db_log = models.BookLog(**log.model_dump())
+async def create_book_log(db: AsyncSession, log: schemas.BookLogCreate, update_task_id: int | None = None) -> models.BookLog:
+    """Create a new book log entry, tied to the scheduled run that produced it (if any)."""
+    db_log = models.BookLog(**log.model_dump(), update_task_id=update_task_id)
     db.add(db_log)
     await db.commit()
     await db.refresh(db_log)
@@ -101,6 +101,16 @@ async def get_update_tasks(db: AsyncSession, limit: int = 20, offset: int = 0) -
     return list(result.scalars().all())
 
 
+async def count_book_logs_for_task(db: AsyncSession, task: models.UpdateTask) -> dict[str, int]:
+    """Number of log entries of each type written by a run."""
+    result = await db.execute(
+        select(models.BookLog.entry_type, func.count(models.BookLog.id))
+        .filter(models.BookLog.update_task_id == task.id)
+        .group_by(models.BookLog.entry_type)
+    )
+    return {entry_type: count for entry_type, count in result.all()}
+
+
 async def get_book_logs_for_task(
     db: AsyncSession, task_id: int
 ) -> tuple[models.UpdateTask, list[tuple[models.BookLog, str | None]]] | tuple[None, None]:
@@ -109,17 +119,10 @@ async def get_book_logs_for_task(
     if task is None:
         return None, None
 
-    from datetime import timedelta
-
-    start_filter = task.started_at - timedelta(seconds=1) if task.started_at else None
-    conditions = [models.BookLog.timestamp >= start_filter] if start_filter is not None else []
-    if task.completed_at:
-        conditions.append(models.BookLog.timestamp <= task.completed_at)
-
     result = await db.execute(
         select(models.BookLog, models.Book.title)
         .join(models.Book, models.BookLog.book_id == models.Book.id)
-        .filter(*conditions)
+        .filter(models.BookLog.update_task_id == task.id)
         .order_by(models.BookLog.timestamp.asc())
     )
     return task, [(log, title) for log, title in result.all()]

@@ -161,6 +161,7 @@ class BookLogCreate(BaseModel):
     previous_chapter_count: Optional[int] = None
     new_chapter_count: Optional[int] = None
     words_added: Optional[int] = None
+    detail: Optional[str] = None
 
 
 # Pydantic model for reading a book log.
@@ -211,6 +212,14 @@ class UpdateTask(BaseModel):
     status: str
     started_at: datetime
     completed_at: Optional[datetime] = None
+
+
+class UpdateTaskSummary(UpdateTask):
+    """A run plus how its per-book checks turned out."""
+
+    updated_count: int
+    unchanged_count: int
+    failed_count: int
 
 
 class SchedulerJobStatus(BaseModel):

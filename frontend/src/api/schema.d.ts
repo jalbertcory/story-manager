@@ -3355,6 +3355,8 @@ export interface components {
             book_id: number;
             /** Book Title */
             book_title: string;
+            /** Detail */
+            detail: string | null;
             /** Entry Type */
             entry_type: string;
             /** Id */
@@ -5444,6 +5446,33 @@ export interface components {
             /** Total Books */
             total_books: number;
         };
+        /**
+         * UpdateTaskSummary
+         * @description A run plus how its per-book checks turned out.
+         */
+        UpdateTaskSummary: {
+            /** Completed At */
+            completed_at: string | null;
+            /** Completed Books */
+            completed_books: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Id */
+            id: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /** Total Books */
+            total_books: number;
+            /** Unchanged Count */
+            unchanged_count: number;
+            /** Updated Count */
+            updated_count: number;
+        };
         /** UpgradeImportedAudiobookPayload */
         UpgradeImportedAudiobookPayload: {
             /** Format Version */
@@ -5497,8 +5526,16 @@ export interface components {
         WebCheck: {
             /** Book Id */
             book_id: number;
+            /** Detail */
+            detail: string | null;
             /** Entry Type */
             entry_type: string;
+            /** Last Update At */
+            last_update_at: string | null;
+            /** Last Update Chapters Added */
+            last_update_chapters_added: number | null;
+            /** Last Update Words Added */
+            last_update_words_added: number | null;
             /** New Chapter Count */
             new_chapter_count: number | null;
             /** Previous Chapter Count */
@@ -9362,7 +9399,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UpdateTask"][];
+                    "application/json": components["schemas"]["UpdateTaskSummary"][];
                 };
             };
             /** @description Validation Error */

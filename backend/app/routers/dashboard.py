@@ -95,10 +95,12 @@ async def _failed_refreshes(db: AsyncSession, limit: int) -> schemas.AttentionBo
     )
     count = await db.scalar(select(func.count()).select_from(query.subquery()))
     books = list((await db.execute(query.limit(limit))).scalars().all())
-    return schemas.AttentionBookCategory(
-        count=count or 0,
-        items=[_book_item(book, "refresh_failed", "The most recent source refresh failed.") for book in books],
-    )
+    items = []
+    for book in books:
+        latest = await crud.get_latest_book_log(db, book.id)
+        reason = latest.detail if latest is not None and latest.entry_type == "error" else None
+        items.append(_book_item(book, "refresh_failed", reason or "The most recent update check failed."))
+    return schemas.AttentionBookCategory(count=count or 0, items=items)
 
 
 async def _stale_audiobooks(db: AsyncSession, limit: int) -> schemas.AttentionBookCategory:

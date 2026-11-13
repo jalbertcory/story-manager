@@ -136,14 +136,46 @@ async def web_checks(db: AsyncSession = Depends(get_db)) -> list[contracts.WebCh
         .subquery()
     )
     result = await db.execute(select(models.BookLog).join(latest, models.BookLog.id == latest.c.id).where(latest.c.rank == 1))
-    return [
-        {
-            "book_id": row.book_id,
-            "entry_type": row.entry_type,
-            "timestamp": row.timestamp,
-            "previous_chapter_count": row.previous_chapter_count,
-            "new_chapter_count": row.new_chapter_count,
-            "words_added": row.words_added,
-        }
-        for row in result.scalars()
-    ]
+    # The latest check is usually "no changes", so the last check that actually
+    # brought in chapters is reported alongside it.
+    latest_update = (
+        select(
+            models.BookLog.id,
+            func.row_number()
+            .over(partition_by=models.BookLog.book_id, order_by=(models.BookLog.timestamp.desc(), models.BookLog.id.desc()))
+            .label("rank"),
+        )
+        .where(models.BookLog.entry_type == "updated")
+        .subquery()
+    )
+    updates = {
+        row.book_id: row
+        for row in (
+            await db.execute(
+                select(models.BookLog)
+                .join(latest_update, models.BookLog.id == latest_update.c.id)
+                .where(latest_update.c.rank == 1)
+            )
+        ).scalars()
+    }
+    checks: list[contracts.WebCheck] = []
+    for row in result.scalars():
+        update = updates.get(row.book_id)
+        chapters_added = None
+        if update is not None and update.new_chapter_count is not None:
+            chapters_added = max(update.new_chapter_count - (update.previous_chapter_count or 0), 0)
+        checks.append(
+            {
+                "book_id": row.book_id,
+                "entry_type": row.entry_type,
+                "timestamp": row.timestamp,
+                "previous_chapter_count": row.previous_chapter_count,
+                "new_chapter_count": row.new_chapter_count,
+                "words_added": row.words_added,
+                "detail": row.detail,
+                "last_update_at": update.timestamp if update is not None else None,
+                "last_update_chapters_added": chapters_added,
+                "last_update_words_added": update.words_added if update is not None else None,
+            }
+        )
+    return checks

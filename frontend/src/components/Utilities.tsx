@@ -9,14 +9,14 @@ import SeriesDetectionPanel from "./utilities/SeriesDetectionPanel";
 import StorageCleanupPanel from "./utilities/StorageCleanupPanel";
 
 const utilityPages = [
-  { key: "audit", label: "Library Audit" },
-  { key: "series", label: "Detect Series" },
-  { key: "metadata", label: "Sync Online Metadata" },
-  { key: "audiobooks", label: "Audiobooks" },
-  { key: "recycle-bin", label: "Recycle Bin" },
-  { key: "storage", label: "Storage Cleanup" },
-  { key: "backups", label: "Backup & Restore" },
-  { key: "reader-access", label: "Reader API Keys" },
+  { key: "audit", label: "Library audit" },
+  { key: "series", label: "Series detection" },
+  { key: "metadata", label: "Sync online metadata" },
+  { key: "audiobooks", label: "Audiobook maintenance" },
+  { key: "recycle-bin", label: "Recycle bin" },
+  { key: "storage", label: "Storage cleanup" },
+  { key: "backups", label: "Backups" },
+  { key: "reader-access", label: "Reader access" },
 ];
 
 function getRequestedUtilityTab(search: string) {
@@ -52,7 +52,7 @@ function Utilities({
         )}
         <h2>
           {reviewOnly
-            ? "Review suggestions"
+            ? "Metadata review"
             : utilityPages.find((page) => page.key === activeTab)?.label}
         </h2>
       </div>

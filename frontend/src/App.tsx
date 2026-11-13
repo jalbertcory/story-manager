@@ -17,6 +17,7 @@ import { getAuthStatus, logout } from "./api/auth";
 import { getBook } from "./api/books";
 import useActiveProcessingJobs from "./hooks/useActiveProcessingJobs";
 import { getAttentionDashboard } from "./api/dashboard";
+import { getWebChecks } from "./api/library";
 import AdminLogin from "./components/AdminLogin";
 import ErrorBoundary from "./components/ErrorBoundary";
 import NotFound from "./components/NotFound";
@@ -213,6 +214,16 @@ export default function App() {
         : false,
   });
   const { data: jobs = [] } = useActiveProcessingJobs(authenticated);
+  // Failed update checks are the one thing on Web updates that needs action.
+  const webChecks = useQuery({
+    queryKey: queryKeys.webChecks,
+    queryFn: getWebChecks,
+    enabled: authenticated,
+    refetchInterval: 60000,
+  });
+  const failedChecks = (webChecks.data || []).filter(
+    (check) => check.entry_type === "error",
+  ).length;
   const attention = useQuery({
     queryKey: queryKeys.attentionDashboard,
     queryFn: ({ signal }) => getAttentionDashboard(5, { signal }),
@@ -478,6 +489,14 @@ export default function App() {
               <span className="nav-label-short" aria-hidden="true">
                 {item.shortLabel}
               </span>
+              {item.key === "updates" && failedChecks > 0 && (
+                <span
+                  className="workspace-count workspace-count--alert"
+                  aria-label={`${failedChecks} failed update ${failedChecks === 1 ? "check" : "checks"}`}
+                >
+                  {failedChecks}
+                </span>
+              )}
               {item.key === "activity" && jobs.length > 0 && (
                 <span
                   className="workspace-count"

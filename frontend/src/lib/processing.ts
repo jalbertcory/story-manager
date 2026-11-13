@@ -1,8 +1,8 @@
 export const JOB_LABELS: Record<string, string> = {
   clean_book: "Clean book",
   clean_all: "Clean library",
-  refresh_book: "Refresh book",
-  refresh_all: "Refresh web library",
+  refresh_book: "Check story for updates",
+  refresh_all: "Check all web stories for updates",
   audiobook_pipeline: "Generate AI audiobook",
   import_audiobook: "Import human audiobook",
   upgrade_imported_audiobook: "Upgrade human audiobook files",

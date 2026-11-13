@@ -1,13 +1,13 @@
 import type { CSSProperties } from "react";
 import type { Book, BookSectionChange } from "../types";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBookCleanedChapters, refreshBook } from "../api/books";
-import { getLibraryBookInfo } from "../api/library";
+import { getLibraryBookInfo, getWebChecks } from "../api/library";
 import { getApiCoverUrl } from "../api/covers";
 import { sanitizeChapterHtml } from "../lib/chapterHtml";
 import UniverseMembership from "./UniverseMembership";
-import { libraryPath } from "../lib/library";
+import { checkResult, lastUpdateLabel, libraryPath } from "../lib/library";
 import Icon from "./ui/Icon";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -44,6 +44,20 @@ export default function BookOverview({
     },
   });
   const checking = ["queued", "processing"].includes(book.refresh_status || "");
+  const isWeb = book.source_type === "web";
+  const webChecks = useQuery({
+    queryKey: queryKeys.webChecks,
+    queryFn: getWebChecks,
+    enabled: isWeb,
+  });
+  // A check that just finished has a new result to show.
+  useEffect(() => {
+    if (isWeb && !checking)
+      void client.invalidateQueries({ queryKey: queryKeys.webChecks });
+  }, [client, isWeb, checking]);
+  const check = webChecks.data?.find((item) => item.book_id === book.id);
+  const lastCheck = checkResult(book, check);
+  const lastUpdate = lastUpdateLabel(check);
   const data = info.data;
   return (
     <section className="book-overview">
@@ -220,26 +234,38 @@ export default function BookOverview({
           Manage audiobooks
         </button>
       </div>
-      {book.source_type === "web" && (
+      {isWeb && (
         <div className="overview-section">
           <div>
-            <h3>Web source</h3>
+            <h3>Web updates</h3>
+            <p className={`book-row-status book-row-status--${lastCheck.tone}`}>
+              Last check: {lastCheck.label}
+            </p>
+            {lastUpdate && lastCheck.state !== "updated" && (
+              <p className="hint">Last update: {lastUpdate}</p>
+            )}
             <p className="hint">
-              <a href="/updates">View chapter changes and source checks</a>
+              <a href={`/books/${book.id}/details`}>
+                See every update to this book
+              </a>
+              {" · "}
+              <a href="/updates">All followed stories</a>
             </p>
           </div>
           <button
             disabled={checking || refresh.isPending}
             onClick={() => refresh.mutate()}
           >
-            {checking ? "Check queued / running" : "Check for updates"}
+            {checking ? "Checking for updates…" : "Check for updates"}
           </button>
           {refresh.error && (
             <p role="alert" className="error">
               {refresh.error.message}
             </p>
           )}
-          {refresh.isSuccess && <p role="status">Source check queued.</p>}
+          {refresh.isSuccess && checking && (
+            <p role="status">Update check queued.</p>
+          )}
         </div>
       )}
       <details className="workspace-disclosure">

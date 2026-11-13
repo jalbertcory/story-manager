@@ -6,6 +6,7 @@ import { mockFetch, renderWithClient } from "../test-utils";
 
 type SchedulerJob = components["schemas"]["SchedulerJobStatus"];
 type UpdateTask = components["schemas"]["UpdateTask"];
+type RunSummary = components["schemas"]["UpdateTaskSummary"];
 type BookLog = components["schemas"]["BookLogWithTitle"];
 
 const mockJob = {
@@ -39,6 +40,9 @@ const mockHistory = [
     status: "completed",
     started_at: new Date(Date.now() - 1000).toISOString(),
     completed_at: new Date(Date.now() - 500).toISOString(),
+    updated_count: 1,
+    unchanged_count: 1,
+    failed_count: 1,
   },
   {
     id: 1,
@@ -47,8 +51,11 @@ const mockHistory = [
     status: "completed",
     started_at: new Date(Date.now() - 90000000).toISOString(),
     completed_at: new Date(Date.now() - 89900000).toISOString(),
+    updated_count: 0,
+    unchanged_count: 5,
+    failed_count: 0,
   },
-] satisfies UpdateTask[];
+] satisfies RunSummary[];
 
 const mockLogs = [
   {
@@ -59,6 +66,7 @@ const mockLogs = [
     previous_chapter_count: 20,
     new_chapter_count: 25,
     words_added: 8000,
+    detail: null,
     timestamp: new Date().toISOString(),
   },
   {
@@ -69,6 +77,7 @@ const mockLogs = [
     previous_chapter_count: 10,
     new_chapter_count: 10,
     words_added: 0,
+    detail: null,
     timestamp: new Date().toISOString(),
   },
   {
@@ -79,6 +88,7 @@ const mockLogs = [
     previous_chapter_count: 7,
     new_chapter_count: 7,
     words_added: 0,
+    detail: "Source site returned 404",
     timestamp: new Date().toISOString(),
   },
 ] satisfies BookLog[];
@@ -170,7 +180,15 @@ describe("SchedulerStatus", () => {
     renderWithClient(<SchedulerStatus onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Run History")).toBeInTheDocument();
+      expect(screen.getByText("Previous checks")).toBeInTheDocument();
+      // Each run says what it found without being expanded.
+      expect(
+        screen.getByText(
+          (_, element) =>
+            element?.className === "task-history-outcome" &&
+            element.textContent === "1 updated · 1 unchanged · 1 failed",
+        ),
+      ).toBeInTheDocument();
       // 3/3 books only appears in history (not in the current run which shows 5/5)
       expect(screen.getByText(/3 \/ 3 books/)).toBeInTheDocument();
       // 5/5 appears in both current run and history — just verify it's present
@@ -224,7 +242,8 @@ describe("SchedulerStatus", () => {
       expect(screen.getByText("Dragon's Lair")).toBeInTheDocument();
       expect(screen.getByText("Moonlight")).toBeInTheDocument();
       expect(screen.getByText("Broken Orbit")).toBeInTheDocument();
-      expect(screen.getByText("Errors (1)")).toBeInTheDocument();
+      expect(screen.getByText(/Failed \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText("Source site returned 404")).toBeInTheDocument();
     });
 
     // Updated entry shows chapter and word counts
@@ -255,7 +274,7 @@ describe("SchedulerStatus", () => {
     renderWithClient(<SchedulerStatus onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Automatic Schedule")).toBeInTheDocument();
+      expect(screen.getByText("Automatic schedule")).toBeInTheDocument();
       expect(screen.getByText("Every 24 hours")).toBeInTheDocument();
       expect(screen.getByText("Completed")).toBeInTheDocument();
       expect(screen.getByText("Time Until Next Run")).toBeInTheDocument();

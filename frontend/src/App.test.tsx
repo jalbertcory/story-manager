@@ -333,7 +333,7 @@ describe("App workspaces", () => {
       [
         "Library",
         "Web updates",
-        "Review suggestions",
+        "Metadata review",
         "Background activity",
         "Settings",
       ].map((name) =>
@@ -349,7 +349,7 @@ describe("App workspaces", () => {
     expect(
       within(
         screen.getByRole("navigation", { name: "Activity view" }),
-      ).getByRole("link", { name: "Overview" }),
+      ).getByRole("link", { name: "Needs attention" }),
     ).toHaveAttribute("aria-current", "page");
     fireEvent.click(within(primary).getByRole("link", { name: "Settings" }));
     expect(
@@ -398,13 +398,13 @@ describe("App workspaces", () => {
     mockApi();
     renderWithClient(<App />);
     const tools: [RegExp, string, string][] = [
-      [/Library audit/, "Library Audit", ""],
-      [/Series detection/, "Detect Series", "series"],
-      [/Audiobook maintenance/, "Audiobooks", "audiobooks"],
-      [/Backups/, "Backup & Restore", "backups"],
-      [/Recycle bin/, "Recycle Bin", "recycle-bin"],
-      [/Storage cleanup/, "Storage Cleanup", "storage"],
-      [/Reader access/, "Reader API Keys", "reader-access"],
+      [/Library audit/, "Library audit", ""],
+      [/Series detection/, "Series detection", "series"],
+      [/Audiobook maintenance/, "Audiobook maintenance", "audiobooks"],
+      [/Backups/, "Backups", "backups"],
+      [/Recycle bin/, "Recycle bin", "recycle-bin"],
+      [/Storage cleanup/, "Storage cleanup", "storage"],
+      [/Reader access/, "Reader access", "reader-access"],
     ];
     for (const [linkName, heading, section] of tools) {
       fireEvent.click(await screen.findByRole("link", { name: linkName }));

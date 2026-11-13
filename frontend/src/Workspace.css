@@ -1385,3 +1385,11 @@ button.btn-sm {
 .library-workspace > button {
   margin-bottom: 1rem;
 }
+
+.library-updates-hint {
+  margin: -0.5rem 0 1rem;
+}
+
+.workspace-count--alert {
+  background: var(--danger);
+}

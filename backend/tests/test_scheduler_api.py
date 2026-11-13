@@ -174,6 +174,10 @@ async def test_update_web_novels_counts_and_logs_book_failures(db_session, mocke
         assert rows is not None
         assert len(rows) == 2
         assert {row[0].entry_type for row in rows} == {"error"}
+        assert {row[0].detail for row in rows} == {"500: boom"}
+
+    history = client.get("/api/scheduler/history").json()
+    assert (history[0]["updated_count"], history[0]["unchanged_count"], history[0]["failed_count"]) == (0, 0, 2)
 
 
 @pytest.mark.asyncio
@@ -254,6 +258,7 @@ async def test_scheduler_history_task_logs(db_session):
                 new_chapter_count=15,
                 words_added=5000,
             ),
+            update_task_id=task.id,
         )
         await crud.create_book_log(
             session,
@@ -264,6 +269,7 @@ async def test_scheduler_history_task_logs(db_session):
                 new_chapter_count=8,
                 words_added=0,
             ),
+            update_task_id=task.id,
         )
         await crud.complete_update_task(session, task)
 
@@ -309,7 +315,9 @@ async def test_scheduler_history_task_logs_includes_error_entries(db_session):
                 previous_chapter_count=12,
                 new_chapter_count=12,
                 words_added=0,
+                detail="Source site returned 404",
             ),
+            update_task_id=task.id,
         )
         await crud.fail_update_task(session, task)
 
@@ -319,6 +327,42 @@ async def test_scheduler_history_task_logs_includes_error_entries(db_session):
     assert len(data) == 1
     assert data[0]["entry_type"] == "error"
     assert data[0]["book_title"] == "Errored Book"
+    assert data[0]["detail"] == "Source site returned 404"
+
+
+@pytest.mark.asyncio
+async def test_run_totals_ignore_checks_made_outside_the_run(db_session):
+    """A manual check just before (or during) a run is not part of that run."""
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Manually Checked",
+                author="Author",
+                immutable_path="man_i",
+                current_path="man_c",
+                source_type=models.SourceType.web,
+                source_url="http://example.com/man",
+            ),
+        )
+        await crud.create_book_log(
+            session, schemas.BookLogCreate(book_id=book.id, entry_type="error", detail="manual failure")
+        )
+        task = await crud.create_update_task(session, total_books=1)
+        await crud.create_book_log(
+            session,
+            schemas.BookLogCreate(book_id=book.id, entry_type="checked", words_added=0),
+            update_task_id=task.id,
+        )
+        # A manual check that happens to land while the run is going.
+        await crud.create_book_log(session, schemas.BookLogCreate(book_id=book.id, entry_type="updated"))
+        await crud.complete_update_task(session, task)
+        task_id = task.id
+
+    summary = client.get("/api/scheduler/history").json()[0]
+    assert (summary["updated_count"], summary["unchanged_count"], summary["failed_count"]) == (0, 1, 0)
+    logs = client.get(f"/api/scheduler/history/{task_id}/logs").json()
+    assert [entry["entry_type"] for entry in logs] == ["checked"]
 
 
 @pytest.mark.asyncio

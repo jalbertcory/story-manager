@@ -4279,3 +4279,19 @@
   -webkit-line-clamp: 5;
   margin-top: 0.5rem;
 }
+
+.book-row-status--success {
+  color: var(--success);
+}
+.task-history-outcome {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.task-outcome-updated {
+  color: var(--success);
+  font-weight: 600;
+}
+.task-outcome-failed {
+  color: var(--danger);
+  font-weight: 600;
+}

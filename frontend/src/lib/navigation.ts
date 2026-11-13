@@ -58,7 +58,7 @@ export const PRIMARY_NAV = [
   },
   {
     key: "review",
-    label: "Review suggestions",
+    label: "Metadata review",
     shortLabel: "Review",
     path: "/review",
     defaultTab: "review",
@@ -81,7 +81,7 @@ export const PRIMARY_NAV = [
 
 export const SECTION_NAV = {
   activity: [
-    { key: "attention", label: "Overview", path: "/activity" },
+    { key: "attention", label: "Needs attention", path: "/activity" },
     {
       key: "processing",
       label: "Processing jobs",

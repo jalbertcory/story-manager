@@ -54,6 +54,7 @@ from .logs import (  # noqa: F401
     get_book_logs as get_book_logs,
     get_active_update_task as get_active_update_task,
     get_book_logs_for_task as get_book_logs_for_task,
+    count_book_logs_for_task as count_book_logs_for_task,
     get_latest_book_log as get_latest_book_log,
     get_latest_update_task as get_latest_update_task,
     get_update_tasks as get_update_tasks,
