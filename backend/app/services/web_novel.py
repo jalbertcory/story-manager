@@ -748,6 +748,27 @@ async def finish_web_novel_download(book_id: int, source_url: str) -> None:
         await queue_metadata_sync_job(db, trigger="new_book", book_ids=[db_book.id])
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """A one-line, bounded reason to show next to a failed update check."""
+    lines = str(exc).strip().splitlines()
+    reason = lines[0].strip() if lines else ""
+    return (reason or type(exc).__name__)[:300]
+
+
+async def _log_failed_check(db: AsyncSession, book_id: int, reason: str, chapter_count: int | None = None) -> None:
+    await crud.create_book_log(
+        db,
+        schemas.BookLogCreate(
+            book_id=book_id,
+            entry_type="error",
+            previous_chapter_count=chapter_count,
+            new_chapter_count=chapter_count,
+            words_added=0,
+            detail=reason,
+        ),
+    )
+
+
 async def run_book_refresh(book_id: int) -> None:
     """Re-download a single web novel from its source URL and apply cleaning.
 
@@ -766,6 +787,7 @@ async def run_book_refresh(book_id: int) -> None:
             logger.warning("Refresh worker: book %s has no source_url.", book_id)
             transition_state(db_book, "refresh_status", WEB_REFRESH, WebRefreshStatus.ERROR, context=f"book {book_id}")
             await db.commit()
+            await _log_failed_check(db, book_id, "This book has no source URL to check.")
             return
 
         transition_state(
@@ -846,7 +868,17 @@ async def run_book_refresh(book_id: int) -> None:
                     new_chapter_count=new_chapter_count,
                     words_added=new_word_count - old_word_count,
                 )
-                await crud.create_book_log(db, log_entry)
+            else:
+                # Record the check itself, so a manual check that finds nothing
+                # still shows up as the book's latest result.
+                log_entry = schemas.BookLogCreate(
+                    book_id=db_book.id,
+                    entry_type="checked",
+                    previous_chapter_count=old_chapter_count,
+                    new_chapter_count=new_chapter_count,
+                    words_added=0,
+                )
+            await crud.create_book_log(db, log_entry)
 
             update_data = schemas.BookUpdate(**metadata)
             updated_book = await crud.update_book(db=db, book=db_book, update_data=update_data)
@@ -877,6 +909,11 @@ async def run_book_refresh(book_id: int) -> None:
                 await db.commit()
             except Exception:
                 logger.exception("Failed to mark refresh_status=error for book %s", book_id)
+            try:
+                await db.rollback()
+                await _log_failed_check(db, book_id, _failure_reason(exc))
+            except Exception:
+                logger.exception("Failed to record the failed check for book %s", book_id)
 
 
 async def update_web_novels() -> None:
@@ -969,16 +1006,7 @@ async def update_web_novels() -> None:
             except Exception as e:
                 had_book_failures = True
                 logger.error(f"Failed to update {book.title}: {e}\n{traceback.format_exc()}")
-                await crud.create_book_log(
-                    db,
-                    schemas.BookLogCreate(
-                        book_id=book.id,
-                        entry_type="error",
-                        previous_chapter_count=old_chapter_count,
-                        new_chapter_count=old_chapter_count,
-                        words_added=0,
-                    ),
-                )
+                await _log_failed_check(db, book.id, _failure_reason(e), old_chapter_count)
             finally:
                 await crud.increment_update_task(db, task)
     except Exception as e:

@@ -121,10 +121,10 @@ function AttentionDashboard({
         </AttentionCard>
 
         <AttentionCard
-          title="Failed refreshes"
+          title="Failed update checks"
           description="Web novels that could not be checked for updates."
           category={data.failed_refreshes}
-          actionHref="/updates"
+          actionHref="/updates?show=error"
           actionLabel="Review web updates"
           bulkAction={bulk(
             "refresh",

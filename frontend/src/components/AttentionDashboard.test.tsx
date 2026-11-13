@@ -258,10 +258,10 @@ it("keeps bulk failures visible and allows retrying failed items", async () => {
     "Book 8: Source is unavailable",
   );
   expect(
-    screen.getByRole("button", { name: "Retry source check for Book 7" }),
+    screen.getByRole("button", { name: "Retry update check for Book 7" }),
   ).toBeDisabled();
   expect(
-    screen.getByRole("button", { name: "Retry source check for Book 8" }),
+    screen.getByRole("button", { name: "Retry update check for Book 8" }),
   ).toBeEnabled();
 });
 
@@ -323,7 +323,7 @@ it("shows a retryable error when a queue request returns no jobs", async () => {
     }),
   });
   const button = screen.getByRole("button", {
-    name: "Retry source check for Missing job",
+    name: "Retry update check for Missing job",
   });
   fireEvent.click(button);
   expect(await screen.findByRole("alert")).toHaveTextContent(

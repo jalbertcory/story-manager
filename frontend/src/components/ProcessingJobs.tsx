@@ -25,8 +25,8 @@ const LIBRARY_ACTIONS = {
       "Every book with cleaning rules is rebuilt from its original EPUB using the current rules. This can take a long time on a large library.",
   },
   refresh_all: {
-    label: "Refresh all web books",
-    title: "Refresh all web books?",
+    label: "Check all web stories for updates",
+    title: "Check all web stories for updates?",
     description:
       "Every web book is checked against its source site for new chapters. This sends requests to each source and can take a long time.",
   },
@@ -36,7 +36,7 @@ type LibraryAction = keyof typeof LIBRARY_ACTIONS;
 const QUEUE_OPERATIONS = [
   { value: "clean_book", label: "Clean selected books" },
   { value: "audiobook_pipeline", label: "Regenerate selected AI audiobooks" },
-  { value: "refresh_book", label: "Refresh selected web books" },
+  { value: "refresh_book", label: "Check selected web stories for updates" },
 ] as const;
 
 function formatDate(value: string | null | undefined) {
@@ -423,7 +423,7 @@ function ProcessingJobs() {
                       job.job_type.replaceAll("_", " ")}
                   </strong>
                   {job.book_id && (
-                    <a href={`/books/${job.book_id}`}>
+                    <a href={`/books/${job.book_id}/overview`}>
                       {job.book_title || `Book ${job.book_id}`}
                     </a>
                   )}

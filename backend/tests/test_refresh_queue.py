@@ -102,6 +102,45 @@ async def test_run_book_refresh_marks_error_when_download_fails(monkeypatch, db,
     refreshed = await crud.get_book(db, book_id=book.id)
     await db.refresh(refreshed)
     assert refreshed.refresh_status == "error"
+    # The reason is kept so the UI can say why the check failed.
+    latest = await crud.get_latest_book_log(db, book.id)
+    assert latest is not None
+    assert (latest.entry_type, latest.detail) == ("error", "cannot read epub")
+
+
+@pytest.mark.asyncio
+async def test_run_book_refresh_records_a_check_that_finds_nothing(monkeypatch, db, sqlite_sessionmaker, tmp_path):
+    immutable = tmp_path / "immutable.epub"
+    immutable.write_bytes(b"epub")
+    book = await _make_web_book(
+        db,
+        source_url="https://example.com/story/quiet",
+        immutable_path=str(immutable),
+        current_path=str(tmp_path / "current.epub"),
+    )
+    await db.commit()
+
+    async def unchanged_download(*args, **kwargs):
+        return immutable, {"title": book.title, "author": book.author}
+
+    async def no_op(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(web_novel_mod, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(web_novel_mod, "get_epub_word_and_chapter_count", lambda path: (1000, 10))
+    monkeypatch.setattr(web_novel_mod, "download_web_novel", unchanged_download)
+    monkeypatch.setattr(web_novel_mod.epub_editor, "apply_book_cleaning", no_op)
+    monkeypatch.setattr(web_novel_mod, "_enqueue_audiobook_refresh", no_op)
+    monkeypatch.setattr(web_novel_mod, "queue_metadata_sync_job", no_op)
+
+    await web_novel_mod.run_book_refresh(book.id)
+
+    refreshed = await crud.get_book(db, book_id=book.id)
+    await db.refresh(refreshed)
+    assert refreshed.refresh_status is None
+    latest = await crud.get_latest_book_log(db, book.id)
+    assert latest is not None
+    assert (latest.entry_type, latest.previous_chapter_count, latest.new_chapter_count) == ("checked", 10, 10)
 
 
 @pytest.mark.asyncio

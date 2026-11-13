@@ -278,6 +278,8 @@ class BookLog(Base):
     previous_chapter_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     new_chapter_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     words_added: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Short reason for an "error" entry; null for every other entry type.
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

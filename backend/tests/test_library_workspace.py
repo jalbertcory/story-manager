@@ -95,6 +95,24 @@ async def test_latest_web_check_does_not_use_metadata_timestamp(db, app_client):
     checks = app_client.get("/api/library/web-checks").json()
     assert len(checks) == 1
     assert checks[0]["entry_type"] == "checked"
+    assert checks[0]["last_update_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_web_check_keeps_the_last_update_after_later_checks(db, app_client):
+    book = models.Book(title="Web", author="A", source_type=models.SourceType.web)
+    db.add(book)
+    await db.flush()
+    db.add(
+        models.BookLog(book_id=book.id, entry_type="updated", previous_chapter_count=10, new_chapter_count=13, words_added=900)
+    )
+    await db.flush()
+    db.add(models.BookLog(book_id=book.id, entry_type="error", detail="Source site returned 404"))
+    await db.commit()
+    (check,) = app_client.get("/api/library/web-checks").json()
+    assert (check["entry_type"], check["detail"]) == ("error", "Source site returned 404")
+    assert check["last_update_at"] is not None
+    assert (check["last_update_chapters_added"], check["last_update_words_added"]) == (3, 900)
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,9 @@
 """Book log and update task CRUD operations."""
 
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import ColumnElement, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from .. import models, schemas
@@ -101,6 +101,25 @@ async def get_update_tasks(db: AsyncSession, limit: int = 20, offset: int = 0) -
     return list(result.scalars().all())
 
 
+def _task_log_window(task: models.UpdateTask) -> list[ColumnElement[bool]]:
+    """Logs are tied to a run by falling inside its start/finish window."""
+    start_filter = task.started_at - timedelta(seconds=1) if task.started_at else None
+    conditions: list[ColumnElement[bool]] = [models.BookLog.timestamp >= start_filter] if start_filter is not None else []
+    if task.completed_at:
+        conditions.append(models.BookLog.timestamp <= task.completed_at)
+    return conditions
+
+
+async def count_book_logs_for_task(db: AsyncSession, task: models.UpdateTask) -> dict[str, int]:
+    """Number of log entries of each type written during a run."""
+    result = await db.execute(
+        select(models.BookLog.entry_type, func.count(models.BookLog.id))
+        .filter(*_task_log_window(task))
+        .group_by(models.BookLog.entry_type)
+    )
+    return {entry_type: count for entry_type, count in result.all()}
+
+
 async def get_book_logs_for_task(
     db: AsyncSession, task_id: int
 ) -> tuple[models.UpdateTask, list[tuple[models.BookLog, str | None]]] | tuple[None, None]:
@@ -109,12 +128,7 @@ async def get_book_logs_for_task(
     if task is None:
         return None, None
 
-    from datetime import timedelta
-
-    start_filter = task.started_at - timedelta(seconds=1) if task.started_at else None
-    conditions = [models.BookLog.timestamp >= start_filter] if start_filter is not None else []
-    if task.completed_at:
-        conditions.append(models.BookLog.timestamp <= task.completed_at)
+    conditions = _task_log_window(task)
 
     result = await db.execute(
         select(models.BookLog, models.Book.title)

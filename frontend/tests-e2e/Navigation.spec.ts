@@ -33,7 +33,7 @@ test("groups pages under canonical destinations and preserves history", async ({
     /\/settings\/library-tools\?section=reader-access$/,
   );
   await expect(
-    page.getByRole("heading", { name: "Reader API Keys", level: 2 }),
+    page.getByRole("heading", { name: "Reader access", level: 2 }),
   ).toBeVisible();
   await expect(page.getByLabel("Library tool")).toHaveCount(0);
 
@@ -41,14 +41,14 @@ test("groups pages under canonical destinations and preserves history", async ({
   await page.getByRole("link", { name: /Storage cleanup/ }).click();
   await expect(page).toHaveURL(/\?section=storage$/);
   await expect(
-    page.getByRole("heading", { name: "Storage Cleanup", level: 2 }),
+    page.getByRole("heading", { name: "Storage cleanup", level: 2 }),
   ).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/settings$/);
   await page.goBack();
   await expect(page).toHaveURL(/\?section=reader-access$/);
   await expect(
-    page.getByRole("heading", { name: "Reader API Keys", level: 2 }),
+    page.getByRole("heading", { name: "Reader access", level: 2 }),
   ).toBeVisible();
 });
 
@@ -66,7 +66,7 @@ test("keeps primary navigation visible and keyboard accessible on mobile", async
   }
 
   const activity = primary.getByRole("link", { name: "Background activity" });
-  await primary.getByRole("link", { name: "Review suggestions" }).focus();
+  await primary.getByRole("link", { name: "Metadata review" }).focus();
   await page.keyboard.press("Tab");
   await expect(activity).toBeFocused();
   await page.keyboard.press("Enter");

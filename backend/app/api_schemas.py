@@ -53,6 +53,10 @@ class WebCheck(TypedDict):
     previous_chapter_count: int | None
     new_chapter_count: int | None
     words_added: int | None
+    detail: str | None
+    last_update_at: datetime | None
+    last_update_chapters_added: int | None
+    last_update_words_added: int | None
 
 
 class SeriesRenamed(TypedDict):

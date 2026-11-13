@@ -174,6 +174,10 @@ async def test_update_web_novels_counts_and_logs_book_failures(db_session, mocke
         assert rows is not None
         assert len(rows) == 2
         assert {row[0].entry_type for row in rows} == {"error"}
+        assert {row[0].detail for row in rows} == {"500: boom"}
+
+    history = client.get("/api/scheduler/history").json()
+    assert (history[0]["updated_count"], history[0]["unchanged_count"], history[0]["failed_count"]) == (0, 0, 2)
 
 
 @pytest.mark.asyncio
@@ -309,6 +313,7 @@ async def test_scheduler_history_task_logs_includes_error_entries(db_session):
                 previous_chapter_count=12,
                 new_chapter_count=12,
                 words_added=0,
+                detail="Source site returned 404",
             ),
         )
         await crud.fail_update_task(session, task)
@@ -319,6 +324,7 @@ async def test_scheduler_history_task_logs_includes_error_entries(db_session):
     assert len(data) == 1
     assert data[0]["entry_type"] == "error"
     assert data[0]["book_title"] == "Errored Book"
+    assert data[0]["detail"] == "Source site returned 404"
 
 
 @pytest.mark.asyncio

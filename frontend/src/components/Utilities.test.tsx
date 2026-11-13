@@ -73,30 +73,30 @@ describe("Utilities", () => {
 
     expect(screen.queryByLabelText("Library tool")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Library Audit" }),
+      screen.getByRole("heading", { name: "Library audit" }),
     ).toBeInTheDocument();
 
     openUtility("series");
     expect(
-      screen.getByRole("heading", { name: "Detect Series" }),
+      screen.getByRole("heading", { name: "Series detection" }),
     ).toBeInTheDocument();
 
     expect(
-      screen.queryByRole("heading", { name: "Sync Online Metadata" }),
+      screen.queryByRole("heading", { name: "Sync online metadata" }),
     ).not.toBeInTheDocument();
     openUtility("metadata");
     expect(
-      screen.getByRole("heading", { name: "Sync Online Metadata" }),
+      screen.getByRole("heading", { name: "Sync online metadata" }),
     ).toBeInTheDocument();
 
     openUtility("storage");
     expect(
-      screen.getByRole("heading", { name: "Storage Cleanup" }),
+      screen.getByRole("heading", { name: "Storage cleanup" }),
     ).toBeInTheDocument();
 
     openUtility("reader-access");
     expect(
-      screen.getByRole("heading", { name: "Reader API Keys" }),
+      screen.getByRole("heading", { name: "Reader access" }),
     ).toBeInTheDocument();
     expect(window.location.search).toBe("?section=reader-access");
 
@@ -108,7 +108,7 @@ describe("Utilities", () => {
     act(() => window.dispatchEvent(new PopStateEvent("popstate")));
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Sync Online Metadata" }),
+        screen.getByRole("heading", { name: "Sync online metadata" }),
       ).toBeInTheDocument();
     });
   });

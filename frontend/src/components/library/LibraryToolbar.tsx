@@ -114,8 +114,8 @@ export default function LibraryToolbar({
         {select("Review", "review", [
           ["", "Any review status"],
           ["missing-series", "Missing series"],
-          ["refresh-error", "Source check failed"],
-          ["refreshing", "Source check in progress"],
+          ["refresh-error", "Update check failed"],
+          ["refreshing", "Checking for updates"],
         ])}
         {select("Genre", "genre", [
           ["", "All genres"],

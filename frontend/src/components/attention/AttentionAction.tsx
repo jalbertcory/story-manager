@@ -11,7 +11,7 @@ export default function AttentionAction({
 }) {
   const label = {
     job: "Retry task",
-    refresh: "Retry source check",
+    refresh: "Retry update check",
     cover: "Recover cover",
   }[kind];
   const title =

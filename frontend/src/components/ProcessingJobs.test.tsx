@@ -173,13 +173,15 @@ describe("ProcessingJobs", () => {
     expect(posts).toEqual([]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Refresh all web books" }),
+      screen.getByRole("button", { name: "Check all web stories for updates" }),
     );
     const dialog = screen.getByRole("dialog", {
-      name: "Refresh all web books?",
+      name: "Check all web stories for updates?",
     });
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Refresh all web books" }),
+      within(dialog).getByRole("button", {
+        name: "Check all web stories for updates",
+      }),
     );
 
     await waitFor(() =>

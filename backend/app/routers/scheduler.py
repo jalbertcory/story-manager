@@ -83,11 +83,28 @@ async def trigger_scheduler(db: AsyncSession = Depends(get_db)) -> contracts.Sch
     return {"message": "Update queued", "processing_job_id": job.id}
 
 
-@router.get("/api/scheduler/history", response_model=List[schemas.UpdateTask])
+@router.get("/api/scheduler/history", response_model=List[schemas.UpdateTaskSummary])
 async def get_scheduler_history(
     limit: int = 20, offset: int = 0, db: AsyncSession = Depends(get_db)
-) -> list[models.UpdateTask]:
-    return await crud.get_update_tasks(db, limit=limit, offset=offset)
+) -> list[schemas.UpdateTaskSummary]:
+    summaries = []
+    for task in await crud.get_update_tasks(db, limit=limit, offset=offset):
+        assert task.started_at is not None  # Persisted tasks receive the database timestamp default.
+        counts = await crud.count_book_logs_for_task(db, task)
+        summaries.append(
+            schemas.UpdateTaskSummary(
+                id=task.id,
+                total_books=task.total_books,
+                completed_books=task.completed_books,
+                status=task.status,
+                started_at=task.started_at,
+                completed_at=task.completed_at,
+                updated_count=counts.get("updated", 0),
+                unchanged_count=counts.get("checked", 0),
+                failed_count=counts.get("error", 0),
+            )
+        )
+    return summaries
 
 
 @router.get("/api/scheduler/history/{task_id}/logs", response_model=List[schemas.BookLogWithTitle])
@@ -108,6 +125,7 @@ async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)) -> lis
                 previous_chapter_count=log.previous_chapter_count,
                 new_chapter_count=log.new_chapter_count,
                 words_added=log.words_added,
+                detail=log.detail,
                 timestamp=log.timestamp,
             )
         )

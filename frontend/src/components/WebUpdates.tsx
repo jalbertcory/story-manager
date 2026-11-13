@@ -1,18 +1,44 @@
-import { checkResult } from "../lib/library";
-import { useState } from "react";
+import {
+  checkResult,
+  isRecentUpdate,
+  lastUpdateLabel,
+  RECENT_UPDATE_DAYS,
+  timeAgo,
+} from "../lib/library";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAllBookCatalog, refreshBook } from "../api/books";
 import { getWebChecks } from "../api/library";
-import { getSchedulerJob, triggerScheduler } from "../api/scheduler";
+import {
+  getSchedulerHistory,
+  getSchedulerJob,
+  triggerScheduler,
+} from "../api/scheduler";
+import { useLocation } from "../lib/router";
 import type { OpenBook } from "../types";
 import { BookRow } from "./book-list/BookCards";
-import SchedulerStatus from "./SchedulerStatus";
 import { queryKeys } from "../lib/queryKeys";
+
+const FILTERS = [
+  ["all", "All stories"],
+  ["recent", `New chapters in the last ${RECENT_UPDATE_DAYS} days`],
+  ["error", "Failed checks"],
+  ["running", "Checking now"],
+  ["quiet", "Nothing new lately"],
+] as const;
+
+// Other pages link straight to a filtered list with ?show=recent or ?show=error.
+function requestedFilter(search: string) {
+  const show = new URLSearchParams(search).get("show");
+  return FILTERS.some(([value]) => value === show) ? (show as string) : "all";
+}
 
 export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const client = useQueryClient();
+  const { search } = useLocation();
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(() => requestedFilter(search));
+  useEffect(() => setFilter(requestedFilter(search)), [search]);
   const [notice, setNotice] = useState("");
   const booksQuery = useQuery({
     queryKey: queryKeys.webUpdateBooks,
@@ -29,12 +55,18 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
     queryFn: getSchedulerJob,
     refetchInterval: 10000,
   });
+  const latestRun = useQuery({
+    queryKey: queryKeys.schedulerLatestRun,
+    queryFn: ({ signal }) => getSchedulerHistory({ limit: 1 }, { signal }),
+    refetchInterval: 10000,
+  });
+  const lastRun = latestRun.data?.[0];
   const refresh = useMutation({
     mutationFn: async (id: number | null) =>
       id ? refreshBook(id) : triggerScheduler(),
     onSuccess: (_, id) => {
       setNotice(
-        id ? "Source check queued." : "Check queued for all followed novels.",
+        id ? "Update check queued." : "Update check queued for every story.",
       );
       for (const queryKey of [
         queryKeys.webUpdateBooks,
@@ -47,19 +79,34 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const checks = new Map(
     (checksQuery.data || []).map((check) => [check.book_id, check]),
   );
-  const books = (booksQuery.data || []).map((book) => ({
-    book,
-    result: checkResult(book, checks.get(book.id)),
-  }));
+  const books = (booksQuery.data || []).map((book) => {
+    const check = checks.get(book.id);
+    return {
+      book,
+      check,
+      result: checkResult(book, check),
+      recent: isRecentUpdate(check),
+    };
+  });
   const failed = books.filter(({ result }) => result.state === "error").length;
+  const recentCount = books.filter(({ recent }) => recent).length;
   const rows = books.filter(
-    ({ book, result }) =>
+    ({ book, result, recent }) =>
       `${book.title} ${book.author}`.toLowerCase().includes(q.toLowerCase()) &&
-      (filter === "all" || result.state === filter),
+      (filter === "all" ||
+        (filter === "recent"
+          ? recent
+          : filter === "quiet"
+            ? !recent && !["error", "running"].includes(result.state)
+            : result.state === filter)),
   );
+  // Failures first, then the stories that most recently gained chapters.
   rows.sort(
     (a, b) =>
       Number(b.result.state === "error") - Number(a.result.state === "error") ||
+      (b.check?.last_update_at || "").localeCompare(
+        a.check?.last_update_at || "",
+      ) ||
       a.book.title.localeCompare(b.book.title),
   );
   return (
@@ -67,7 +114,21 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
       <div className="workspace-heading">
         <div>
           <h2>Web updates</h2>
-          <p className="hint">{books.length} followed novels</p>
+          <p className="hint">
+            {books.length} followed {books.length === 1 ? "story" : "stories"}
+            {recentCount > 0 &&
+              ` · ${recentCount} with new chapters in the last ${RECENT_UPDATE_DAYS} days`}
+          </p>
+          {lastRun && (
+            <p className="hint">
+              {lastRun.status === "running"
+                ? `Checking every story now (${lastRun.completed_books} of ${lastRun.total_books})`
+                : `Last full check ${timeAgo(lastRun.completed_at || lastRun.started_at)}`}
+              {" · "}
+              {lastRun.updated_count} updated · {lastRun.unchanged_count}{" "}
+              unchanged · {lastRun.failed_count} failed
+            </p>
+          )}
         </div>
         <button
           className="btn-primary"
@@ -83,18 +144,19 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
         <div className="workspace-notice">
           <div>
             <strong>
-              {failed} {failed === 1 ? "novel needs" : "novels need"} attention
+              {failed} update {failed === 1 ? "check" : "checks"} failed
             </strong>
             <p>
-              Review the affected sources. Your other books are listed below.
+              Each failed story below says what went wrong. Your other stories
+              were checked normally.
             </p>
           </div>
-          <button onClick={() => setFilter("error")}>Review errors</button>
+          <button onClick={() => setFilter("error")}>Show failed checks</button>
         </div>
       )}
       <div className="library-toolbar">
         <input
-          aria-label="Search web novels"
+          aria-label="Search followed stories"
           placeholder="Search title or author"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -106,16 +168,22 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
             onChange={(e) => setFilter(e.target.value)}
             aria-label="Filter web updates"
           >
-            <option value="all">All novels</option>
-            <option value="updated">Content updated</option>
-            <option value="error">Needs attention</option>
-            <option value="running">Checking</option>
-            <option value="checked">Checked / imported</option>
+            {FILTERS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
         </label>
       </div>
       {notice && <p role="status">{notice}</p>}
-      {[booksQuery.error, checksQuery.error, schedule.error, refresh.error]
+      {[
+        booksQuery.error,
+        checksQuery.error,
+        schedule.error,
+        latestRun.error,
+        refresh.error,
+      ]
         .filter(Boolean)
         .map((error, i) => (
           <p className="error" role="alert" key={i}>
@@ -123,14 +191,20 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
           </p>
         ))}
       {(booksQuery.isLoading || checksQuery.isLoading) && (
-        <p role="status">Loading source checks…</p>
+        <p role="status">Loading update checks…</p>
       )}
-      {rows.map(({ book, result }) => (
+      {rows.map(({ book, check, result }) => (
         <BookRow
           key={book.id}
           book={book}
           onEdit={onEdit}
           status={result}
+          subtitle={
+            // The latest check often finds nothing; keep the last real update visible.
+            result.state !== "updated" && lastUpdateLabel(check)
+              ? `Last update: ${lastUpdateLabel(check)}`
+              : null
+          }
           actions={
             <button
               disabled={refresh.isPending || result.state === "running"}
@@ -147,22 +221,22 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
       ))}
       {!booksQuery.isLoading && !rows.length && (
         <p className="empty-state">
-          No novels match this view.{" "}
+          No stories match this view.{" "}
           <a href="/import?type=web">Add a web novel</a>
         </p>
       )}
-      {schedule.data?.next_run_at && (
-        <p className="hint">
-          Next automatic check:{" "}
-          {new Date(schedule.data.next_run_at).toLocaleString()} ·{" "}
-          {schedule.data.schedule_timezone ||
-            Intl.DateTimeFormat().resolvedOptions().timeZone}
-        </p>
-      )}
-      <details className="workspace-disclosure">
-        <summary>Schedule and previous runs</summary>
-        <SchedulerStatus />
-      </details>
+      <p className="hint">
+        {schedule.data?.next_run_at && (
+          <>
+            Next automatic check:{" "}
+            {new Date(schedule.data.next_run_at).toLocaleString()} ·{" "}
+            {schedule.data.schedule_timezone ||
+              Intl.DateTimeFormat().resolvedOptions().timeZone}
+            {" · "}
+          </>
+        )}
+        <a href="/activity/scheduled-runs">Schedule and previous checks</a>
+      </p>
     </section>
   );
 }

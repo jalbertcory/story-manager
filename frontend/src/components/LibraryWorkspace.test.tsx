@@ -297,14 +297,18 @@ it("preserves all filters in group links, saved views, and subsequent filter cha
 
 it("pages group summaries without discarding earlier groups", async () => {
   stubFetch((url) =>
-    response({
-      items: [
-        libraryGroup({ name: url.includes("cursor=") ? "Second" : "First" }),
-      ],
-      total_count: 2,
-      next_cursor: url.includes("cursor=") ? null : "next",
-      facets: null,
-    } satisfies components["schemas"]["LibraryGroupsPage"]),
+    url === "/api/library/web-checks"
+      ? response([])
+      : response({
+          items: [
+            libraryGroup({
+              name: url.includes("cursor=") ? "Second" : "First",
+            }),
+          ],
+          total_count: 2,
+          next_cursor: url.includes("cursor=") ? null : "next",
+          facets: null,
+        } satisfies components["schemas"]["LibraryGroupsPage"]),
   );
   renderWithClient(
     <LibraryWorkspace
@@ -368,13 +372,15 @@ it("lists standalone search matches as books beside matching series", async () =
 });
 
 it("keeps standalone books grouped when not searching", async () => {
-  const fetch = stubFetch(() =>
-    response({
-      items: [libraryGroup({ name: null, book_count: 3, author_count: 2 })],
-      next_cursor: null,
-      total_count: 1,
-      facets: facets(),
-    } satisfies components["schemas"]["LibraryGroupsPage"]),
+  const fetch = stubFetch((url) =>
+    url === "/api/library/web-checks"
+      ? response([])
+      : response({
+          items: [libraryGroup({ name: null, book_count: 3, author_count: 2 })],
+          next_cursor: null,
+          total_count: 1,
+          facets: facets(),
+        } satisfies components["schemas"]["LibraryGroupsPage"]),
   );
   renderWithClient(
     <LibraryWorkspace
