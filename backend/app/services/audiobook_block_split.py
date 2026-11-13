@@ -32,6 +32,8 @@ _MIN_SPEECH_MS = 60
 # these bounds of the block's own; anything else is a misplaced boundary.
 _PACE_CHECK_MIN_CHARS = 12
 _PACE_RATIO_BOUNDS = (0.4, 2.5)
+# A block whose loudest frame is below this has no speech in it at all.
+_BLOCK_SPEECH_FLOOR_DB = -52.0
 
 
 class BlockSplitError(RuntimeError):
@@ -172,22 +174,24 @@ def split_block(samples: PcmSamples, rate: int, texts: list[str]) -> list[PcmSam
     silences = silence_intervals(levels)
     boundaries = estimated_block_boundaries(duration_ms, texts, silences)
 
-    speech = levels >= max(_SILENCE_FLOOR_DB, float(levels.max()) - _SILENCE_RANGE_DB) if levels.size else levels > 0
-    block_has_speech = bool(levels.size) and float(levels.max()) > -52.0
+    if not levels.size or float(levels.max()) <= _BLOCK_SPEECH_FLOOR_DB:
+        # A silent block has nothing to line sentences up with, and its slices
+        # would be stored as finished audio.
+        raise BlockSplitError("block contains no speech")
+    speech = levels >= max(_SILENCE_FLOOR_DB, float(levels.max()) - _SILENCE_RANGE_DB)
     spoken_ms = [
         int(np.count_nonzero(speech[slice(start // _FRAME_MS, end // _FRAME_MS)])) * _FRAME_MS
         for start, end in zip(boundaries, boundaries[1:])
     ]
-    if block_has_speech:
-        total_chars = sum(_spoken_chars(text) for text in texts)
-        block_pace = total_chars / max(1, sum(spoken_ms))
-        for index, (text, milliseconds) in enumerate(zip(texts, spoken_ms, strict=True)):
-            chars = _spoken_chars(text)
-            if milliseconds < _MIN_SPEECH_MS:
-                raise BlockSplitError(f"slice {index + 1} of {len(texts)} has no speech")
-            if chars >= _PACE_CHECK_MIN_CHARS:
-                ratio = (chars / milliseconds) / block_pace
-                if not _PACE_RATIO_BOUNDS[0] <= ratio <= _PACE_RATIO_BOUNDS[1]:
-                    raise BlockSplitError(f"slice {index + 1} of {len(texts)} is spoken at {ratio:.1f}x the block's pace")
+    total_chars = sum(_spoken_chars(text) for text in texts)
+    block_pace = total_chars / max(1, sum(spoken_ms))
+    for index, (text, milliseconds) in enumerate(zip(texts, spoken_ms, strict=True)):
+        chars = _spoken_chars(text)
+        if milliseconds < _MIN_SPEECH_MS:
+            raise BlockSplitError(f"slice {index + 1} of {len(texts)} has no speech")
+        if chars >= _PACE_CHECK_MIN_CHARS:
+            ratio = (chars / milliseconds) / block_pace
+            if not _PACE_RATIO_BOUNDS[0] <= ratio <= _PACE_RATIO_BOUNDS[1]:
+                raise BlockSplitError(f"slice {index + 1} of {len(texts)} is spoken at {ratio:.1f}x the block's pace")
 
     return [samples[slice(start * rate // 1000, end * rate // 1000)] for start, end in zip(boundaries, boundaries[1:])]

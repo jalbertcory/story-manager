@@ -139,6 +139,14 @@ def test_split_block_rejects_a_slice_with_no_speech():
         split_block(block, RATE, ["A much longer first sentence here.", "No."])
 
 
+def test_split_block_rejects_an_entirely_silent_block():
+    # Silent slices would otherwise be stored as finished sentence audio.
+    block = np.zeros(RATE * 2, dtype=np.int16)
+
+    with pytest.raises(BlockSplitError, match="no speech"):
+        split_block(block, RATE, ["The first sentence.", "The second sentence."])
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for MP3 slicing")
 async def test_split_block_audio_round_trips_through_mp3(tmp_path):
