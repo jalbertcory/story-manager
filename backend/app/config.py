@@ -21,7 +21,7 @@ LOG_BACKUP_COUNT = max(1, int(os.getenv("STORY_MANAGER_LOG_BACKUP_COUNT", "3")))
 # Rename this marker whenever chapter concatenation semantics change. A
 # missing marker makes existing packages resumable at assembly without a
 # database migration or destructive audio regeneration.
-AUDIOBOOK_ASSEMBLY_MARKER = ".epub3-overlay-v3"
+AUDIOBOOK_ASSEMBLY_MARKER = ".epub3-overlay-v4"
 
 GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
 GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED = os.getenv("GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED", "true").strip().lower() in {

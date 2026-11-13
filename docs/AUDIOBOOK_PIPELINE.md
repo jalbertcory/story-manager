@@ -90,7 +90,7 @@ The five pipeline phases are:
 2. **Roster Generation** — LLM extracts named characters and assigns provider-neutral voice profiles
 3. **Diarization** — LLM assigns a speaker and non-verbal tags to every sentence
 4. **Audio Generation** — the configured TTS provider produces an MP3 snippet per sentence
-5. **Assembly** — MP3 snippets are concatenated per chapter; SMIL timing files and the final EPUB 3 Media Overlay package are generated
+5. **Assembly** — MP3 snippets are level-matched, re-paced, and joined per chapter; SMIL timing files and the final EPUB 3 Media Overlay package are generated
 
 ---
 
@@ -145,7 +145,7 @@ AudiobookQueue.enqueue(book_id)
 │  Phase 5 – Assembly (status="assembling")                │
 │    audiobook_assembly.assemble_book(book_id)             │
 │    • for each chapter where needs_reassembly=True:       │
-│      concat snippets → ch{N}.mp3 (ffmpeg)               │
+│      master snippets → ch{N}.mp3 (ffmpeg)               │
 │      generate .smil from html_element_id + timestamps   │
 │      chapter.needs_reassembly = False                    │
 │    • patch content.opf media-overlay attributes          │
@@ -309,6 +309,22 @@ The compact speed profile maps to the provider's speed parameter. A character vo
 block (up to `tts_max_block_chars`) and then split back into sentence MP3s. This preserves the existing SMIL cue
 granularity while giving the model more context. Mixed dialogue/narration sentences stay isolated so each role keeps
 its own voice.
+
+Block boundaries are recovered from the pauses in the generated waveform (`audiobook_block_split.py`). All
+boundaries are chosen together: the splitter picks one pause per sentence break so that every slice lasts about as
+long as its text should take to say. If a slice would contain no speech, or be spoken at an implausible pace for its
+length, the block is discarded and its sentences are generated one at a time instead, so a misplaced cut never
+reaches the audiobook.
+
+### Chapter Mastering
+
+Sentence clips arrive at whatever level and with whatever surrounding silence the model produced. Assembly
+(`audiobook_mastering.py`) decodes each clip, trims it to its speech, brings the speech to a common level
+(−21 dBFS gated mean, peaks held under −1 dBFS), and inserts a pause chosen from how the sentence ends: 380 ms after
+a full stop, 480 ms when the speaker changes, 160 ms after a clause, and 900 ms at the end of a chapter. The chapter
+is then encoded once, and each SMIL cue covers a sentence's speech plus the pause that follows it. Stored snippets
+are left untouched, so mastering can be retuned and reapplied by reassembling; changing `AUDIOBOOK_ASSEMBLY_MARKER`
+forces that for existing books.
 
 Provider locking prevents endpoint routing from crossing into another TTS engine. Persistent `omnivoice-...` and
 `qwen3-...` voice IDs are backed by files in the worker's voice store, so same-engine fallback endpoints must share or
@@ -575,7 +591,7 @@ All paths stored in the database as relative to `LIBRARY_PATH.parent`, matching 
 | `backend/app/services/audiobook_llm.py` | Phases 2 & 3: character roster + diarization |
 | `backend/app/services/audiobook_tts.py` | Phase 4: provider-neutral TTS orchestration per sentence |
 | `backend/app/services/tts_providers.py` | OmniVoice, OpenAI-compatible, OpenAI, ElevenLabs, and stub clients |
-| `backend/app/services/audiobook_assembly.py` | Phase 5: MP3 concat + SMIL + EPUB repackage |
+| `backend/app/services/audiobook_assembly.py` | Phase 5: chapter mastering + SMIL + EPUB repackage |
 | `backend/app/services/audiobook_queue.py` | Audiobook pipeline worker invoked by the durable processing queue |
 | `backend/app/routers/audiobook.py` | All API endpoints |
 | `backend/app/main.py` | Wire queue lifecycle + router |

@@ -21,6 +21,8 @@ from .. import crud
 from ..config import LIBRARY_PATH
 from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
+from .audiobook_block_split import BlockSplitError, split_block
+from .audiobook_mastering import decode_clip, encode_mp3
 from .subprocesses import communicate_bounded
 from .audiobook_text import split_speech_segments
 from .endpoint_pool import EndpointsCoolingDown, ProviderSettings, settings_for_provider
@@ -37,6 +39,7 @@ from .tts_providers import (
 )
 
 logger = logging.getLogger(__name__)
+_SLICE_MP3_BITRATE = "96k"
 TTS_BATCH_SIZE = max(1, int(os.getenv("AUDIOBOOK_TTS_BATCH_SIZE", "4")))
 TTS_FETCH_SIZE = max(TTS_BATCH_SIZE, int(os.getenv("AUDIOBOOK_TTS_FETCH_SIZE", "64")))
 _LOCAL_DESIGN_PROVIDERS = {"omnivoice", "qwen3"}
@@ -675,8 +678,17 @@ async def _generate_stable_blocks(
         plans[0][0][0].id,
         [plan[3] for plan in plans],
     )
-    for (sentences, texts, group_digest, _request), result in zip(plans, results, strict=True):
-        parts = await _split_block_audio(result.audio_bytes, texts, group_digest)
+    for block, (sentences, texts, group_digest, _request), result in zip(blocks, plans, results, strict=True):
+        try:
+            parts = await _split_block_audio(result.audio_bytes, texts, group_digest)
+        except BlockSplitError as exc:
+            # A sentence whose words landed in its neighbour's clip would be
+            # highlighted in silence. Generating these sentences one at a time
+            # costs some voice continuity but keeps text and audio aligned.
+            logger.warning("TTS block %s could not be split (%s); generating its sentences individually.", group_digest, exc)
+            for sentence, requests in block:
+                await _generate_sentence_clip(settings, book_id, sentence, db, requests)
+            continue
         if len(parts) != len(sentences):
             raise RuntimeError(f"TTS block {group_digest} produced {len(parts)} slices for {len(sentences)} sentences.")
         for sentence, audio_bytes in zip(sentences, parts, strict=True):
@@ -699,103 +711,29 @@ def _stable_group_digest(sentences: list[AudiobookSentence], prototype: TTSReque
 
 
 async def _split_block_audio(audio_bytes: bytes, texts: list[str], group_id: str) -> list[bytes]:
-    """Recover sentence boundaries from nearby pauses and slice a block to MP3s."""
+    """Recover sentence boundaries from the block's pauses and slice it to MP3s.
+
+    Raises ``BlockSplitError`` when the pauses do not line up with the sentences.
+    """
     if len(texts) == 1:
         return [audio_bytes]
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg is required to split stable TTS generation blocks.")
     with tempfile.TemporaryDirectory(prefix=f"story-manager-block-{group_id}-") as directory:
-        root = Path(directory)
-        source = root / "block.mp3"
+        source = Path(directory) / "block.mp3"
         source.write_bytes(audio_bytes)
-        duration_ms = _get_mp3_duration_ms(source)
-        process = await asyncio.create_subprocess_exec(
-            ffmpeg,
-            "-v",
-            "info",
-            "-i",
-            str(source),
-            "-af",
-            "silencedetect=noise=-38dB:d=0.06",
-            "-f",
-            "null",
-            "-",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await communicate_bounded(process, description="ffmpeg silence detection")
-        silence_starts: list[float] = []
-        silence_midpoints: list[int] = []
-        for line in stderr.decode("utf-8", errors="replace").splitlines():
-            start_match = re.search(r"silence_start:\s*([0-9.]+)", line)
-            end_match = re.search(r"silence_end:\s*([0-9.]+)", line)
-            if start_match:
-                silence_starts.append(float(start_match.group(1)))
-            if end_match and silence_starts:
-                start = silence_starts.pop(0)
-                end = float(end_match.group(1))
-                silence_midpoints.append(round((start + end) * 500))
+        from mutagen.mp3 import MP3
 
-        boundaries = _estimated_block_boundaries(duration_ms, texts, silence_midpoints)
-
+        # mutagen's stubs omit MPEGInfo.sample_rate.
+        rate = int(getattr(cast(Callable[[str], MP3], MP3)(str(source)).info, "sample_rate"))
+        samples = await decode_clip(ffmpeg, source, rate)
         parts: list[bytes] = []
-        for index, (start_ms, end_ms) in enumerate(zip(boundaries, boundaries[1:])):
-            output = root / f"part-{index}.mp3"
-            process = await asyncio.create_subprocess_exec(
-                ffmpeg,
-                "-v",
-                "error",
-                "-ss",
-                f"{start_ms / 1000:.3f}",
-                "-t",
-                f"{(end_ms - start_ms) / 1000:.3f}",
-                "-i",
-                str(source),
-                "-codec:a",
-                "libmp3lame",
-                "-b:a",
-                "96k",
-                "-y",
-                str(output),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, split_stderr = await communicate_bounded(process, description="ffmpeg TTS block split")
-            if process.returncode:
-                message = split_stderr.decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(f"Unable to split TTS block {group_id}: {message}")
+        for index, part in enumerate(split_block(samples, rate, texts)):
+            output = Path(directory) / f"part-{index}.mp3"
+            await encode_mp3(ffmpeg, part, rate, _SLICE_MP3_BITRATE, output)
             parts.append(output.read_bytes())
         return parts
-
-
-def _estimated_block_boundaries(
-    duration_ms: int,
-    texts: list[str],
-    silence_midpoints: list[int],
-) -> list[int]:
-    """Allocate monotonic sentence slices, snapping weighted estimates to pauses."""
-    weights = [max(1, len(re.sub(r"\W+", "", text))) for text in texts]
-    total_weight = sum(weights)
-    expected = []
-    cumulative = 0
-    for weight in weights[:-1]:
-        cumulative += weight
-        expected.append(round(duration_ms * cumulative / total_weight))
-    search_radius = max(900, min(2500, duration_ms // max(2, len(texts)) // 2))
-    minimum_gap = max(1, min(120, duration_ms // max(1, len(texts) * 2)))
-    boundaries = [0]
-    available = list(silence_midpoints)
-    for boundary_index, estimate in enumerate(expected, start=1):
-        lower = boundaries[-1] + minimum_gap
-        upper = duration_ms - minimum_gap * (len(texts) - boundary_index)
-        candidates = [point for point in available if lower <= point <= upper and abs(point - estimate) <= search_radius]
-        boundary = min(candidates, key=lambda point: abs(point - estimate)) if candidates else estimate
-        boundary = max(lower, min(boundary, upper))
-        boundaries.append(boundary)
-        available = [point for point in available if point > boundary]
-    boundaries.append(duration_ms)
-    return boundaries
 
 
 async def generate_audio_for_sentences(

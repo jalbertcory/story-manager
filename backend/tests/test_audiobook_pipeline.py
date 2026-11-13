@@ -27,6 +27,7 @@ from backend.app.services import (
     web_novel,
 )
 from backend.app.services import audiobook_queue, library_paths
+from backend.app.services.audiobook_block_split import estimated_block_boundaries
 from backend.app.services.audiobook_queue import AudiobookQueue
 from backend.app.services.processing_queue import ProcessingQueue
 
@@ -1866,10 +1867,10 @@ async def test_tts_series_scope_ignores_deleted_books(db):
 
 
 def test_block_boundaries_remain_monotonic_for_many_short_sentences():
-    boundaries = audiobook_tts._estimated_block_boundaries(
+    boundaries = estimated_block_boundaries(
         350,
         ["A.", "B.", "C.", "D.", "E."],
-        [60, 130, 210, 290],
+        [(55, 65), (125, 135), (205, 215), (285, 295)],
     )
 
     assert boundaries[0] == 0
@@ -3016,7 +3017,9 @@ async def test_manual_chapter_preview_generates_playable_audio(db, tmp_path, mon
     sentences = await crud.audiobook.get_sentences_for_chapter(db, chapter.id)
     expected_duration_ms = sum(sentence.audio_duration_ms for sentence in sentences)
     actual_duration_ms = round(MP3(chapter_audio_path).info.length * 1000)
-    assert abs(actual_duration_ms - expected_duration_ms) <= 1
+    # The chapter is encoded once from mastered PCM, so the MP3 container adds
+    # only one encoder delay and final-frame padding to the sentence timeline.
+    assert 0 <= actual_duration_ms - expected_duration_ms <= 100
     smil_xml = (library_path.parent / chapter.smil_file_path).read_text(encoding="utf-8")
     assert f'clipEnd="{audiobook_assembly._ms_to_clock(expected_duration_ms)}"' in smil_xml
     assert packaged_epub.exists() is False
