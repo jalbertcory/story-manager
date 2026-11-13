@@ -21,6 +21,7 @@ from .. import crud
 from ..config import AUDIOBOOK_ASSEMBLY_MARKER, LIBRARY_PATH
 from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookSentence
+from .audiobook_mastering import decode_clip, master_clip, pause_after_ms, silence
 from .subprocesses import communicate_bounded
 from .audiobook_publication import publish_reader_audiobook
 
@@ -208,6 +209,61 @@ def _build_smil(chapter: AudiobookChapter, sentences: list[AudiobookSentence], a
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
 
 
+_CHAPTER_MP3_BITRATE = "96k"
+_DECODE_CONCURRENCY = 6
+
+
+async def _master_chapter_pcm(
+    ffmpeg: str,
+    chapter: AudiobookChapter,
+    sentences: list[AudiobookSentence],
+    snippet_paths: list[Path],
+    sample_rate: int,
+    pcm_path: Path,
+) -> list[int]:
+    """Write the mastered chapter as raw PCM and return each sentence's duration.
+
+    Rounding cumulative sample positions preserves every intermediate boundary
+    and the exact rounded chapter total.
+    """
+    durations: list[int] = []
+    total_samples = 0
+    previous_boundary_ms = 0
+    speechless: list[int] = []
+    with pcm_path.open("wb") as pcm:
+        for offset in range(0, len(sentences), _DECODE_CONCURRENCY):
+            batch = range(offset, min(offset + _DECODE_CONCURRENCY, len(sentences)))
+            decoded = await asyncio.gather(*(decode_clip(ffmpeg, snippet_paths[index], sample_rate) for index in batch))
+            for index, samples in zip(batch, decoded, strict=True):
+                sentence = sentences[index]
+                following = sentences[index + 1] if index + 1 < len(sentences) else None
+                clip = master_clip(samples, sample_rate)
+                if not clip.has_speech and any(character.isalnum() for character in sentence.original_text):
+                    speechless.append(sentence.id)
+                pause = silence(
+                    pause_after_ms(
+                        sentence.original_text,
+                        speaker_changes=following is not None and following.character_id != sentence.character_id,
+                        last_in_chapter=following is None,
+                    ),
+                    sample_rate,
+                )
+                pcm.write(clip.samples.tobytes())
+                pcm.write(pause.tobytes())
+                total_samples += len(clip.samples) + len(pause)
+                boundary_ms = round(total_samples * 1000 / sample_rate)
+                durations.append(boundary_ms - previous_boundary_ms)
+                previous_boundary_ms = boundary_ms
+    if speechless:
+        logger.warning(
+            "Chapter %s has %d sentence clip(s) with no audible speech (sentence ids: %s); regenerate them.",
+            chapter.id,
+            len(speechless),
+            ", ".join(str(sentence_id) for sentence_id in speechless[:20]),
+        )
+    return durations
+
+
 async def _assemble_chapter(
     book_id: int, chapter: AudiobookChapter, sentences: list[AudiobookSentence], output_dir: Path, db: AsyncSession
 ) -> None:
@@ -224,71 +280,63 @@ async def _assemble_chapter(
             raise RuntimeError(f"Snippet file missing for sentence {sentence.id}: {snippet_full}")
         snippet_paths.append(snippet_full)
 
-    # Treat the MP3 artifacts as authoritative. Older pipeline versions trusted
-    # provider-reported durations, which accumulated into visibly incorrect
-    # SMIL timelines. Rounding cumulative frame durations preserves both every
-    # intermediate boundary and the exact rounded chapter total.
-    from mutagen.mp3 import MP3, MPEGInfo
-
-    cumulative_exact_ms = 0.0
-    previous_boundary_ms = 0
-    corrected_durations = 0
-    for sentence, snippet_path in zip(sentences, snippet_paths, strict=True):
-        snippet = cast(Callable[[str], MP3], MP3)(str(snippet_path))
-        cumulative_exact_ms += cast(MPEGInfo, snippet.info).length * 1000
-        next_boundary_ms = round(cumulative_exact_ms)
-        duration_ms = next_boundary_ms - previous_boundary_ms
-        if sentence.audio_duration_ms != duration_ms:
-            sentence.audio_duration_ms = duration_ms
-            corrected_durations += 1
-        previous_boundary_ms = next_boundary_ms
-    if corrected_durations:
-        await db.commit()
-        logger.info(
-            "Corrected %d legacy sentence duration(s) in chapter %s.",
-            corrected_durations,
-            chapter.id,
-        )
-
-    audio_filename = f"ch{chapter.chapter_number:04d}.mp3"
-    audio_path = output_dir / audio_filename
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg is required to assemble audiobook chapters.")
-    # Assemble into a temporary file and swap it in only on success: the live
+    from mutagen.mp3 import MP3
+
+    # mutagen's stubs omit MPEGInfo.sample_rate. The chapter is mastered at the
+    # rate of its first clip; clips at any other rate are resampled on decode.
+    sample_rate = int(getattr(cast(Callable[[str], MP3], MP3)(str(snippet_paths[0])).info, "sample_rate"))
+
+    audio_filename = f"ch{chapter.chapter_number:04d}.mp3"
+    audio_path = output_dir / audio_filename
+    # Master into temporary files and swap the MP3 in only on success: the live
     # chapter MP3 is served to readers while a rebuild runs.
     with tempfile.NamedTemporaryFile(dir=output_dir, prefix=f".{audio_filename}.", suffix=".mp3", delete=False) as handle:
         partial_audio_path = Path(handle.name)
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", dir=output_dir, encoding="utf-8") as manifest:
-        for snippet_path in snippet_paths:
-            escaped_path = str(snippet_path).replace("'", "'\\''")
-            manifest.write(f"file '{escaped_path}'\n")
-        manifest.flush()
+    with tempfile.NamedTemporaryFile(dir=output_dir, prefix=f".{audio_filename}.", suffix=".pcm", delete=False) as handle:
+        pcm_path = Path(handle.name)
+    try:
+        durations = await _master_chapter_pcm(ffmpeg, chapter, sentences, snippet_paths, sample_rate, pcm_path)
         process = await asyncio.create_subprocess_exec(
             ffmpeg,
             "-v",
             "error",
             "-f",
-            "concat",
-            "-safe",
-            "0",
+            "s16le",
+            "-ar",
+            str(sample_rate),
+            "-ac",
+            "1",
             "-i",
-            manifest.name,
+            str(pcm_path),
             "-codec:a",
-            "copy",
+            "libmp3lame",
+            "-b:a",
+            _CHAPTER_MP3_BITRATE,
             "-y",
             str(partial_audio_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            _, stderr = await communicate_bounded(process, description="ffmpeg chapter assembly")
-            if process.returncode:
-                message = stderr.decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
-            partial_audio_path.replace(audio_path)
-        finally:
-            partial_audio_path.unlink(missing_ok=True)
+        _, stderr = await communicate_bounded(process, description="ffmpeg chapter assembly")
+        if process.returncode:
+            message = stderr.decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"ffmpeg chapter assembly failed: {message}")
+        # The media overlay is timed against the mastered chapter, so a sentence's
+        # duration is its slot there: trimmed speech plus the pause that follows.
+        changed_durations = 0
+        for sentence, duration_ms in zip(sentences, durations, strict=True):
+            if sentence.audio_duration_ms != duration_ms:
+                sentence.audio_duration_ms = duration_ms
+                changed_durations += 1
+        if changed_durations:
+            await db.commit()
+        partial_audio_path.replace(audio_path)
+    finally:
+        partial_audio_path.unlink(missing_ok=True)
+        pcm_path.unlink(missing_ok=True)
     total_duration_ms = sum(sentence.audio_duration_ms or 0 for sentence in sentences)
     logger.info("Assembled chapter audio: %s (%d ms)", audio_path, total_duration_ms)
 
@@ -351,8 +399,8 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     if assembly_marker.is_file():
         chapters = await crud.audiobook.get_chapters_pending_assembly(db, book_id)
     else:
-        # Existing outputs were assembled with timeline-shortening re-encoding.
-        # Rebuild every chapter once with frame-copy concatenation.
+        # Existing outputs predate chapter mastering (level, trim, and pause
+        # conditioning). Rebuild every chapter once from the sentence clips.
         chapters = await crud.audiobook.get_chapters_for_book(db, book_id)
     if chapters:
         # Once chapter state changes, an older package is no longer a valid
@@ -453,7 +501,7 @@ async def assemble_book(book_id: int, db: AsyncSession) -> None:
     _ensure_toc_link_ids(ebook.toc)
     epub.write_epub(str(temporary_epub_path), ebook)
     temporary_epub_path.replace(audiobook_epub_path)
-    assembly_marker.write_text("EPUB 3 media-overlay package with frame-copy audio\n", encoding="utf-8")
+    assembly_marker.write_text("EPUB 3 media-overlay package with mastered chapter audio\n", encoding="utf-8")
     await publish_reader_audiobook(db, book_id)
     logger.info("Repackaged audiobook EPUB: %s", audiobook_epub_path)
 

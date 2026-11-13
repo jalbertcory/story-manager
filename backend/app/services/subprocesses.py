@@ -21,6 +21,7 @@ async def communicate_bounded(
     *,
     description: str,
     timeout: float | None = None,
+    stdin: bytes | None = None,
 ) -> tuple[bytes, bytes]:
     """Wait for a subprocess with a timeout, killing it on timeout or cancellation.
 
@@ -29,7 +30,7 @@ async def communicate_bounded(
     """
     limit = MEDIA_TOOL_TIMEOUT_SECONDS if timeout is None else timeout
     try:
-        return await asyncio.wait_for(process.communicate(), timeout=limit)
+        return await asyncio.wait_for(process.communicate(stdin), timeout=limit)
     except BaseException as exc:
         if process.returncode is None:
             process.kill()
