@@ -8,7 +8,7 @@ from typing import Optional, TypedDict
 from pydantic import Field
 
 from .api_model import APIModel as BaseModel
-from .endpoint_types import EndpointStats, EndpointUpdate
+from .endpoint_types import EndpointStats, EndpointUpdate, SolverStats
 from .services.audiobook_reading import ReadingBlock
 
 # ---------------------------------------------------------------------------
@@ -171,6 +171,7 @@ class AllEndpointStatsResponse(BaseModel):
     llm: list[EndpointStats]
     tts: list[EndpointStats]
     transcription: list[EndpointStats]
+    solver: list[SolverStats]
 
 
 class SettingsUpdate(BaseModel):

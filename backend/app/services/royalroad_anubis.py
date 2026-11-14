@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from requests.cookies import RequestsCookieJar
 
 from .fanficfare_types import Configuration
+from .solver_metrics import timed_solver_request
 
 logger = logging.getLogger(__name__)
 SOLVE_TIMEOUT = 10.0
@@ -104,6 +105,12 @@ class _FlareSolverr:
     timeout_ms: int
 
     def fetch(self, response: requests.Response) -> requests.Response:
+        # A reply that is rejected below (redirect, another challenge) is a
+        # failed solver request too, so the whole exchange is measured.
+        with timed_solver_request(response.url, self.endpoint.removesuffix("/v1"), "royalroad"):
+            return self._fetch(response)
+
+    def _fetch(self, response: requests.Response) -> requests.Response:
         # Retrieve public HTML in the browser. Do not export login cookies or
         # copy browser clearance into requests, whose TLS identity is different.
         logger.info("Fetching Royal Road Cloudflare challenge through configured FlareSolverr.")

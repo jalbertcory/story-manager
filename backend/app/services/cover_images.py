@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from ..config import LIBRARY_PATH
 from ..upload_validation import detect_image_extension
 from .fanficfare_config import is_enabled_config_value
+from .solver_metrics import solver_base_url, timed_solver_request
 from .library_paths import write_file_atomically
 
 logger = logging.getLogger(__name__)
@@ -118,13 +119,11 @@ def fetch_page_direct(url: str) -> str:
     return response.text
 
 
-def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download: bool = False) -> FlareSolverrSolution:
+def request_via_flaresolverr(
+    url: str, site_config: dict[str, str], *, download: bool = False, require_text: bool = False
+) -> FlareSolverrSolution:
     validate_remote_cover_url(url)
-    proxy_url = (
-        f"{site_config.get('flaresolverr_proxy_protocol', 'http')}://"
-        f"{site_config.get('flaresolverr_proxy_address', 'localhost')}:"
-        f"{site_config.get('flaresolverr_proxy_port', '8191')}/v1"
-    )
+    solver_url = solver_base_url(site_config.get)
     payload = {
         "cmd": "request.get",
         "url": url,
@@ -132,22 +131,26 @@ def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download:
     }
     if download:
         payload["download"] = True
-    response = http_requests.post(
-        proxy_url,
-        timeout=70,
-        headers={"Content-Type": "application/json"},
-        json=payload,
-    )
-    response.raise_for_status()
-    data = FlareSolverrResponse.model_validate(response.json())
-    solution = data.solution
-    if data.status != "ok" or solution is None or solution.status != 200:
-        raise ValueError(data.message or f"FlareSolverr failed with status {solution.status if solution else None}")
+    with timed_solver_request(url, solver_url, "cover"):
+        response = http_requests.post(
+            f"{solver_url}/v1",
+            timeout=70,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+        )
+        response.raise_for_status()
+        data = FlareSolverrResponse.model_validate(response.json())
+        solution = data.solution
+        if data.status != "ok" or solution is None or solution.status != 200:
+            raise ValueError(data.message or f"FlareSolverr failed with status {solution.status if solution else None}")
+        # Checked here so a response the caller cannot use is measured as a failure.
+        if require_text and not isinstance(solution.response or "", str):
+            raise ValueError("FlareSolverr page response must be text")
     return solution
 
 
 def fetch_page_via_flaresolverr(url: str, site_config: dict[str, str]) -> str:
-    solution = request_via_flaresolverr(url, site_config)
+    solution = request_via_flaresolverr(url, site_config, require_text=True)
     body = solution.response or ""
     if not isinstance(body, str):
         raise ValueError("FlareSolverr page response must be text")

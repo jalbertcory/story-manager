@@ -49,6 +49,7 @@ from .fanficfare_types import (
 )
 from .library_paths import library_staging_dir, reserve_book_paths
 from .metadata_jobs import queue_metadata_sync_job
+from .solver_metrics import flush_solver_metrics, install_fanficfare_timing
 from .royalroad_anubis import is_royalroad, royalroad_access, royalroad_cli_options
 
 logger = logging.getLogger(__name__)
@@ -440,12 +441,16 @@ async def _run_fff_thread(func: Callable[..., _T], *args: object) -> _T:
     ``_fff_lock`` while it keeps writing, letting a retry run a second FanFicFare
     process against the same files.
     """
+    install_fanficfare_timing()
     future = asyncio.get_running_loop().run_in_executor(None, func, *args)
     try:
         return await asyncio.shield(future)
     except asyncio.CancelledError:
         await asyncio.wait({future})
         raise
+    finally:
+        # Solver requests are measured inside the thread; save them once it has stopped.
+        await asyncio.shield(flush_solver_metrics())
 
 
 def _discard_download(epub_path: Path) -> None:

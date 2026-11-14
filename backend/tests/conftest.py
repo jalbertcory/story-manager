@@ -83,3 +83,17 @@ async def app_client(sqlite_sessionmaker):
         app.dependency_overrides[get_db] = original_override
     else:
         app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_solver_metrics(monkeypatch):
+    """Solver timings queue in memory; never write them to a developer's real database."""
+    from backend.app.services import solver_metrics
+
+    def unavailable():
+        raise RuntimeError("Tests that save solver metrics must supply a sessionmaker.")
+
+    solver_metrics.reset_pending()
+    monkeypatch.setattr(solver_metrics, "SessionLocal", unavailable)
+    yield
+    solver_metrics.reset_pending()

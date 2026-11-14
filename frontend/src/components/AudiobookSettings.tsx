@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction, FormEvent } from "react";
+import type { Dispatch, SetStateAction, FormEvent, ReactNode } from "react";
 import type { components } from "../api/schema";
 type Capability = "llm" | "tts" | "transcription";
 type Settings = components["schemas"]["SettingsResponse"];
@@ -416,31 +416,103 @@ function formatDuration(milliseconds: number | null | undefined) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
-function EndpointMetrics({
+type RequestStats =
+  components["schemas"]["EndpointStats"] | components["schemas"]["SolverStats"];
+
+function MetricCard({
+  title,
+  subtitle,
   stats,
-  capability,
+}: {
+  title: string;
+  subtitle: string;
+  stats: RequestStats;
+}) {
+  return (
+    <article className="llm-metric-card">
+      <header>
+        <div>
+          <strong>{title}</strong>
+          <span>{subtitle}</span>
+        </div>
+        <span className="llm-success-rate">
+          {stats.success_rate === null
+            ? "No data"
+            : `${stats.success_rate}% answered`}
+        </span>
+      </header>
+      <dl className="llm-metric-summary">
+        <div>
+          <dt>Answered</dt>
+          <dd>{stats.answered}</dd>
+        </div>
+        <div>
+          <dt>Failed attempts</dt>
+          <dd>{stats.failed}</dd>
+        </div>
+        <div>
+          <dt>Average</dt>
+          <dd>{formatDuration(stats.average_ms)}</dd>
+        </div>
+        <div>
+          <dt>P50</dt>
+          <dd>{formatDuration(stats.p50_ms)}</dd>
+        </div>
+        <div>
+          <dt>P95</dt>
+          <dd>{formatDuration(stats.p95_ms)}</dd>
+        </div>
+        <div>
+          <dt>Last 24h</dt>
+          <dd>{stats.answered_24h}</dd>
+        </div>
+      </dl>
+      <div
+        className="llm-speed-breakdown"
+        aria-label={`${title} speed breakdown`}
+      >
+        <span>
+          &lt;5s <strong>{stats.speed_buckets.under_5s}</strong>
+        </span>
+        <span>
+          5–15s <strong>{stats.speed_buckets.from_5s_to_15s}</strong>
+        </span>
+        <span>
+          15–60s <strong>{stats.speed_buckets.from_15s_to_60s}</strong>
+        </span>
+        <span>
+          60s+ <strong>{stats.speed_buckets.over_60s}</strong>
+        </span>
+      </div>
+    </article>
+  );
+}
+
+function MetricsPanel({
+  heading,
+  hint,
+  emptyMessage,
   isLoading,
   error,
   onRefresh,
   isRefreshing,
+  children,
 }: {
-  stats: components["schemas"]["EndpointStats"][];
-  capability: string;
+  heading: string;
+  hint: string;
+  emptyMessage: string;
   isLoading: boolean;
   error: Error | null;
   onRefresh: () => void;
   isRefreshing: boolean;
+  children: ReactNode[];
 }) {
   return (
     <div className="llm-metrics">
       <div className="llm-metrics-heading">
         <div>
-          <h4>Connection performance</h4>
-          <p className="settings-hint">
-            Successful {capability} requests and endpoint failures are recorded
-            from this upgrade onward. Latency is measured end-to-end for each
-            endpoint attempt.
-          </p>
+          <h4>{heading}</h4>
+          <p className="settings-hint">{hint}</p>
         </div>
         <button
           type="button"
@@ -459,78 +531,83 @@ function EndpointMetrics({
           {error.message || "Failed to load connection metrics"}
         </p>
       )}
-      {!isLoading && !error && stats.length === 0 && (
-        <p className="settings-hint">
-          Save an LLM endpoint to begin collecting metrics.
-        </p>
+      {!isLoading && !error && children.length === 0 && (
+        <p className="settings-hint">{emptyMessage}</p>
       )}
-      {stats.length > 0 && (
-        <div className="llm-metric-grid">
-          {stats.map((endpoint) => (
-            <article className="llm-metric-card" key={endpoint.endpoint_id}>
-              <header>
-                <div>
-                  <strong>{endpoint.name}</strong>
-                  <span>
-                    {endpoint.provider}
-                    {endpoint.model ? ` · ${endpoint.model}` : ""}
-                  </span>
-                </div>
-                <span className="llm-success-rate">
-                  {endpoint.success_rate === null
-                    ? "No data"
-                    : `${endpoint.success_rate}% answered`}
-                </span>
-              </header>
-              <dl className="llm-metric-summary">
-                <div>
-                  <dt>Answered</dt>
-                  <dd>{endpoint.answered}</dd>
-                </div>
-                <div>
-                  <dt>Failed attempts</dt>
-                  <dd>{endpoint.failed}</dd>
-                </div>
-                <div>
-                  <dt>Average</dt>
-                  <dd>{formatDuration(endpoint.average_ms)}</dd>
-                </div>
-                <div>
-                  <dt>P50</dt>
-                  <dd>{formatDuration(endpoint.p50_ms)}</dd>
-                </div>
-                <div>
-                  <dt>P95</dt>
-                  <dd>{formatDuration(endpoint.p95_ms)}</dd>
-                </div>
-                <div>
-                  <dt>Last 24h</dt>
-                  <dd>{endpoint.answered_24h}</dd>
-                </div>
-              </dl>
-              <div
-                className="llm-speed-breakdown"
-                aria-label={`${endpoint.name} speed breakdown`}
-              >
-                <span>
-                  &lt;5s <strong>{endpoint.speed_buckets.under_5s}</strong>
-                </span>
-                <span>
-                  5–15s <strong>{endpoint.speed_buckets.from_5s_to_15s}</strong>
-                </span>
-                <span>
-                  15–60s{" "}
-                  <strong>{endpoint.speed_buckets.from_15s_to_60s}</strong>
-                </span>
-                <span>
-                  60s+ <strong>{endpoint.speed_buckets.over_60s}</strong>
-                </span>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
+      {children.length > 0 && <div className="llm-metric-grid">{children}</div>}
     </div>
+  );
+}
+
+function EndpointMetrics({
+  stats,
+  capability,
+  isLoading,
+  error,
+  onRefresh,
+  isRefreshing,
+}: {
+  stats: components["schemas"]["EndpointStats"][];
+  capability: string;
+  isLoading: boolean;
+  error: Error | null;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  return (
+    <MetricsPanel
+      heading="Connection performance"
+      hint={`Successful ${capability} requests and endpoint failures are recorded from this upgrade onward. Latency is measured end-to-end for each endpoint attempt.`}
+      emptyMessage="Save an LLM endpoint to begin collecting metrics."
+      isLoading={isLoading}
+      error={error}
+      onRefresh={onRefresh}
+      isRefreshing={isRefreshing}
+    >
+      {stats.map((endpoint) => (
+        <MetricCard
+          key={endpoint.endpoint_id}
+          title={endpoint.name}
+          subtitle={`${endpoint.provider}${endpoint.model ? ` · ${endpoint.model}` : ""}`}
+          stats={endpoint}
+        />
+      ))}
+    </MetricsPanel>
+  );
+}
+
+function SolverMetrics({
+  stats,
+  isLoading,
+  error,
+  onRefresh,
+  isRefreshing,
+}: {
+  stats: components["schemas"]["SolverStats"][];
+  isLoading: boolean;
+  error: Error | null;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+}) {
+  return (
+    <MetricsPanel
+      heading="Solver request performance"
+      hint="Each card is one site fetched through one solver address, so a replacement solver gets its own card. Every page or file requested from the solver is timed individually, from sending the request to receiving the solved page; this is not the time to update a whole book. Royal Road only uses the solver when Cloudflare challenges a direct request."
+      emptyMessage="No solver requests have been recorded yet. They appear after the next web novel download or update check that uses the solver."
+      isLoading={isLoading}
+      error={error}
+      onRefresh={onRefresh}
+      isRefreshing={isRefreshing}
+    >
+      {stats.map((solver) => (
+        <MetricCard
+          key={`${solver.site} ${solver.solver_url}`}
+          title={solver.site}
+          subtitle={solver.solver_url}
+          stats={solver}
+        />
+      ))}
+    </MetricsPanel>
   );
 }
 
@@ -838,6 +915,24 @@ function AudiobookSettings() {
           <EndpointMetrics
             stats={endpointStatsQuery.data?.transcription || []}
             capability="speech-to-text"
+            isLoading={endpointStatsQuery.isLoading}
+            error={endpointStatsQuery.error}
+            onRefresh={() => {
+              void endpointStatsQuery.refetch();
+            }}
+            isRefreshing={endpointStatsQuery.isFetching}
+          />
+        </section>
+
+        <section className="settings-section">
+          <h3>Cloudflare solver</h3>
+          <p className="settings-hint">
+            Web novel sites behind Cloudflare are fetched through the
+            FlareSolverr-compatible server set in FanFicFare&apos;s
+            personal.ini.
+          </p>
+          <SolverMetrics
+            stats={endpointStatsQuery.data?.solver || []}
             isLoading={endpointStatsQuery.isLoading}
             error={endpointStatsQuery.error}
             onRefresh={() => {

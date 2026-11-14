@@ -27,6 +27,7 @@ from ..models import (
 from ..orm_updates import SettingsPatch
 from ..services import audiobook_llm
 from ..services.endpoint_metrics import endpoint_summaries
+from ..services.solver_metrics import flush_solver_metrics, solver_summaries
 from ..services.endpoint_pool import (
     EndpointProbeResult,
     EndpointSettings,
@@ -255,10 +256,13 @@ async def get_llm_endpoint_stats(db: AsyncSession = Depends(get_db)) -> Endpoint
 async def get_endpoint_stats(db: AsyncSession = Depends(get_db)) -> AllEndpointStatsResponse:
     """Compare reliability and response latency across all configured AI endpoints."""
     settings = await crud.audiobook.get_audiobook_settings(db)
+    # Include solver requests from a download or update that is still running.
+    await flush_solver_metrics()
     return AllEndpointStatsResponse(
         llm=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "llm")],
         tts=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "tts")],
         transcription=[EndpointStats.model_validate(item) for item in await endpoint_summaries(db, settings, "transcription")],
+        solver=await solver_summaries(db),
     )
 
 

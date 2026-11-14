@@ -296,6 +296,26 @@ describe("AudiobookSettings", () => {
                   },
                 },
               ],
+              solver: [
+                {
+                  site: "scribblehub.com",
+                  solver_url: "http://192.168.1.151:8193",
+                  requests: 40,
+                  answered: 38,
+                  failed: 2,
+                  success_rate: 95,
+                  average_ms: 12_600,
+                  p50_ms: 12_100,
+                  p95_ms: 19_400,
+                  answered_24h: 12,
+                  speed_buckets: {
+                    under_5s: 1,
+                    from_5s_to_15s: 30,
+                    from_15s_to_60s: 7,
+                    over_60s: 0,
+                  },
+                },
+              ],
             }),
         });
       }
@@ -316,5 +336,13 @@ describe("AudiobookSettings", () => {
     expect(screen.getByText("800 ms")).toBeInTheDocument();
     expect(screen.getByText("Speech Host")).toBeInTheDocument();
     expect(screen.getAllByText("1.1 min")).toHaveLength(3);
+    expect(screen.getByText("scribblehub.com")).toBeInTheDocument();
+    expect(screen.getByText("http://192.168.1.151:8193")).toBeInTheDocument();
+    expect(screen.getByText("95% answered")).toBeInTheDocument();
+    expect(screen.getByText("12.1 s")).toBeInTheDocument();
+    expect(screen.getByText("19.4 s")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("scribblehub.com speed breakdown"),
+    ).toHaveTextContent("5–15s 30");
   });
 });
