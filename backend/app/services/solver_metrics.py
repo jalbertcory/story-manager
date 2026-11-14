@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 _MAX_PENDING = 10_000
 _TIMED_MARKER = "_story_manager_solver_timing"
 
+# Creating a solver session starts a browser. It is stored under its own source
+# and left out of the page request statistics, which it would otherwise distort.
+SESSION_SETUP_SOURCE = "fanficfare_session"
+
 
 @dataclass(frozen=True)
 class _Measurement:
@@ -70,28 +74,46 @@ def pending_count() -> int:
     return len(_pending)
 
 
+class SolverTimer:
+    """Lets the measured code leave out time that does not belong to the request."""
+
+    def __init__(self) -> None:
+        self.excluded_seconds = 0.0
+        self.discarded = False
+
+    def exclude(self, seconds: float) -> None:
+        self.excluded_seconds += max(0.0, seconds)
+
+    def discard(self) -> None:
+        """Record nothing, because the request itself was never sent."""
+        self.discarded = True
+
+
 @contextmanager
-def timed_solver_request(target_url: str, solver_url: str, source: str) -> Iterator[None]:
+def timed_solver_request(target_url: str, solver_url: str, source: str) -> Iterator[SolverTimer]:
     """Measure one solver request. Any exception raised inside counts as a failure."""
+    timer = SolverTimer()
     started = time.monotonic()
     error_type: str | None = None
     try:
-        yield
+        yield timer
     except BaseException as exc:
         error_type = type(exc).__name__
         raise
     finally:
-        _pending.append(
-            _Measurement(
-                site=site_of(target_url),
-                solver_url=solver_url,
-                source=source,
-                success=error_type is None,
-                duration_ms=max(0.0, (time.monotonic() - started) * 1000),
-                error_type=error_type,
-                created_at=datetime.now(timezone.utc),
+        elapsed = time.monotonic() - started - timer.excluded_seconds
+        if not timer.discarded:
+            _pending.append(
+                _Measurement(
+                    site=site_of(target_url),
+                    solver_url=solver_url,
+                    source=source,
+                    success=error_type is None,
+                    duration_ms=max(0.0, elapsed * 1000),
+                    error_type=error_type,
+                    created_at=datetime.now(timezone.utc),
+                )
             )
-        )
 
 
 def install_fanficfare_timing() -> None:
@@ -100,6 +122,10 @@ def install_fanficfare_timing() -> None:
     FanFicFare chooses its fetcher class internally and offers no hook, so the
     class's ``request`` method is wrapped once. Its cache and its deliberate
     delay between requests both sit above ``request`` and are not measured.
+
+    With ``use_flaresolverr_session`` set, the first request also creates the
+    solver session inside ``request``. That call is measured on its own, so the
+    page request's time covers only the page.
     """
     from fanficfare.fetchers.fetcher_flaresolverr_proxy import FlareSolverr_ProxyFetcher
 
@@ -108,8 +134,28 @@ def install_fanficfare_timing() -> None:
         return
 
     def request(self: Any, method: str, url: str, headers: Any = None, parameters: Any = None) -> Any:
-        with timed_solver_request(url, solver_base_url(self.getConfig), "fanficfare"):
-            return original(self, method, url, headers=headers, parameters=parameters)
+        solver_url = solver_base_url(self.getConfig)
+        send = self.super_request
+        with timed_solver_request(url, solver_url, "fanficfare") as page_timer:
+
+            def send_timing_session_setup(*args: Any, **kwargs: Any) -> Any:
+                if (kwargs.get("json") or {}).get("cmd") != "sessions.create":
+                    return send(*args, **kwargs)
+                setup_started = time.monotonic()
+                try:
+                    with timed_solver_request(url, solver_url, SESSION_SETUP_SOURCE):
+                        return send(*args, **kwargs)
+                except BaseException:
+                    page_timer.discard()
+                    raise
+                finally:
+                    page_timer.exclude(time.monotonic() - setup_started)
+
+            self.super_request = send_timing_session_setup
+            try:
+                return original(self, method, url, headers=headers, parameters=parameters)
+            finally:
+                self.super_request = send
 
     setattr(request, _TIMED_MARKER, True)
     FlareSolverr_ProxyFetcher.request = request
@@ -145,8 +191,17 @@ async def flush_solver_metrics() -> None:
 
 
 async def solver_summaries(db: AsyncSession) -> list[SolverStats]:
-    """Statistics for every site and solver pair that has been used."""
-    rows = (await db.scalars(select(SolverRequestMetric).order_by(SolverRequestMetric.created_at.asc()))).all()
+    """Statistics for every site and solver pair that has been used.
+
+    Session setup is stored but not summarised: it is not a page request.
+    """
+    rows = (
+        await db.scalars(
+            select(SolverRequestMetric)
+            .where(SolverRequestMetric.source != SESSION_SETUP_SOURCE)
+            .order_by(SolverRequestMetric.created_at.asc())
+        )
+    ).all()
     grouped: dict[tuple[str, str], list[SolverRequestMetric]] = defaultdict(list)
     for row in rows:
         grouped[(row.site, row.solver_url)].append(row)

@@ -104,6 +104,68 @@ async def test_fanficfare_solver_requests_are_timed_individually(monkeypatch, sq
 
 
 @pytest.mark.asyncio
+async def test_fanficfare_session_setup_is_timed_apart_from_the_page(monkeypatch, sqlite_sessionmaker):
+    from fanficfare import exceptions
+    from fanficfare.fetchers.fetcher_flaresolverr_proxy import FlareSolverr_ProxyFetcher
+
+    monkeypatch.setattr(solver_metrics, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(FlareSolverr_ProxyFetcher, "request", FlareSolverr_ProxyFetcher.request)
+    config = {
+        "flaresolverr_proxy_address": "192.168.1.151",
+        "flaresolverr_proxy_port": "8193",
+        "use_flaresolverr_session": "true",
+    }
+    clock = [100.0]
+    session_setup_fails = [False]
+    commands: list[str] = []
+
+    def send_to_solver(self, method, url, headers=None, parameters=None, json=None):
+        commands.append(json["cmd"])
+        reply = MagicMock()
+        if json["cmd"] == "sessions.create":
+            clock[0] += 10.0
+            if session_setup_fails[0]:
+                raise exceptions.FailedToDownload("browser did not start")
+            reply.json = {"status": "ok", "session": "story-manager"}
+        else:
+            clock[0] += 1.0
+            reply.json = {"status": "ok", "solution": {"status": 200, "url": url, "cookies": [], "response": "<html></html>"}}
+        return reply
+
+    # The solver fetcher sends through its parent class's request method.
+    parent = FlareSolverr_ProxyFetcher.__mro__[1]
+    monkeypatch.setattr(parent, "request", send_to_solver)
+    solver_metrics.install_fanficfare_timing()
+
+    def new_fetcher():
+        return FlareSolverr_ProxyFetcher(lambda key, default=None: config.get(key, default), lambda key, default=None: [])
+
+    with monkeypatch.context() as patched:
+        patched.setattr(solver_metrics.time, "monotonic", lambda: clock[0])
+        fetcher = new_fetcher()
+        fetcher.request("GET", "https://www.scribblehub.com/read/1/chapter/1/")
+        fetcher.request("GET", "https://www.scribblehub.com/read/1/chapter/2/")
+        session_setup_fails[0] = True
+        with pytest.raises(exceptions.FailedToDownload):
+            new_fetcher().request("GET", "https://www.scribblehub.com/read/1/chapter/3/")
+
+    assert commands == ["sessions.create", "request.get", "request.get", "sessions.create"]
+    saved = await _saved(sqlite_sessionmaker)
+    # The failed setup records no page request: the page was never asked for.
+    assert [(row.source, row.success, round(row.duration_ms)) for row in saved] == [
+        ("fanficfare_session", True, 10_000),
+        ("fanficfare", True, 1_000),
+        ("fanficfare", True, 1_000),
+        ("fanficfare_session", False, 10_000),
+    ]
+
+    # Session setup is kept out of the page request statistics.
+    async with sqlite_sessionmaker() as session:
+        (summary,) = await solver_metrics.solver_summaries(session)
+    assert (summary.requests, summary.answered, summary.failed, summary.slowest_ms) == (2, 2, 0, 1000.0)
+
+
+@pytest.mark.asyncio
 async def test_fanficfare_thread_saves_its_solver_requests(monkeypatch, sqlite_sessionmaker):
     monkeypatch.setattr(solver_metrics, "SessionLocal", sqlite_sessionmaker)
     monkeypatch.setattr(web_novel, "install_fanficfare_timing", lambda: None)
@@ -170,6 +232,21 @@ async def test_cover_solver_requests_are_timed(monkeypatch, sqlite_sessionmaker)
     assert posted == [f"{TRAWL}/v1", f"{TRAWL}/v1"]
     assert (ok.site, ok.solver_url, ok.source, ok.success) == ("scribblehub.com", TRAWL, "cover", True)
     assert failed.success is False
+
+
+@pytest.mark.asyncio
+async def test_cover_page_response_that_is_not_text_is_a_failed_request(monkeypatch, sqlite_sessionmaker):
+    monkeypatch.setattr(solver_metrics, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(cover_images, "validate_remote_cover_url", lambda url: None)
+    reply = _solver_reply({"status": "ok", "solution": {"status": 200, "response": [137, 80, 78, 71]}})
+    monkeypatch.setattr(cover_images.http_requests, "post", lambda url, **kwargs: reply)
+    site_config = {"flaresolverr_proxy_address": "192.168.1.151", "flaresolverr_proxy_port": "8193"}
+
+    with pytest.raises(ValueError, match="page response must be text"):
+        cover_images.fetch_page_via_flaresolverr("https://www.scribblehub.com/series/2/", site_config)
+
+    (failed,) = await _saved(sqlite_sessionmaker)
+    assert (failed.source, failed.success, failed.error_type) == ("cover", False, "ValueError")
 
 
 @pytest.mark.asyncio

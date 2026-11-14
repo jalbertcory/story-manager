@@ -119,7 +119,9 @@ def fetch_page_direct(url: str) -> str:
     return response.text
 
 
-def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download: bool = False) -> FlareSolverrSolution:
+def request_via_flaresolverr(
+    url: str, site_config: dict[str, str], *, download: bool = False, require_text: bool = False
+) -> FlareSolverrSolution:
     validate_remote_cover_url(url)
     solver_url = solver_base_url(site_config.get)
     payload = {
@@ -141,11 +143,14 @@ def request_via_flaresolverr(url: str, site_config: dict[str, str], *, download:
         solution = data.solution
         if data.status != "ok" or solution is None or solution.status != 200:
             raise ValueError(data.message or f"FlareSolverr failed with status {solution.status if solution else None}")
+        # Checked here so a response the caller cannot use is measured as a failure.
+        if require_text and not isinstance(solution.response or "", str):
+            raise ValueError("FlareSolverr page response must be text")
     return solution
 
 
 def fetch_page_via_flaresolverr(url: str, site_config: dict[str, str]) -> str:
-    solution = request_via_flaresolverr(url, site_config)
+    solution = request_via_flaresolverr(url, site_config, require_text=True)
     body = solution.response or ""
     if not isinstance(body, str):
         raise ValueError("FlareSolverr page response must be text")
