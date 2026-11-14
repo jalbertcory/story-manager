@@ -11,6 +11,7 @@ export const queryKeys = {
   processingBookCatalog: (operation: string, search: string) =>
     ["processing-book-catalog", operation, search] as const,
   attentionDashboard: ["attention-dashboard"] as const,
+  notificationWebhooks: ["notification-webhooks"] as const,
   attentionActionJob: (jobId: number) =>
     ["attention-action-job", jobId] as const,
 

@@ -1,11 +1,12 @@
 from pydantic import JsonValue
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     Integer,
     String,
     DateTime,
@@ -679,3 +680,52 @@ class ImportedAudiobookCue(Base):
     clip_end_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     method: Mapped[str] = mapped_column(String, nullable=False, default="estimated", server_default="estimated")
+
+
+class NotificationWebhook(Base):
+    """An outbound webhook that receives library event notifications."""
+
+    __tablename__ = "notification_webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    # Webhook URLs usually embed a secret token; never log or return them in full.
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    format: Mapped[str] = mapped_column(String, nullable=False, default="json", server_default="json")
+    events: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_delivery_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SeriesFinding(Base):
+    """A missing series volume ("gap") or a new/upcoming series release.
+
+    Gaps are recomputed from the library on demand; rows exist so a gap can be
+    dismissed and so each finding is announced only once. Releases are discovered
+    by the scheduled series check and live only here.
+    """
+
+    __tablename__ = "series_findings"
+    __table_args__ = (
+        CheckConstraint("kind IN ('gap', 'release')", name="ck_series_findings_kind"),
+        CheckConstraint("status IN ('open', 'dismissed')", name="ck_series_findings_status"),
+        UniqueConstraint("finding_key", name="uq_series_findings_finding_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    finding_key: Mapped[str] = mapped_column(String, nullable=False)
+    series_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    series_index: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    published_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    release_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    remote_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="open", server_default="open")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

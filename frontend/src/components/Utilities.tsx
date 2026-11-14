@@ -3,6 +3,7 @@ import ReaderKeys from "./ReaderKeys";
 import AuditPanel from "./utilities/AuditPanel";
 import AudiobookToolsPanel from "./utilities/AudiobookToolsPanel";
 import BackupsPanel from "./utilities/BackupsPanel";
+import NotificationsPanel from "./utilities/NotificationsPanel";
 import MetadataPanel from "./utilities/MetadataPanel";
 import RecycleBinPanel from "./utilities/RecycleBinPanel";
 import SeriesDetectionPanel from "./utilities/SeriesDetectionPanel";
@@ -17,6 +18,7 @@ const utilityPages = [
   { key: "storage", label: "Storage cleanup" },
   { key: "backups", label: "Backups" },
   { key: "reader-access", label: "Reader access" },
+  { key: "notifications", label: "Notifications" },
 ];
 
 function getRequestedUtilityTab(search: string) {
@@ -66,6 +68,7 @@ function Utilities({
         {activeTab === "storage" && <StorageCleanupPanel />}
         {activeTab === "backups" && <BackupsPanel />}
         {activeTab === "reader-access" && <ReaderKeys showHeading={false} />}
+        {activeTab === "notifications" && <NotificationsPanel />}
       </div>
     </div>
   );

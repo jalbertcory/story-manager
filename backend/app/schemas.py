@@ -1,6 +1,6 @@
 from .api_model import APIModel as BaseModel
 from pydantic import ConfigDict, Field, HttpUrl, JsonValue, field_validator
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .models import SourceType
@@ -316,6 +316,55 @@ class ApiKeyWithToken(ApiKey):
     token: str
 
 
+NotificationEvent = Literal["new_chapters", "audiobook_finished", "job_failed", "series_update"]
+WebhookFormat = Literal["json", "ntfy", "discord", "slack"]
+ALL_NOTIFICATION_EVENTS: tuple[NotificationEvent, ...] = (
+    "new_chapters",
+    "audiobook_finished",
+    "job_failed",
+    "series_update",
+)
+
+
+class NotificationWebhookCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=2000)
+    format: WebhookFormat = "json"
+    events: List[NotificationEvent] = Field(default_factory=lambda: list(ALL_NOTIFICATION_EVENTS))
+    enabled: bool = True
+
+
+class NotificationWebhookUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    url: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    format: Optional[WebhookFormat] = None
+    events: Optional[List[NotificationEvent]] = None
+    enabled: Optional[bool] = None
+
+
+class NotificationWebhook(BaseModel):
+    id: int
+    name: str
+    # The full URL is write-only because it usually embeds a secret token.
+    url_preview: str
+    format: WebhookFormat
+    events: List[NotificationEvent]
+    enabled: bool
+    created_at: datetime
+    last_delivery_at: Optional[datetime] = None
+    last_delivery_status: Optional[str] = None
+    last_delivery_error: Optional[str] = None
+
+
+class NotificationTestResult(BaseModel):
+    ok: bool
+    error: Optional[str] = None
+
+
+class SeriesGapDismiss(BaseModel):
+    series_name: str = Field(min_length=1)
+
+
 class SeriesRename(BaseModel):
     new_name: str
 
@@ -484,6 +533,36 @@ class AttentionMetadataItem(BaseModel):
     note: Optional[str] = None
 
 
+class AttentionSeriesGapItem(BaseModel):
+    series_name: str
+    author: str
+    missing_indexes: List[int]
+    owned_count: int
+    possible_titles: List[str] = Field(default_factory=list)
+
+
+class AttentionReleaseItem(BaseModel):
+    id: int
+    series_name: str
+    author: Optional[str] = None
+    title: str
+    series_index: Optional[float] = None
+    published_date: Optional[str] = None
+    release_date: Optional[date] = None
+    upcoming: bool
+    remote_url: Optional[str] = None
+
+
+class AttentionSeriesGapCategory(BaseModel):
+    count: int
+    items: List[AttentionSeriesGapItem] = Field(default_factory=list)
+
+
+class AttentionReleaseCategory(BaseModel):
+    count: int
+    items: List[AttentionReleaseItem] = Field(default_factory=list)
+
+
 class AttentionBookCategory(BaseModel):
     count: int
     items: List[AttentionBookItem] = Field(default_factory=list)
@@ -512,6 +591,8 @@ class AttentionDashboard(BaseModel):
     metadata_proposals: AttentionMetadataCategory
     broken_files: AttentionFileCategory
     missing_covers: AttentionFileCategory
+    series_gaps: AttentionSeriesGapCategory
+    series_releases: AttentionReleaseCategory
 
 
 class ReaderSeriesSummary(BaseModel):

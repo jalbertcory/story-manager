@@ -26,6 +26,8 @@ from ..job_payloads import (
     RematchImportedAudiobookPayload,
     MetadataSyncPayload,
     AudiobookPipelinePayload,
+    DeliverNotificationPayload,
+    SeriesCheckPayload,
 )
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
@@ -35,7 +37,7 @@ from ..lifecycle import (
     ProcessingJobStatus,
     transition_state,
 )
-from ..models import Book, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
+from ..models import Book, BookLog, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
 from ..logging_config import redact_text
 from ..observability_context import correlation_context
 from .audiobook_alignment import process_alignment
@@ -55,6 +57,15 @@ from .backup_barrier import backup_barrier
 from .backups import create_backup_archive, resolve_backup, verify_backup_archive
 from .cover_processing import reextract_book_cover
 from .metadata_jobs import process_metadata_sync_job
+from .notifications import (
+    DELIVERY_JOB_TYPE,
+    EVENT_AUDIOBOOK_FINISHED,
+    EVENT_JOB_FAILED,
+    EVENT_NEW_CHAPTERS,
+    deliver_to_webhook,
+    emit_notification,
+)
+from .series_tracking import run_series_check
 from .transcription_providers import transcription_provider_name
 from .update_scheduler import run_web_novel_update
 from .web_novel import run_book_refresh
@@ -270,8 +281,18 @@ class ProcessingQueue:
                         retry_backoff_seconds=self._retry_backoff_seconds,
                     )
 
-            if await self._retry_bookkeeping(record_failure) == "queued":
+            outcome = await self._retry_bookkeeping(record_failure)
+            if outcome == "queued":
                 self._wake.set()
+            elif outcome == "error" and job.job_type != DELIVERY_JOB_TYPE:
+                # Only the final failure is announced; a failed delivery never
+                # announces itself, which would loop on a broken webhook.
+                await emit_notification(
+                    EVENT_JOB_FAILED,
+                    f"Background job failed: {job.job_type.replace('_', ' ')}",
+                    error,
+                    book_id=job.book_id,
+                )
             return
 
         async def record_completion() -> None:
@@ -435,16 +456,54 @@ class ProcessingQueue:
         async def refresh_all() -> bool:
             return await run_web_novel_update(RefreshAllPayload.model_validate(job.payload or {}).trigger)
 
-        await self._run_with_progress_mirror(
+        ran = await self._run_with_progress_mirror(
             job.id,
             refresh_all,
             self._library_refresh_progress,
         )
         async with SessionLocal() as db:
             refresh_task = await crud.get_latest_update_task(db)
+            if ran and refresh_task is not None:
+                await self._announce_new_chapters(db, refresh_task.id)
             if refresh_task is not None and refresh_task.status == "failed":
                 raise RuntimeError("One or more web books failed to refresh; check the job history.")
         return "Library refresh completed"
+
+    async def _announce_new_chapters(self, db: AsyncSession, update_task_id: int) -> None:
+        rows = (
+            await db.execute(
+                select(BookLog, Book.title)
+                .join(Book, BookLog.book_id == Book.id)
+                .where(BookLog.update_task_id == update_task_id, BookLog.entry_type == "updated")
+                .order_by(Book.title)
+            )
+        ).all()
+        if not rows:
+            return
+        lines: list[str] = []
+        for log, title in rows[:15]:
+            added = (log.new_chapter_count or 0) - (log.previous_chapter_count or 0)
+            chapters = f"{added} new chapter{'s' if added != 1 else ''}" if added > 0 else "updated"
+            words = f", {log.words_added:,} words" if log.words_added and log.words_added > 0 else ""
+            lines.append(f"{title or 'Untitled'}: {chapters}{words}")
+        if len(rows) > len(lines):
+            lines.append(f"…and {len(rows) - len(lines)} more")
+        title = "1 story has new chapters" if len(rows) == 1 else f"{len(rows)} stories have new chapters"
+        await emit_notification(EVENT_NEW_CHAPTERS, title, "\n".join(lines))
+
+    async def _handle_deliver_notification(self, job: ProcessingJob) -> str:
+        payload = DeliverNotificationPayload.model_validate(job.payload or {})
+        return await deliver_to_webhook(
+            _required_target(job), event=payload.event, title=payload.title, message=payload.message
+        )
+
+    async def _handle_series_check(self, job: ProcessingJob) -> str:
+        SeriesCheckPayload.model_validate(job.payload or {})
+
+        async def progress(current: int, total: int, detail: str) -> None:
+            await self._update_progress(job.id, current, total, detail)
+
+        return await run_series_check(progress)
 
     async def _handle_audiobook_pipeline(self, job: ProcessingJob) -> str:
         return await self._run_audiobook_pipeline(job)
@@ -700,6 +759,9 @@ class ProcessingQueue:
                 raise ValueError("Book no longer exists.")
             if not book.audiobook_enabled:
                 raise ValueError("AI audiobook generation is not enabled for this book.")
+            # A rebuild of a finished audiobook produces a new one worth announcing;
+            # any other run on an already complete book is a no-op.
+            was_complete = book.audiobook_pipeline_status == "complete" and mode != "rebuild"
 
             if mode == "rebuild":
                 chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
@@ -798,6 +860,16 @@ class ProcessingQueue:
             book = await db.get(Book, job.book_id)
             if book is not None and book.audiobook_pipeline_status == "error":
                 raise RuntimeError(book.audiobook_last_error or "Audiobook processing failed.")
+            finished_title = (
+                book.title if book is not None and book.audiobook_pipeline_status == "complete" and not was_complete else None
+            )
+        if finished_title is not None:
+            await emit_notification(
+                EVENT_AUDIOBOOK_FINISHED,
+                "Audiobook finished",
+                f"{finished_title or 'Untitled'} is ready to listen to.",
+                book_id=book_id,
+            )
         return "Audiobook processing reached its requested checkpoint"
 
     async def _run_with_progress_mirror(
@@ -914,6 +986,8 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "create_backup": ("maintenance", 1),
     "verify_backup": ("maintenance", 1),
     "backfill_reader_checksums": ("maintenance", 3),
+    "deliver_notification": ("maintenance", 3),
+    "series_check": ("maintenance", 2),
 }
 
 JobHandler = Callable[[ProcessingQueue, ProcessingJob], Awaitable[str]]
@@ -936,6 +1010,8 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "generate_chapter_preview": ProcessingQueue._handle_generate_chapter_preview,
     "retry_cover": ProcessingQueue._handle_retry_cover,
     "backfill_reader_checksums": ProcessingQueue._handle_backfill_reader_checksums,
+    "deliver_notification": ProcessingQueue._handle_deliver_notification,
+    "series_check": ProcessingQueue._handle_series_check,
 }
 
 

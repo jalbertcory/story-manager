@@ -68,6 +68,65 @@ export function JobItem({
   );
 }
 
+const formatIndex = (value: number) => `#${value}`;
+
+export function SeriesGapItem({
+  item,
+  children,
+}: {
+  item: Schemas["AttentionSeriesGapItem"];
+  children?: ReactNode;
+}) {
+  return (
+    <li className="attention-item">
+      <strong>{item.series_name}</strong>
+      <span>
+        Missing {item.missing_indexes.map(formatIndex).join(", ")} · you have{" "}
+        {item.owned_count}
+      </span>
+      {item.possible_titles.length > 0 && (
+        <small title={item.possible_titles.join(", ")}>
+          Possibly: {item.possible_titles.join(", ")}
+        </small>
+      )}
+      {children}
+    </li>
+  );
+}
+
+function releaseDateLabel(item: Schemas["AttentionReleaseItem"]) {
+  const date = item.published_date || item.release_date;
+  if (!date) return item.upcoming ? "Upcoming" : "Released";
+  return `${item.upcoming ? "Releases" : "Released"} ${date}`;
+}
+
+export function ReleaseItem({
+  item,
+  children,
+}: {
+  item: Schemas["AttentionReleaseItem"];
+  children?: ReactNode;
+}) {
+  return (
+    <li className="attention-item">
+      {item.remote_url ? (
+        <a href={item.remote_url} target="_blank" rel="noreferrer">
+          {item.title}
+        </a>
+      ) : (
+        <strong>{item.title}</strong>
+      )}
+      <span>{releaseDateLabel(item)}</span>
+      <small>
+        {item.series_name}
+        {item.series_index != null && ` ${formatIndex(item.series_index)}`}
+        {item.author && ` · ${item.author}`}
+      </small>
+      {children}
+    </li>
+  );
+}
+
 export function MetadataItem({
   item,
   children,
@@ -97,8 +156,8 @@ export function AttentionCard({
   title: string;
   description: string;
   category: { count: number; items?: unknown[] };
-  actionHref: string;
-  actionLabel: string;
+  actionHref?: string;
+  actionLabel?: string;
   children: ReactNode;
   bulkAction?: ReactNode;
 }) {
@@ -117,7 +176,7 @@ export function AttentionCard({
           </span>
           <h3>{title}</h3>
         </div>
-        {hasItems && (
+        {hasItems && actionHref && (
           <a className="btn btn-sm" href={actionHref}>
             {actionLabel}
           </a>

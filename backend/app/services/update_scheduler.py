@@ -1,4 +1,4 @@
-from ..job_payloads import RefreshAllPayload
+from ..job_payloads import RefreshAllPayload, SeriesCheckPayload
 
 """Scheduler orchestration for recurring web novel update runs."""
 
@@ -25,6 +25,10 @@ METADATA_STALE_SCAN_JOB_ID = "enqueue_stale_metadata_sync"
 METADATA_STALE_SCAN_INTERVAL_HOURS = 24
 METADATA_STALE_SCAN_INTERVAL = timedelta(hours=METADATA_STALE_SCAN_INTERVAL_HOURS)
 METADATA_SYNC_STALE_AFTER_DAYS = 30
+SERIES_CHECK_JOB_ID = "queue_series_check"
+SERIES_CHECK_INTERVAL = timedelta(hours=24)
+# The first check after startup runs soon so a fresh install is not empty for a day.
+SERIES_CHECK_STARTUP_DELAY = timedelta(minutes=15)
 OVERDUE_RUN_DELAY = timedelta(seconds=5)
 
 _run_lock = asyncio.Lock()
@@ -265,3 +269,30 @@ async def run_metadata_recheck(trigger: str = "scheduled") -> bool:
         return job is not None
     finally:
         await schedule_next_metadata_recheck()
+
+
+async def schedule_next_series_check(delay: timedelta = SERIES_CHECK_INTERVAL) -> datetime:
+    next_run_at = datetime.now(timezone.utc) + delay
+    _scheduler.add_job(
+        queue_scheduled_series_check,
+        "date",
+        id=SERIES_CHECK_JOB_ID,
+        replace_existing=True,
+        run_date=next_run_at,
+    )
+    logger.info("Next series gap and release check scheduled for %s.", next_run_at.isoformat())
+    return next_run_at
+
+
+async def queue_scheduled_series_check() -> None:
+    from .processing_queue import queue_processing_job
+
+    try:
+        await queue_processing_job(
+            job_type="series_check",
+            payload=SeriesCheckPayload(trigger="scheduled"),
+            dedupe_key="series_check",
+            progress_detail="Queued by the daily series check",
+        )
+    finally:
+        await schedule_next_series_check()

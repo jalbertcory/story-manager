@@ -61,6 +61,12 @@ const settings: {
     href: "/settings/library-tools?section=reader-access",
   },
   {
+    title: "Notifications",
+    icon: "bell",
+    description: "Send webhooks for new chapters, audiobooks, and failures",
+    href: "/settings/library-tools?section=notifications",
+  },
+  {
     title: "Logs",
     icon: "logs",
     description: "Diagnostics and service history",

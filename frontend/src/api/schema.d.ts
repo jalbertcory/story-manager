@@ -1843,6 +1843,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Notification Webhooks */
+        get: operations["list_notification_webhooks_api_notifications_webhooks_get"];
+        put?: never;
+        /** Create Notification Webhook */
+        post: operations["create_notification_webhook_api_notifications_webhooks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/webhooks/{webhook_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Notification Webhook */
+        delete: operations["delete_notification_webhook_api_notifications_webhooks__webhook_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Notification Webhook */
+        patch: operations["update_notification_webhook_api_notifications_webhooks__webhook_id__patch"];
+        trace?: never;
+    };
+    "/api/notifications/webhooks/{webhook_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Notification Webhook
+         * @description Send a test message now and report whether the receiver accepted it.
+         */
+        post: operations["test_notification_webhook_api_notifications_webhooks__webhook_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/observability/diagnostics": {
         parameters: {
             query?: never;
@@ -2186,6 +2242,57 @@ export interface paths {
         get: operations["list_series_api_series_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/series-tracking/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue Series Check */
+        post: operations["queue_series_check_api_series_tracking_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/series-tracking/gaps/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss Gaps */
+        post: operations["dismiss_gaps_api_series_tracking_gaps_dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/series-tracking/releases/{finding_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss Release */
+        post: operations["dismiss_release_api_series_tracking_releases__finding_id__dismiss_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2831,6 +2938,8 @@ export interface components {
             failed_refreshes: components["schemas"]["AttentionBookCategory"];
             metadata_proposals: components["schemas"]["AttentionMetadataCategory"];
             missing_covers: components["schemas"]["AttentionFileCategory"];
+            series_gaps: components["schemas"]["AttentionSeriesGapCategory"];
+            series_releases: components["schemas"]["AttentionReleaseCategory"];
             stale_audiobooks: components["schemas"]["AttentionBookCategory"];
             /** Total Count */
             total_count: number;
@@ -2908,6 +3017,54 @@ export interface components {
             proposal_id: number;
             /** Title */
             title: string;
+        };
+        /** AttentionReleaseCategory */
+        AttentionReleaseCategory: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AttentionReleaseItem"][];
+        };
+        /** AttentionReleaseItem */
+        AttentionReleaseItem: {
+            /** Author */
+            author: string | null;
+            /** Id */
+            id: number;
+            /** Published Date */
+            published_date: string | null;
+            /** Release Date */
+            release_date: string | null;
+            /** Remote Url */
+            remote_url: string | null;
+            /** Series Index */
+            series_index: number | null;
+            /** Series Name */
+            series_name: string;
+            /** Title */
+            title: string;
+            /** Upcoming */
+            upcoming: boolean;
+        };
+        /** AttentionSeriesGapCategory */
+        AttentionSeriesGapCategory: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AttentionSeriesGapItem"][];
+        };
+        /** AttentionSeriesGapItem */
+        AttentionSeriesGapItem: {
+            /** Author */
+            author: string;
+            /** Missing Indexes */
+            missing_indexes: number[];
+            /** Owned Count */
+            owned_count: number;
+            /** Possible Titles */
+            possible_titles: string[];
+            /** Series Name */
+            series_name: string;
         };
         /** AudiobookPipelinePayload */
         AudiobookPipelinePayload: {
@@ -4563,6 +4720,75 @@ export interface components {
             /** Target Id */
             target_id?: number | null;
         };
+        /** NotificationTestResult */
+        NotificationTestResult: {
+            /** Error */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+        };
+        /** NotificationWebhook */
+        NotificationWebhook: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Events */
+            events: ("new_chapters" | "audiobook_finished" | "job_failed" | "series_update")[];
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "json" | "ntfy" | "discord" | "slack";
+            /** Id */
+            id: number;
+            /** Last Delivery At */
+            last_delivery_at: string | null;
+            /** Last Delivery Error */
+            last_delivery_error: string | null;
+            /** Last Delivery Status */
+            last_delivery_status: string | null;
+            /** Name */
+            name: string;
+            /** Url Preview */
+            url_preview: string;
+        };
+        /** NotificationWebhookCreate */
+        NotificationWebhookCreate: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Events */
+            events?: ("new_chapters" | "audiobook_finished" | "job_failed" | "series_update")[];
+            /**
+             * Format
+             * @default json
+             * @enum {string}
+             */
+            format: "json" | "ntfy" | "discord" | "slack";
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+        };
+        /** NotificationWebhookUpdate */
+        NotificationWebhookUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Events */
+            events?: ("new_chapters" | "audiobook_finished" | "job_failed" | "series_update")[] | null;
+            /** Format */
+            format?: ("json" | "ntfy" | "discord" | "slack") | null;
+            /** Name */
+            name?: string | null;
+            /** Url */
+            url?: string | null;
+        };
         /** OkResponse */
         OkResponse: {
             /** Ok */
@@ -5168,6 +5394,11 @@ export interface components {
             series_detected: string[];
             /** Updated */
             updated: number;
+        };
+        /** SeriesGapDismiss */
+        SeriesGapDismiss: {
+            /** Series Name */
+            series_name: string;
         };
         /** SeriesGenresUpdate */
         SeriesGenresUpdate: {
@@ -8914,6 +9145,154 @@ export interface operations {
             };
         };
     };
+    list_notification_webhooks_api_notifications_webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationWebhook"][];
+                };
+            };
+        };
+    };
+    create_notification_webhook_api_notifications_webhooks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationWebhookCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationWebhook"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_notification_webhook_api_notifications_webhooks__webhook_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_notification_webhook_api_notifications_webhooks__webhook_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationWebhookUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationWebhook"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_notification_webhook_api_notifications_webhooks__webhook_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     download_diagnostics_api_observability_diagnostics_get: {
         parameters: {
             query?: never;
@@ -9520,6 +9899,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": string[];
+                };
+            };
+        };
+    };
+    queue_series_check_api_series_tracking_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingJob"];
+                };
+            };
+        };
+    };
+    dismiss_gaps_api_series_tracking_gaps_dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesGapDismiss"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_release_api_series_tracking_releases__finding_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                finding_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
