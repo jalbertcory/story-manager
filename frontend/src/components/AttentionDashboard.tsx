@@ -5,8 +5,17 @@ import {
   FileItem,
   JobItem,
   MetadataItem,
+  ReleaseItem,
+  SeriesGapItem,
   AttentionCard,
 } from "./attention/AttentionCards";
+import { useState } from "react";
+import {
+  dismissSeriesGap,
+  dismissSeriesRelease,
+  queueSeriesCheck,
+} from "../api/dashboard";
+import { errorMessage } from "../lib/errors";
 import useAttentionActions from "./attention/useAttentionActions";
 import AttentionAction from "./attention/AttentionAction";
 
@@ -24,6 +33,44 @@ function AttentionDashboard({
   isRefreshing: boolean;
 }) {
   const actions = useAttentionActions(onRefresh);
+  const [seriesBusy, setSeriesBusy] = useState<string | null>(null);
+  const [seriesNotice, setSeriesNotice] = useState<{
+    error: boolean;
+    text: string;
+  }>();
+  const runSeriesAction = async (
+    key: string,
+    request: () => Promise<unknown>,
+    done?: string,
+  ) => {
+    setSeriesBusy(key);
+    setSeriesNotice(undefined);
+    try {
+      await request();
+      if (done) setSeriesNotice({ error: false, text: done });
+      await onRefresh();
+    } catch (err) {
+      setSeriesNotice({ error: true, text: errorMessage(err) });
+    } finally {
+      setSeriesBusy(null);
+    }
+  };
+  const dismiss = (
+    key: string,
+    label: string,
+    request: () => Promise<unknown>,
+  ) => (
+    <button
+      className="btn-text"
+      disabled={seriesBusy === key}
+      aria-label={`Dismiss ${label}`}
+      onClick={() => {
+        void runSeriesAction(key, request);
+      }}
+    >
+      Dismiss
+    </button>
+  );
   const action = (kind: ActionKind, item: ActionItem) => (
     <AttentionAction kind={kind} item={item} actions={actions} />
   );
@@ -97,6 +144,11 @@ function AttentionDashboard({
             </p>
           )}
         </section>
+      )}
+      {seriesNotice && (
+        <p role={seriesNotice.error ? "alert" : "status"}>
+          {seriesNotice.text}
+        </p>
       )}
       {healthy && (
         <section className="attention-healthy" role="status">
@@ -200,7 +252,53 @@ function AttentionDashboard({
             </FileItem>
           ))}
         </AttentionCard>
+
+        <AttentionCard
+          title="Series gaps"
+          description="Numbered series where a book in the middle is not in your library."
+          category={data.series_gaps}
+          actionHref="/"
+          actionLabel="Open library"
+        >
+          {data.series_gaps.items.map((item) => (
+            <SeriesGapItem key={item.series_name} item={item}>
+              {dismiss(`gap:${item.series_name}`, item.series_name, () =>
+                dismissSeriesGap(item.series_name),
+              )}
+            </SeriesGapItem>
+          ))}
+        </AttentionCard>
+
+        <AttentionCard
+          title="New in your series"
+          description="Recent and upcoming books Google Books lists for series you own."
+          category={data.series_releases}
+        >
+          {data.series_releases.items.map((item) => (
+            <ReleaseItem key={item.id} item={item}>
+              {dismiss(`release:${item.id}`, item.title, () =>
+                dismissSeriesRelease(item.id),
+              )}
+            </ReleaseItem>
+          ))}
+        </AttentionCard>
       </div>
+      <p className="hint">
+        Series are checked once a day.{" "}
+        <button
+          className="btn-text"
+          disabled={seriesBusy === "check"}
+          onClick={() => {
+            void runSeriesAction(
+              "check",
+              queueSeriesCheck,
+              "Series check queued. Refresh in a minute to see the results.",
+            );
+          }}
+        >
+          Check series now
+        </button>
+      </p>
     </div>
   );
 }

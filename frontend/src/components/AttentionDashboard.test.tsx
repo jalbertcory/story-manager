@@ -25,6 +25,8 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     metadata_proposals: emptyCategory,
     broken_files: emptyCategory,
     missing_covers: emptyCategory,
+    series_gaps: emptyCategory,
+    series_releases: emptyCategory,
     ...overrides,
   };
 }
@@ -89,7 +91,7 @@ describe("AttentionDashboard", () => {
     renderDashboard({ data: dashboard() });
 
     expect(screen.getByText("Your library looks healthy.")).toBeInTheDocument();
-    expect(screen.getAllByText("No attention needed")).toHaveLength(6);
+    expect(screen.getAllByText("No attention needed")).toHaveLength(8);
   });
 
   it("shows actionable items and their destinations", () => {
@@ -332,4 +334,71 @@ it("shows a retryable error when a queue request returns no jobs", async () => {
   expect(button).toBeEnabled();
   fireEvent.click(button);
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+});
+
+it("lists series gaps and releases and dismisses them", async () => {
+  const calls: string[] = [];
+  const fetchMock: FixtureFetch = (url, options) => {
+    calls.push(
+      `${options?.method || "GET"} ${url} ${String(options?.body ?? "")}`,
+    );
+    return Promise.resolve({
+      ok: true,
+      status: 204,
+      json: () => Promise.resolve(null),
+    });
+  };
+  vi.stubGlobal("fetch", vi.fn(fetchMock));
+  const onRefresh = vi.fn();
+  renderDashboard({
+    onRefresh,
+    data: dashboard({
+      total_count: 2,
+      series_gaps: {
+        count: 1,
+        items: [
+          {
+            series_name: "The Saga",
+            author: "Ann Author",
+            missing_indexes: [3],
+            owned_count: 3,
+            possible_titles: ["Third Dusk"],
+          },
+        ],
+      },
+      series_releases: {
+        count: 1,
+        items: [
+          {
+            id: 7,
+            series_name: "The Saga",
+            author: "Ann Author",
+            title: "Fifth Night",
+            series_index: 5,
+            published_date: "2027-03",
+            release_date: "2027-03-31",
+            upcoming: true,
+            remote_url: "https://books.example/fifth",
+          },
+        ],
+      },
+    }),
+  });
+
+  expect(screen.getByText("Missing #3 · you have 3")).toBeInTheDocument();
+  expect(screen.getByText("Possibly: Third Dusk")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Fifth Night" })).toHaveAttribute(
+    "href",
+    "https://books.example/fifth",
+  );
+  expect(screen.getByText("Releases 2027-03")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss The Saga" }));
+  await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss Fifth Night" }));
+  await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+  expect(calls).toEqual([
+    'POST /api/series-tracking/gaps/dismiss {"series_name":"The Saga"}',
+    "POST /api/series-tracking/releases/7/dismiss ",
+  ]);
 });

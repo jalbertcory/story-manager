@@ -170,6 +170,8 @@ function mockApi(
           metadata_proposals: category,
           broken_files: category,
           missing_covers: category,
+          series_gaps: category,
+          series_releases: category,
         } satisfies components["schemas"]["AttentionDashboard"];
       } else data = [];
     }

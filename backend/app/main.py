@@ -37,15 +37,23 @@ from .routers import (
     lifecycles,
     library,
     metadata,
+    notifications,
     processing,
     observability,
     reader,
     scheduler,
+    series_tracking,
     storage,
     upload,
     web_novels,
 )
-from .services.update_scheduler import get_scheduler, schedule_next_metadata_recheck, schedule_next_web_novel_update
+from .services.update_scheduler import (
+    SERIES_CHECK_STARTUP_DELAY,
+    get_scheduler,
+    schedule_next_metadata_recheck,
+    schedule_next_series_check,
+    schedule_next_web_novel_update,
+)
 from .services.library_paths import audiobooks_root
 from .services.processing_queue import get_processing_queue
 
@@ -94,6 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _scheduler.start()
     await schedule_next_web_novel_update()
     await schedule_next_metadata_recheck()
+    await schedule_next_series_check(SERIES_CHECK_STARTUP_DELAY)
     yield
     await _processing_queue.stop()
     if _scheduler.running:
@@ -133,6 +142,8 @@ app.include_router(lifecycles.router)
 app.include_router(scheduler.router)
 app.include_router(storage.router)
 app.include_router(api_keys.router)
+app.include_router(notifications.router)
+app.include_router(series_tracking.router)
 app.include_router(auth.router)
 app.include_router(reader.router)
 app.include_router(metadata.router)

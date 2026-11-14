@@ -93,6 +93,16 @@ class BackfillReaderChecksumsPayload(JobPayload):
     pass
 
 
+class DeliverNotificationPayload(JobPayload):
+    event: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    message: str = ""
+
+
+class SeriesCheckPayload(JobPayload):
+    trigger: str = "manual"
+
+
 JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "clean_book": CleanBookPayload,
     "clean_all": CleanAllPayload,
@@ -112,6 +122,8 @@ JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "create_backup": CreateBackupPayload,
     "verify_backup": VerifyBackupPayload,
     "backfill_reader_checksums": BackfillReaderChecksumsPayload,
+    "deliver_notification": DeliverNotificationPayload,
+    "series_check": SeriesCheckPayload,
 }
 
 

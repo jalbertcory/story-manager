@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -14,6 +15,7 @@ from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..crud.metadata import actionable_metadata_proposal_conditions
 from ..services.library_health import LibraryFileIssue, find_missing_covers, inspect_library_files
+from ..services.series_tracking import compute_series_gaps
 
 router = APIRouter()
 
@@ -169,6 +171,58 @@ async def _metadata_proposals(db: AsyncSession, limit: int) -> schemas.Attention
     )
 
 
+async def _series_gaps(db: AsyncSession, limit: int) -> schemas.AttentionSeriesGapCategory:
+    gaps = await compute_series_gaps(db)
+    return schemas.AttentionSeriesGapCategory(
+        count=len(gaps),
+        items=[
+            schemas.AttentionSeriesGapItem(
+                series_name=gap.series_name,
+                author=gap.author,
+                missing_indexes=gap.missing_indexes,
+                owned_count=gap.owned_count,
+                possible_titles=gap.possible_titles,
+            )
+            for gap in gaps[:limit]
+        ],
+    )
+
+
+async def _series_releases(db: AsyncSession, limit: int) -> schemas.AttentionReleaseCategory:
+    conditions = (models.SeriesFinding.kind == "release", models.SeriesFinding.status == "open")
+    count = await db.scalar(select(func.count()).select_from(models.SeriesFinding).where(*conditions))
+    findings = (
+        (
+            await db.execute(
+                select(models.SeriesFinding)
+                .where(*conditions)
+                .order_by(models.SeriesFinding.release_date.desc(), models.SeriesFinding.id.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    today = datetime.now(timezone.utc).date()
+    return schemas.AttentionReleaseCategory(
+        count=count or 0,
+        items=[
+            schemas.AttentionReleaseItem(
+                id=finding.id,
+                series_name=finding.series_name,
+                author=finding.author,
+                title=finding.title or "",
+                series_index=float(finding.series_index) if finding.series_index is not None else None,
+                published_date=finding.published_date,
+                release_date=finding.release_date,
+                upcoming=finding.release_date is not None and finding.release_date > today,
+                remote_url=finding.remote_url,
+            )
+            for finding in findings
+        ],
+    )
+
+
 def _scan_library_files(
     books: list[models.Book],
 ) -> tuple[list[LibraryFileIssue], list[LibraryFileIssue], set[int]]:
@@ -203,6 +257,8 @@ async def get_attention_dashboard(
     failed_refreshes = await _failed_refreshes(db, limit)
     stale_audiobooks = await _stale_audiobooks(db, limit)
     metadata_proposals = await _metadata_proposals(db, limit)
+    series_gaps = await _series_gaps(db, limit)
+    series_releases = await _series_releases(db, limit)
     broken_category = schemas.AttentionFileCategory(
         count=len(broken_files),
         items=[_file_item(issue) for issue in broken_files[:limit]],
@@ -220,6 +276,8 @@ async def get_attention_dashboard(
             metadata_proposals,
             broken_category,
             cover_category,
+            series_gaps,
+            series_releases,
         )
     )
     return schemas.AttentionDashboard(
@@ -230,4 +288,6 @@ async def get_attention_dashboard(
         metadata_proposals=metadata_proposals,
         broken_files=broken_category,
         missing_covers=cover_category,
+        series_gaps=series_gaps,
+        series_releases=series_releases,
     )
