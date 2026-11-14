@@ -180,6 +180,8 @@ test("retries from Needs Attention and displays a failed recovery without leavin
         broken_files: empty,
         stale_audiobooks: empty,
         metadata_proposals: empty,
+        series_gaps: empty,
+        series_releases: empty,
       },
     }),
   );
