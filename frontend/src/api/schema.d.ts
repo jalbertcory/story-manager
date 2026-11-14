@@ -2858,6 +2858,8 @@ export interface components {
         AllEndpointStatsResponse: {
             /** Llm */
             llm: components["schemas"]["EndpointStats"][];
+            /** Solver */
+            solver: components["schemas"]["SolverStats"][];
             /** Transcription */
             transcription: components["schemas"]["EndpointStats"][];
             /** Tts */
@@ -5549,6 +5551,41 @@ export interface components {
             tts_quality_attempts?: number | null;
             /** Tts Voice Drift Margin */
             tts_voice_drift_margin?: number | null;
+        };
+        /**
+         * SolverStats
+         * @description Requests for one site through one Cloudflare solver (FlareSolverr-compatible) server.
+         */
+        SolverStats: {
+            /** Answered */
+            answered: number;
+            /** Answered 24H */
+            answered_24h: number;
+            /** Average 24H Ms */
+            average_24h_ms: number | null;
+            /** Average Ms */
+            average_ms: number | null;
+            /** Failed */
+            failed: number;
+            /** Fastest Ms */
+            fastest_ms: number | null;
+            /** Last Answered At */
+            last_answered_at: string | null;
+            /** P50 Ms */
+            p50_ms: number | null;
+            /** P95 Ms */
+            p95_ms: number | null;
+            /** Requests */
+            requests: number;
+            /** Site */
+            site: string;
+            /** Slowest Ms */
+            slowest_ms: number | null;
+            /** Solver Url */
+            solver_url: string;
+            speed_buckets: components["schemas"]["EndpointSpeedBuckets"];
+            /** Success Rate */
+            success_rate: number | null;
         };
         /**
          * SourceType

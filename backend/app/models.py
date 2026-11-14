@@ -464,6 +464,25 @@ class AiEndpointRequestMetric(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class SolverRequestMetric(Base):
+    """One request sent to a Cloudflare solver (FlareSolverr-compatible) server."""
+
+    __tablename__ = "solver_request_metrics"
+    __table_args__ = (Index("ix_solver_request_metrics_site_solver_created", "site", "solver_url", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    # Hostname of the page or file the solver was asked to fetch.
+    site: Mapped[str] = mapped_column(String, nullable=False)
+    # protocol://host:port of the solver, so replacing the solver starts a new series.
+    solver_url: Mapped[str] = mapped_column(String, nullable=False)
+    # Which code path made the request: fanficfare, royalroad or cover.
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    duration_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class AudiobookChapter(Base):
     __tablename__ = "audiobook_chapters"
     __table_args__ = (

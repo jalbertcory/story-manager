@@ -38,11 +38,9 @@ class EndpointSpeedBuckets(BaseModel):
     over_60s: int
 
 
-class EndpointStats(BaseModel):
-    endpoint_id: str
-    name: str
-    provider: str
-    model: Optional[str]
+class RequestStats(BaseModel):
+    """Counts and latency shared by every measured kind of outbound request."""
+
     requests: int
     answered: int
     failed: int
@@ -56,3 +54,17 @@ class EndpointStats(BaseModel):
     average_24h_ms: Optional[float]
     speed_buckets: EndpointSpeedBuckets
     last_answered_at: Optional[datetime]
+
+
+class EndpointStats(RequestStats):
+    endpoint_id: str
+    name: str
+    provider: str
+    model: Optional[str]
+
+
+class SolverStats(RequestStats):
+    """Requests for one site through one Cloudflare solver (FlareSolverr-compatible) server."""
+
+    site: str
+    solver_url: str
