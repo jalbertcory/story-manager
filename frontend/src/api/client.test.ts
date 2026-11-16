@@ -1,11 +1,14 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.unmock("openapi-fetch");
 
-import { apiUrl } from "./client";
+import { apiUrl, isApiError, SIGN_IN_EXPIRED_MESSAGE } from "./client";
+import { login } from "./auth";
 import { deleteBook, getBook, getBookCatalog, updateBook } from "./books";
 import { uploadEpubs } from "./imports";
+import { onUnauthorized } from "../lib/authSession";
+import type { UnauthorizedReason } from "../lib/authSession";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -152,5 +155,79 @@ describe("OpenAPI HTTP transport", () => {
     await expect(updateBook(12, { title: "" })).rejects.toThrow(
       "Invalid title",
     );
+  });
+});
+
+describe("refused sign-ins", () => {
+  let reasons: UnauthorizedReason[] = [];
+  let stopListening = () => {};
+  beforeEach(() => {
+    reasons = [];
+    stopListening = onUnauthorized((reason) => reasons.push(reason));
+  });
+  afterEach(() => stopListening());
+
+  function loginRedirect() {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: "https://auth.example.com/login" },
+    });
+  }
+
+  it("stops at an auth proxy's login redirect and reports it as a 401", async () => {
+    let sent: Request | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: Request) => {
+        sent = request;
+        return loginRedirect();
+      }),
+    );
+
+    const error: unknown = await getBook(12).catch((caught: unknown) => caught);
+
+    expect(sent?.redirect).toBe("manual");
+    expect(isApiError(error, 401)).toBe(true);
+    expect(error).toHaveProperty("message", SIGN_IN_EXPIRED_MESSAGE);
+    expect(reasons).toEqual(["redirected"]);
+  });
+
+  it("recognizes the opaque response browsers give for a manual redirect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        // Browsers hide the redirect: no status, no headers, no body.
+        const response = new Response(null, { status: 200 });
+        Object.defineProperty(response, "type", { value: "opaqueredirect" });
+        Object.defineProperty(response, "status", { value: 0 });
+        Object.defineProperty(response, "ok", { value: false });
+        return response;
+      }),
+    );
+
+    await expect(getBook(12)).rejects.toThrow(SIGN_IN_EXPIRED_MESSAGE);
+    expect(reasons).toEqual(["redirected"]);
+  });
+
+  it("reports an expired session but not a mistyped password", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: Request) =>
+        Response.json(
+          {
+            detail: request.url.endsWith("/api/auth/login")
+              ? "Invalid password"
+              : "Admin authentication required",
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+
+    await expect(login("wrong")).rejects.toThrow("Invalid password");
+    expect(reasons).toEqual([]);
+
+    await expect(getBook(12)).rejects.toThrow("Admin authentication required");
+    expect(reasons).toEqual(["unauthorized"]);
   });
 });
