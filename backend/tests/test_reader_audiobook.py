@@ -248,8 +248,9 @@ async def test_reader_audiobook_capability_and_assets(
     assert single["audiobook"]["status"] == "complete"
     assert single["audiobook_types"] == ["ai_generated", "human_narrated"]
     human = app_client.get("/reader/books/839/human-audiobooks", auth=auth).json()
-    assert [edition["id"] for edition in human] == [70, 69]
-    assert [edition["is_reader_default"] for edition in human] == [True, False]
+    # The empty older edition must not be offered as a playable fallback.
+    assert [edition["id"] for edition in human] == [70]
+    assert [edition["is_reader_default"] for edition in human] == [True]
     assert human[0]["created_at"].startswith("2026-07-02T15:30:00")
     assert len(human[0]["tracks"]) == 2
     assert human[0]["audio_size_bytes"] == len(audio_content)
@@ -394,9 +395,8 @@ async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlit
     human_url = f"/reader/books/{book_id}/human-audiobooks"
     assert app_client.get(human_url).status_code == 401
     editions = app_client.get(human_url, auth=auth).json()
-    assert len(editions) == 1
-    assert editions[0]["name"] == "Human narration"
-    assert editions[0]["status"] == "ready"
+    # Merely creating an edition without tracks is not a publishable audiobook.
+    assert editions == []
     assert (
         app_client.get(
             f"/reader/books/{book_id}/human-audiobooks/chapters",

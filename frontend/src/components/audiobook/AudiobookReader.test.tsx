@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockFetch, renderWithClient } from "../../test-utils";
 import AudiobookReader from "./AudiobookReader";
+import AudiobookSources from "./AudiobookSources";
 import type { Chapter, Character, ImportedEdition } from "./types";
 
 type Track = ImportedEdition["tracks"][number];
@@ -84,6 +85,7 @@ const editionFixture = (
   is_reader_default: true,
   alignment_method: null,
   alignment_error: null,
+  matching_error: null,
   progress_current: 0,
   progress_total: 0,
   progress_detail: null,
@@ -99,6 +101,83 @@ const editionFixture = (
 describe("AudiobookReader", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("never skips an unmatched track between synchronized tracks", () => {
+    mockFetch(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+    );
+    const { container } = renderWithClient(
+      <AudiobookReader
+        bookId={11}
+        imports={[
+          editionFixture({
+            tracks: [
+              trackFixture(3, { cue_count: 10 }),
+              trackFixture(1, { cue_count: 10 }),
+              trackFixture(2),
+            ],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByLabelText("Chapter", { exact: true })).toHaveValue("1");
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByLabelText("Chapter", { exact: true })).toHaveValue("2");
+    expect(container.querySelector("audio")).toHaveAttribute("src", "2.mp3");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "no narration is skipped",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByLabelText("Chapter", { exact: true })).toHaveValue("3");
+  });
+
+  it("blocks an unsafe edition even when its old status says ready", () => {
+    const { container } = renderWithClient(
+      <AudiobookReader
+        bookId={11}
+        imports={[
+          editionFixture({
+            matching_error:
+              "Chapter matching needs review. 84 numbered chapters have no audio match.",
+            tracks: [trackFixture(1, { cue_count: 200 })],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Chapter matching needs review",
+    );
+    expect(container.querySelector("audio")).toBeNull();
+  });
+
+  it("shows repair controls and disables alignment for a blocked edition", () => {
+    const error = "Chapter matching needs review. Too few tracks match.";
+    renderWithClient(
+      <AudiobookSources
+        bookId={11}
+        imports={[
+          editionFixture({
+            status: "error",
+            matching_error: error,
+            error,
+            alignment_error: error,
+            tracks: [trackFixture(1)],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(error);
+    expect(screen.getAllByText(error)).toHaveLength(1);
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Re-align Timestamps" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Rematch Narration to book text" }),
+    ).toBeEnabled();
+    expect(screen.getByText("Review track matching")).toBeInTheDocument();
+    expect(screen.queryByText("Reader app default")).not.toBeInTheDocument();
   });
 
   it.each(["imported", "generated"] as const)(

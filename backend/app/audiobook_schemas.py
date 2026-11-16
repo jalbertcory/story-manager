@@ -277,6 +277,7 @@ class ImportedAudiobookResponse(BaseModel):
     progress_detail: Optional[str]
     error: Optional[str]
     alignment_error: Optional[str]
+    matching_error: Optional[str]
     created_at: datetime
     is_reader_default: bool = False
     tracks: list[ImportedTrackResponse]

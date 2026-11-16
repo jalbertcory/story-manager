@@ -44,6 +44,8 @@ from ..models import (
 from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
+from .audiobook_chapter_titles import chapter_identity as _chapter_identity
+from .audiobook_match_validation import MatchValidationError, require_safe_matches
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ IMPORT_EXTENSIONS = AUDIO_EXTENSIONS | {".cue", ".zip"}
 CURRENT_DERIVED_FORMAT_VERSION = 1
 # Increment when an imported human audiobook must be rebuilt to benefit from
 # changes to text ingestion, chapter matching, cue generation, or alignment.
-CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION = 1
+CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION = 2
 SOURCE_MANIFEST_FORMAT = "story-manager-audiobook-source"
 SOURCE_MANIFEST_VERSION = 1
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
@@ -68,8 +70,6 @@ _ASIN_RE = re.compile(r"\[((?:B[0-9A-Z]{9})|(?:[0-9]{9}[0-9X]))\]", re.IGNORECAS
 _CUE_TRACK_RE = re.compile(r"^\s*TRACK\s+(\d+)\s+AUDIO\s*$", re.IGNORECASE)
 _CUE_TITLE_RE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$', re.IGNORECASE)
 _CUE_INDEX_RE = re.compile(r"^\s*INDEX\s+01\s+(\d+):(\d+):(\d+)\s*$", re.IGNORECASE)
-_CHAPTER_NUMBER_RE = re.compile(r"(?:^|\b)chapter\s+(\d+)\b|^\s*(\d+)\s*$", re.IGNORECASE)
-_CREDITS_RE = re.compile(r"\b(?:opening|end)\s+credits?\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -442,7 +442,9 @@ async def rebuild_imported_audiobook(
     edition.progress_total = len(tracks)
     edition.progress_detail = "Preparing current book text"
     await db.commit()
-    chapters = await ensure_span_anchored_text(book, db)
+    chapters = await ensure_span_anchored_text(
+        book, db, force_ingest=(edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    )
     chapters_by_id = {chapter.id: chapter for chapter in chapters}
 
     matched_count = 0
@@ -475,6 +477,7 @@ async def rebuild_imported_audiobook(
         AlignmentMethod.ESTIMATED,
         context=f"imported audiobook {edition.id}",
     )
+    await _validate_completed_matches(edition, db)
     edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
     edition.matched_content_version = book.content_version or 1
     edition.progress_detail = f"Rebuilt with human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
@@ -856,20 +859,6 @@ async def _track_specs(audio_paths: list[Path], cue_paths: list[Path]) -> tuple[
     return specs, total_duration_ms
 
 
-def _chapter_identity(title: str | None) -> tuple[str, int | str] | None:
-    value = " ".join((title or "").split()).strip()
-    if not value or _CREDITS_RE.search(value):
-        return None
-    if match := _CHAPTER_NUMBER_RE.search(value):
-        return "chapter", int(match.group(1) or match.group(2))
-    lowered = value.casefold()
-    if "epilogue" in lowered:
-        return "named", "epilogue"
-    if "prologue" in lowered:
-        return "named", "prologue"
-    return "named", re.sub(r"[^a-z0-9]+", " ", lowered).strip()
-
-
 def _chapter_match(spec: TrackSpec, chapters: list[AudiobookChapter]) -> AudiobookChapter | None:
     wanted = _chapter_identity(spec.title)
     if wanted is None:
@@ -950,7 +939,7 @@ async def rebuild_estimated_cues(track: ImportedAudiobookTrack, db: AsyncSession
     return len(sentences)
 
 
-async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[AudiobookChapter]:
+async def ensure_span_anchored_text(book: Book, db: AsyncSession, *, force_ingest: bool = False) -> list[AudiobookChapter]:
     if not book.current_path:
         return []
     chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
@@ -961,7 +950,7 @@ async def ensure_span_anchored_text(book: Book, db: AsyncSession) -> list[Audiob
         and book.audiobook_text_content_version == content_version
         and all(chapter.logical_chapter_key is not None and chapter.logical_part_order is not None for chapter in chapters)
     )
-    if chapters_are_current:
+    if chapters_are_current and not force_ingest:
         return chapters
     prior_status = book.audiobook_pipeline_status
     await ingest_epub(book.id, db)
@@ -1053,6 +1042,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             await db.commit()
 
         matched_count = sum(1 for spec in specs if _chapter_match(spec, chapters))
+        await _validate_completed_matches(edition, db)
         transition_state(
             edition,
             "status",
@@ -1122,7 +1112,9 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
     edition.progress_current = 0
     edition.progress_detail = "Preparing current cleaned book text"
     await db.commit()
-    chapters = await ensure_span_anchored_text(book, db)
+    chapters = await ensure_span_anchored_text(
+        book, db, force_ingest=(edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    )
     result = await db.execute(
         select(ImportedAudiobookTrack)
         .where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
@@ -1153,6 +1145,7 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
         edition.progress_detail = f"Rematched track {index} of {len(tracks)}"
         await db.commit()
 
+    await _validate_completed_matches(edition, db)
     transition_state(
         edition,
         "status",
@@ -1200,4 +1193,27 @@ async def rematch_track(
         edition.alignment_error = None
     await db.commit()
     await db.refresh(track)
-    return await rebuild_estimated_cues(track, db)
+    cue_count = await rebuild_estimated_cues(track, db)
+    if edition is not None:
+        try:
+            await _validate_completed_matches(edition, db)
+        except MatchValidationError:
+            pass  # Keep each correction so a user can repair several tracks.
+    return cue_count
+
+
+async def _validate_completed_matches(edition: ImportedAudiobook, db: AsyncSession) -> None:
+    try:
+        await require_safe_matches(edition, db)
+    except MatchValidationError as exc:
+        transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.ERROR)
+        edition.error = str(exc)
+        edition.progress_detail = "Chapter matching blocked; review required"
+        await db.commit()
+        raise
+    if edition.status == "error" and (edition.error or "").startswith("Chapter matching needs review."):
+        transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.READY)
+        edition.error = None
+        edition.alignment_error = None
+        edition.progress_detail = "Chapter matching repaired"
+        await db.commit()

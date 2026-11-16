@@ -53,6 +53,7 @@ from ..services.audiobook_import import (
 from ..services.audiobook_metadata import filename_metadata
 from ..services.audiobook_reading import chapter_reading_blocks
 from ..services.audiobook_uploads import receive_audiobook_upload
+from ..services.audiobook_match_validation import MatchValidationError, require_safe_matches
 from ..services.audiobook_views import AudiobookViewNotFoundError, imported_audiobook_response
 from ..services.processing_queue import queue_processing_job
 from ..services.transcription_providers import (
@@ -380,8 +381,12 @@ async def align_imported_audiobook(
     await get_book_or_404(edition.book_id, db)
     if edition.status == "aligning":
         return await imported_audiobook_response(edition, db)
-    if edition.status != "ready":
+    if edition.status != "ready" and not (edition.status == "error" and edition.alignment_error):
         raise HTTPException(status_code=409, detail=f"Audiobook is {edition.status}, not ready for alignment")
+    try:
+        await require_safe_matches(edition, db, check_transcripts=False)
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     settings = await crud.audiobook.get_audiobook_settings(db)
     if settings is None or transcription_provider_name(settings) == "none":
         raise HTTPException(status_code=409, detail="Configure a transcription provider in Audio Settings first.")
@@ -497,6 +502,10 @@ async def get_imported_track_cues(
     # Imported narration is independent of the opt-in AI generation pipeline.
     # Human-only books still need synchronized text and block metadata.
     book = await get_book_or_404(edition.book_id, db)
+    try:
+        await require_safe_matches(edition, db)
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     result = await db.execute(
         select(ImportedAudiobookCue, AudiobookSentence)
         .join(AudiobookSentence, AudiobookSentence.id == ImportedAudiobookCue.sentence_id)
@@ -536,6 +545,8 @@ async def match_imported_track(
     db: AsyncSession = Depends(get_db),
 ) -> ImportedTrackResponse:
     edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    if edition.status in {"queued", "importing", "aligning", "stale"}:
+        raise HTTPException(status_code=409, detail="Wait for audiobook processing to finish before changing matches.")
     try:
         await rematch_track(track, body.chapter_id, db)
     except ValueError as exc:
@@ -554,9 +565,12 @@ async def get_imported_track_audio(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    _edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
     try:
+        await require_safe_matches(edition, db)
         full_path = audiobook_views.imported_track_audio_path(track)
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return FileResponse(str(full_path), media_type=track.media_type)
@@ -575,6 +589,8 @@ async def get_imported_track_smil(
     edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
     try:
         payload = await audiobook_views.imported_track_smil(edition, track, db)
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return Response(payload, media_type="application/smil+xml")

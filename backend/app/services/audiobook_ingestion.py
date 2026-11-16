@@ -261,7 +261,15 @@ def _chapter_title(
         value = heading.get_text(" ", strip=True)
         if value:
             return value[:500]
-    return f"Chapter {chapter_number}"
+    # EpubHtml.get_content() rebuilds <head> and can drop the source <title>.
+    document_title = soup.title or BeautifulSoup(item.content, "html.parser").title
+    if document_title:
+        value = document_title.get_text(" ", strip=True)
+        if value:
+            return value[:500]
+    # A spine position is not a chapter number: front matter and split files
+    # would otherwise impersonate numbered chapters during audio matching.
+    return f"Section {chapter_number}"
 
 
 def _looks_like_independent_chapter(title: str) -> bool:

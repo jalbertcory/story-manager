@@ -26,7 +26,20 @@ from .audiobook_import import (
     CURRENT_DERIVED_FORMAT_VERSION,
     CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
 )
+from ..lifecycle import ImportedAudiobookStatus
 from .library_paths import resolve_library_file
+from .audiobook_match_validation import imported_matching_error, require_safe_matches
+
+# Import and rematch jobs write tracks and matches one at a time while the UI
+# polls. Judging that partial state would flag every running job as needing
+# review; each job validates its finished matches before it can become ready.
+_MATCHES_IN_PROGRESS = frozenset(
+    {
+        ImportedAudiobookStatus.QUEUED.value,
+        ImportedAudiobookStatus.IMPORTING.value,
+        ImportedAudiobookStatus.STALE.value,
+    }
+)
 
 
 class AudiobookViewNotFoundError(LookupError):
@@ -89,6 +102,11 @@ async def imported_audiobook_response(
         .order_by(ImportedAudiobookTrack.sequence_order)
     )
     tracks = list(result.scalars().all())
+    matching_error = (
+        await imported_matching_error(edition, db, tracks=tracks)
+        if edition.status not in _MATCHES_IN_PROGRESS and (tracks or edition.status == "ready")
+        else None
+    )
     canonical_audio_track_ids = canonical_track_ids_by_audio_path(tracks)
     audio_paths = {
         path for track in tracks if (path := resolve_library_file(track.audio_file_path)) is not None and path.is_file()
@@ -137,8 +155,9 @@ async def imported_audiobook_response(
         progress_detail=edition.progress_detail,
         error=edition.error,
         alignment_error=edition.alignment_error,
+        matching_error=matching_error,
         created_at=edition.created_at,
-        is_reader_default=is_reader_default,
+        is_reader_default=is_reader_default and matching_error is None,
         tracks=[
             ImportedTrackResponse(
                 id=track.id,
@@ -164,7 +183,7 @@ async def imported_audiobook_response(
                 cues_url=f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/cues",
                 smil_url=(
                     f"/api/imported-audiobooks/{edition.id}/tracks/{track.id}/smil"
-                    if track.matched_chapter_id is not None
+                    if track.matched_chapter_id is not None and matching_error is None
                     else None
                 ),
             )
@@ -182,15 +201,12 @@ async def list_imported_audiobook_responses(book_id: int, db: AsyncSession) -> l
         .order_by(ImportedAudiobook.created_at.desc(), ImportedAudiobook.id.desc())
     )
     editions = list(result.scalars().all())
-    reader_default_id = next((edition.id for edition in editions if edition.status == "ready"), None)
-    return [
-        await imported_audiobook_response(
-            edition,
-            db,
-            is_reader_default=edition.id == reader_default_id,
-        )
-        for edition in editions
-    ]
+    responses = [await imported_audiobook_response(edition, db) for edition in editions]
+    for response in responses:
+        if response.status == "ready" and response.matching_error is None:
+            response.is_reader_default = True
+            break
+    return responses
 
 
 _NO_SENTENCES: crud.audiobook.ChapterSentenceCounts = {
@@ -250,6 +266,7 @@ async def imported_track_smil(
     ``audio_url_prefix`` selects the admin or reader-key audio route the
     overlay points at.
     """
+    await require_safe_matches(edition, db)
     if track.matched_chapter_id is None:
         raise AudiobookViewNotFoundError("Track is not matched to book text")
     primary_chapter = await db.get(AudiobookChapter, track.matched_chapter_id)

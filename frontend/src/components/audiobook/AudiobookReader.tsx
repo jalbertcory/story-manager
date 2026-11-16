@@ -122,8 +122,12 @@ function ImportedEditionReader({
   edition: ImportedEdition;
   audioOnly?: boolean;
 }) {
-  const playable = edition.tracks.filter(
-    (track) => audioOnly || track.cue_count > 0,
+  const playable = useMemo(
+    () =>
+      [...edition.tracks].sort(
+        (left, right) => left.sequence_order - right.sequence_order,
+      ),
+    [edition.tracks],
   );
   const [trackId, setTrackId] = useState(playable[0]?.id ?? null);
   const [activeSentenceId, setActiveSentenceId] = useState<number | null>(null);
@@ -146,7 +150,7 @@ function ImportedEditionReader({
       trackId == null
         ? Promise.resolve([])
         : getImportedTrackCues(edition.id, trackId, { signal }),
-    enabled: trackId != null && !audioOnly,
+    enabled: trackId != null && !audioOnly && (selected?.cue_count ?? 0) > 0,
   });
 
   const seek = (timeMs: number) => {
@@ -261,7 +265,13 @@ function ImportedEditionReader({
           onTimeUpdate={updateHighlight}
           onSeeked={updateHighlight}
         />
-        {!audioOnly && (
+        {!audioOnly && selected?.cue_count === 0 && (
+          <p role="status">
+            This track has no synchronized text. Its audio stays in the original
+            sequence so no narration is skipped.
+          </p>
+        )}
+        {!audioOnly && (selected?.cue_count ?? 0) > 0 && (
           <>
             <p className="audiobook-reader-summary">
               Click any sentence to seek.{" "}
@@ -487,6 +497,7 @@ function AudiobookReader({
       imports.filter(
         (edition) =>
           ["ready", "aligning"].includes(edition.status) &&
+          !edition.matching_error &&
           edition.tracks.length > 0,
       ),
     [imports],
@@ -512,6 +523,14 @@ function AudiobookReader({
   }, [sourceKey, sources]);
 
   if (!sources.length) {
+    const blocked = imports.find((edition) => edition.matching_error);
+    if (blocked) {
+      return (
+        <p className="error" role="alert">
+          {blocked.matching_error}
+        </p>
+      );
+    }
     return (
       <p className="empty-state">
         No playable audiobook edition yet. Import human narration in Sources or

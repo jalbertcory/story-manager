@@ -4184,6 +4184,8 @@ export interface components {
              * @default false
              */
             is_reader_default: boolean;
+            /** Matching Error */
+            matching_error: string | null;
             /** Name */
             name: string;
             /** Needs Rebuild */

@@ -6,10 +6,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from backend.tests.storage_environment import TEST_LIBRARY_PATH
 from backend.app.database import Base, get_db
 from backend.app.main import app
 
 SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolated_test_library():
+    """Every test's default file storage belongs to this temporary session."""
+    return TEST_LIBRARY_PATH
 
 
 @pytest.fixture(autouse=True)

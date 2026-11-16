@@ -5,7 +5,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).parent.resolve()
 
 # Absolute path to the library/ directory at the project root
-LIBRARY_PATH = (APP_DIR / ".." / ".." / "library").resolve()
+LIBRARY_PATH = Path(os.getenv("STORY_MANAGER_LIBRARY_DIR", str(APP_DIR / ".." / ".." / "library"))).resolve()
 
 # Backups live outside the library tree so a backup never recursively includes
 # older archives. Production mounts this directory as a separate persistent

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.config import LIBRARY_PATH
+
 from api_harness import client, create_dummy_epub, create_zip_archive
 
 
@@ -12,7 +14,7 @@ async def test_upload_epub(db_session):
     """
     Test uploading an EPUB file.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     epub_filename = "Uploaded Book.epub"
     epub_filepath = library_path / epub_filename
@@ -56,7 +58,7 @@ async def test_upload_zip_with_nested_epubs(db_session):
     """
     Test uploading a ZIP file with EPUBs in nested folders ignores non-EPUB files.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
 
     first_epub = library_path / "Nested One.epub"
@@ -107,7 +109,7 @@ async def test_upload_zip_with_no_epubs(db_session):
     """
     Test uploading a ZIP file with no EPUB entries reports a skipped result.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     zip_path = library_path / "non-books.zip"
     create_zip_archive(zip_path, {"nested/readme.txt": b"hello", "nested/image.jpg": b"jpg"})
@@ -133,7 +135,7 @@ async def test_duplicate_epub_upload(db_session):
     """
     Test that uploading an EPUB with the same title and author as an existing book returns 409.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     epub_filename = "Dup Book.epub"
     epub_filepath = library_path / epub_filename
@@ -164,7 +166,7 @@ async def test_duplicate_epub_upload(db_session):
 @pytest.mark.asyncio
 async def test_epub_upload_deduplicates_matching_epub_source(db_session):
     """Two epub uploads with the same full title and author are blocked → 409."""
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     title = "The Lighthouse at the Edge of Everything"
     author = "Cordelia Vance-Whitmore"

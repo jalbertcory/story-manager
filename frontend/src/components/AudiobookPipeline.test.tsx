@@ -257,6 +257,7 @@ describe("AudiobookPipeline", () => {
                 duration_ms: 3_600_000,
                 created_at: "2026-07-02T15:30:00Z",
                 is_reader_default: true,
+                matching_error: null,
                 tracks: [
                   {
                     id: 100,
@@ -274,6 +275,7 @@ describe("AudiobookPipeline", () => {
                 duration_ms: 3_600_000,
                 created_at: "2026-07-01T15:30:00Z",
                 is_reader_default: false,
+                matching_error: null,
                 tracks: [
                   {
                     id: 90,
@@ -352,7 +354,7 @@ describe("AudiobookPipeline", () => {
       await screen.findByRole("option", { name: "Newest narration" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/imported audio is intact, but it has no synchronized/),
+      screen.getByText(/This track has no synchronized text/),
     ).toBeInTheDocument();
   });
 

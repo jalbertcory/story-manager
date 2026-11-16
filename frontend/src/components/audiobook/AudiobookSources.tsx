@@ -239,15 +239,15 @@ function AudiobookSources({
                   </p>
                 </div>
                 <div className="imported-edition-badges">
-                  {edition.is_reader_default && (
+                  {edition.is_reader_default && !edition.matching_error && (
                     <span className="badge badge--success">
                       Reader app default
                     </span>
                   )}
                   <span
-                    className={`badge${edition.status === "error" ? " badge--error" : active ? " badge--warning" : ""}`}
+                    className={`badge${edition.status === "error" || edition.matching_error ? " badge--error" : active ? " badge--warning" : ""}`}
                   >
-                    {edition.status}
+                    {edition.matching_error ? "Needs review" : edition.status}
                   </span>
                 </div>
               </header>
@@ -262,11 +262,19 @@ function AudiobookSources({
                   )}
                 </div>
               )}
-              {edition.error && <p className="error">{edition.error}</p>}
-              {edition.alignment_error && (
-                <p className="error">{edition.alignment_error}</p>
+              {edition.error && edition.error !== edition.matching_error && (
+                <p className="error">{edition.error}</p>
               )}
-              {edition.status === "error" && (
+              {edition.matching_error && (
+                <p className="error" role="alert">
+                  {edition.matching_error}
+                </p>
+              )}
+              {edition.alignment_error &&
+                edition.alignment_error !== edition.matching_error && (
+                  <p className="error">{edition.alignment_error}</p>
+                )}
+              {edition.status === "error" && !edition.matching_error && (
                 <button
                   type="button"
                   onClick={() => retryMutation.mutate(edition.id)}
@@ -275,27 +283,30 @@ function AudiobookSources({
                   Retry Import
                 </button>
               )}
-              {edition.status === "ready" && (
+              {(edition.status === "ready" ||
+                (!active && edition.matching_error)) && (
                 <>
-                  {!audioOnly && edition.tracks.length > 0 && matched === 0 && (
-                    <div className="alignment-note">
-                      <p>
-                        The imported audio is intact, but its chapter matches
-                        and synchronized text need to be restored.
-                      </p>
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        aria-label={`Rematch ${edition.name} to book text`}
-                        disabled={rematchMutation.isPending}
-                        onClick={() => rematchMutation.mutate(edition.id)}
-                      >
-                        {rematchMutation.isPending
-                          ? "Queueing…"
-                          : "Rematch to Book Text"}
-                      </button>
-                    </div>
-                  )}
+                  {!audioOnly &&
+                    edition.tracks.length > 0 &&
+                    (matched === 0 || edition.matching_error) && (
+                      <div className="alignment-note">
+                        <p>
+                          The imported audio is intact, but its chapter matches
+                          and synchronized text need to be restored.
+                        </p>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          aria-label={`Rematch ${edition.name} to book text`}
+                          disabled={rematchMutation.isPending}
+                          onClick={() => rematchMutation.mutate(edition.id)}
+                        >
+                          {rematchMutation.isPending
+                            ? "Queueing…"
+                            : "Rematch to Book Text"}
+                        </button>
+                      </div>
+                    )}
                   {!audioOnly && (
                     <>
                       <p className="alignment-note">
@@ -308,7 +319,10 @@ function AudiobookSources({
                       <button
                         type="button"
                         className="btn-primary"
-                        disabled={alignMutation.isPending}
+                        disabled={
+                          alignMutation.isPending ||
+                          Boolean(edition.matching_error)
+                        }
                         onClick={() => alignMutation.mutate(edition.id)}
                       >
                         {alignMutation.isPending

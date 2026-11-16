@@ -68,9 +68,10 @@ async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
 
 
 @pytest.mark.asyncio
-async def test_existing_audiobook_text_is_reingested_when_book_content_is_newer(db, monkeypatch):
+@pytest.mark.parametrize("force_ingest", [False, True])
+async def test_existing_audiobook_text_is_reingested_when_book_content_is_newer(db, monkeypatch, force_ingest):
     book, chapter = await _seed_book_text(db)
-    book.content_version = 2
+    book.content_version = 1 if force_ingest else 2
     await db.commit()
     calls = []
 
@@ -84,17 +85,18 @@ async def test_existing_audiobook_text_is_reingested_when_book_content_is_newer(
 
     monkeypatch.setattr(audiobook_import, "ingest_epub", fake_ingest)
 
-    chapters = await audiobook_import.ensure_span_anchored_text(book, db)
+    chapters = await audiobook_import.ensure_span_anchored_text(book, db, force_ingest=force_ingest)
 
     assert calls == [book.id]
     assert [item.id for item in chapters] == [chapter.id]
     assert book.audiobook_pipeline_status is None
-    assert book.audiobook_source_content_version == 2
-    assert book.audiobook_text_content_version == 2
+    assert book.audiobook_source_content_version == book.content_version
+    assert book.audiobook_text_content_version == book.content_version
 
 
 @pytest.mark.asyncio
-async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tmp_path, monkeypatch):
+@pytest.mark.parametrize("valid_match", [True, False])
+async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tmp_path, monkeypatch, valid_match):
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         pytest.skip("ffmpeg and ffprobe are required")
     library = tmp_path / "library"
@@ -102,6 +104,9 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     monkeypatch.setattr(audiobook_import, "LIBRARY_PATH", library)
     monkeypatch.setattr(library_paths, "LIBRARY_PATH", library)
     book, chapter = await _seed_book_text(db)
+    if not valid_match:
+        chapter.title = "Chapter 2"
+        await db.commit()
     edition = ImportedAudiobook(
         book_id=book.id,
         name="Libation edition",
@@ -160,6 +165,17 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
         .all()
     )
     cues = list((await db.execute(select(ImportedAudiobookCue))).scalars().all())
+
+    if not valid_match:
+        assert edition.status == "error"
+        assert "Chapter matching needs review" in edition.error
+        assert len(tracks) == 2
+        assert cues == []
+        assert (audiobook_import.imported_audiobook_dir(book.id, edition.id) / "source").is_dir()
+        response = await audiobook_views.imported_audiobook_response(edition, db)
+        assert response.matching_error
+        assert not response.is_reader_default
+        return
 
     assert edition.status == "ready"
     assert edition.source_type == "libation"
@@ -344,8 +360,14 @@ async def test_manual_track_rematch_rebuilds_cues(db):
 
 
 @pytest.mark.asyncio
-async def test_human_audiobook_rebuild_preserves_valid_match_and_marks_pipeline_current(db):
+async def test_human_audiobook_rebuild_preserves_valid_match_and_marks_pipeline_current(db, monkeypatch):
     book, chapter = await _seed_book_text(db)
+    reingested = []
+
+    async def fake_ingest(book_id, selected_db):
+        reingested.append(book_id)
+
+    monkeypatch.setattr(audiobook_import, "ingest_epub", fake_ingest)
     edition = ImportedAudiobook(
         book_id=book.id,
         name="Existing human edition",
@@ -395,6 +417,7 @@ async def test_human_audiobook_rebuild_preserves_valid_match_and_marks_pipeline_
     assert track.alignment_score is None
     assert len(cues) == 2
     assert edition.pipeline_version == audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    assert reingested == [book.id]
     assert edition.alignment_method == "estimated"
 
 

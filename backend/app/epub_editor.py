@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 import re
 
 from . import models
+from .config import LIBRARY_PATH
 from .services.epub_utils import collect_epub_book_styled_classes, normalize_xhtml_prose_blocks
 
 TocLeaf: TypeAlias = epub.Link | epub.Section | epub.EpubItem
@@ -326,7 +327,7 @@ async def apply_book_cleaning(
         )
         return False
 
-    library_path = (Path(__file__).parent.resolve() / ".." / ".." / "library").resolve()
+    library_path = LIBRARY_PATH
     immutable_path = library_path.parent / book.immutable_path
     current_path = library_path.parent / book.current_path
 

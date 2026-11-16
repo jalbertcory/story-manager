@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.config import LIBRARY_PATH
+
 from backend.app import crud, epub_editor, models, schemas
 from backend.app.services import library_paths
 from api_harness import AsyncTestingSessionLocal, client, create_dummy_epub
@@ -44,7 +46,7 @@ async def test_process_book(db_session):
         )
 
     # Create dummy epub files
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     immutable_filepath = library_path / "immutable_process.epub"
     current_filepath = library_path / "process.epub"
@@ -240,7 +242,7 @@ async def test_reprocess_all(db_session):
 
 @pytest.mark.asyncio
 async def test_reprocess_all_skips_unchanged_books_without_cleaning_rules(db_session):
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     author_dir = library_path / "Reprocess Author"
     author_dir.mkdir(exist_ok=True)
@@ -283,7 +285,7 @@ async def test_preview_cleaning(db_session):
     """
     Test POST /api/books/{book_id}/preview-cleaning returns word count preview.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     epub_filename = "immutable_preview.epub"
     epub_filepath = library_path / epub_filename
