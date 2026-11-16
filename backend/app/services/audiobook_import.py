@@ -45,7 +45,7 @@ from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
 from .audiobook_chapter_titles import chapter_identity as _chapter_identity
-from .audiobook_match_validation import MatchValidationError, require_safe_matches
+from .audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError, require_safe_matches
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
 logger = logging.getLogger(__name__)
@@ -1093,7 +1093,11 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
 
 
 async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
-    """Rematch existing human-audio tracks after the book text changes."""
+    """Rematch existing human-audio tracks after the book text changes.
+
+    Manual corrections are kept while their chapter still exists; ingestion
+    keeps chapter ids stable for unchanged EPUB files.
+    """
     edition = await db.get(ImportedAudiobook, edition_id)
     if edition is None:
         raise ValueError("Imported audiobook no longer exists.")
@@ -1124,23 +1128,25 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
     edition.progress_total = len(tracks)
     await db.commit()
 
+    chapter_ids = {chapter.id for chapter in chapters}
     matched_count = 0
     for index, track in enumerate(tracks, start=1):
-        spec = TrackSpec(
-            sequence_order=track.sequence_order,
-            title=track.title,
-            audio_path=(LIBRARY_PATH.parent / track.audio_file_path).resolve(),
-            start_ms=track.source_start_ms,
-            end_ms=track.source_end_ms,
-            media_type=track.media_type,
-        )
-        matched = _chapter_match(spec, chapters)
-        track.matched_chapter_id = matched.id if matched else None
-        track.match_method = "automatic"
+        if track.match_method != "manual" or track.matched_chapter_id not in chapter_ids:
+            spec = TrackSpec(
+                sequence_order=track.sequence_order,
+                title=track.title,
+                audio_path=(LIBRARY_PATH.parent / track.audio_file_path).resolve(),
+                start_ms=track.source_start_ms,
+                end_ms=track.source_end_ms,
+                media_type=track.media_type,
+            )
+            matched = _chapter_match(spec, chapters)
+            track.matched_chapter_id = matched.id if matched else None
+            track.match_method = "automatic"
         track.alignment_score = None
         await db.commit()
         await rebuild_estimated_cues(track, db)
-        matched_count += int(matched is not None)
+        matched_count += int(track.matched_chapter_id is not None)
         edition.progress_current = index
         edition.progress_detail = f"Rematched track {index} of {len(tracks)}"
         await db.commit()
@@ -1211,7 +1217,7 @@ async def _validate_completed_matches(edition: ImportedAudiobook, db: AsyncSessi
         edition.progress_detail = "Chapter matching blocked; review required"
         await db.commit()
         raise
-    if edition.status == "error" and (edition.error or "").startswith("Chapter matching needs review."):
+    if edition.status == "error" and (edition.error or "").startswith(MATCH_REVIEW_PREFIX):
         transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.READY)
         edition.error = None
         edition.alignment_error = None
