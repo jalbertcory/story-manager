@@ -524,6 +524,29 @@ class ProcessingQueue:
             edition = await db.get(ImportedAudiobook, target_id)
             if edition is not None and edition.status == "error":
                 raise RuntimeError(edition.error or "Human audiobook import failed.")
+        if ImportAudiobookPayload.model_validate(job.payload or {}).auto_align and await self._queue_timestamp_alignment(
+            job, target_id, progress_detail="Queued automatically after audiobook import"
+        ):
+            return "Human audiobook import completed; timestamp alignment queued"
+        return "Human audiobook import completed"
+
+    async def _queue_timestamp_alignment(
+        self,
+        job: ProcessingJob,
+        target_id: int,
+        *,
+        progress_detail: str,
+        previously_aligned: bool = False,
+    ) -> bool:
+        """Queue Whisper timestamp alignment after chapter matching succeeds.
+
+        Matching alone leaves estimated timings, so alignment follows whenever a
+        transcription provider is configured. An edition that previously had
+        Whisper timings is queued even without one, so the alignment step
+        reports why those timings were lost.
+        """
+        async with SessionLocal() as db:
+            edition = await db.get(ImportedAudiobook, target_id)
             settings = await crud.audiobook.get_audiobook_settings(db)
             matched_count = await db.scalar(
                 select(func.count(ImportedAudiobookTrack.id)).where(
@@ -531,25 +554,21 @@ class ProcessingQueue:
                     ImportedAudiobookTrack.matched_chapter_id.is_not(None),
                 )
             )
-        if (
-            ImportAudiobookPayload.model_validate(job.payload or {}).auto_align
-            and edition is not None
-            and matched_count
-            and transcription_provider_name(settings) != "none"
-        ):
-            child = await queue_processing_job(
-                job_type="align_imported_audiobook",
-                book_id=job.book_id,
-                target_type="imported_audiobook",
-                target_id=target_id,
-                target_content_version=edition.matched_content_version,
-                parent_job_id=job.id,
-                dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
-                progress_detail="Queued automatically after audiobook import",
-            )
-            await self.enqueue(child.id)
-            return "Human audiobook import completed; timestamp alignment queued"
-        return "Human audiobook import completed"
+        configured = transcription_provider_name(settings) != "none"
+        if edition is None or not matched_count or not (configured or previously_aligned):
+            return False
+        child = await queue_processing_job(
+            job_type="align_imported_audiobook",
+            book_id=job.book_id,
+            target_type="imported_audiobook",
+            target_id=target_id,
+            target_content_version=edition.matched_content_version,
+            parent_job_id=job.id,
+            dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
+            progress_detail=progress_detail,
+        )
+        await self.enqueue(child.id)
+        return True
 
     async def _handle_upgrade_imported_audiobook(self, job: ProcessingJob) -> str:
         target_id = _required_target(job)
@@ -577,18 +596,12 @@ class ProcessingQueue:
             rebuild_audio,
             lambda: self._imported_audio_progress(target_id),
         )
-        if result.realign:
-            child = await queue_processing_job(
-                job_type="align_imported_audiobook",
-                book_id=job.book_id,
-                target_type="imported_audiobook",
-                target_id=target_id,
-                target_content_version=job.target_content_version,
-                parent_job_id=job.id,
-                dedupe_key=f"align_imported_audiobook:imported_audiobook:{target_id}",
-                progress_detail="Queued after human-audiobook rebuild",
-            )
-            await self.enqueue(child.id)
+        if await self._queue_timestamp_alignment(
+            job,
+            target_id,
+            progress_detail="Queued after human-audiobook rebuild",
+            previously_aligned=result.realign,
+        ):
             return (
                 f"Human audiobook rebuilt ({result.matched_track_count} of {result.track_count} tracks); "
                 "timestamp alignment queued"
@@ -607,17 +620,13 @@ class ProcessingQueue:
             rematch_audio,
             lambda: self._imported_audio_progress(target_id),
         )
-        if RematchImportedAudiobookPayload.model_validate(job.payload or {}).realign:
-            child = await queue_processing_job(
-                job_type="align_imported_audiobook",
-                book_id=job.book_id,
-                target_type="imported_audiobook",
-                target_id=job.target_id,
-                parent_job_id=job.id,
-                dedupe_key=f"align_imported_audiobook:imported_audiobook:{job.target_id}",
-                progress_detail="Queued after human-audio rematch",
-            )
-            await self.enqueue(child.id)
+        if await self._queue_timestamp_alignment(
+            job,
+            target_id,
+            progress_detail="Queued after human-audio rematch",
+            previously_aligned=RematchImportedAudiobookPayload.model_validate(job.payload or {}).realign,
+        ):
+            return f"Human audiobook rematched ({matched} tracks); timestamp alignment queued"
         return f"Human audiobook rematched ({matched} tracks)"
 
     async def _handle_align_imported_audiobook(self, job: ProcessingJob) -> str:
