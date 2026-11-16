@@ -55,7 +55,9 @@ IMPORT_EXTENSIONS = AUDIO_EXTENSIONS | {".cue", ".zip"}
 CURRENT_DERIVED_FORMAT_VERSION = 1
 # Increment when an imported human audiobook must be rebuilt to benefit from
 # changes to text ingestion, chapter matching, cue generation, or alignment.
-CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION = 2
+# v3: back matter after the story no longer joins the last chapter's logical
+# group, so estimated cues stop spreading epilogue audio over afterwords.
+CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION = 3
 SOURCE_MANIFEST_FORMAT = "story-manager-audiobook-source"
 SOURCE_MANIFEST_VERSION = 1
 MAX_AUDIOBOOK_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
