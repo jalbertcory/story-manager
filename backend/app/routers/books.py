@@ -9,15 +9,18 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud, epub_editor, models, schemas
 from ..config import LIBRARY_PATH, RECYCLE_BIN_RETENTION_DAYS
 from ..database import get_db
 from ..services.catalog import build_book_catalog_page, normalize_genre_tags
+from ..services.audiobook_import import AUDIO_EXTENSIONS, imported_audiobook_dir
 from ..services.chapter_history import build_chapter_update_history
 from ..services.library_paths import book_audiobook_dir, remove_empty_parent_dirs
 from ..services.metadata_jobs import queue_metadata_sync_job
@@ -509,6 +512,102 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)) -> Fil
         media_type="application/epub+zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _original_epub_path(book: models.Book) -> Path | None:
+    if not book.immutable_path:
+        return None
+    path = (LIBRARY_PATH.parent / book.immutable_path).resolve()
+    return path if path.is_relative_to(LIBRARY_PATH.resolve()) and path.is_file() else None
+
+
+def _original_audio_files(book_id: int, edition_id: int) -> dict[str, Path]:
+    edition_dir = imported_audiobook_dir(book_id, edition_id).absolute()
+    files: dict[str, Path] = {}
+    # Direct uploads move from incoming to source during import. Keep their
+    # download URLs stable and never expose derived chapter files or manifests.
+    for folder in ("source", "incoming"):
+        directory = edition_dir / folder
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if (
+                path.suffix.lower() in AUDIO_EXTENSIONS
+                and path.resolve().is_relative_to(directory.resolve())
+                and directory.resolve().is_relative_to(edition_dir)
+                and path.is_file()
+            ):
+                files.setdefault(path.name, path)
+    return files
+
+
+@router.get("/api/books/{book_id}/original-files", response_model=list[schemas.OriginalBookFile])
+async def get_original_book_files(book_id: int, db: AsyncSession = Depends(get_db)) -> list[schemas.OriginalBookFile]:
+    book = await crud.get_book(db, book_id=book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    files = []
+    epub_path = _original_epub_path(book)
+    if epub_path is not None:
+        files.append(
+            schemas.OriginalBookFile(
+                filename=epub_path.name,
+                kind="epub",
+                edition_name=None,
+                size_bytes=epub_path.stat().st_size,
+                download_url=f"/api/books/{book_id}/download-original",
+            )
+        )
+    editions = await db.scalars(
+        select(models.ImportedAudiobook)
+        .where(models.ImportedAudiobook.book_id == book_id)
+        .order_by(models.ImportedAudiobook.id)
+    )
+    for edition in editions:
+        for filename, path in _original_audio_files(book_id, edition.id).items():
+            files.append(
+                schemas.OriginalBookFile(
+                    filename=filename,
+                    kind="audio",
+                    edition_name=edition.name,
+                    size_bytes=path.stat().st_size,
+                    download_url=(f"/api/books/{book_id}/original-audio/{edition.id}?{urlencode({'filename': filename})}"),
+                )
+            )
+    return files
+
+
+@router.get(
+    "/api/books/{book_id}/download-original",
+    response_class=Response,
+    responses=contracts.media_responses("application/epub+zip"),
+)
+async def download_original_epub(book_id: int, db: AsyncSession = Depends(get_db)) -> FileResponse:
+    book = await crud.get_book(db, book_id=book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    path = _original_epub_path(book)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Original EPUB file not found")
+    return FileResponse(path, media_type="application/epub+zip", filename=path.name)
+
+
+@router.get(
+    "/api/books/{book_id}/original-audio/{edition_id}",
+    response_class=Response,
+    responses=contracts.media_responses("application/octet-stream"),
+)
+async def download_original_audio(
+    book_id: int, edition_id: int, filename: str, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    book = await crud.get_book(db, book_id=book_id)
+    edition = await db.get(models.ImportedAudiobook, edition_id)
+    if book is None or edition is None or edition.book_id != book_id:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    path = _original_audio_files(book_id, edition_id).get(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Original audio file not found")
+    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
 
 
 @router.post("/api/books/remove-all", response_model=contracts.RemoveAllBooks)

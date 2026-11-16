@@ -41,6 +41,7 @@ export const queryKeys = {
   webUpdateBooks: ["web-update-books"] as const,
 
   chapters: (bookId: number) => ["chapters", bookId] as const,
+  originalBookFiles: (bookId: number) => ["original-book-files", bookId] as const,
   cleanedChapters: (bookId: number) => ["cleaned-chapters", bookId] as const,
   matchedConfig: (bookId: number) => ["matched-config", bookId] as const,
   bookRevisions: (bookId: number) => ["book-revisions", bookId] as const,

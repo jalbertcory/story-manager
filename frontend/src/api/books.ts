@@ -126,6 +126,16 @@ export function getBook(bookId: number, options?: RequestOptions) {
   );
 }
 
+export function getOriginalBookFiles(bookId: number, options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/books/{book_id}/original-files", {
+      ...requestInit(options),
+      params: { path: { book_id: bookId } },
+    }),
+    "Could not load original files",
+  );
+}
+
 export function updateBook(
   bookId: number,
   data: Body<"/api/books/{book_id}", "put">,

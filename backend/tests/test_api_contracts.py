@@ -45,6 +45,8 @@ def test_every_json_success_response_has_a_concrete_contract():
     ("path", "media_type", "binary"),
     [
         ("/api/books/{book_id}/download", "application/epub+zip", True),
+        ("/api/books/{book_id}/download-original", "application/epub+zip", True),
+        ("/api/books/{book_id}/original-audio/{edition_id}", "application/octet-stream", True),
         ("/api/audiobook/sentences/{sentence_id}/audio", "audio/mpeg", True),
         ("/api/backups/{filename}/download", "application/zip", True),
         ("/api/observability/diagnostics", "application/zip", True),

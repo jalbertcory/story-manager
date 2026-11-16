@@ -573,6 +573,39 @@ button.btn-sm {
   font-size: 0.85rem;
 }
 
+.original-file-list {
+  list-style: none;
+  padding: 0;
+}
+
+.original-file-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0;
+}
+
+.original-file-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.original-file-list li > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.original-file-list .hint {
+  margin: 0.25rem 0 0;
+}
+
+.original-file-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .book-notes {
   flex-basis: 100%;
   margin: 0;
