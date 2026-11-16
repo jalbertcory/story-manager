@@ -48,6 +48,82 @@ _INDEPENDENT_CHAPTER_TITLE_RE = re.compile(
     r"^(?:chapter(?:\s+|$)|prologue\b|epilogue\b|foreword\b|afterword\b|introduction\b|appendix\b|\d+\s*$)",
     re.IGNORECASE,
 )
+# Titles of pages that follow the story: author and publisher pages, catalogs,
+# sign-up and social pages, and previews of other books. Most are anchored to
+# the start because story subheadings can contain the same words mid-title.
+_BACK_MATTER_TITLE_RE = re.compile(
+    r"^(?:"
+    r"about\s+the\s+(?:authors?|publisher|illustrators?|translators?|narrators?)"
+    r"|(?:also|more|other\s+(?:books|titles|works|novels))\s+(?:by|from)"
+    r"|(?:books|titles|novels)\s+by"
+    r"|acknowledge?ments?"
+    r"|copyright"
+    r"|credits"
+    r"|(?:\w+\s+)?(?:advance\s+)?praise\s+for"
+    r"|how\s+to\s+contact"
+    r"|connect\s+with"
+    r"|thanks?\s+(?:you\s+)?for\s+reading"
+    r"|what.s\s+next\s+on\s+your\s+reading\s+list"
+    r"|join\s+(?:my|our|the)"
+    r"|sign\s+up"
+    r"|to\s+be\s+notified"
+    r"|mailing\s+list"
+    r"|newsletter"
+    r"|the\s+story\s+continues"
+    r")\b"
+    r"|\b(?:preview|sneak\s+peek)\b"
+    r"|\bread\s+an?\s+excerpt\b"
+    r"|^(?:an?\s+)?excerpt\s+(?:of|from)\b",
+    re.IGNORECASE,
+)
+# EPUB structural semantics (epub:type) for back matter. DPUB-ARIA roles use
+# the same names with a "doc-" prefix, which ``_semantic_tokens`` removes.
+_BACK_MATTER_SEMANTICS = frozenset(
+    {
+        "acknowledgments",
+        "afterword",
+        "appendix",
+        "backmatter",
+        "bibliography",
+        "colophon",
+        "contributors",
+        "copyright-page",
+        "credits",
+        "endnotes",
+        "errata",
+        "glossary",
+        "imprint",
+        "index",
+        "other-credits",
+        "rearnotes",
+        "z3998:biographical-note",
+        "z3998:biography",
+        "z3998:promotional-copy",
+        "z3998:published-works",
+        "z3998:publisher-information",
+    }
+)
+# Story semantics outrank back-matter semantics: some publishers mark a whole
+# closing chapter as both "backmatter" and "epilogue".
+_NARRATIVE_SEMANTICS = frozenset(
+    {
+        "bodymatter",
+        "chapter",
+        "conclusion",
+        "division",
+        "epilogue",
+        "introduction",
+        "part",
+        "preamble",
+        "prologue",
+        "subchapter",
+        "volume",
+    }
+)
+# Short pages that mostly point readers elsewhere (newsletters, stores, social
+# media) are promotional back matter rather than the rest of a chapter.
+_PROMOTIONAL_PAGE_MAX_CHARS = 3000
+_PROMOTIONAL_PAGE_MIN_LINKS = 2
 
 
 def _get_nlp() -> Language:
@@ -277,6 +353,65 @@ def _looks_like_independent_chapter(title: str) -> bool:
     return bool(_INDEPENDENT_CHAPTER_TITLE_RE.search(" ".join(title.split())))
 
 
+def _semantic_tokens(element: Tag) -> set[str]:
+    tokens: set[str] = set()
+    for attribute in ("epub:type", "role"):
+        value = element.get(attribute)
+        for part in [value] if isinstance(value, str) else value or []:
+            tokens.update(token.casefold().removeprefix("doc-") for token in part.split())
+    return tokens
+
+
+def _page_text_length(element: Tag) -> int:
+    return len(" ".join(element.get_text(" ").split()))
+
+
+def _back_matter_semantics(body: Tag) -> frozenset[str]:
+    """Return the back-matter roles of a page's outermost semantic blocks.
+
+    Nested footnotes and page breaks do not describe the page, and a block
+    must hold at least half the page's text to speak for it. Any story role
+    means the page is narrative, whatever else it is marked as.
+    """
+    page_length = _page_text_length(body)
+    roles: set[str] = set()
+    pending = [body]
+    while pending:
+        element = pending.pop()
+        tokens = _semantic_tokens(element)
+        if tokens & _NARRATIVE_SEMANTICS:
+            return frozenset()
+        if tokens & _BACK_MATTER_SEMANTICS and (element is body or 2 * _page_text_length(element) >= page_length):
+            roles.update(tokens & _BACK_MATTER_SEMANTICS)
+        if element is body or not tokens:
+            pending.extend(element.find_all(True, recursive=False))
+    return frozenset(roles)
+
+
+def _looks_like_back_matter(title: str, body: Tag, group_semantics: frozenset[str]) -> bool:
+    """Recognize a non-TOC spine item that follows the story instead of continuing a chapter.
+
+    Without this, an untitled afterword, author biography or newsletter page
+    that the table of contents omits joins the last narrated chapter, and audio
+    cues for that chapter are spread over text the narrator never reads.
+
+    Semantic roles count only when the page adds one its group's first page
+    lacks: publishers mark narrated postludes and appendices as back matter on
+    every file, so a continuation that shares its heading's roles still
+    belongs to it.
+    """
+    if _BACK_MATTER_TITLE_RE.search(" ".join(title.split())):
+        return True
+    links = sum(
+        1
+        for anchor in body.find_all("a", href=True)
+        if str(anchor["href"]).strip().casefold().startswith(("http:", "https:", "mailto:"))
+    )
+    if links >= _PROMOTIONAL_PAGE_MIN_LINKS and _page_text_length(body) <= _PROMOTIONAL_PAGE_MAX_CHARS:
+        return True
+    return bool(_back_matter_semantics(body) - group_semantics)
+
+
 def _sentence_texts(soup: BeautifulSoup) -> list[str]:
     texts: list[str] = []
     quote_state: str | None = None
@@ -360,6 +495,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
     logical_chapter_key: str | None = None
     logical_part_order = 0
     logical_group_started_from_toc = False
+    logical_group_semantics: frozenset[str] = frozenset()
 
     for chapter_num, item in enumerate(spine_items, start=1):
         content = item.get_content()
@@ -367,11 +503,15 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         href = normalize_resource_href(item.get_name(), chapter_num)
         chapter_title = _chapter_title(item, soup, chapter_num, toc_titles)
         starts_toc_chapter = href.casefold() in toc_titles
+        # A file outside the TOC usually continues the preceding TOC chapter
+        # (publishers split long chapters). Back matter breaks that chain, and
+        # every later non-TOC file then forms its own group.
         continues_toc_chapter = (
             logical_chapter_key is not None
             and logical_group_started_from_toc
             and not starts_toc_chapter
             and not _looks_like_independent_chapter(chapter_title)
+            and not _looks_like_back_matter(chapter_title, soup.body or soup, logical_group_semantics)
         )
         if continues_toc_chapter:
             logical_part_order += 1
@@ -379,6 +519,7 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
             logical_chapter_key = stable_chapter_key(href)
             logical_part_order = 0
             logical_group_started_from_toc = starts_toc_chapter
+            logical_group_semantics = _back_matter_semantics(soup.body or soup)
         content_hash = _source_content_hash(soup)
         sentence_texts = _sentence_texts(soup)
 

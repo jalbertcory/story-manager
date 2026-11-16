@@ -12,12 +12,14 @@ from fastapi import HTTPException
 from bs4 import BeautifulSoup
 from ebooklib import epub
 from mutagen.mp3 import MP3
+from sqlalchemy import select
 
 from backend.app import crud, models
 from backend.app import audiobook_schemas
 from backend.app.routers import audiobook_characters, audiobook_pipeline, audiobook_settings
 from backend.app.services import (
     audiobook_assembly,
+    audiobook_import,
     audiobook_ingestion,
     audiobook_llm,
     audiobook_publication,
@@ -28,6 +30,7 @@ from backend.app.services import (
 )
 from backend.app.services import audiobook_queue, library_paths
 from backend.app.services.audiobook_block_split import estimated_block_boundaries
+from backend.app.services.audiobook_match_validation import imported_matching_error
 from backend.app.services.audiobook_queue import AudiobookQueue
 from backend.app.services.processing_queue import ProcessingQueue
 
@@ -2340,6 +2343,56 @@ def _write_split_spine_epub(path: Path) -> None:
     epub.write_epub(path, book, {})
 
 
+_STORY_TEXT = " ".join(f"Story sentence {number} keeps the scene moving." for number in range(1, 41))
+# Book 1194's ending: a split epilogue, then back matter the TOC omits.
+_EPILOGUE_WITH_BACK_MATTER = [
+    ("Chapter 1", f'<section epub:type="chapter"><h1>Chapter 1</h1><p>{_STORY_TEXT}</p></section>', True),
+    ("Phase Two", f"<h2>Phase Two</h2><p>{_STORY_TEXT}</p>", False),
+    ("Epilogue", f'<section epub:type="epilogue"><h1>Epilogue</h1><p>{_STORY_TEXT}</p></section>', True),
+    ("Later That Night", f"<h2>Later That Night</h2><p>{_STORY_TEXT}</p>", False),
+    (
+        "And Just Like That",
+        '<section epub:type="afterword" role="doc-afterword"><h1>And Just Like That</h1>'
+        "<p>Thank you for reading this far.</p></section>",
+        False,
+    ),
+    (
+        "About the Author",
+        '<section epub:type="z3998:biographical-note"><h1>About the Author</h1>'
+        "<p>The author lives with a cat.</p></section>",
+        False,
+    ),
+    (
+        "Stay in Touch",
+        '<h1>Stay in Touch</h1><p><a href="https://example.com/list">Mailing list</a>. '
+        '<a href="https://example.com/forum">Forum</a>.</p>',
+        False,
+    ),
+]
+
+
+def _write_epilogue_with_back_matter_epub(path: Path) -> None:
+    book = epub.EpubBook()
+    book.set_identifier("back-matter-test")
+    book.set_title("Back Matter")
+    book.set_language("en")
+    book.add_author("Author")
+    spine: list[object] = ["nav"]
+    toc = []
+    for index, (title, body, in_toc) in enumerate(_EPILOGUE_WITH_BACK_MATTER, start=1):
+        page = epub.EpubHtml(title=title, file_name=f"Text/page-{index}.xhtml", lang="en")
+        page.content = f"<html><body>{body}</body></html>"
+        book.add_item(page)
+        spine.append(page)
+        if in_toc:
+            toc.append(epub.Link(page.file_name, title, f"page-{index}"))
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = spine
+    book.toc = tuple(toc)
+    epub.write_epub(path, book, {})
+
+
 def _write_incremental_epub(path: Path, chapters: list[tuple[str, str, str]]) -> None:
     book = epub.EpubBook()
     book.set_identifier("incremental-test")
@@ -2457,6 +2510,141 @@ async def test_ingestion_groups_non_toc_spine_continuation_with_prior_chapter(db
     assert [chapters[0].logical_part_order, chapters[1].logical_part_order] == [0, 1]
     assert chapters[2].logical_chapter_key != chapters[0].logical_chapter_key
     assert chapters[2].logical_part_order == 0
+
+
+async def _ingest_epilogue_with_back_matter(db, tmp_path, monkeypatch):
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    epub_path = library_path / "back-matter.epub"
+    _write_epilogue_with_back_matter_epub(epub_path)
+    book = await _make_book(
+        db,
+        immutable_path=str(epub_path.relative_to(library_path.parent)),
+        current_path=str(epub_path.relative_to(library_path.parent)),
+    )
+    monkeypatch.setattr(audiobook_ingestion, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_publication, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(library_paths, "LIBRARY_PATH", library_path)
+    monkeypatch.setattr(audiobook_ingestion, "_tokenize_text", _simple_sentence_split)
+    await audiobook_ingestion.ingest_epub(book.id, db)
+    return book, await crud.audiobook.get_chapters_for_book(db, book.id)
+
+
+@pytest.mark.asyncio
+async def test_ingestion_starts_new_groups_for_back_matter_after_the_epilogue(db, tmp_path, monkeypatch):
+    _book, chapters = await _ingest_epilogue_with_back_matter(db, tmp_path, monkeypatch)
+
+    assert [chapter.title for chapter in chapters] == [title for title, _body, _toc in _EPILOGUE_WITH_BACK_MATTER]
+    chapter_one, phase_two, epilogue, later, afterword, author, socials = chapters
+    # Split story files still read as one chapter.
+    assert phase_two.logical_chapter_key == chapter_one.logical_chapter_key
+    assert later.logical_chapter_key == epilogue.logical_chapter_key
+    # Back matter the TOC omits no longer joins the epilogue.
+    back_matter_keys = [chapter.logical_chapter_key for chapter in (afterword, author, socials)]
+    assert epilogue.logical_chapter_key not in back_matter_keys
+    assert len(set(back_matter_keys)) == 3
+    assert [chapter.logical_part_order for chapter in chapters] == [0, 1, 0, 1, 0, 0, 0]
+
+
+_LONG_STORY = "<p>" + "The story goes on through the night. " * 100 + "</p>"
+
+
+@pytest.mark.parametrize(
+    "title,body,group_semantics,expected",
+    [
+        ("Later That Night", "<p>The story goes on.</p>", frozenset(), False),
+        ("ABOUT THE AUTHOR", "<p>The author lives with a cat.</p>", frozenset(), True),
+        ("Also by Someone", "<p>Another book.</p>", frozenset(), True),
+        (
+            "Stay in Touch",
+            '<p><a href="https://example.com/list">List</a> <a href="mailto:hello@example.com">Mail</a></p>',
+            frozenset(),
+            True,
+        ),
+        # A long chapter that happens to cite two websites is still story.
+        (
+            "Signals",
+            '<a href="https://example.com/a">a</a><a href="https://example.com/b">b</a>' + _LONG_STORY,
+            frozenset(),
+            False,
+        ),
+        ("And Just Like That", '<section epub:type="afterword"><p>Thanks.</p></section>', frozenset(), True),
+        ("And Just Like That", '<section role="doc-afterword"><p>Thanks.</p></section>', frozenset(), True),
+        # Story roles outrank back-matter roles.
+        ("Final Scene", '<section epub:type="backmatter epilogue"><p>The end.</p></section>', frozenset(), False),
+        # Notes nested inside a chapter do not describe the page.
+        ("Later", f'<section>{_LONG_STORY}<aside epub:type="endnotes"><p>A note.</p></aside></section>', frozenset(), False),
+        # Narrated postludes and appendices carry their heading's roles on every file.
+        ("Kalak Woke", '<section epub:type="backmatter"><p>Kalak woke up.</p></section>', frozenset({"backmatter"}), False),
+        ("Endnotes", '<section epub:type="backmatter endnotes"><p>1. A note.</p></section>', frozenset({"backmatter"}), True),
+    ],
+)
+def test_back_matter_detection(title, body, group_semantics, expected):
+    soup = BeautifulSoup(f"<html><body>{body}</body></html>", "html.parser")
+    assert audiobook_ingestion._looks_like_back_matter(title, soup.body, group_semantics) is expected
+
+
+async def _cue_chapter_titles(db, track) -> set[str]:
+    rows = await db.scalars(
+        select(models.AudiobookChapter.title)
+        .join(models.AudiobookSentence, models.AudiobookSentence.chapter_id == models.AudiobookChapter.id)
+        .join(models.ImportedAudiobookCue, models.ImportedAudiobookCue.sentence_id == models.AudiobookSentence.id)
+        .where(models.ImportedAudiobookCue.track_id == track.id)
+    )
+    return set(rows.all())
+
+
+@pytest.mark.asyncio
+async def test_rebuild_moves_epilogue_cues_off_back_matter_and_keeps_the_match(db, tmp_path, monkeypatch):
+    book, chapters = await _ingest_epilogue_with_back_matter(db, tmp_path, monkeypatch)
+    chapter_one, _phase_two, epilogue = chapters[:3]
+    ids_by_href = {chapter.source_href: chapter.id for chapter in chapters}
+    # Recreate the v2 grouping, which folded the back matter into the epilogue.
+    for order, chapter in enumerate(chapters[3:], start=1):
+        chapter.logical_chapter_key = epilogue.logical_chapter_key
+        chapter.logical_part_order = order
+    edition = models.ImportedAudiobook(
+        book_id=book.id,
+        name="Matched under v2",
+        status="ready",
+        alignment_method="estimated",
+        source_manifest_sha256="a" * 64,
+        derived_format_version=audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+        pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION - 1,
+    )
+    db.add(edition)
+    await db.flush()
+    tracks = [
+        models.ImportedAudiobookTrack(
+            imported_audiobook_id=edition.id,
+            sequence_order=index,
+            title=chapter.title,
+            matched_chapter_id=chapter.id,
+            match_method="automatic",
+            audio_file_path=f"library/track-{index}.m4b",
+            media_type="audio/mp4",
+            source_start_ms=0,
+            source_end_ms=600_000,
+            duration_ms=600_000,
+        )
+        for index, chapter in enumerate((chapter_one, epilogue))
+    ]
+    db.add_all(tracks)
+    await db.commit()
+    for track in tracks:
+        await audiobook_import.rebuild_estimated_cues(track, db)
+    assert "And Just Like That" in await _cue_chapter_titles(db, tracks[1])
+
+    await audiobook_import.rebuild_imported_audiobook(edition.id, db)
+
+    chapters = await crud.audiobook.get_chapters_for_book(db, book.id)
+    assert {chapter.source_href: chapter.id for chapter in chapters} == ids_by_href
+    assert [track.matched_chapter_id for track in tracks] == [chapter_one.id, epilogue.id]
+    assert await _cue_chapter_titles(db, tracks[0]) == {"Chapter 1", "Phase Two"}
+    assert await _cue_chapter_titles(db, tracks[1]) == {"Epilogue", "Later That Night"}
+    assert (edition.status, edition.error) == ("ready", None)
+    assert edition.pipeline_version == audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    assert await imported_matching_error(edition, db) is None
 
 
 @pytest.mark.asyncio
