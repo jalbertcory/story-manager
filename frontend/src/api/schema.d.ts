@@ -874,6 +874,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{book_id}/download-original": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Original Epub */
+        get: operations["download_original_epub_api_books__book_id__download_original_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{book_id}/matched-config": {
         parameters: {
             query?: never;
@@ -886,6 +903,40 @@ export interface paths {
          * @description Returns all CleaningConfigs that match the book's source URL.
          */
         get: operations["get_book_matched_config_api_books__book_id__matched_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/original-audio/{edition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Original Audio */
+        get: operations["download_original_audio_api_books__book_id__original_audio__edition_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/original-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Original Book Files */
+        get: operations["get_original_book_files_api_books__book_id__original_files_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4796,6 +4847,22 @@ export interface components {
             /** Ok */
             ok: boolean;
         };
+        /** OriginalBookFile */
+        OriginalBookFile: {
+            /** Download Url */
+            download_url: string;
+            /** Edition Name */
+            edition_name: string | null;
+            /** Filename */
+            filename: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "epub" | "audio";
+            /** Size Bytes */
+            size_bytes: number;
+        };
         /** PipelinePaused */
         PipelinePaused: {
             /** Pause Requested */
@@ -7445,6 +7512,37 @@ export interface operations {
             };
         };
     };
+    download_original_epub_api_books__book_id__download_original_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/epub+zip": Blob;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_book_matched_config_api_books__book_id__matched_config_get: {
         parameters: {
             query?: never;
@@ -7463,6 +7561,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleaningConfig"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_original_audio_api_books__book_id__original_audio__edition_id__get: {
+        parameters: {
+            query: {
+                filename: string;
+            };
+            header?: never;
+            path: {
+                book_id: number;
+                edition_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": Blob;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_original_book_files_api_books__book_id__original_files_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OriginalBookFile"][];
                 };
             };
             /** @description Validation Error */

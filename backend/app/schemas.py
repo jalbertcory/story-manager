@@ -8,6 +8,14 @@ from .models import SourceType
 AudiobookType = Literal["ai_generated", "human_narrated"]
 
 
+class OriginalBookFile(BaseModel):
+    filename: str
+    kind: Literal["epub", "audio"]
+    edition_name: str | None
+    size_bytes: int
+    download_url: str
+
+
 # Base Pydantic model for a book, defining common attributes.
 class BookBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)

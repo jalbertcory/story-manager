@@ -2,12 +2,17 @@ import type { CSSProperties } from "react";
 import type { Book, BookSectionChange } from "../types";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getBookCleanedChapters, refreshBook } from "../api/books";
+import {
+  getBookCleanedChapters,
+  getOriginalBookFiles,
+  refreshBook,
+} from "../api/books";
 import { getLibraryBookInfo, getWebChecks } from "../api/library";
 import { getApiCoverUrl } from "../api/covers";
 import { sanitizeChapterHtml } from "../lib/chapterHtml";
 import UniverseMembership from "./UniverseMembership";
 import { checkResult, lastUpdateLabel, libraryPath } from "../lib/library";
+import { formatBytes } from "../lib/format";
 import Icon from "./ui/Icon";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -28,6 +33,10 @@ export default function BookOverview({
   const info = useQuery({
     queryKey: queryKeys.libraryBookInfo.detail(book.id),
     queryFn: ({ signal }) => getLibraryBookInfo(book.id, { signal }),
+  });
+  const originalFiles = useQuery({
+    queryKey: queryKeys.originalBookFiles(book.id),
+    queryFn: ({ signal }) => getOriginalBookFiles(book.id, { signal }),
   });
   const chapters = useQuery({
     queryKey: queryKeys.cleanedChapters(book.id),
@@ -178,6 +187,44 @@ export default function BookOverview({
           <p className="book-notes">{book.notes}</p>
         </div>
       )}
+      <details className="workspace-disclosure" aria-label="Original files">
+        <summary>Original files</summary>
+        <p className="hint">
+          Download the original EPUB and imported audio files.
+        </p>
+        {originalFiles.isLoading && (
+          <p role="status">Loading original files…</p>
+        )}
+        {originalFiles.error && (
+          <p role="alert" className="error">
+            {originalFiles.error.message}
+          </p>
+        )}
+        {originalFiles.data?.length === 0 && (
+          <p>No original EPUB or audio files are available.</p>
+        )}
+        <ul className="original-file-list">
+          {originalFiles.data?.map((file) => (
+            <li key={file.download_url}>
+              <div>
+                <strong>{file.filename}</strong>
+                <p className="hint">
+                  {file.edition_name ? `${file.edition_name} · ` : ""}
+                  {formatBytes(file.size_bytes)}
+                </p>
+              </div>
+              <a
+                href={file.download_url}
+                download
+                aria-label={`Download original ${file.kind === "epub" ? "EPUB" : "audio"}: ${file.filename}`}
+              >
+                <Icon name="download" size={16} />
+                Download
+              </a>
+            </li>
+          ))}
+        </ul>
+      </details>
       <details
         className="workspace-disclosure"
         onToggle={(e) => setChaptersOpen(e.currentTarget.open)}
