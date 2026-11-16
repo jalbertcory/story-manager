@@ -185,6 +185,33 @@ async def test_existing_bad_editions_are_not_published_or_playable(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["queued", "importing", "stale"])
+async def test_running_import_is_not_reported_as_needing_review(db, status):
+    # An import commits each track as it is matched, and the UI polls meanwhile.
+    db.add_all(
+        [
+            Book(id=1, title="Import in progress", current_path="library/test.epub"),
+            ImportedAudiobook(id=1, book_id=1, name="Importing", status=status),
+            *_chapters(),
+            *_tracks()[:3],
+        ]
+    )
+    await db.commit()
+    edition = await db.get(ImportedAudiobook, 1)
+    assert edition is not None
+
+    assert (await audiobook_views.imported_audiobook_response(edition, db)).matching_error is None
+    # Playback stays blocked until the finished import passes validation.
+    with pytest.raises(HTTPException) as exc:
+        await audiobook_imports.get_imported_track_audio(edition.id, 1, db)
+    assert exc.value.status_code == 409
+
+    edition.status = "ready"
+    await db.commit()
+    assert (await audiobook_views.imported_audiobook_response(edition, db)).matching_error
+
+
+@pytest.mark.asyncio
 async def test_background_alignment_stops_before_transcribing_bad_matches(db, monkeypatch):
     _book, edition, _chapters_list, _tracks_list = await _seed(db)
     db.add(AudiobookSettings(transcription_provider="whisperx", transcription_base_url="http://whisper:8002"))

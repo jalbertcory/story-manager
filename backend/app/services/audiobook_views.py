@@ -26,8 +26,20 @@ from .audiobook_import import (
     CURRENT_DERIVED_FORMAT_VERSION,
     CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
 )
+from ..lifecycle import ImportedAudiobookStatus
 from .library_paths import resolve_library_file
 from .audiobook_match_validation import imported_matching_error, require_safe_matches
+
+# Import and rematch jobs write tracks and matches one at a time while the UI
+# polls. Judging that partial state would flag every running job as needing
+# review; each job validates its finished matches before it can become ready.
+_MATCHES_IN_PROGRESS = frozenset(
+    {
+        ImportedAudiobookStatus.QUEUED.value,
+        ImportedAudiobookStatus.IMPORTING.value,
+        ImportedAudiobookStatus.STALE.value,
+    }
+)
 
 
 class AudiobookViewNotFoundError(LookupError):
@@ -90,7 +102,11 @@ async def imported_audiobook_response(
         .order_by(ImportedAudiobookTrack.sequence_order)
     )
     tracks = list(result.scalars().all())
-    matching_error = await imported_matching_error(edition, db, tracks=tracks) if tracks or edition.status == "ready" else None
+    matching_error = (
+        await imported_matching_error(edition, db, tracks=tracks)
+        if edition.status not in _MATCHES_IN_PROGRESS and (tracks or edition.status == "ready")
+        else None
+    )
     canonical_audio_track_ids = canonical_track_ids_by_audio_path(tracks)
     audio_paths = {
         path for track in tracks if (path := resolve_library_file(track.audio_file_path)) is not None and path.is_file()
