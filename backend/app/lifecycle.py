@@ -529,7 +529,12 @@ IMPORTED_AUDIOBOOK = StateMachine(
             )
         ),
         ImportedAudiobookStatus.READY: _values(
-            (ImportedAudiobookStatus.ALIGNING, ImportedAudiobookStatus.STALE, ImportedAudiobookStatus.IMPORTING)
+            (
+                ImportedAudiobookStatus.ALIGNING,
+                ImportedAudiobookStatus.STALE,
+                ImportedAudiobookStatus.IMPORTING,
+                ImportedAudiobookStatus.ERROR,
+            )
         ),
         ImportedAudiobookStatus.ALIGNING: _values(
             (ImportedAudiobookStatus.READY, ImportedAudiobookStatus.STALE, ImportedAudiobookStatus.ERROR)
@@ -538,7 +543,13 @@ IMPORTED_AUDIOBOOK = StateMachine(
             (ImportedAudiobookStatus.IMPORTING, ImportedAudiobookStatus.READY, ImportedAudiobookStatus.ALIGNING)
         ),
         ImportedAudiobookStatus.ERROR: _values(
-            (ImportedAudiobookStatus.QUEUED, ImportedAudiobookStatus.IMPORTING, ImportedAudiobookStatus.STALE)
+            (
+                ImportedAudiobookStatus.QUEUED,
+                ImportedAudiobookStatus.IMPORTING,
+                ImportedAudiobookStatus.STALE,
+                ImportedAudiobookStatus.READY,
+                ImportedAudiobookStatus.ALIGNING,
+            )
         ),
     },
     labels=_labels(queued="Queued", importing="Importing", ready="Ready", aligning="Aligning", stale="Stale", error="Error"),

@@ -1,9 +1,9 @@
 """Web novel add, refresh, detach and download completion."""
 
-from pathlib import Path
-
 import pytest
 from sqlalchemy import select
+
+from backend.app.config import LIBRARY_PATH
 
 from backend.app import crud, models, schemas
 from backend.app.services import web_novel
@@ -96,7 +96,7 @@ async def test_add_failed_web_novel_retries_placeholder(db_session):
 @pytest.mark.asyncio
 async def test_refresh_book(db_session, mocker):
     """Refresh now enqueues a background job and returns 202 with queued status."""
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     author_dir = library_path / "Original Author"
     author_dir.mkdir(exist_ok=True)
@@ -292,7 +292,7 @@ async def test_detach_book_source_requires_epub_files(db_session):
 @pytest.mark.asyncio
 async def test_epub_upload_allowed_when_web_novel_has_same_title_and_author(db_session):
     """An epub upload is allowed even when a web novel with the same title and author already exists."""
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     title = "The Lighthouse at the Edge of Everything"
     author = "Cordelia Vance-Whitmore"

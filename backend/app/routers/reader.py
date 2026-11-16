@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, models, schemas
 from ..auth import get_reader_api_key
 from ..audiobook_schemas import ChapterResponse, ImportedAudiobookResponse
+from ..services.audiobook_match_validation import MatchValidationError, require_safe_matches
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.audiobook_publication import (
@@ -478,6 +479,7 @@ async def get_reader_human_audiobooks(
             }
         )
         for edition in editions
+        if edition.status == "ready" and edition.matching_error is None
     ]
 
 
@@ -504,8 +506,11 @@ async def get_reader_human_audiobook_audio(
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     try:
-        _edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
+        await require_safe_matches(edition, db)
         full_path = audiobook_views.imported_track_audio_path(track)
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return FileResponse(str(full_path), media_type=track.media_type)
@@ -524,6 +529,8 @@ async def get_reader_human_audiobook_smil(
     try:
         edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
         payload = await audiobook_views.imported_track_smil(edition, track, db, audio_url_prefix="/reader/human-audiobooks")
+    except MatchValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return Response(payload, media_type="application/smil+xml")

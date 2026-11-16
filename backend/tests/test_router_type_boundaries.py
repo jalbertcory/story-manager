@@ -124,6 +124,7 @@ async def test_smil_rejects_cue_chapter_without_content_file(monkeypatch):
     sentence = models.AudiobookSentence(chapter_id=1)
     monkeypatch.setattr(audiobook_imports, "_get_imported_track_or_404", AsyncMock(return_value=(edition, track)))
     monkeypatch.setattr(audiobook_views, "find_canonical_audio_track_id", AsyncMock(return_value=1))
+    monkeypatch.setattr(audiobook_views, "require_safe_matches", AsyncMock())
     rows = Mock()
     rows.all.return_value = [(models.ImportedAudiobookCue(), sentence)]
     chapters = Mock()

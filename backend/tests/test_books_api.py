@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.config import LIBRARY_PATH
+
 from backend.app import crud, models, schemas
 from backend.app.services import library_paths
 from api_harness import AsyncTestingSessionLocal, client, create_dummy_epub
@@ -37,7 +39,7 @@ async def test_get_book_catalog_returns_minimal_entries(db_session):
                 notes="Should not be in catalog payload",
             ),
         )
-        library_path = Path("./library").resolve()
+        library_path = LIBRARY_PATH
         cover_path = library_path / "covers" / f"{book.id}.jpg"
         cover_path.parent.mkdir(parents=True, exist_ok=True)
         cover_path.write_bytes(b"catalog-cover")
@@ -276,7 +278,7 @@ async def test_get_book_details_by_ids_preserves_request_order(db_session):
 
 @pytest.mark.asyncio
 async def test_static_cover_files_are_served_without_cover_lookup(db_session):
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     cover_path = library_path / "covers" / "static-test.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     cover_path.write_bytes(b"cover-bytes")
@@ -289,7 +291,7 @@ async def test_static_cover_files_are_served_without_cover_lookup(db_session):
 
 @pytest.mark.asyncio
 async def test_static_cover_files_reject_active_formats(db_session):
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     cover_path = library_path / "covers" / "unsafe.svg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     cover_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
@@ -370,7 +372,7 @@ async def test_get_book_chapters(db_session):
         )
 
     # Create a dummy epub file
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     immutable_filepath = library_path / "immutable_test.epub"
     create_dummy_epub(immutable_filepath, "Test Book", "Test Author")
@@ -401,7 +403,7 @@ async def test_get_book_chapters_parses_off_the_event_loop(db_session, monkeypat
             ),
         )
 
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     immutable_filepath = library_path / "immutable_threaded.epub"
     create_dummy_epub(immutable_filepath, "Threaded Book", "Test Author")
@@ -648,7 +650,7 @@ async def test_book_revision_can_restore_metadata(db_session):
 
 @pytest.mark.asyncio
 async def test_delete_book_preserves_files_until_permanent_delete(db_session):
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     author_dir = library_path / "Folder Author"
     author_dir.mkdir(parents=True, exist_ok=True)
 
@@ -748,7 +750,7 @@ async def test_permanent_delete_keeps_files_when_database_delete_fails(db_sessio
 
 @pytest.mark.asyncio
 async def test_remove_all_books_preview_and_delete(db_session):
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     author_one_dir = library_path / "Author One"
     author_two_dir = library_path / "Author Two"
     author_one_dir.mkdir(parents=True, exist_ok=True)
@@ -891,7 +893,7 @@ async def test_download_book(db_session):
     """
     Test GET /api/books/{book_id}/download returns the EPUB file.
     """
-    library_path = Path("./library").resolve()
+    library_path = LIBRARY_PATH
     library_path.mkdir(exist_ok=True)
     epub_filename = "Download Test Book.epub"
     epub_filepath = library_path / epub_filename

@@ -37,6 +37,7 @@ from .subprocesses import communicate_bounded
 from .audiobook_import import imported_audiobook_dir, relative_library_path, sentences_for_logical_chapter
 from .endpoint_pool import configured_endpoints
 from .endpoint_pool import ProviderSettings
+from .audiobook_match_validation import MatchValidationError, require_safe_matches
 from .transcription_providers import (
     TranscriptResult,
     TranscriptWord,
@@ -218,6 +219,9 @@ def _interpolate_boundaries(
     duration_ms: int,
 ) -> list[int]:
     """Fill ungrounded sentence boundaries while preserving timestamp anchors."""
+    interval_count = len(boundaries) - 1
+    if duration_ms < interval_count:
+        raise ValueError("Audio track is too short for ordered sentence timestamps.")
     clean: list[int | None] = [None] * len(boundaries)
     clean[0] = 0
     last = 0
@@ -245,9 +249,14 @@ def _interpolate_boundaries(
             clean[boundary_index] = left_value + round((right_value - left_value) * cumulative / total)
 
     result: list[int] = []
-    for value in clean:
+    for index, value in enumerate(clean):
         assert value is not None
-        result.append(value)
+        # Interpolation can round adjacent boundaries to the same millisecond.
+        # Reserve space for every remaining cue instead of extending cue ends
+        # independently, which would overlap the next cue or exceed the track.
+        earliest = result[-1] + 1 if result else 0
+        latest = duration_ms - (interval_count - index)
+        result.append(max(earliest, min(value, latest)))
     return result
 
 
@@ -318,7 +327,7 @@ def align_transcript_to_sentences(
             sentence_id=sentence_id,
             sequence_order=index,
             clip_begin_ms=source_start_ms + boundaries[index],
-            clip_end_ms=source_start_ms + max(boundaries[index] + 1, boundaries[index + 1]),
+            clip_end_ms=source_start_ms + boundaries[index + 1],
             confidence=confidences[index],
             method=methods[index],
         )
@@ -607,6 +616,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
     await db.commit()
 
     try:
+        await require_safe_matches(edition, db, check_transcripts=False)
         scores = []
         edition_dir = imported_audiobook_dir(edition.book_id, edition.id)
         cache_provider, cache_model, cache_language, cache_root = _transcription_cache_config(settings)
@@ -681,6 +691,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
             edition.progress_current = index
             await db.commit()
 
+        await require_safe_matches(edition, db)
         average_score = sum(scores) / max(1, len(scores))
         transition_state(
             edition,
@@ -700,6 +711,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
         edition.progress_total = len(tracks)
         edition.progress_detail = f"Timestamp alignment ready ({average_score:.0%} confidence)"
         edition.alignment_error = None
+        edition.error = None
         await db.commit()
         shutil.rmtree(edition_dir / "alignment" / "clips", ignore_errors=True)
     except Exception as exc:
@@ -711,9 +723,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
                 edition,
                 "status",
                 IMPORTED_AUDIOBOOK,
-                ImportedAudiobookStatus.READY,
+                ImportedAudiobookStatus.ERROR if isinstance(exc, MatchValidationError) else ImportedAudiobookStatus.READY,
                 context=f"imported audiobook {edition.id}",
             )
             edition.alignment_error = str(exc)
-            edition.progress_detail = "Timestamp alignment failed; estimated cues retained where available"
+            if isinstance(exc, MatchValidationError):
+                edition.error = str(exc)
+                edition.progress_detail = "Chapter matching blocked; review required"
+            else:
+                edition.progress_detail = "Timestamp alignment failed; estimated cues retained where available"
             await db.commit()

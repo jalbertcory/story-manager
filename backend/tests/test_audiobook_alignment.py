@@ -120,6 +120,25 @@ def test_alignment_detects_and_explains_a_large_unused_transcript_tail():
     assert audiobook_alignment._continuation_improves_alignment(heading_only, expanded, duration_ms)
 
 
+@pytest.mark.parametrize("duration_ms", [1002, 2000])
+def test_tightly_spaced_transcript_anchors_cannot_create_overlapping_cues(duration_ms):
+    sentences = [(1, "alpha"), (2, "zzz"), (3, "xxx"), (4, "qqq"), (5, "omega")]
+    words = [
+        TranscriptWord(text="alpha", start_ms=900, end_ms=1000, score=1.0),
+        TranscriptWord(text="omega", start_ms=1001, end_ms=1002, score=1.0),
+    ]
+    result = audiobook_alignment.align_transcript_to_sentences(sentences, words, duration_ms, source_start_ms=5000)
+    assert result.cues[0].clip_begin_ms == 5000
+    assert result.cues[-1].clip_end_ms == 5000 + duration_ms
+    assert all(cue.clip_begin_ms < cue.clip_end_ms for cue in result.cues)
+    assert all(left.clip_end_ms == right.clip_begin_ms for left, right in zip(result.cues, result.cues[1:]))
+
+
+def test_track_too_short_for_distinct_cues_is_rejected():
+    with pytest.raises(ValueError, match="too short"):
+        audiobook_alignment.align_transcript_to_sentences([(1, "a"), (2, "b")], [], duration_ms=1)
+
+
 class _Response:
     def raise_for_status(self):
         return None
@@ -318,6 +337,7 @@ async def test_process_alignment_replaces_estimates_and_caches_transcript(db, tm
         book_id=book.id,
         chapter_number=1,
         stable_chapter_key="aligned-chapter",
+        title="Chapter 1",
         content_file_name="text/chapter.xhtml",
         spine_order=0,
     )
