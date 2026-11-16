@@ -433,6 +433,106 @@ async def test_audiobook_import_automatically_queues_whisper_alignment(
         assert alignment_job.parent_job_id == job.id
 
 
+async def _matched_edition(db, *, provider: str | None) -> ImportedAudiobook:
+    book = Book(
+        title="Whisper After Matching",
+        author="Narrator",
+        source_type=SourceType.epub,
+        immutable_path="library/whisper-after-immutable.epub",
+        current_path="library/whisper-after.epub",
+        content_version=1,
+    )
+    db.add(book)
+    await db.flush()
+    chapter = AudiobookChapter(book_id=book.id, chapter_number=1, title="Chapter 1", spine_order=0)
+    edition = ImportedAudiobook(
+        book_id=book.id,
+        name="Human narration",
+        status="ready",
+        alignment_method="estimated",
+        matched_content_version=1,
+    )
+    db.add_all([chapter, edition])
+    await db.flush()
+    db.add(
+        ImportedAudiobookTrack(
+            imported_audiobook_id=edition.id,
+            matched_chapter_id=chapter.id,
+            sequence_order=1,
+            title="Chapter 1",
+            audio_file_path="library/audio.m4b",
+            media_type="audio/mp4",
+            source_start_ms=0,
+            source_end_ms=10_000,
+            duration_ms=10_000,
+        )
+    )
+    if provider is not None:
+        db.add(AudiobookSettings(transcription_provider=provider, transcription_base_url="http://whisper:8002"))
+    await db.commit()
+    return edition
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job_type,provider,previously_aligned,queued",
+    [
+        # Estimated-only editions now get Whisper timings once a provider exists.
+        ("rematch_imported_audiobook", "whisperx", False, True),
+        ("rebuild_imported_audiobook", "whisperx", False, True),
+        # Without a provider, only editions that had Whisper timings re-align
+        # (so the alignment step can report why they were lost).
+        ("rematch_imported_audiobook", None, False, False),
+        ("rematch_imported_audiobook", None, True, True),
+        ("rebuild_imported_audiobook", None, False, False),
+    ],
+)
+async def test_matching_jobs_queue_whisper_alignment_when_configured(
+    sqlite_sessionmaker, monkeypatch, job_type, provider, previously_aligned, queued
+):
+    async with sqlite_sessionmaker() as db:
+        edition = await _matched_edition(db, provider=provider)
+        job = ProcessingJob(
+            job_type=job_type,
+            status="running",
+            book_id=edition.book_id,
+            target_type="imported_audiobook",
+            target_id=edition.id,
+            target_content_version=1,
+            payload={"realign": previously_aligned} if job_type == "rematch_imported_audiobook" else {},
+            dedupe_key=f"{job_type}:imported_audiobook:{edition.id}",
+        )
+        db.add(job)
+        await db.commit()
+
+    rebuild_result = processing_queue_module.HumanAudiobookRebuildResult(
+        matched_track_count=1, track_count=1, realign=previously_aligned, derived_revision=1
+    )
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "rematch_imported_audiobook", AsyncMock(return_value=1))
+    monkeypatch.setattr(processing_queue_module, "rebuild_imported_audiobook", AsyncMock(return_value=rebuild_result))
+    queue = ProcessingQueue()
+    monkeypatch.setattr(queue, "enqueue", AsyncMock())
+
+    detail = await queue._execute(job)
+
+    async with sqlite_sessionmaker() as db:
+        alignment_jobs = (
+            (
+                await db.execute(
+                    select(ProcessingJob).where(
+                        ProcessingJob.job_type == "align_imported_audiobook",
+                        ProcessingJob.target_id == edition.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert detail.endswith("timestamp alignment queued") is queued
+    assert [(j.parent_job_id, j.target_content_version) for j in alignment_jobs] == ([(job.id, 1)] if queued else [])
+
+
 @pytest.mark.asyncio
 async def test_processing_api_queues_lists_cancels_and_retries(app_client, sqlite_sessionmaker):
     async with sqlite_sessionmaker() as db:
