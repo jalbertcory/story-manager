@@ -53,7 +53,7 @@ from ..services.audiobook_import import (
 from ..services.audiobook_metadata import filename_metadata
 from ..services.audiobook_reading import chapter_reading_blocks
 from ..services.audiobook_uploads import receive_audiobook_upload
-from ..services.audiobook_match_validation import MatchValidationError, require_safe_matches
+from ..services.audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError, require_safe_matches
 from ..services.audiobook_views import AudiobookViewNotFoundError, imported_audiobook_response
 from ..services.processing_queue import queue_processing_job
 from ..services.transcription_providers import (
@@ -191,9 +191,15 @@ async def retry_imported_audiobook(
     edition = await db.get(ImportedAudiobook, edition_id)
     if edition is None:
         raise HTTPException(status_code=404, detail="Imported audiobook not found")
-    await get_book_or_404(edition.book_id, db)
+    book = await get_book_or_404(edition.book_id, db)
     if edition.status not in ("error", "queued"):
         raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not retryable")
+    track_count = await _track_count(edition, db)
+    if edition.status == "error" and (edition.error or "").startswith(MATCH_REVIEW_PREFIX) and track_count:
+        # The audio imported; only matching was blocked. Re-importing would
+        # discard manual corrections, so retry the matching step instead.
+        await _queue_rematch(edition, book, track_count, db)
+        return await imported_audiobook_response(edition, db)
     transition_state(
         edition,
         "status",
@@ -438,14 +444,23 @@ async def rematch_imported_audiobook(
     book = await get_book_or_404(edition.book_id, db)
     if edition.status in ("queued", "importing", "aligning", "stale"):
         raise HTTPException(status_code=409, detail=f"Audiobook is already {edition.status}")
-    track_count = await db.scalar(
+    track_count = await _track_count(edition, db)
+    if not track_count:
+        raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
+    await _queue_rematch(edition, book, track_count, db)
+    return await imported_audiobook_response(edition, db)
+
+
+async def _track_count(edition: ImportedAudiobook, db: AsyncSession) -> int:
+    count = await db.scalar(
         select(func.count(ImportedAudiobookTrack.id)).where(
             ImportedAudiobookTrack.imported_audiobook_id == edition.id,
         )
     )
-    if not track_count:
-        raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
+    return count or 0
 
+
+async def _queue_rematch(edition: ImportedAudiobook, book: Book, track_count: int, db: AsyncSession) -> None:
     realign = edition.alignment_method in {"transcribed", "hybrid"}
     transition_state(
         edition,
@@ -454,6 +469,8 @@ async def rematch_imported_audiobook(
         ImportedAudiobookStatus.STALE,
         context=f"imported audiobook {edition.id}",
     )
+    # The rematch validates its finished matches and records any new problem.
+    edition.error = None
     edition.alignment_error = None
     edition.progress_current = 0
     edition.progress_total = track_count
@@ -470,7 +487,6 @@ async def rematch_imported_audiobook(
         dedupe_key=f"rematch_imported_audiobook:imported_audiobook:{edition.id}:v{book.content_version or 1}",
         progress_detail="Queued to restore human-audio chapter matches and text cues",
     )
-    return await imported_audiobook_response(edition, db)
 
 
 @router.delete("/api/imported-audiobooks/{edition_id}", status_code=204)

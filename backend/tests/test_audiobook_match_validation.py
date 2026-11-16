@@ -148,6 +148,72 @@ def test_empty_or_missing_text_fails_closed(tracks, chapters):
     assert match_coverage_error(tracks, chapters) is not None
 
 
+def _unnarrated_sections():
+    """Title pages, contents and part dividers ahead of the narrated chapters."""
+    titles = ["THIS INEVITABLE RUIN", "BOOK VII", "AUTHOR", "PUBLISHER", "Section 6", "Section 7", "CONTENTS"]
+    titles += [f"[ PART {i} ] TITLE" for i in range(1, 6)]
+    return [
+        AudiobookChapter(
+            id=1000 + i,
+            book_id=1,
+            chapter_number=1000 + i,
+            spine_order=-len(titles) + i,
+            logical_chapter_key=f"front-{i}",
+            title=title,
+        )
+        for i, title in enumerate(titles)
+    ]
+
+
+def test_unnarrated_front_matter_does_not_block_a_fully_matched_book():
+    # Book 1194: every narrated chapter matched, yet 12 unnarrated pages made
+    # it "100 of 112 logical book chapters".
+    front = _unnarrated_sections()
+    chapters = [*front, *_chapters(100)]
+    tracks = _tracks(100)
+    for track in tracks:
+        track.duration_ms = 600_000
+    tracks += [
+        ImportedAudiobookTrack(id=201, sequence_order=-3, title="Opening Credits", duration_ms=26_000),
+        ImportedAudiobookTrack(id=202, sequence_order=-2, title="Dedication", duration_ms=34_000),
+        ImportedAudiobookTrack(id=203, sequence_order=-1, title="Part I: The Ceasefire", duration_ms=4_000),
+    ]
+    sizes = {chapter.id: 20 for chapter in front} | {i: 20_000 for i in range(1, 101)}
+
+    assert match_coverage_error(tracks, chapters, sizes) is None
+    # Without text sizes, section counts remain the fallback safeguard.
+    assert "100 of 112 logical book chapters" in match_coverage_error(tracks, chapters)
+
+
+def _parted_book():
+    chapters = [
+        AudiobookChapter(id=101, book_id=1, chapter_number=101, spine_order=0, logical_chapter_key="p1", title="PART 1"),
+        *_chapters(9),
+        AudiobookChapter(id=102, book_id=1, chapter_number=102, spine_order=5, logical_chapter_key="p2", title="PART 2"),
+    ]
+    for chapter in chapters[1:10]:
+        chapter.spine_order = chapter.chapter_number + (0 if chapter.chapter_number <= 5 else 1)
+    tracks = _tracks(9)
+    tracks.insert(0, ImportedAudiobookTrack(id=101, sequence_order=-1, title="Part I: Arrival", duration_ms=4_000))
+    tracks.insert(6, ImportedAudiobookTrack(id=102, sequence_order=4, title="Part II: Departure", duration_ms=4_000))
+    for track in tracks[7:]:
+        track.sequence_order += 1
+    return tracks, chapters
+
+
+def test_matched_part_announcement_covers_its_divider_page():
+    tracks, chapters = _parted_book()
+    assert "9 of 11 logical book chapters" in match_coverage_error(tracks, chapters)
+    tracks[0].matched_chapter_id, tracks[6].matched_chapter_id = 101, 102
+    assert match_coverage_error(tracks, chapters) is None
+
+
+def test_matched_part_announcement_must_keep_book_order():
+    tracks, chapters = _parted_book()
+    tracks[0].matched_chapter_id, tracks[6].matched_chapter_id = 102, 101
+    assert "run out of book order" in match_coverage_error(tracks, chapters)
+
+
 async def _seed(db):
     book = Book(id=1, title="Matching safeguard", current_path="library/test.epub")
     edition = ImportedAudiobook(id=1, book_id=1, name="Incomplete", status="ready", alignment_method="estimated")
@@ -257,6 +323,50 @@ async def test_rebuild_and_rematch_cannot_publish_incomplete_matches(db, monkeyp
         await getattr(audiobook_import, operation)(edition.id, db)
     assert edition.status == "error"
     assert "review required" in edition.progress_detail
+
+
+@pytest.mark.asyncio
+async def test_rematch_keeps_manual_corrections(db, monkeypatch):
+    _book, edition, chapters, tracks = await _seed(db)
+    tracks[5].title = "Unrecognized track"
+    tracks[5].matched_chapter_id = chapters[5].id
+    tracks[5].match_method = "manual"
+    tracks[6].matched_chapter_id = None
+    tracks[6].match_method = "automatic"
+    await db.commit()
+    monkeypatch.setattr(audiobook_import, "ensure_span_anchored_text", AsyncMock(return_value=chapters))
+
+    assert await audiobook_import.rematch_imported_audiobook(edition.id, db) == 20
+    assert (tracks[5].matched_chapter_id, tracks[5].match_method) == (chapters[5].id, "manual")
+    assert (tracks[6].matched_chapter_id, tracks[6].match_method) == (chapters[6].id, "automatic")
+    assert edition.status == "ready"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error,job_type,status",
+    [
+        (
+            "Chapter matching needs review. 1 numbered book chapters have no audio match.",
+            "rematch_imported_audiobook",
+            "stale",
+        ),
+        ("Could not read the uploaded audio.", "import_audiobook", "queued"),
+    ],
+)
+async def test_retry_reruns_only_the_step_that_failed(db, error, job_type, status):
+    _book, edition, _chapters_list, tracks = await _seed(db)
+    edition.status = "error"
+    edition.error = error
+    tracks[5].match_method = "manual"
+    await db.commit()
+
+    await audiobook_imports.retry_imported_audiobook(edition.id, db)
+
+    assert (edition.status, edition.error) == (status, None)
+    assert [job.job_type for job in (await db.scalars(select(ProcessingJob))).all()] == [job_type]
+    # Retrying the match must not delete tracks and their manual corrections.
+    assert tracks[5].match_method == "manual"
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from .audiobook_chapter_titles import chapter_identity
 MIN_MATCH_COVERAGE = 0.90
 MIN_AUDIO_COVERAGE = 0.95
 MIN_TRANSCRIPT_MATCH = 0.50
+MATCH_REVIEW_PREFIX = "Chapter matching needs review."
 _CREDITS = re.compile(r"^(?:opening|closing|end)\s+credits?\b", re.IGNORECASE)
 _PART = re.compile(r"^\[?\s*part\s+(?:[ivxlcdm]+|\d+)\b", re.IGNORECASE)
 
@@ -36,9 +37,16 @@ def match_coverage_error(
 ) -> str | None:
     """Compare logical chapters, narration tracks, duration, and reading order.
 
-    Credits and short part announcements are audio extras. Physical EPUB files
-    belonging to the same logical chapter count once. All numbered chapters must
-    match, even when a missing chapter would fit within the coverage tolerance.
+    Credits and short part announcements are audio extras: they need no match,
+    but a match they do have covers its text and must keep book order. Physical
+    EPUB files belonging to the same logical chapter count once. All numbered
+    chapters must match, even when a missing chapter would fit within the
+    coverage tolerance.
+
+    Book coverage is weighed by text when ``chapter_sizes`` is known. Counting
+    sections would let unnarrated title pages, contents and part dividers block
+    an audiobook whose every chapter matches; counting is the fallback when
+    sizes are unavailable.
     """
     by_id = {chapter.id: chapter for chapter in chapters}
     groups = {_group(chapter) for chapter in chapters}
@@ -53,23 +61,24 @@ def match_coverage_error(
         if not _CREDITS.search(track.title or "") and not (_PART.search(track.title or "") and track.duration_ms <= 30_000)
     ]
     matched = [track for track in narration if track.matched_chapter_id in by_id]
-    covered = {_group(by_id[track.matched_chapter_id]) for track in matched if track.matched_chapter_id is not None}
+    placed = [track for track in tracks if track.matched_chapter_id in by_id]
+    covered = {_group(by_id[track.matched_chapter_id]) for track in placed if track.matched_chapter_id is not None}
     duration = sum(max(0, track.duration_ms) for track in narration)
     matched_duration = sum(max(0, track.duration_ms) for track in matched)
+    total_text = sum((chapter_sizes or {}).get(chapter.id, 0) for chapter in chapters)
     reasons = []
     if not narration or not groups or not matched:
         reasons.append("No complete audio-to-text match is available.")
     else:
         if len(matched) / len(narration) < MIN_MATCH_COVERAGE:
             reasons.append(f"Only {len(matched)} of {len(narration)} narration tracks match (90% required).")
-        if len(covered) / len(groups) < MIN_MATCH_COVERAGE:
+        if not total_text and len(covered) / len(groups) < MIN_MATCH_COVERAGE:
             reasons.append(f"Only {len(covered)} of {len(groups)} logical book chapters match (90% required).")
         if duration and matched_duration / duration < MIN_AUDIO_COVERAGE:
             reasons.append(f"Only {matched_duration / duration:.0%} of narration time matches (95% required).")
-    if chapter_sizes:
-        total_text = sum(chapter_sizes.get(chapter.id, 0) for chapter in chapters)
+    if chapter_sizes and total_text:
         matched_text = sum(chapter_sizes.get(chapter.id, 0) for chapter in chapters if _group(chapter) in covered)
-        if total_text and matched_text / total_text < MIN_MATCH_COVERAGE:
+        if matched_text / total_text < MIN_MATCH_COVERAGE:
             reasons.append(f"Only {matched_text / total_text:.0%} of book text is covered (90% required).")
     numbered = {
         _group(chapter)
@@ -82,7 +91,7 @@ def match_coverage_error(
     seen = set()
     previous_position = -1
     previous_track: ImportedAudiobookTrack | None = None
-    for track in sorted(matched, key=lambda item: item.sequence_order):
+    for track in sorted(placed, key=lambda item: item.sequence_order):
         assert track.matched_chapter_id is not None
         chapter = by_id[track.matched_chapter_id]
         key = _group(chapter)
@@ -118,7 +127,7 @@ def match_coverage_error(
     if not reasons:
         return None
     return (
-        "Chapter matching needs review. " + " ".join(reasons) + " Alignment and synchronized playback are blocked. "
+        f"{MATCH_REVIEW_PREFIX} " + " ".join(reasons) + " Alignment and synchronized playback are blocked. "
         "Review track matching or rematch the book text; the original audio is preserved."
     )
 
