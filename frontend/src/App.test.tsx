@@ -7,6 +7,15 @@ import type { Book, CatalogBook } from "./types";
 import { jsonResponse, mockFetch, renderWithClient } from "./test-utils";
 import type { FixtureFetch } from "./test-utils";
 
+// A real reload would end the test; record it instead.
+const { reloadForSignIn } = vi.hoisted(() => ({
+  reloadForSignIn: vi.fn<() => boolean>(() => true),
+}));
+vi.mock("./lib/authSession", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/authSession")>()),
+  reloadForSignIn,
+}));
+
 type LibraryGroup = components["schemas"]["LibraryGroup"];
 
 const book = {
@@ -242,6 +251,7 @@ describe("App workspaces", () => {
       url === "/api/auth/status" ? passwordAuth(true) : undefined,
     );
     rejectLibraryGroups("Admin authentication required");
+    reloadForSignIn.mockClear();
     renderWithClient(<App />);
     expect(
       await screen.findByRole("heading", { name: "Admin Login" }),
@@ -249,19 +259,57 @@ describe("App workspaces", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Your session expired",
     );
+    expect(reloadForSignIn).not.toHaveBeenCalled();
   });
 
-  it("never shows sign-in for a 401 when app auth is disabled", async () => {
+  it("reloads so the auth proxy can sign in again when app auth is disabled", async () => {
     mockApi();
     rejectLibraryGroups("Proxy says no");
+    reloadForSignIn.mockClear().mockReturnValue(true);
     renderWithClient(<App />);
     expect(await screen.findByText(/Proxy says no/)).toBeInTheDocument();
+    expect(reloadForSignIn).toHaveBeenCalled();
     expect(
       screen.queryByRole("heading", { name: "Admin Login" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("explains failing requests when the sign-in reload is refused", async () => {
+    mockApi();
+    rejectLibraryGroups("Proxy says no");
+    // The page was just reloaded for the same reason and is still refused.
+    reloadForSignIn.mockClear().mockReturnValue(false);
+    renderWithClient(<App />);
+    const alert = await screen.findByText(/Your sign-in expired/);
+    expect(
+      within(alert).getByRole("button", { name: "Reload" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("navigation", { name: "Primary navigation" }),
     ).toBeInTheDocument();
+  });
+
+  it("reloads for a proxy login redirect even with app password auth", async () => {
+    mockApi((url) =>
+      url === "/api/auth/status" ? passwordAuth(true) : undefined,
+    );
+    const originalFetch = apiFetch;
+    fetchMock.mockImplementation((url, options) =>
+      url.startsWith("/api/library/groups?")
+        ? Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { Location: "https://auth.example.com/login" },
+            }),
+          )
+        : originalFetch(url, options),
+    );
+    reloadForSignIn.mockClear().mockReturnValue(true);
+    renderWithClient(<App />);
+    await waitFor(() => expect(reloadForSignIn).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("heading", { name: "Admin Login" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reports an unreachable server instead of assuming no sign-in", async () => {

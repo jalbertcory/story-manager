@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import "./App.css";
 import "./Workspace.css";
 import { getAuthStatus, logout } from "./api/auth";
+import { SIGN_IN_EXPIRED_MESSAGE } from "./api/client";
 import { getBook } from "./api/books";
 import useActiveProcessingJobs from "./hooks/useActiveProcessingJobs";
 import { getAttentionDashboard } from "./api/dashboard";
@@ -51,7 +52,7 @@ import {
   SECTION_NAV,
 } from "./lib/navigation";
 import { allowNavigation } from "./lib/navigationGuard";
-import { onUnauthorized } from "./lib/authSession";
+import { onUnauthorized, reloadForSignIn } from "./lib/authSession";
 import { queryKeys } from "./lib/queryKeys";
 import { RouterContext } from "./lib/router";
 
@@ -84,6 +85,7 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState("");
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [proxySignInExpired, setProxySignInExpired] = useState(false);
   const [pendingImportEntries, setPendingImportEntries] = useState<
     FileSystemEntry[]
   >([]);
@@ -108,10 +110,9 @@ export default function App() {
   const isBook = route.view === "book";
   const notFound = route.view === "not-found";
   const activeTab = route.tab || "library";
-  // A 401 from any request means the admin session expired. With app auth
-  // disabled (e.g. behind an auth proxy) a 401 is not ours to answer, so the
-  // UI is never blocked on a sign-in page.
-  const sessionLost = sessionExpired && authStatus?.mode !== "disabled";
+  // With app password auth, a 401 from any request means the admin session
+  // expired and the sign-in page takes over.
+  const sessionLost = sessionExpired && authStatus?.mode === "password";
   const authenticated = Boolean(authStatus?.authenticated) && !sessionLost;
 
   const loadAuthStatus = useCallback(() => {
@@ -121,7 +122,23 @@ export default function App() {
       .catch((error: unknown) => setAuthError(errorMessage(error)));
   }, []);
   useEffect(loadAuthStatus, [loadAuthStatus]);
-  useEffect(() => onUnauthorized(() => setSessionExpired(true)), []);
+  const authMode = authStatus?.mode;
+  useEffect(
+    () =>
+      onUnauthorized((reason) => {
+        if (reason === "unauthorized" && authMode === "password") {
+          setSessionExpired(true);
+          return;
+        }
+        // An auth proxy in front of the app refused the request because its
+        // own sign-in expired. It can only sign in again on a page load, so
+        // reload. If that is refused (it just happened, or the user stayed to
+        // keep unsaved edits), explain why requests are failing instead.
+        setProxySignInExpired(true);
+        reloadForSignIn();
+      }),
+    [authMode],
+  );
   const signedIn = (status: AuthStatus) => {
     setSessionExpired(false);
     setAuthStatus(status);
@@ -539,6 +556,14 @@ export default function App() {
           {authError && (
             <p className="error workspace-alert" role="alert">
               {authError}
+            </p>
+          )}
+          {proxySignInExpired && (
+            <p className="error workspace-alert" role="alert">
+              {SIGN_IN_EXPIRED_MESSAGE}{" "}
+              <button type="button" onClick={() => window.location.reload()}>
+                Reload
+              </button>
             </p>
           )}
           {activePrimary === "settings" && activeTab !== "settings" && (
