@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, TypedDict
+from typing import Literal, Optional, TypedDict
 
 from pydantic import Field
 
@@ -14,6 +14,36 @@ from .services.audiobook_reading import ReadingBlock
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
+# One plain-language state per audio source; see services/audiobook_status.py.
+AudioState = Literal[
+    "working",
+    "job_failed",
+    "import_failed",
+    "needs_review",
+    "outdated",
+    "whisper_failed",
+    "ready_whisper",
+    "ready_estimated",
+    "audio_only",
+    "tts_failed",
+    "tts_running",
+    "tts_paused",
+    "tts_outdated",
+    "tts_partial",
+    "tts_complete",
+    "tts_not_started",
+]
+AudioNextAction = Literal[
+    "retry_processing",
+    "retry_import",
+    "review_matches",
+    "rebuild",
+    "retry_whisper",
+    "improve_with_whisper",
+    "set_up_transcription",
+    "open_generation",
+]
 
 
 class AudiobookStatusResponse(BaseModel):
@@ -280,7 +310,54 @@ class ImportedAudiobookResponse(BaseModel):
     matching_error: Optional[str]
     created_at: datetime
     is_reader_default: bool = False
+    state: AudioState
+    state_label: str
+    state_detail: Optional[str]
+    next_action: Optional[AudioNextAction]
+    next_action_label: Optional[str]
+    processing_job_id: Optional[int]
     tracks: list[ImportedTrackResponse]
+
+
+class AudiobookOverviewSource(BaseModel):
+    kind: Literal["human", "tts"]
+    edition_id: Optional[int]
+    name: str
+    state: AudioState
+    state_label: str
+    state_detail: Optional[str]
+    next_action: Optional[AudioNextAction]
+    next_action_label: Optional[str]
+    processing_job_id: Optional[int]
+    alignment_method: Optional[str]
+    progress_current: int
+    progress_total: int
+    updated_at: Optional[datetime]
+
+
+class AudiobookOverviewBook(BaseModel):
+    book_id: int
+    title: str
+    author: str
+    has_epub: bool
+    audio_kind: Literal["human", "tts", "both"]
+    state: AudioState
+    needs_attention: bool
+    sources: list[AudiobookOverviewSource]
+
+
+class AudiobookOverviewCount(BaseModel):
+    state: AudioState
+    label: str
+    count: int
+
+
+class AudiobookOverviewResponse(BaseModel):
+    transcription_configured: bool
+    total_count: int
+    attention_count: int
+    counts: list[AudiobookOverviewCount]
+    books: list[AudiobookOverviewBook]
 
 
 class HumanAudiobookRebuildPreview(BaseModel):

@@ -596,6 +596,7 @@ class AttentionDashboard(BaseModel):
     failed_jobs: AttentionJobCategory
     failed_refreshes: AttentionBookCategory
     stale_audiobooks: AttentionBookCategory
+    audiobook_problems: AttentionBookCategory
     metadata_proposals: AttentionMetadataCategory
     broken_files: AttentionFileCategory
     missing_covers: AttentionFileCategory

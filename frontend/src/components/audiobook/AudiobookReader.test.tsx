@@ -94,6 +94,12 @@ const editionFixture = (
   derived_revision: 1,
   needs_rebuild: false,
   needs_upgrade: false,
+  state: "ready_estimated",
+  state_label: "Human audio",
+  state_detail: null,
+  next_action: null,
+  next_action_label: null,
+  processing_job_id: null,
   tracks: [],
   ...overrides,
 });
@@ -101,6 +107,37 @@ const editionFixture = (
 describe("AudiobookReader", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("offers a failed rematch retry even when the lifecycle still says importing", async () => {
+    const posts: string[] = [];
+    mockFetch((url, init) => {
+      if (init?.method === "POST") posts.push(url);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    renderWithClient(
+      <AudiobookSources
+        bookId={11}
+        imports={[
+          editionFixture({
+            status: "importing",
+            state: "job_failed",
+            state_label: "Processing failed",
+            state_detail: "EPUB missing",
+            processing_job_id: 72,
+            next_action: "retry_processing",
+            next_action_label: "Retry processing",
+            tracks: [trackFixture(1)],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("EPUB missing");
+    fireEvent.click(screen.getByRole("button", { name: "Retry processing" }));
+    await screen.findByText("Human audiobook processing retry queued.", {
+      exact: false,
+    });
+    expect(posts).toEqual(["/api/processing/jobs/72/retry"]);
   });
 
   it("never skips an unmatched track between synchronized tracks", () => {
@@ -151,7 +188,7 @@ describe("AudiobookReader", () => {
     expect(container.querySelector("audio")).toBeNull();
   });
 
-  it("shows repair controls and disables alignment for a blocked edition", () => {
+  it("leads a blocked edition with its match review", () => {
     const error = "Chapter matching needs review. Too few tracks match.";
     renderWithClient(
       <AudiobookSources
@@ -162,6 +199,12 @@ describe("AudiobookReader", () => {
             matching_error: error,
             error,
             alignment_error: error,
+            is_reader_default: false,
+            state: "needs_review",
+            state_label: "Needs match review",
+            state_detail: error,
+            next_action: "review_matches",
+            next_action_label: "Review matches",
             tracks: [trackFixture(1)],
           }),
         ]}
@@ -169,15 +212,128 @@ describe("AudiobookReader", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent(error);
     expect(screen.getAllByText(error)).toHaveLength(1);
-    expect(screen.getByText("Needs review")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Re-align Timestamps" }),
-    ).toBeDisabled();
+    expect(screen.getByText("Needs match review")).toHaveClass(
+      "audio-state--danger",
+    );
     expect(
       screen.getByRole("button", { name: "Rematch Narration to book text" }),
+    ).toHaveClass("btn-primary");
+    // Track matching opens with the problem; alignment waits for valid matches.
+    expect(
+      screen.getByText("Track matching and more options").closest("details"),
+    ).toHaveAttribute("open");
+    expect(
+      screen.getByRole("combobox", { name: "Book chapter for Chapter 1" }),
     ).toBeEnabled();
-    expect(screen.getByText("Review track matching")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Whisper/ })).toBeNull();
     expect(screen.queryByText("Reader app default")).not.toBeInTheDocument();
+  });
+
+  it("offers Retry import when an import failed after writing tracks", async () => {
+    const fetchMock = mockFetch(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    );
+    // The live match check also fails for a partial import; that used to hide
+    // the retry button.
+    renderWithClient(
+      <AudiobookSources
+        bookId={11}
+        imports={[
+          editionFixture({
+            status: "error",
+            error: "ffmpeg exited with status 1",
+            matching_error:
+              "Chapter matching needs review. No complete audio-to-text match is available.",
+            is_reader_default: false,
+            state: "import_failed",
+            state_label: "Import failed",
+            state_detail: "ffmpeg exited with status 1",
+            next_action: "retry_import",
+            next_action_label: "Retry import",
+            tracks: [trackFixture(1)],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "ffmpeg exited with status 1",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry import" }));
+    expect(
+      await screen.findByText(/Human audiobook import retry queued/),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/imported-audiobooks/7/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it.each([
+    ["outdated", "Rebuild", "rebuild"],
+    ["whisper_failed", "Retry Whisper", "align"],
+    ["ready_estimated", "Improve with Whisper", "align"],
+  ] as const)(
+    "queues the %s edition's next action",
+    async (state, label, endpoint) => {
+      const fetchMock = mockFetch(() =>
+        Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+      );
+      const nextAction =
+        state === "outdated"
+          ? "rebuild"
+          : state === "whisper_failed"
+            ? "retry_whisper"
+            : "improve_with_whisper";
+      renderWithClient(
+        <AudiobookSources
+          bookId={11}
+          imports={[
+            editionFixture({
+              state,
+              state_label: "Label",
+              state_detail: "Detail",
+              next_action: nextAction,
+              next_action_label: label,
+              alignment_method: "estimated",
+              tracks: [trackFixture(1, { matched_chapter_id: 9 })],
+            }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      await screen.findByText(/queued/);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/imported-audiobooks/7/${endpoint}`,
+        expect.objectContaining({ method: "POST" }),
+      );
+      // The primary action is not repeated under more options.
+      expect(
+        screen.getAllByRole("button", { name: /Whisper|^Rebuild$/ }),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("points to transcription settings instead of a Whisper button", () => {
+    renderWithClient(
+      <AudiobookSources
+        bookId={11}
+        imports={[
+          editionFixture({
+            alignment_method: "estimated",
+            state_detail: "Sentence timing is estimated from text length.",
+            next_action: "set_up_transcription",
+            next_action_label: "Set up transcription",
+            tracks: [trackFixture(1, { matched_chapter_id: 9 })],
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "Set up transcription" }),
+    ).toHaveAttribute("href", "/settings/audio-ai");
+    expect(screen.queryByRole("button", { name: /Whisper/ })).toBeNull();
+    expect(screen.getByText("Reader app default")).toBeInTheDocument();
+    expect(screen.getByText("Human audio")).toHaveClass("audio-state--neutral");
   });
 
   it.each(["imported", "generated"] as const)(

@@ -192,11 +192,23 @@ function AttentionDashboard({
         </AttentionCard>
 
         <AttentionCard
-          title="Audiobooks need updating"
-          description="The book text has changed since this audio was created."
+          title="Audiobook problems"
+          description="Failed imports, chapter matches to review, and AI narration that stopped."
+          category={data.audiobook_problems}
+          actionHref="/activity/audiobooks?state=attention"
+          actionLabel="View audiobooks"
+        >
+          {data.audiobook_problems.items.map((item) => (
+            <BookItem key={item.book_id} item={item} audiobook />
+          ))}
+        </AttentionCard>
+
+        <AttentionCard
+          title="AI audiobooks need updating"
+          description="The book text has changed since this narration was generated."
           category={data.stale_audiobooks}
-          actionHref="/activity/processing"
-          actionLabel="View processing"
+          actionHref="/activity/audiobooks?state=tts_outdated"
+          actionLabel="View audiobooks"
         >
           {data.stale_audiobooks.items.map((item) => (
             <BookItem key={item.book_id} item={item} audiobook />

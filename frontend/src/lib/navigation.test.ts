@@ -32,6 +32,16 @@ describe("application navigation", () => {
     expect(buildTabPath("attention")).toBe("/activity");
   });
 
+  it("lists every audiobook under Activity", () => {
+    expect(parseLocation("/activity/audiobooks", "", "?state=attention")).toEqual({
+      view: "tab",
+      tab: "audiobooks",
+      libraryView: "series",
+    });
+    expect(getPrimarySection("audiobooks")).toBe("activity");
+    expect(buildTabPath("audiobooks")).toBe("/activity/audiobooks");
+  });
+
   it("keeps the guided import workflow inside the Library section", () => {
     expect(parseLocation("/import", "", "?type=audiobook")).toEqual({
       view: "tab",

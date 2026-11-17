@@ -370,6 +370,22 @@ export function rebuildAllHumanAudiobooks({ force = false } = {}) {
   );
 }
 
+export function rebuildImportedAudiobook(editionId: number) {
+  return unwrap(
+    api.POST("/api/imported-audiobooks/{edition_id}/rebuild", {
+      params: { path: { edition_id: editionId } },
+    }),
+    "Failed to queue the audiobook rebuild",
+  );
+}
+
+export function getAudiobookOverview(options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/audiobooks/overview", requestInit(options)),
+    "Failed to load audiobooks",
+  );
+}
+
 export function alignImportedAudiobook(editionId: number) {
   return unwrap(
     api.POST("/api/imported-audiobooks/{edition_id}/align", {

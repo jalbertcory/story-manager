@@ -1,10 +1,16 @@
 import type { ComponentProps } from "react";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AudiobookPipeline from "./AudiobookPipeline";
 import type { Chapter } from "./audiobook/types";
-import { mockFetch, renderWithClient } from "../test-utils";
+import { jsonResponse, mockFetch, renderWithClient } from "../test-utils";
 
 type PipelineBook = ComponentProps<typeof AudiobookPipeline>["book"];
 
@@ -100,6 +106,66 @@ vi.mock("../hooks/useLifecycleDefinitions", () => ({
 describe("AudiobookPipeline", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("polls a ready edition while its rebuild works and stops after a job failure", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const fetchMock = mockFetch((url) => {
+      if (url === "/api/books/11/audiobook/imports") {
+        reads += 1;
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: 10,
+              name: "Rebuilding edition",
+              status: reads === 1 ? "ready" : "importing",
+              state: reads === 1 ? "working" : "job_failed",
+              state_label: reads === 1 ? "Rebuilding" : "Processing failed",
+              state_detail:
+                reads === 1 ? "Rebuilt track 1 of 3" : "EPUB missing",
+              next_action: reads === 1 ? null : "retry_processing",
+              next_action_label: reads === 1 ? null : "Retry processing",
+              processing_job_id: 72,
+              progress_current: 1,
+              progress_total: 3,
+              tracks: [],
+            },
+          ]),
+        );
+      }
+      return Promise.resolve(jsonResponse([]));
+    });
+    const rendered = renderWithClient(
+      <AudiobookPipeline book={pipelineBook({ audiobook_enabled: false })} />,
+    );
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(reads).toBe(1);
+      expect(screen.getByRole("progressbar")).toHaveAttribute("value", "1");
+      expect(
+        screen.queryByRole("button", { name: "Retry processing" }),
+      ).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3100);
+      });
+      expect(reads).toBe(2);
+      expect(
+        screen.getByRole("button", { name: "Retry processing" }),
+      ).toBeEnabled();
+      expect(screen.queryByRole("progressbar")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      expect(reads).toBe(2);
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      rendered.unmount();
+      rendered.queryClient.clear();
+      vi.useRealTimers();
+    }
   });
 
   it("shows the actionable error and can run only the next stage", async () => {
@@ -254,6 +320,11 @@ describe("AudiobookPipeline", () => {
                 name: "Newest narration",
                 source_type: "upload",
                 status: "ready",
+                state: "ready_estimated",
+                state_label: "Human audio",
+                state_detail: null,
+                next_action: null,
+                next_action_label: null,
                 duration_ms: 3_600_000,
                 created_at: "2026-07-02T15:30:00Z",
                 is_reader_default: true,
@@ -272,6 +343,11 @@ describe("AudiobookPipeline", () => {
                 name: "Older narration",
                 source_type: "upload",
                 status: "ready",
+                state: "ready_estimated",
+                state_label: "Human audio",
+                state_detail: null,
+                next_action: null,
+                next_action_label: null,
                 duration_ms: 3_600_000,
                 created_at: "2026-07-01T15:30:00Z",
                 is_reader_default: false,
@@ -337,6 +413,12 @@ describe("AudiobookPipeline", () => {
       "2026-07-01T15:30:00Z",
     );
 
+    expect(within(newestCard).getByText("Human audio")).toHaveClass(
+      "audio-state--neutral",
+    );
+    fireEvent.click(
+      within(newestCard).getByText("Track matching and more options"),
+    );
     fireEvent.click(
       within(newestCard).getByRole("button", {
         name: "Rematch Newest narration to book text",

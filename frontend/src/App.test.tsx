@@ -176,6 +176,7 @@ function mockApi(
           failed_jobs: category,
           failed_refreshes: category,
           stale_audiobooks: category,
+          audiobook_problems: category,
           metadata_proposals: category,
           broken_files: category,
           missing_covers: category,

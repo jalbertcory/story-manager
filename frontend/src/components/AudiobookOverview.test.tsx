@@ -1,0 +1,285 @@
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { components } from "../api/schema";
+import { jsonResponse, mockFetch, renderWithClient } from "../test-utils";
+import AudiobookOverview from "./AudiobookOverview";
+
+type Overview = components["schemas"]["AudiobookOverviewResponse"];
+type Source = components["schemas"]["AudiobookOverviewSource"];
+
+const source = (overrides: Partial<Source>): Source => ({
+  kind: "human",
+  edition_id: null,
+  name: "Libation",
+  state: "ready_whisper",
+  state_label: "Human audio + Whisper",
+  state_detail: null,
+  next_action: null,
+  next_action_label: null,
+  processing_job_id: null,
+  alignment_method: "transcribed",
+  progress_current: 0,
+  progress_total: 0,
+  updated_at: null,
+  ...overrides,
+});
+
+const overview: Overview = {
+  transcription_configured: true,
+  total_count: 4,
+  attention_count: 3,
+  counts: [
+    { state: "import_failed", label: "Import failed", count: 1 },
+    { state: "tts_failed", label: "AI narration failed", count: 1 },
+    { state: "needs_review", label: "Needs match review", count: 1 },
+    { state: "working", label: "In progress", count: 1 },
+    { state: "ready_whisper", label: "Human audio + Whisper", count: 1 },
+  ],
+  books: [
+    {
+      book_id: 3,
+      title: "Charlie",
+      author: "Cee",
+      has_epub: true,
+      audio_kind: "human",
+      state: "import_failed",
+      needs_attention: true,
+      sources: [
+        source({
+          edition_id: 31,
+          state: "import_failed",
+          state_label: "Import failed",
+          state_detail: "Could not read the audio files.",
+          next_action: "retry_import",
+          next_action_label: "Retry import",
+          alignment_method: "estimated",
+        }),
+      ],
+    },
+    {
+      book_id: 5,
+      title: "Echo",
+      author: "Eve",
+      has_epub: true,
+      audio_kind: "both",
+      state: "tts_failed",
+      needs_attention: true,
+      sources: [
+        source({
+          kind: "tts",
+          name: "AI narration",
+          state: "tts_failed",
+          state_label: "Failed",
+          state_detail: "Voice server offline",
+          next_action: "open_generation",
+          next_action_label: "Review and retry",
+          alignment_method: null,
+        }),
+        source({
+          edition_id: 51,
+          state: "working",
+          state_label: "Importing",
+          state_detail: "Splitting chapters",
+          progress_current: 2,
+          progress_total: 5,
+        }),
+      ],
+    },
+    {
+      book_id: 1,
+      title: "Alpha",
+      author: "Ann",
+      has_epub: true,
+      audio_kind: "human",
+      state: "needs_review",
+      needs_attention: true,
+      sources: [
+        source({
+          edition_id: 11,
+          state: "needs_review",
+          state_label: "Needs review",
+          next_action: "review_matches",
+          next_action_label: "Review matches",
+        }),
+      ],
+    },
+    {
+      book_id: 2,
+      title: "Bravo",
+      author: "Bea",
+      has_epub: true,
+      audio_kind: "human",
+      state: "ready_whisper",
+      needs_attention: false,
+      sources: [source({ edition_id: 21 })],
+    },
+  ],
+};
+
+function titles() {
+  return within(screen.getByRole("list", { name: "Audiobooks" }))
+    .getAllByRole("link")
+    .map((link) => link.textContent)
+    .filter((text) => ["Alpha", "Bravo", "Charlie", "Echo"].includes(text));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.pushState({}, "", "/");
+});
+
+describe("AudiobookOverview", () => {
+  it("lists every audiobook with one state and action per source", async () => {
+    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    renderWithClient(<AudiobookOverview />);
+
+    expect(
+      await screen.findByRole("link", { name: "Charlie" }),
+    ).toHaveAttribute("href", "/books/3/audiobooks?tab=sources");
+    expect(titles()).toEqual(["Charlie", "Echo", "Alpha", "Bravo"]);
+    expect(screen.getByText("Could not read the audio files.")).toBeVisible();
+    expect(screen.getByText("Eve · Human and AI narration")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Review and retry" }),
+    ).toHaveAttribute("href", "/books/5/audiobooks?tab=progress");
+    expect(
+      screen.getByRole("link", { name: "Review matches" }),
+    ).toHaveAttribute("href", "/books/1/audiobooks?tab=sources");
+    expect(
+      screen.getByRole("progressbar", { name: "Libation progress" }),
+    ).toHaveAttribute("max", "5");
+    expect(screen.getByRole("button", { name: /^All 4$/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("filters by attention, by state and by search", async () => {
+    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Bravo" });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Needs attention 3$/ }),
+    );
+    expect(titles()).toEqual(["Charlie", "Echo", "Alpha"]);
+
+    // A book matches a state when any of its sources is in it.
+    fireEvent.click(screen.getByRole("button", { name: /^In progress 1$/ }));
+    expect(titles()).toEqual(["Echo"]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^All 4$/ }));
+    fireEvent.change(screen.getByLabelText("Find audiobooks"), {
+      target: { value: "bea" },
+    });
+    expect(titles()).toEqual(["Bravo"]);
+  });
+
+  it("opens with the state filter from the address", async () => {
+    window.history.pushState({}, "", "/activity/audiobooks?state=needs_review");
+    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    renderWithClient(<AudiobookOverview />);
+
+    await screen.findByRole("link", { name: "Alpha" });
+    expect(titles()).toEqual(["Alpha"]);
+  });
+
+  it("queues the edition's next action from the list", async () => {
+    const posts: string[] = [];
+    mockFetch((url, init) => {
+      if (init?.method === "POST") {
+        posts.push(url);
+        return Promise.resolve(jsonResponse({}));
+      }
+      return Promise.resolve(jsonResponse(overview));
+    });
+    renderWithClient(<AudiobookOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Retry import: Charlie, Libation",
+      }),
+    );
+
+    expect(
+      await screen.findByText("Retry import queued for Charlie.", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    expect(posts).toEqual(["/api/imported-audiobooks/31/retry"]);
+  });
+
+  it("points to transcription settings when no provider is set up", async () => {
+    mockFetch(() =>
+      Promise.resolve(
+        jsonResponse({ ...overview, transcription_configured: false }),
+      ),
+    );
+    renderWithClient(<AudiobookOverview />);
+
+    expect(
+      await screen.findByRole("link", { name: "Set up transcription" }),
+    ).toHaveAttribute("href", "/settings/audio-ai");
+  });
+
+  it("retries the failed rematch job instead of reimporting its audio", async () => {
+    const posts: string[] = [];
+    const data: Overview = {
+      ...overview,
+      books: [
+        {
+          ...overview.books[0]!,
+          state: "job_failed",
+          sources: [
+            source({
+              edition_id: 31,
+              processing_job_id: 72,
+              state: "job_failed",
+              state_label: "Processing failed",
+              state_detail: "EPUB missing",
+              next_action: "retry_processing",
+              next_action_label: "Retry processing",
+            }),
+          ],
+        },
+      ],
+    };
+    mockFetch((url, init) => {
+      if (init?.method === "POST") {
+        posts.push(url);
+        return Promise.resolve(jsonResponse({ id: 72, status: "queued" }));
+      }
+      return Promise.resolve(jsonResponse(data));
+    });
+    renderWithClient(<AudiobookOverview />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Retry processing: Charlie, Libation",
+      }),
+    );
+    await screen.findByText("Retry processing queued for Charlie.", {
+      exact: false,
+    });
+    expect(posts).toEqual(["/api/processing/jobs/72/retry"]);
+  });
+
+  it("explains an empty library", async () => {
+    mockFetch(() =>
+      Promise.resolve(
+        jsonResponse({
+          ...overview,
+          total_count: 0,
+          attention_count: 0,
+          counts: [],
+          books: [],
+        }),
+      ),
+    );
+    renderWithClient(<AudiobookOverview />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/No audiobooks yet/)).toBeVisible(),
+    );
+  });
+});

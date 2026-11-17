@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,44 +132,65 @@ def match_coverage_error(
     )
 
 
-async def imported_matching_error(
-    edition: ImportedAudiobook,
+async def imported_matching_errors(
+    editions: Sequence[ImportedAudiobook],
     db: AsyncSession,
     *,
-    tracks: Sequence[ImportedAudiobookTrack] | None = None,
+    tracks_by_edition: Mapping[int, Sequence[ImportedAudiobookTrack]] | None = None,
     check_transcripts: bool = True,
-) -> str | None:
-    book = await db.get(Book, edition.book_id)
-    if book is not None and not book.current_path:
-        return None  # Audio-only books have no text to synchronize.
-    if tracks is None:
-        tracks = list(
-            (
-                await db.scalars(
-                    select(ImportedAudiobookTrack).where(ImportedAudiobookTrack.imported_audiobook_id == edition.id)
+) -> dict[int, str | None]:
+    """Check many editions' chapter matches with a fixed number of queries."""
+    results: dict[int, str | None] = {edition.id: None for edition in editions}
+    if not editions:
+        return results
+    books = {
+        book.id: book
+        for book in (await db.scalars(select(Book).where(Book.id.in_({edition.book_id for edition in editions})))).all()
+    }
+    # Audio-only books have no text to synchronize.
+    checked = [edition for edition in editions if (book := books.get(edition.book_id)) is None or book.current_path]
+    if not checked:
+        return results
+    book_ids = {edition.book_id for edition in checked}
+    if tracks_by_edition is None:
+        loaded: dict[int, list[ImportedAudiobookTrack]] = {edition.id: [] for edition in checked}
+        for track in (
+            await db.scalars(
+                select(ImportedAudiobookTrack).where(
+                    ImportedAudiobookTrack.imported_audiobook_id.in_([edition.id for edition in checked])
                 )
-            ).all()
-        )
-    chapters = list((await db.scalars(select(AudiobookChapter).where(AudiobookChapter.book_id == edition.book_id))).all())
-    sizes = dict(
-        (
-            await db.execute(
-                select(AudiobookSentence.chapter_id, func.sum(func.length(AudiobookSentence.original_text)))
-                .join(AudiobookChapter)
-                .where(AudiobookChapter.book_id == edition.book_id)
-                .group_by(AudiobookSentence.chapter_id)
             )
-        ).all()
-    )
+        ).all():
+            loaded[track.imported_audiobook_id].append(track)
+        tracks_by_edition = loaded
+    chapters_by_book: dict[int, list[AudiobookChapter]] = {book_id: [] for book_id in book_ids}
+    for chapter in (await db.scalars(select(AudiobookChapter).where(AudiobookChapter.book_id.in_(book_ids)))).all():
+        chapters_by_book[chapter.book_id].append(chapter)
+    sizes_by_book: dict[int, dict[int, int]] = {book_id: {} for book_id in book_ids}
+    for book_id, chapter_id, size in (
+        await db.execute(
+            select(
+                AudiobookChapter.book_id,
+                AudiobookSentence.chapter_id,
+                func.sum(func.length(AudiobookSentence.original_text)),
+            )
+            .join(AudiobookChapter)
+            .where(AudiobookChapter.book_id.in_(book_ids))
+            .group_by(AudiobookChapter.book_id, AudiobookSentence.chapter_id)
+        )
+    ).all():
+        sizes_by_book[book_id][chapter_id] = int(size or 0)
     # Existing editions can legitimately split one text chapter over multiple
     # audio tracks. Permit that only with non-overlapping, ordered sentence cues.
-    by_id = {chapter.id: chapter for chapter in chapters}
-    group_tracks: dict[str, list[int]] = {}
-    for track in tracks:
-        chapter = by_id.get(track.matched_chapter_id) if track.matched_chapter_id is not None else None
-        if chapter is not None:
-            group_tracks.setdefault(_group(chapter), []).append(track.id)
-    duplicate_ids = [track_id for ids in group_tracks.values() if len(ids) > 1 for track_id in ids]
+    chapter_by_id = {chapter.id: chapter for chapters in chapters_by_book.values() for chapter in chapters}
+    duplicate_ids: list[int] = []
+    for edition in checked:
+        group_tracks: dict[str, list[int]] = {}
+        for track in tracks_by_edition.get(edition.id, ()):
+            matched = chapter_by_id.get(track.matched_chapter_id) if track.matched_chapter_id is not None else None
+            if matched is not None and matched.book_id == edition.book_id:
+                group_tracks.setdefault(_group(matched), []).append(track.id)
+        duplicate_ids.extend(track_id for ids in group_tracks.values() if len(ids) > 1 for track_id in ids)
     cue_ranges: dict[int, tuple[tuple[int, int], tuple[int, int]]] = {}
     if duplicate_ids:
         rows = await db.execute(
@@ -178,14 +199,41 @@ async def imported_matching_error(
             .where(ImportedAudiobookCue.track_id.in_(duplicate_ids))
         )
         for track_id, chapter_id, sequence in rows:
-            chapter = by_id.get(chapter_id)
-            if chapter is None:
+            cue_chapter = chapter_by_id.get(chapter_id)
+            if cue_chapter is None:
                 continue
-            point = (chapter.spine_order if chapter.spine_order is not None else chapter.chapter_number, sequence)
+            point = (
+                cue_chapter.spine_order if cue_chapter.spine_order is not None else cue_chapter.chapter_number,
+                sequence,
+            )
             start, end = cue_ranges.get(track_id, (point, point))
             cue_ranges[track_id] = min(start, point), max(end, point)
-    # A retry may improve poor transcripts. Structural coverage still has to pass.
-    return match_coverage_error(tracks, chapters, sizes, check_transcripts=check_transcripts, cue_ranges=cue_ranges)
+    for edition in checked:
+        # A retry may improve poor transcripts. Structural coverage still has to pass.
+        results[edition.id] = match_coverage_error(
+            tracks_by_edition.get(edition.id, ()),
+            chapters_by_book[edition.book_id],
+            sizes_by_book[edition.book_id],
+            check_transcripts=check_transcripts,
+            cue_ranges=cue_ranges,
+        )
+    return results
+
+
+async def imported_matching_error(
+    edition: ImportedAudiobook,
+    db: AsyncSession,
+    *,
+    tracks: Sequence[ImportedAudiobookTrack] | None = None,
+    check_transcripts: bool = True,
+) -> str | None:
+    errors = await imported_matching_errors(
+        [edition],
+        db,
+        tracks_by_edition=None if tracks is None else {edition.id: tracks},
+        check_transcripts=check_transcripts,
+    )
+    return errors[edition.id]
 
 
 async def require_safe_matches(edition: ImportedAudiobook, db: AsyncSession, *, check_transcripts: bool = True) -> None:

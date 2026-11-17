@@ -40,6 +40,9 @@ const SchedulerStatus = lazy(() => import("./components/SchedulerStatus"));
 const Logs = lazy(() => import("./components/Logs"));
 const Utilities = lazy(() => import("./components/Utilities"));
 const ProcessingJobs = lazy(() => import("./components/ProcessingJobs"));
+const AudiobookOverview = lazy(
+  () => import("./components/AudiobookOverview"),
+);
 import {
   buildBookPath,
   getPrimarySection,
@@ -415,6 +418,8 @@ export default function App() {
             isRefreshing={attention.isFetching}
           />
         );
+      case "audiobooks":
+        return <AudiobookOverview key={location.search} />;
       case "processing":
         return <ProcessingJobs key={location.search} />;
       case "scheduler":

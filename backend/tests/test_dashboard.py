@@ -89,7 +89,7 @@ async def test_attention_dashboard_aggregates_actionable_categories(
         _add_cover(library_path, broken_book)
 
         cover_paths = _book_paths(library_path, "coverless")
-        await crud.create_book(
+        coverless_book = await crud.create_book(
             db,
             schemas.BookCreate(
                 title="Coverless",
@@ -98,6 +98,16 @@ async def test_attention_dashboard_aggregates_actionable_categories(
                 immutable_path=cover_paths[0],
                 current_path=cover_paths[1],
             ),
+        )
+
+        db.add(
+            models.ImportedAudiobook(
+                book_id=coverless_book.id,
+                name="Broken import",
+                source_type="upload",
+                status="error",
+                error="Could not read the audio files.",
+            )
         )
 
         db.add(
@@ -134,13 +144,17 @@ async def test_attention_dashboard_aggregates_actionable_categories(
     data = response.json()
     assert data["failed_refreshes"]["items"][0]["can_retry_refresh"] is True
     assert data["missing_covers"]["items"][0]["can_retry_cover"] is True
-    assert data["total_count"] == 7
+    assert data["total_count"] == 8
     assert data["failed_jobs"]["count"] == 1
     assert data["failed_jobs"]["items"][0]["book_title"] == "Refresh Me"
     assert data["failed_refreshes"]["count"] == 1
     assert data["stale_audiobooks"]["count"] == 1
     assert "Generated audiobook" in data["stale_audiobooks"]["items"][0]["detail"]
-    assert "Human edition" in data["stale_audiobooks"]["items"][0]["detail"]
+    # A human edition being rematched is progress, not something to fix.
+    assert "Human edition" not in data["stale_audiobooks"]["items"][0]["detail"]
+    assert data["audiobook_problems"]["count"] == 1
+    assert data["audiobook_problems"]["items"][0]["title"] == "Coverless"
+    assert data["audiobook_problems"]["items"][0]["detail"] == "Broken import: Import failed"
     assert data["metadata_proposals"]["count"] == 1
     assert data["broken_files"]["count"] == 2
     assert data["missing_covers"]["count"] == 1
