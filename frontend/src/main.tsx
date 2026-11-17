@@ -10,8 +10,10 @@ import {
   consumeStaleChunkMarker,
   reloadAfterStaleChunk,
 } from "./lib/staleChunk";
+import { consumeSignInReloadMarker } from "./lib/authSession";
 
 consumeStaleChunkMarker();
+consumeSignInReloadMarker();
 
 // Apply the saved theme before the first render to avoid a flash of the
 // wrong colors.

@@ -1,4 +1,6 @@
 import createClient from "openapi-fetch";
+import type { Middleware } from "openapi-fetch";
+import { reportUnauthorized } from "../lib/authSession";
 import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
@@ -39,7 +41,40 @@ export const api = createClient<paths>({
   baseUrl:
     typeof window === "undefined" ? "http://localhost" : window.location.origin,
   fetch: (request) => globalThis.fetch(request),
+  // The API never redirects. A forward-auth proxy whose session expired does,
+  // to its login page on another origin, and a followed redirect would fail
+  // as an indistinguishable network error. Stop at the redirect instead so
+  // signInMiddleware can recognize it.
+  redirect: "manual",
 });
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+export const SIGN_IN_EXPIRED_MESSAGE =
+  "Your sign-in expired. Reload the page to sign in again.";
+
+// Reports refused sign-ins for every API call, whether or not it runs through
+// React Query, and turns a redirect into a plain 401 so callers see one kind
+// of failure: not retried, with a message that says what happened.
+export const signInMiddleware: Middleware = {
+  onResponse({ response, schemaPath }) {
+    if (
+      response.type === "opaqueredirect" ||
+      REDIRECT_STATUSES.has(response.status)
+    ) {
+      reportUnauthorized("redirected");
+      return new Response(JSON.stringify({ detail: SIGN_IN_EXPIRED_MESSAGE }), {
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    // A wrong password at sign-in is a 401 too, but not a lost session.
+    if (response.status === 401 && schemaPath !== "/api/auth/login")
+      reportUnauthorized("unauthorized");
+    return undefined;
+  },
+};
+api.use(signInMiddleware);
 
 export type RequestOptions = { signal?: AbortSignal | undefined };
 

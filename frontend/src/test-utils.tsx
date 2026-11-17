@@ -31,8 +31,7 @@ export const jsonResponse = (body: unknown, status = 200) => ({
   json: () => Promise.resolve(body),
 });
 
-// The app's client (with its global 401 handling), minus retries so failures
-// surface immediately.
+// The app's client, minus retries so failures surface immediately.
 const createTestQueryClient = () => {
   const client = createQueryClient();
   client.setDefaultOptions({ queries: { retry: false } });
