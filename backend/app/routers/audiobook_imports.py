@@ -350,20 +350,7 @@ async def rebuild_all_human_audiobooks(
         if not available or (not force and not _needs_human_audiobook_rebuild(edition)):
             skipped += 1
             continue
-        await queue_processing_job(
-            db=db,
-            job_type="rebuild_imported_audiobook",
-            book_id=edition.book_id,
-            target_type="imported_audiobook",
-            target_id=edition.id,
-            target_content_version=edition.matched_content_version,
-            payload=RebuildImportedAudiobookPayload(pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION, force=force),
-            dedupe_key=(
-                f"rebuild_imported_audiobook:imported_audiobook:{edition.id}:" f"v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
-            ),
-            progress_detail=f"Queued human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}",
-        )
-        edition.progress_detail = "Human audiobook rebuild queued"
+        await _queue_rebuild(edition, db, force=force)
         queued += 1
     await db.commit()
     return {
@@ -371,6 +358,50 @@ async def rebuild_all_human_audiobooks(
         "skipped_count": skipped,
         "pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
     }
+
+
+async def _queue_rebuild(edition: ImportedAudiobook, db: AsyncSession, *, force: bool) -> None:
+    await queue_processing_job(
+        db=db,
+        job_type="rebuild_imported_audiobook",
+        book_id=edition.book_id,
+        target_type="imported_audiobook",
+        target_id=edition.id,
+        target_content_version=edition.matched_content_version,
+        payload=RebuildImportedAudiobookPayload(pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION, force=force),
+        dedupe_key=(
+            f"rebuild_imported_audiobook:imported_audiobook:{edition.id}:" f"v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
+        ),
+        progress_detail=f"Queued human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}",
+    )
+    edition.progress_detail = "Human audiobook rebuild queued"
+
+
+@router.post(
+    "/api/imported-audiobooks/{edition_id}/rebuild",
+    response_model=ImportedAudiobookResponse,
+)
+async def rebuild_imported_audiobook(
+    edition_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ImportedAudiobookResponse:
+    """Bring one ready edition up to the current human-audiobook pipeline.
+
+    Rebuilding keeps manual track matches, refreshes chapter audio from the
+    retained source files when needed, and queues Whisper again for editions
+    that had it.
+    """
+    edition = await db.get(ImportedAudiobook, edition_id)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Imported audiobook not found")
+    await get_book_or_404(edition.book_id, db)
+    if edition.status != ImportedAudiobookStatus.READY.value:
+        raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not ready to rebuild")
+    if not await _track_count(edition, db):
+        raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
+    await _queue_rebuild(edition, db, force=True)
+    await db.commit()
+    return await imported_audiobook_response(edition, db)
 
 
 @router.post(

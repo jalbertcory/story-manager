@@ -274,6 +274,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audiobooks/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Audiobook Overview
+         * @description Every book with human or AI audio, its sources' states, and the next step for each.
+         */
+        get: operations["get_audiobook_overview_api_audiobooks_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audiobooks/upload": {
         parameters: {
             query?: never;
@@ -1447,6 +1467,30 @@ export interface paths {
         put?: never;
         /** Align Imported Audiobook */
         post: operations["align_imported_audiobook_api_imported_audiobooks__edition_id__align_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/imported-audiobooks/{edition_id}/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild Imported Audiobook
+         * @description Bring one ready edition up to the current human-audiobook pipeline.
+         *
+         *     Rebuilding keeps manual track matches, refreshes chapter audio from the
+         *     retained source files when needed, and queues Whisper again for editions
+         *     that had it.
+         */
+        post: operations["rebuild_imported_audiobook_api_imported_audiobooks__edition_id__rebuild_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2986,6 +3030,7 @@ export interface components {
         };
         /** AttentionDashboard */
         AttentionDashboard: {
+            audiobook_problems: components["schemas"]["AttentionBookCategory"];
             broken_files: components["schemas"]["AttentionFileCategory"];
             failed_jobs: components["schemas"]["AttentionJobCategory"];
             failed_refreshes: components["schemas"]["AttentionBookCategory"];
@@ -3118,6 +3163,89 @@ export interface components {
             possible_titles: string[];
             /** Series Name */
             series_name: string;
+        };
+        /** AudiobookOverviewBook */
+        AudiobookOverviewBook: {
+            /**
+             * Audio Kind
+             * @enum {string}
+             */
+            audio_kind: "human" | "tts" | "both";
+            /** Author */
+            author: string;
+            /** Book Id */
+            book_id: number;
+            /** Has Epub */
+            has_epub: boolean;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Sources */
+            sources: components["schemas"]["AudiobookOverviewSource"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            /** Title */
+            title: string;
+        };
+        /** AudiobookOverviewCount */
+        AudiobookOverviewCount: {
+            /** Count */
+            count: number;
+            /** Label */
+            label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+        };
+        /** AudiobookOverviewResponse */
+        AudiobookOverviewResponse: {
+            /** Attention Count */
+            attention_count: number;
+            /** Books */
+            books: components["schemas"]["AudiobookOverviewBook"][];
+            /** Counts */
+            counts: components["schemas"]["AudiobookOverviewCount"][];
+            /** Total Count */
+            total_count: number;
+            /** Transcription Configured */
+            transcription_configured: boolean;
+        };
+        /** AudiobookOverviewSource */
+        AudiobookOverviewSource: {
+            /** Alignment Method */
+            alignment_method: string | null;
+            /** Edition Id */
+            edition_id: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "human" | "tts";
+            /** Name */
+            name: string;
+            /** Next Action */
+            next_action: ("retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
+            /** Next Action Label */
+            next_action_label: string | null;
+            /** Progress Current */
+            progress_current: number;
+            /** Progress Total */
+            progress_total: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            /** State Detail */
+            state_detail: string | null;
+            /** State Label */
+            state_label: string;
+            /** Updated At */
+            updated_at: string | null;
         };
         /** AudiobookPipelinePayload */
         AudiobookPipelinePayload: {
@@ -4192,6 +4320,10 @@ export interface components {
             needs_rebuild: boolean;
             /** Needs Upgrade */
             needs_upgrade: boolean;
+            /** Next Action */
+            next_action: ("retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
+            /** Next Action Label */
+            next_action_label: string | null;
             /** Original Filenames */
             original_filenames: string[];
             /** Pipeline Version */
@@ -4208,6 +4340,15 @@ export interface components {
             source_size_bytes: number | null;
             /** Source Type */
             source_type: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            /** State Detail */
+            state_detail: string | null;
+            /** State Label */
+            state_label: string;
             /** Status */
             status: string;
             /** Tracks */
@@ -6336,6 +6477,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TTSTest"];
+                };
+            };
+        };
+    };
+    get_audiobook_overview_api_audiobooks_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudiobookOverviewResponse"];
                 };
             };
         };
@@ -8560,6 +8721,37 @@ export interface operations {
         };
     };
     align_imported_audiobook_api_imported_audiobooks__edition_id__align_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                edition_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportedAudiobookResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_imported_audiobook_api_imported_audiobooks__edition_id__rebuild_post: {
         parameters: {
             query?: never;
             header?: never;

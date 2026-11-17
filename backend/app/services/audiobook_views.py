@@ -29,6 +29,7 @@ from .audiobook_import import (
 from ..lifecycle import ImportedAudiobookStatus
 from .library_paths import resolve_library_file
 from .audiobook_match_validation import imported_matching_error, require_safe_matches
+from .audiobook_status import human_edition_status, transcription_configured
 
 # Import and rematch jobs write tracks and matches one at a time while the UI
 # polls. Judging that partial state would flag every running job as needing
@@ -95,6 +96,7 @@ async def imported_audiobook_response(
     db: AsyncSession,
     *,
     is_reader_default: bool = False,
+    transcription_ready: bool | None = None,
 ) -> ImportedAudiobookResponse:
     result = await db.execute(
         select(ImportedAudiobookTrack)
@@ -132,6 +134,16 @@ async def imported_audiobook_response(
         or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
         or bool(edition.alignment_error)
     )
+    book = await db.get(Book, edition.book_id)
+    if transcription_ready is None:
+        transcription_ready = await transcription_configured(db)
+    state = human_edition_status(
+        edition,
+        has_epub=book is not None and bool(book.current_path),
+        content_version=(book.content_version if book is not None else None) or 1,
+        matching_error=matching_error,
+        transcription_configured=transcription_ready,
+    )
     return ImportedAudiobookResponse(
         id=edition.id,
         book_id=edition.book_id,
@@ -158,6 +170,11 @@ async def imported_audiobook_response(
         matching_error=matching_error,
         created_at=edition.created_at,
         is_reader_default=is_reader_default and matching_error is None,
+        state=state.state,
+        state_label=state.label,
+        state_detail=state.detail,
+        next_action=state.next_action,
+        next_action_label=state.action_label,
         tracks=[
             ImportedTrackResponse(
                 id=track.id,
@@ -201,7 +218,10 @@ async def list_imported_audiobook_responses(book_id: int, db: AsyncSession) -> l
         .order_by(ImportedAudiobook.created_at.desc(), ImportedAudiobook.id.desc())
     )
     editions = list(result.scalars().all())
-    responses = [await imported_audiobook_response(edition, db) for edition in editions]
+    transcription_ready = await transcription_configured(db)
+    responses = [
+        await imported_audiobook_response(edition, db, transcription_ready=transcription_ready) for edition in editions
+    ]
     for response in responses:
         if response.status == "ready" and response.matching_error is None:
             response.is_reader_default = True

@@ -177,7 +177,7 @@ function ImportedEditionReader({
     return (
       <p className="empty-state">
         This edition's imported audio is intact, but it has no synchronized book
-        text. Use Rematch to Book Text in Sources to restore it.
+        text. Use Rematch to book text in Sources to restore it.
       </p>
     );
   }

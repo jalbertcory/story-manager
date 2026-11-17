@@ -254,6 +254,11 @@ describe("AudiobookPipeline", () => {
                 name: "Newest narration",
                 source_type: "upload",
                 status: "ready",
+                state: "ready_estimated",
+                state_label: "Human audio",
+                state_detail: null,
+                next_action: null,
+                next_action_label: null,
                 duration_ms: 3_600_000,
                 created_at: "2026-07-02T15:30:00Z",
                 is_reader_default: true,
@@ -272,6 +277,11 @@ describe("AudiobookPipeline", () => {
                 name: "Older narration",
                 source_type: "upload",
                 status: "ready",
+                state: "ready_estimated",
+                state_label: "Human audio",
+                state_detail: null,
+                next_action: null,
+                next_action_label: null,
                 duration_ms: 3_600_000,
                 created_at: "2026-07-01T15:30:00Z",
                 is_reader_default: false,
@@ -337,6 +347,12 @@ describe("AudiobookPipeline", () => {
       "2026-07-01T15:30:00Z",
     );
 
+    expect(within(newestCard).getByText("Human audio")).toHaveClass(
+      "audio-state--neutral",
+    );
+    fireEvent.click(
+      within(newestCard).getByText("Track matching and more options"),
+    );
     fireEvent.click(
       within(newestCard).getByRole("button", {
         name: "Rematch Newest narration to book text",

@@ -140,6 +140,157 @@
   color: var(--text-muted);
 }
 
+/* ─── Audiobook states ─────────────────────────────────── */
+.audio-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.audio-state--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.audio-state--warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.audio-state--active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.audio-state--success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.audio-overview-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.audio-overview-chip {
+  min-height: 1.95rem;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+}
+
+.audio-overview-chip span {
+  margin-left: 0.3rem;
+  color: var(--text-muted);
+}
+
+.audio-overview-chip[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.audio-overview-search {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 24rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.audio-overview-list,
+.audio-overview-sources {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audio-overview-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.audio-overview-book {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.audio-overview-book:last-child {
+  border-bottom: 0;
+}
+
+.audio-overview-title {
+  display: grid;
+  align-content: start;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.audio-overview-title a {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.audio-overview-title span,
+.audio-overview-source small {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.audio-overview-sources {
+  gap: 0.6rem;
+}
+
+.audio-overview-source {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.audio-overview-source-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.audio-overview-source-name {
+  overflow-wrap: anywhere;
+}
+
+.audio-overview-source progress {
+  width: 100%;
+  max-width: 20rem;
+  accent-color: var(--accent);
+}
+
+.audio-overview-link {
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .audio-overview-book {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+}
+
 /* ─── Needs Attention dashboard ─────────────────────────── */
 .attention-page {
   display: grid;
@@ -1618,6 +1769,17 @@
 
 .imported-track-list small {
   color: var(--text-muted);
+}
+
+.imported-edition-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.imported-edition-card details > .imported-edition-actions,
+.imported-edition-card details > .hint {
+  margin-top: 0.75rem;
 }
 
 .imported-edition-delete {

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
@@ -14,6 +13,7 @@ from .. import crud, models, schemas
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..crud.metadata import actionable_metadata_proposal_conditions
+from ..services.audiobook_status import BLOCKING_STATES, audiobook_overview
 from ..services.library_health import LibraryFileIssue, find_missing_covers, inspect_library_files
 from ..services.series_tracking import compute_series_gaps
 
@@ -106,36 +106,47 @@ async def _failed_refreshes(db: AsyncSession, limit: int) -> schemas.AttentionBo
 
 
 async def _stale_audiobooks(db: AsyncSession, limit: int) -> schemas.AttentionBookCategory:
-    ai_query = select(models.Book).where(
-        models.Book.deleted_at.is_(None),
-        models.Book.audiobook_enabled.is_(True),
-        models.Book.audiobook_publication_state == "stale",
-    )
-    human_query = (
-        select(models.Book, models.ImportedAudiobook)
-        .join(models.ImportedAudiobook, models.ImportedAudiobook.book_id == models.Book.id)
-        .where(models.ImportedAudiobook.status == "stale", models.Book.deleted_at.is_(None))
-    )
+    """Generated narration whose book text changed since it was published.
 
-    reasons: dict[int, list[str]] = defaultdict(list)
-    books_by_id: dict[int, models.Book] = {}
-    for book in (await db.execute(ai_query)).scalars().all():
-        books_by_id[book.id] = book
-        reasons[book.id].append("Generated audiobook")
-    for book, edition in (await db.execute(human_query)).all():
-        books_by_id[book.id] = book
-        reasons[book.id].append(edition.name or "Imported audiobook")
-
-    ordered = sorted(
-        books_by_id.values(), key=lambda book: (book.updated_at is not None, book.updated_at, book.id), reverse=True
+    Human editions are rematched automatically when the text changes, so they
+    are progress rather than a problem; failures surface in audiobook problems.
+    """
+    query = (
+        select(models.Book)
+        .where(
+            models.Book.deleted_at.is_(None),
+            models.Book.audiobook_enabled.is_(True),
+            models.Book.audiobook_publication_state == "stale",
+        )
+        .order_by(models.Book.updated_at.desc(), models.Book.id.desc())
     )
+    count = await db.scalar(select(func.count()).select_from(query.subquery()))
+    books = list((await db.execute(query.limit(limit))).scalars().all())
     return schemas.AttentionBookCategory(
-        count=len(ordered),
+        count=count or 0,
         items=[
-            _book_item(
-                book, "audiobook_stale", f"{', '.join(reasons[book.id])} needs updating to match the current book text."
+            _book_item(book, "audiobook_stale", "Generated audiobook needs updating to match the current book text.")
+            for book in books
+        ],
+    )
+
+
+async def _audiobook_problems(db: AsyncSession, limit: int) -> schemas.AttentionBookCategory:
+    """Books whose audio cannot be played along with the text until the owner acts."""
+    overview = await audiobook_overview(db)
+    blocked = [(row, [source for source in row.sources if source.state in BLOCKING_STATES]) for row in overview.books]
+    blocked = [(row, sources) for row, sources in blocked if sources]
+    return schemas.AttentionBookCategory(
+        count=len(blocked),
+        items=[
+            schemas.AttentionBookItem(
+                book_id=row.book_id,
+                title=row.title,
+                author=row.author,
+                issue="audiobook_blocked",
+                detail="; ".join(f"{source.name}: {source.state_label}" for source in sources),
             )
-            for book in ordered[:limit]
+            for row, sources in blocked[:limit]
         ],
     )
 
@@ -256,6 +267,7 @@ async def get_attention_dashboard(
     failed_jobs = await _failed_jobs(db, limit)
     failed_refreshes = await _failed_refreshes(db, limit)
     stale_audiobooks = await _stale_audiobooks(db, limit)
+    audiobook_problems = await _audiobook_problems(db, limit)
     metadata_proposals = await _metadata_proposals(db, limit)
     series_gaps = await _series_gaps(db, limit)
     series_releases = await _series_releases(db, limit)
@@ -273,6 +285,7 @@ async def get_attention_dashboard(
             failed_jobs,
             failed_refreshes,
             stale_audiobooks,
+            audiobook_problems,
             metadata_proposals,
             broken_category,
             cover_category,
@@ -285,6 +298,7 @@ async def get_attention_dashboard(
         failed_jobs=failed_jobs,
         failed_refreshes=failed_refreshes,
         stale_audiobooks=stale_audiobooks,
+        audiobook_problems=audiobook_problems,
         metadata_proposals=metadata_proposals,
         broken_files=broken_category,
         missing_covers=cover_category,

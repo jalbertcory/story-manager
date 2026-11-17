@@ -22,6 +22,7 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
     failed_jobs: emptyCategory,
     failed_refreshes: emptyCategory,
     stale_audiobooks: emptyCategory,
+    audiobook_problems: emptyCategory,
     metadata_proposals: emptyCategory,
     broken_files: emptyCategory,
     missing_covers: emptyCategory,
@@ -91,7 +92,7 @@ describe("AttentionDashboard", () => {
     renderDashboard({ data: dashboard() });
 
     expect(screen.getByText("Your library looks healthy.")).toBeInTheDocument();
-    expect(screen.getAllByText("No attention needed")).toHaveLength(8);
+    expect(screen.getAllByText("No attention needed")).toHaveLength(9);
   });
 
   it("shows actionable items and their destinations", () => {
@@ -121,6 +122,18 @@ describe("AttentionDashboard", () => {
           }),
         ],
       },
+      audiobook_problems: {
+        count: 1,
+        items: [
+          bookItem({
+            book_id: 5,
+            title: "Broken Audio",
+            author: "Reader",
+            issue: "audiobook_blocked",
+            detail: "Libation: Import failed",
+          }),
+        ],
+      },
       metadata_proposals: {
         count: 1,
         items: [
@@ -146,6 +159,14 @@ describe("AttentionDashboard", () => {
       "href",
       "/books/3/audiobooks?tab=sources",
     );
+    expect(screen.getByRole("link", { name: "Broken Audio" })).toHaveAttribute(
+      "href",
+      "/books/5/audiobooks?tab=sources",
+    );
+    expect(screen.getByText("Libation: Import failed")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("link", { name: "View audiobooks" })[0],
+    ).toHaveAttribute("href", "/activity/audiobooks?state=attention");
     expect(
       screen.getByRole("link", { name: "Review metadata" }),
     ).toHaveAttribute("href", "/review");

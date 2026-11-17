@@ -83,6 +83,11 @@ export const SECTION_NAV = {
   activity: [
     { key: "attention", label: "Needs attention", path: "/activity" },
     {
+      key: "audiobooks",
+      label: "Audiobooks",
+      path: "/activity/audiobooks",
+    },
+    {
       key: "processing",
       label: "Processing jobs",
       path: "/activity/processing",
