@@ -179,6 +179,7 @@ test("retries from Needs Attention and displays a failed recovery without leavin
         missing_covers: empty,
         broken_files: empty,
         stale_audiobooks: empty,
+        audiobook_problems: empty,
         metadata_proposals: empty,
         series_gaps: empty,
         series_releases: empty,
