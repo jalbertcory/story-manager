@@ -187,7 +187,7 @@ lint-ui:
 
 audit-ui:
 	cd frontend && npm audit --omit=dev --audit-level=moderate
-	cd frontend && npm audit --audit-level=high
+	cd frontend && node --test scripts/audit-dev.test.mjs && node scripts/audit-dev.mjs
 
 audit-python:
 	@set -e; site_packages="$$($(UV_RUN) python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
