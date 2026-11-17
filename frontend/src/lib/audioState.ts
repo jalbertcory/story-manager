@@ -10,6 +10,7 @@ export type AudioNextAction = NonNullable<
 type Tone = "danger" | "warning" | "active" | "success" | "neutral";
 
 const TONES: Record<AudioState, Tone> = {
+  job_failed: "danger",
   import_failed: "danger",
   tts_failed: "danger",
   needs_review: "danger",
@@ -42,6 +43,7 @@ export function audioStateClass(state: AudioState) {
 
 // Actions that queue a job for one human edition, as opposed to links.
 export const EDITION_JOB_ACTIONS: ReadonlySet<AudioNextAction> = new Set([
+  "retry_processing",
   "retry_import",
   "rebuild",
   "retry_whisper",

@@ -142,7 +142,6 @@ function AudiobookPipeline({
 }) {
   const { data: lifecycleDefinitions } = useLifecycleDefinitions();
   const pipelineLifecycle = lifecycleDefinitions?.audiobook_pipeline;
-  const importedLifecycle = lifecycleDefinitions?.imported_audiobook;
   const previewLifecycle = lifecycleDefinitions?.chapter_preview;
   const sentenceLifecycle = lifecycleDefinitions?.sentence;
   const stateLabels = Object.fromEntries<string>(
@@ -166,7 +165,6 @@ function AudiobookPipeline({
   const pausedPipelineStatuses = new Set(
     pipelineLifecycle?.groups?.paused ?? [],
   );
-  const activeImportStatuses = new Set(importedLifecycle?.active_states ?? []);
   const activePreviewStatuses = new Set(previewLifecycle?.active_states ?? []);
   const playableSentenceStatuses =
     sentenceLifecycle?.groups?.audio_playable ?? [];
@@ -206,7 +204,7 @@ function AudiobookPipeline({
     queryFn: ({ signal }) => getImportedAudiobooks(bookId, { signal }),
     refetchInterval: ({ state }) =>
       Array.isArray(state.data) &&
-      state.data.some((edition) => activeImportStatuses.has(edition.status))
+      state.data.some((edition) => edition.state === "working")
         ? ACTIVE_POLL_MS
         : false,
   });

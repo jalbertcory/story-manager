@@ -11,11 +11,12 @@ source the same way. Within each function the first matching rule wins.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
@@ -41,6 +42,7 @@ from .transcription_providers import transcription_provider_name
 
 # Most urgent first: the overview sorts and rolls books up by this order.
 STATE_ORDER: tuple[AudioState, ...] = (
+    "job_failed",
     "import_failed",
     "tts_failed",
     "needs_review",
@@ -59,6 +61,7 @@ STATE_ORDER: tuple[AudioState, ...] = (
 )
 # Names for whole groups of sources, used by the overview's filters.
 STATE_LABELS: dict[AudioState, str] = {
+    "job_failed": "Audio processing stopped",
     "import_failed": "Import failed",
     "tts_failed": "AI narration failed",
     "needs_review": "Needs match review",
@@ -77,10 +80,10 @@ STATE_LABELS: dict[AudioState, str] = {
 }
 # Something is wrong or out of date and only the owner can move it forward.
 ATTENTION_STATES: frozenset[AudioState] = frozenset(
-    {"import_failed", "tts_failed", "needs_review", "whisper_failed", "outdated", "tts_outdated"}
+    {"job_failed", "import_failed", "tts_failed", "needs_review", "whisper_failed", "outdated", "tts_outdated"}
 )
 # Listening along with the text is blocked until the owner acts.
-BLOCKING_STATES: frozenset[AudioState] = frozenset({"import_failed", "tts_failed", "needs_review"})
+BLOCKING_STATES: frozenset[AudioState] = frozenset({"job_failed", "import_failed", "tts_failed", "needs_review"})
 
 _WORKING_LABELS = {
     ImportedAudiobookStatus.QUEUED.value: "Queued",
@@ -98,6 +101,48 @@ _TTS_PHASES = frozenset(
     }
 )
 _ACTIVE_JOB_STATUSES = (ProcessingJobStatus.QUEUED.value, ProcessingJobStatus.RUNNING.value)
+_HUMAN_JOB_LABELS = {
+    "import_audiobook": "Importing",
+    "rematch_imported_audiobook": "Rematching",
+    "rebuild_imported_audiobook": "Rebuilding",
+    "upgrade_imported_audiobook": "Rebuilding chapter files",
+    "align_imported_audiobook": "Running Whisper",
+}
+
+
+async def human_edition_jobs(editions: Sequence[ImportedAudiobook], db: AsyncSession) -> dict[int, ProcessingJob]:
+    """Load one relevant job per edition, preferring active work to history.
+
+    Include completed jobs so a later success supersedes an earlier failure.
+    Rank in SQL to keep both the query count and returned history bounded.
+    """
+    if not editions:
+        return {}
+    ranked = (
+        select(
+            ProcessingJob.id,
+            func.row_number()
+            .over(
+                partition_by=ProcessingJob.target_id,
+                order_by=(
+                    case((ProcessingJob.status.in_(_ACTIVE_JOB_STATUSES), 0), else_=1),
+                    ProcessingJob.created_at.desc(),
+                    ProcessingJob.id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(
+            ProcessingJob.target_type == "imported_audiobook",
+            ProcessingJob.target_id.in_([edition.id for edition in editions]),
+            ProcessingJob.job_type.in_(_HUMAN_JOB_LABELS),
+        )
+        .subquery()
+    )
+    jobs = (
+        await db.scalars(select(ProcessingJob).join(ranked, ranked.c.id == ProcessingJob.id).where(ranked.c.rank == 1))
+    ).all()
+    return {job.target_id: job for job in jobs if job.target_id is not None}
 
 
 @dataclass(frozen=True)
@@ -142,6 +187,7 @@ def human_edition_status(
     content_version: int,
     matching_error: str | None,
     transcription_configured: bool,
+    job: ProcessingJob | None = None,
 ) -> AudioStatus:
     """Collapse a human edition's raw fields into one state and next action.
 
@@ -149,6 +195,24 @@ def human_edition_status(
     or 1``, as imports record it). ``matching_error`` is the live
     chapter-matching check, which only matters once the edition is ready.
     """
+    if job is not None and job.status in _ACTIVE_JOB_STATUSES:
+        label = "Queued" if job.status == ProcessingJobStatus.QUEUED.value else _HUMAN_JOB_LABELS[job.job_type]
+        return AudioStatus("working", label, job.progress_detail or edition.progress_detail)
+    if (
+        job is not None
+        and job.status in (ProcessingJobStatus.ERROR.value, ProcessingJobStatus.CANCELED.value)
+        # Match-safety failures still need manual review, not a blind retry.
+        and not is_match_review_error(edition.error)
+        and not is_match_review_error(matching_error)
+        and not is_match_review_error(job.error)
+    ):
+        return AudioStatus(
+            "job_failed",
+            "Processing canceled" if job.status == ProcessingJobStatus.CANCELED.value else "Processing failed",
+            job.error or job.progress_detail or "Audio processing stopped before it finished.",
+            "retry_processing",
+            "Retry processing",
+        )
     status = edition.status
     if status in _WORKING_LABELS:
         return AudioStatus("working", _WORKING_LABELS[status], edition.progress_detail)
@@ -253,6 +317,7 @@ def _source(
     progress_current: int,
     progress_total: int,
     updated_at: datetime | None,
+    job: ProcessingJob | None = None,
 ) -> AudiobookOverviewSource:
     return AudiobookOverviewSource(
         kind=kind,
@@ -263,9 +328,12 @@ def _source(
         state_detail=status.detail,
         next_action=status.next_action,
         next_action_label=status.action_label,
+        processing_job_id=job.id if job is not None else None,
         alignment_method=alignment_method,
-        progress_current=progress_current,
-        progress_total=progress_total,
+        progress_current=job.progress_current if job is not None and status.state == "working" else progress_current,
+        progress_total=(
+            (job.progress_total or progress_total) if job is not None and status.state == "working" else progress_total
+        ),
         updated_at=updated_at,
     )
 
@@ -297,7 +365,16 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
             )
         ).all()
     }
-    matching = await imported_matching_errors([edition for edition in editions if needs_match_check(edition)], db)
+    human_jobs = await human_edition_jobs(editions, db)
+    matching = await imported_matching_errors(
+        [
+            edition
+            for edition in editions
+            if needs_match_check(edition)
+            and not ((job := human_jobs.get(edition.id)) is not None and job.status in _ACTIVE_JOB_STATUSES)
+        ],
+        db,
+    )
     active_tts = set(
         (
             await db.scalars(
@@ -323,6 +400,7 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
             content_version=book.content_version or 1,
             matching_error=matching.get(edition.id),
             transcription_configured=configured,
+            job=human_jobs.get(edition.id),
         )
         sources[book.id].append(
             _source(
@@ -334,6 +412,7 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
                 progress_current=edition.progress_current or 0,
                 progress_total=edition.progress_total or 0,
                 updated_at=edition.updated_at,
+                job=human_jobs.get(edition.id),
             )
         )
     for book in books.values():

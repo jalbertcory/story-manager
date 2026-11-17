@@ -29,7 +29,7 @@ from .audiobook_import import (
 from ..lifecycle import ImportedAudiobookStatus
 from .library_paths import resolve_library_file
 from .audiobook_match_validation import imported_matching_error, require_safe_matches
-from .audiobook_status import human_edition_status, transcription_configured
+from .audiobook_status import human_edition_jobs, human_edition_status, transcription_configured
 
 # Import and rematch jobs write tracks and matches one at a time while the UI
 # polls. Judging that partial state would flag every running job as needing
@@ -104,6 +104,8 @@ async def imported_audiobook_response(
         .order_by(ImportedAudiobookTrack.sequence_order)
     )
     tracks = list(result.scalars().all())
+    job = (await human_edition_jobs([edition], db)).get(edition.id)
+    job_active = job is not None and job.status in ("queued", "running")
     matching_error = (
         await imported_matching_error(edition, db, tracks=tracks)
         if edition.status not in _MATCHES_IN_PROGRESS and (tracks or edition.status == "ready")
@@ -143,6 +145,7 @@ async def imported_audiobook_response(
         content_version=(book.content_version if book is not None else None) or 1,
         matching_error=matching_error,
         transcription_configured=transcription_ready,
+        job=job,
     )
     return ImportedAudiobookResponse(
         id=edition.id,
@@ -162,8 +165,12 @@ async def imported_audiobook_response(
         pipeline_version=edition.pipeline_version or 0,
         needs_upgrade=needs_asset_upgrade,
         needs_rebuild=needs_rebuild,
-        progress_current=edition.progress_current or 0,
-        progress_total=edition.progress_total or 0,
+        progress_current=job.progress_current if job is not None and job_active else edition.progress_current or 0,
+        progress_total=(
+            (job.progress_total or edition.progress_total or 0)
+            if job is not None and job_active
+            else edition.progress_total or 0
+        ),
         progress_detail=edition.progress_detail,
         error=edition.error,
         alignment_error=edition.alignment_error,
@@ -175,6 +182,7 @@ async def imported_audiobook_response(
         state_detail=state.detail,
         next_action=state.next_action,
         next_action_label=state.action_label,
+        processing_job_id=job.id if job is not None else None,
         tracks=[
             ImportedTrackResponse(
                 id=track.id,

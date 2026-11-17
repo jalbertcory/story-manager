@@ -3185,7 +3185,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            state: "working" | "job_failed" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
             /** Title */
             title: string;
         };
@@ -3199,7 +3199,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            state: "working" | "job_failed" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
         };
         /** AudiobookOverviewResponse */
         AudiobookOverviewResponse: {
@@ -3228,9 +3228,11 @@ export interface components {
             /** Name */
             name: string;
             /** Next Action */
-            next_action: ("retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
+            next_action: ("retry_processing" | "retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
             /** Next Action Label */
             next_action_label: string | null;
+            /** Processing Job Id */
+            processing_job_id: number | null;
             /** Progress Current */
             progress_current: number;
             /** Progress Total */
@@ -3239,7 +3241,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            state: "working" | "job_failed" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
             /** State Detail */
             state_detail: string | null;
             /** State Label */
@@ -4321,13 +4323,15 @@ export interface components {
             /** Needs Upgrade */
             needs_upgrade: boolean;
             /** Next Action */
-            next_action: ("retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
+            next_action: ("retry_processing" | "retry_import" | "review_matches" | "rebuild" | "retry_whisper" | "improve_with_whisper" | "set_up_transcription" | "open_generation") | null;
             /** Next Action Label */
             next_action_label: string | null;
             /** Original Filenames */
             original_filenames: string[];
             /** Pipeline Version */
             pipeline_version: number;
+            /** Processing Job Id */
+            processing_job_id: number | null;
             /** Progress Current */
             progress_current: number;
             /** Progress Detail */
@@ -4344,7 +4348,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "working" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
+            state: "working" | "job_failed" | "import_failed" | "needs_review" | "outdated" | "whisper_failed" | "ready_whisper" | "ready_estimated" | "audio_only" | "tts_failed" | "tts_running" | "tts_paused" | "tts_outdated" | "tts_partial" | "tts_complete" | "tts_not_started";
             /** State Detail */
             state_detail: string | null;
             /** State Label */

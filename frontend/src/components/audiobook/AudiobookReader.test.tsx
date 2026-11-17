@@ -99,6 +99,7 @@ const editionFixture = (
   state_detail: null,
   next_action: null,
   next_action_label: null,
+  processing_job_id: null,
   tracks: [],
   ...overrides,
 });
@@ -106,6 +107,37 @@ const editionFixture = (
 describe("AudiobookReader", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("offers a failed rematch retry even when the lifecycle still says importing", async () => {
+    const posts: string[] = [];
+    mockFetch((url, init) => {
+      if (init?.method === "POST") posts.push(url);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    renderWithClient(
+      <AudiobookSources
+        bookId={11}
+        imports={[
+          editionFixture({
+            status: "importing",
+            state: "job_failed",
+            state_label: "Processing failed",
+            state_detail: "EPUB missing",
+            processing_job_id: 72,
+            next_action: "retry_processing",
+            next_action_label: "Retry processing",
+            tracks: [trackFixture(1)],
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("EPUB missing");
+    fireEvent.click(screen.getByRole("button", { name: "Retry processing" }));
+    await screen.findByText("Human audiobook processing retry queued.", {
+      exact: false,
+    });
+    expect(posts).toEqual(["/api/processing/jobs/72/retry"]);
   });
 
   it("never skips an unmatched track between synchronized tracks", () => {

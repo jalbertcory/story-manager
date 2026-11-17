@@ -17,6 +17,7 @@ import {
 import { chapterLabel } from "../../lib/audiobook";
 import { audioStateClass, audioStateTone } from "../../lib/audioState";
 import { queryKeys } from "../../lib/queryKeys";
+import { retryProcessingJob } from "../../api/processing";
 
 function durationLabel(durationMs: number | null | undefined) {
   if (!durationMs) return "—";
@@ -79,6 +80,13 @@ function AudiobookSources({
     mutationFn: retryImportedAudiobook,
     onSuccess: () => {
       setJobNotice("Human audiobook import retry queued.");
+      invalidate();
+    },
+  });
+  const retryProcessingMutation = useMutation({
+    mutationFn: retryProcessingJob,
+    onSuccess: () => {
+      setJobNotice("Human audiobook processing retry queued.");
       invalidate();
     },
   });
@@ -231,6 +239,7 @@ function AudiobookSources({
           ).length;
           const tone = audioStateTone(edition.state);
           const next = edition.next_action;
+          const jobId = edition.processing_job_id;
           const isReady = edition.status === "ready";
           const canRematch =
             !audioOnly && !working && edition.tracks.length > 0;
@@ -273,7 +282,16 @@ function AudiobookSources({
           );
           const label = edition.next_action_label ?? "";
           const primaryAction =
-            next === "retry_import" ? (
+            next === "retry_processing" && jobId != null ? (
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={retryProcessingMutation.isPending}
+                onClick={() => retryProcessingMutation.mutate(jobId)}
+              >
+                {retryProcessingMutation.isPending ? "Queueing…" : label}
+              </button>
+            ) : next === "retry_import" ? (
               queueButton(label, retryMutation)
             ) : next === "rebuild" ? (
               queueButton(label, rebuildMutation)
@@ -474,6 +492,7 @@ function AudiobookSources({
         </p>
       )}
       {(retryMutation.isError ||
+        retryProcessingMutation.isError ||
         rebuildMutation.isError ||
         alignMutation.isError ||
         rematchMutation.isError ||
@@ -483,6 +502,7 @@ function AudiobookSources({
         <p className="error" role="alert">
           {(
             retryMutation.error ||
+            retryProcessingMutation.error ||
             rebuildMutation.error ||
             alignMutation.error ||
             rematchMutation.error ||

@@ -16,6 +16,7 @@ import {
 } from "../lib/audioState";
 import type { AudioNextAction } from "../lib/audioState";
 import { queryKeys } from "../lib/queryKeys";
+import { retryProcessingJob } from "../api/processing";
 import { useLocation } from "../lib/router";
 
 type OverviewBook = Schemas["AudiobookOverviewBook"];
@@ -30,7 +31,16 @@ const KIND_LABELS: Record<OverviewBook["audio_kind"], string> = {
   both: "Human and AI narration",
 };
 
-function queueEditionAction(action: AudioNextAction, editionId: number) {
+async function queueEditionAction(
+  action: AudioNextAction,
+  editionId: number,
+  jobId: number | null,
+) {
+  if (action === "retry_processing") {
+    if (jobId == null)
+      throw new Error("The failed processing job is unavailable.");
+    return retryProcessingJob(jobId);
+  }
   if (action === "retry_import") return retryImportedAudiobook(editionId);
   if (action === "rebuild") return rebuildImportedAudiobook(editionId);
   return alignImportedAudiobook(editionId);
@@ -87,6 +97,7 @@ function AudiobookOverview() {
       queueEditionAction(
         source.next_action as AudioNextAction,
         source.edition_id,
+        source.processing_job_id,
       ),
     onSuccess: (_edition, { book, source }) => {
       setNotice(`${source.next_action_label} queued for ${book.title}.`);

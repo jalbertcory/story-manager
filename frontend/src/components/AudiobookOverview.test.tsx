@@ -17,6 +17,7 @@ const source = (overrides: Partial<Source>): Source => ({
   state_detail: null,
   next_action: null,
   next_action_label: null,
+  processing_job_id: null,
   alignment_method: "transcribed",
   progress_current: 0,
   progress_total: 0,
@@ -220,6 +221,47 @@ describe("AudiobookOverview", () => {
     expect(
       await screen.findByRole("link", { name: "Set up transcription" }),
     ).toHaveAttribute("href", "/settings/audio-ai");
+  });
+
+  it("retries the failed rematch job instead of reimporting its audio", async () => {
+    const posts: string[] = [];
+    const data: Overview = {
+      ...overview,
+      books: [
+        {
+          ...overview.books[0]!,
+          state: "job_failed",
+          sources: [
+            source({
+              edition_id: 31,
+              processing_job_id: 72,
+              state: "job_failed",
+              state_label: "Processing failed",
+              state_detail: "EPUB missing",
+              next_action: "retry_processing",
+              next_action_label: "Retry processing",
+            }),
+          ],
+        },
+      ],
+    };
+    mockFetch((url, init) => {
+      if (init?.method === "POST") {
+        posts.push(url);
+        return Promise.resolve(jsonResponse({ id: 72, status: "queued" }));
+      }
+      return Promise.resolve(jsonResponse(data));
+    });
+    renderWithClient(<AudiobookOverview />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Retry processing: Charlie, Libation",
+      }),
+    );
+    await screen.findByText("Retry processing queued for Charlie.", {
+      exact: false,
+    });
+    expect(posts).toEqual(["/api/processing/jobs/72/retry"]);
   });
 
   it("explains an empty library", async () => {

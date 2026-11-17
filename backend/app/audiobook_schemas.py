@@ -18,6 +18,7 @@ from .services.audiobook_reading import ReadingBlock
 # One plain-language state per audio source; see services/audiobook_status.py.
 AudioState = Literal[
     "working",
+    "job_failed",
     "import_failed",
     "needs_review",
     "outdated",
@@ -34,6 +35,7 @@ AudioState = Literal[
     "tts_not_started",
 ]
 AudioNextAction = Literal[
+    "retry_processing",
     "retry_import",
     "review_matches",
     "rebuild",
@@ -313,6 +315,7 @@ class ImportedAudiobookResponse(BaseModel):
     state_detail: Optional[str]
     next_action: Optional[AudioNextAction]
     next_action_label: Optional[str]
+    processing_job_id: Optional[int]
     tracks: list[ImportedTrackResponse]
 
 
@@ -325,6 +328,7 @@ class AudiobookOverviewSource(BaseModel):
     state_detail: Optional[str]
     next_action: Optional[AudioNextAction]
     next_action_label: Optional[str]
+    processing_job_id: Optional[int]
     alignment_method: Optional[str]
     progress_current: int
     progress_total: int

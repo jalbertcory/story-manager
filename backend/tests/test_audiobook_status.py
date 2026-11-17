@@ -1,10 +1,12 @@
 """One state and next step per audiobook source, and the library-wide overview."""
 
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event, select
+from backend.app import crud
 
 from backend.app.models import (
     AudiobookChapter,
@@ -14,8 +16,8 @@ from backend.app.models import (
     ImportedAudiobookTrack,
     ProcessingJob,
 )
-from backend.app.routers import audiobook_imports
-from backend.app.services import audiobook_views
+from backend.app.routers import audiobook_imports, dashboard, processing
+from backend.app.services import audiobook_import, audiobook_views
 from backend.app.services.audiobook_import import CURRENT_DERIVED_FORMAT_VERSION, CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
 from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PREFIX
 from backend.app.services.audiobook_status import audiobook_overview, human_edition_status, tts_status
@@ -207,6 +209,7 @@ async def test_overview_lists_every_audio_source_most_urgent_first(app_client, s
         "state_detail": "Bad file",
         "next_action": "retry_import",
         "next_action_label": "Retry import",
+        "processing_job_id": None,
         "alignment_method": None,
         "progress_current": 0,
         "progress_total": 0,
@@ -292,3 +295,116 @@ async def test_rebuild_one_edition(db):
     jobs = list((await db.scalars(select(ProcessingJob))).all())
     assert [(job.job_type, job.target_id) for job in jobs] == [("rebuild_imported_audiobook", 1)]
     assert jobs[0].payload == {"pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION, "force": True}
+
+
+@pytest.mark.asyncio
+async def test_rebuild_status_tracks_queued_running_and_completed_jobs(db):
+    _matched_book(db, 1, "Rebuild me", method="estimated")
+    await db.commit()
+    edition = await db.get(ImportedAudiobook, 1)
+    edition.pipeline_version = 2
+    await db.commit()
+
+    response = await audiobook_imports.rebuild_imported_audiobook(1, db)
+    job = (await db.scalars(select(ProcessingJob))).one()
+    assert response.status == "ready"  # The rebuild worker requires this lifecycle state.
+    assert (response.state, response.state_label, response.next_action) == ("working", "Queued", None)
+    assert response.processing_job_id == job.id
+    overview = await audiobook_overview(db)
+    assert overview.books[0].state == "working"
+    assert overview.attention_count == 0
+
+    job = await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+    assert job is not None
+    await crud.update_processing_job_progress(db, job.id, current=1, total=3, detail="Rebuilt track 1 of 3")
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    source = (await audiobook_overview(db)).books[0].sources[0]
+    for result in (response, source):
+        assert (result.state, result.state_label, result.next_action) == ("working", "Rebuilding", None)
+        assert (result.progress_current, result.progress_total) == (1, 3)
+        assert result.state_detail == "Rebuilt track 1 of 3"
+
+    edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
+    await db.commit()
+    await crud.complete_processing_job(db, job.id)
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert response.state == "ready_estimated"
+    assert (await audiobook_overview(db)).books[0].state == response.state
+
+
+@pytest.mark.asyncio
+async def test_failed_rematch_offers_retry_of_original_job(db, monkeypatch):
+    _matched_book(db, 1, "Rematch me")
+    await db.commit()
+    await audiobook_imports.rematch_imported_audiobook(1, db)
+    job = (await db.scalars(select(ProcessingJob))).one()
+    job.max_attempts = 1
+    await db.commit()
+    await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+    monkeypatch.setattr(audiobook_import, "ensure_span_anchored_text", AsyncMock(side_effect=ValueError("EPUB missing")))
+    with pytest.raises(ValueError, match="EPUB missing"):
+        await audiobook_import.rematch_imported_audiobook(1, db)
+    assert await crud.fail_processing_job(db, job.id, "EPUB missing") == "error"
+
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    overview = await audiobook_overview(db)
+    assert response.status == "importing"  # The service failed before clearing the lifecycle phase.
+    assert overview.attention_count == 1
+    assert (await dashboard._audiobook_problems(db, 10)).count == 1
+    for result in (response, overview.books[0].sources[0]):
+        assert (result.state, result.next_action, result.processing_job_id) == ("job_failed", "retry_processing", job.id)
+        assert result.state_detail == "EPUB missing"
+
+    retried = await processing.retry_processing_job(response.processing_job_id, db)
+    assert (retried.id, retried.job_type, retried.status) == (job.id, "rematch_imported_audiobook", "queued")
+    assert retried.payload == {"realign": True}
+    assert len((await db.scalars(select(ProcessingJob))).all()) == 1
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert (response.state, response.next_action) == ("working", None)
+    assert (await audiobook_overview(db)).attention_count == 0
+
+
+@pytest.mark.asyncio
+async def test_canceled_job_and_superseded_failure(db):
+    _matched_book(db, 1, "Canceled rebuild")
+    await db.commit()
+    await audiobook_imports.rebuild_imported_audiobook(1, db)
+    old = (await db.scalars(select(ProcessingJob))).one()
+    await crud.request_processing_job_cancel(db, old.id)
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert (response.state, response.state_label, response.next_action) == (
+        "job_failed",
+        "Processing canceled",
+        "retry_processing",
+    )
+
+    await audiobook_imports.rebuild_imported_audiobook(1, db)
+    newer = (await db.scalars(select(ProcessingJob).order_by(ProcessingJob.id.desc()))).first()
+    assert newer.id != old.id
+    assert (await audiobook_overview(db)).books[0].state == "working"
+    await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+    await crud.complete_processing_job(db, newer.id)
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert response.state == "ready_whisper"
+    assert (await audiobook_overview(db)).attention_count == 0
+
+
+@pytest.mark.asyncio
+async def test_job_history_keeps_match_review_action_and_manual_repair(db):
+    _matched_book(db, 1, "Review matches")
+    await db.commit()
+    await audiobook_imports.rematch_imported_audiobook(1, db)
+    job = (await db.scalars(select(ProcessingJob))).one()
+    job.max_attempts = 1
+    edition = await db.get(ImportedAudiobook, 1)
+    edition.status = "error"
+    edition.error = _REVIEW
+    await db.commit()
+    await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+    await crud.fail_processing_job(db, job.id, _REVIEW)
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert (response.state, response.next_action) == ("needs_review", "review_matches")
+    # A manual match correction can repair the edition without another job.
+    track = await db.get(ImportedAudiobookTrack, 101)
+    await audiobook_import.rematch_track(track, 101, db)
+    assert (await audiobook_overview(db)).books[0].state == "ready_estimated"
