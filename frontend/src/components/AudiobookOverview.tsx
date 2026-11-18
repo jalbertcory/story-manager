@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   alignImportedAudiobook,
+  bulkImportedAudiobookAction,
   getAudiobookOverview,
   rebuildImportedAudiobook,
   retryImportedAudiobook,
@@ -12,18 +13,23 @@ import {
   ACTIVE_AUDIO_STATES,
   audioActionHref,
   audioStateClass,
-  EDITION_JOB_ACTIONS,
+  isEditionJobAction,
 } from "../lib/audioState";
-import type { AudioNextAction } from "../lib/audioState";
+import type { EditionJobAction } from "../lib/audioState";
 import { queryKeys } from "../lib/queryKeys";
 import { retryProcessingJob } from "../api/processing";
 import { useLocation } from "../lib/router";
+import AudiobookToolsPanel from "./AudiobookToolsPanel";
+import ConfirmActionDialog from "./ConfirmActionDialog";
 
 type OverviewBook = Schemas["AudiobookOverviewBook"];
 type OverviewSource = Schemas["AudiobookOverviewSource"];
+type BulkSkip = Schemas["AudiobookBulkActionSkip"];
 
 const ATTENTION_FILTER = "attention";
 const ALL_FILTER = "all";
+// The bulk endpoint takes at most this many editions per request.
+const BULK_BATCH_SIZE = 500;
 
 const KIND_LABELS: Record<OverviewBook["audio_kind"], string> = {
   human: "Human narration",
@@ -32,7 +38,7 @@ const KIND_LABELS: Record<OverviewBook["audio_kind"], string> = {
 };
 
 async function queueEditionAction(
-  action: AudioNextAction,
+  action: EditionJobAction,
   editionId: number,
   jobId: number | null,
 ) {
@@ -44,6 +50,85 @@ async function queueEditionAction(
   if (action === "retry_import") return retryImportedAudiobook(editionId);
   if (action === "rebuild") return rebuildImportedAudiobook(editionId);
   return alignImportedAudiobook(editionId);
+}
+
+type BulkPlan = {
+  action: EditionJobAction;
+  label: string;
+  editionIds: number[];
+};
+
+// A state filter can be acted on in one go when every human edition shown in
+// it has the same queueable next action.
+function bulkPlanFor(books: OverviewBook[], filter: string): BulkPlan | null {
+  if (filter === ALL_FILTER || filter === ATTENTION_FILTER) return null;
+  let plan: BulkPlan | null = null;
+  for (const book of books) {
+    for (const source of book.sources) {
+      const next = source.next_action;
+      if (
+        source.state !== filter ||
+        source.edition_id == null ||
+        !next ||
+        !isEditionJobAction(next)
+      ) {
+        continue;
+      }
+      if (plan && plan.action !== next) return null;
+      plan ??= {
+        action: next,
+        label: source.next_action_label ?? next,
+        editionIds: [],
+      };
+      plan.editionIds.push(source.edition_id);
+    }
+  }
+  return plan && plan.editionIds.length > 1 ? plan : null;
+}
+
+async function runBulkPlan(plan: BulkPlan) {
+  const queued: number[] = [];
+  const skipped: BulkSkip[] = [];
+  for (
+    let start = 0;
+    start < plan.editionIds.length;
+    start += BULK_BATCH_SIZE
+  ) {
+    const result = await bulkImportedAudiobookAction({
+      action: plan.action,
+      edition_ids: plan.editionIds.slice(start, start + BULK_BATCH_SIZE),
+    });
+    queued.push(...result.queued);
+    skipped.push(...result.skipped);
+  }
+  return { queued, skipped };
+}
+
+function plural(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function describeBulkResult(
+  label: string,
+  queued: number,
+  skipped: BulkSkip[],
+) {
+  const parts = [
+    queued > 0
+      ? `${label} queued for ${plural(queued, "audiobook")}.`
+      : "Nothing was queued.",
+  ];
+  if (skipped.length > 0) {
+    const reasons = new Map<string, number>();
+    for (const { reason } of skipped) {
+      reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    }
+    const summary = [...reasons]
+      .map(([reason, count]) => (count > 1 ? `${reason} (${count})` : reason))
+      .join("; ");
+    parts.push(`Skipped ${skipped.length}: ${summary}.`);
+  }
+  return parts.join(" ");
 }
 
 function matchesFilter(book: OverviewBook, filter: string) {
@@ -73,6 +158,7 @@ function AudiobookOverview() {
   );
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
   const overview = useQuery({
     queryKey: queryKeys.audiobookOverview,
@@ -89,29 +175,43 @@ function AudiobookOverview() {
 
   const action = useMutation({
     mutationFn: ({
+      next,
       source,
     }: {
       book: OverviewBook;
+      next: EditionJobAction;
       source: OverviewSource & { edition_id: number };
-    }) =>
-      queueEditionAction(
-        source.next_action as AudioNextAction,
-        source.edition_id,
-        source.processing_job_id,
-      ),
+    }) => queueEditionAction(next, source.edition_id, source.processing_job_id),
     onSuccess: (_edition, { book, source }) => {
       setNotice(`${source.next_action_label} queued for ${book.title}.`);
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.audiobookOverview,
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.attentionDashboard,
-      });
+      refreshAfterQueueing();
       void queryClient.invalidateQueries({
         queryKey: queryKeys.audiobook.imports(book.book_id),
       });
     },
   });
+
+  const bulk = useMutation({
+    mutationFn: runBulkPlan,
+    onSuccess: ({ queued, skipped }, plan) => {
+      setConfirmBulk(false);
+      setNotice(describeBulkResult(plan.label, queued.length, skipped));
+      refreshAfterQueueing();
+      void queryClient.invalidateQueries({ queryKey: ["audiobook-imports"] });
+    },
+  });
+
+  function refreshAfterQueueing() {
+    for (const queryKey of [
+      queryKeys.audiobookOverview,
+      queryKeys.attentionDashboard,
+      queryKeys.humanAudiobookRebuildPreview,
+      queryKeys.processingJobs.all,
+      queryKeys.activeProcessingJobs,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  }
 
   const data = overview.data;
   const needle = query.trim().toLocaleLowerCase();
@@ -126,6 +226,7 @@ function AudiobookOverview() {
       ),
     [data, filter, needle],
   );
+  const bulkPlan = useMemo(() => bulkPlanFor(books, filter), [books, filter]);
 
   const chips = [
     { key: ALL_FILTER, label: "All", count: data?.total_count ?? 0 },
@@ -153,7 +254,7 @@ function AudiobookOverview() {
       );
     }
     const editionId = source.edition_id;
-    if (!EDITION_JOB_ACTIONS.has(next) || editionId == null) return null;
+    if (!isEditionJobAction(next) || editionId == null) return null;
     const busy =
       action.isPending && action.variables.source.edition_id === editionId;
     return (
@@ -164,7 +265,11 @@ function AudiobookOverview() {
         aria-label={`${source.next_action_label}: ${book.title}, ${source.name}`}
         onClick={() => {
           setNotice("");
-          action.mutate({ book, source: { ...source, edition_id: editionId } });
+          action.mutate({
+            book,
+            next,
+            source: { ...source, edition_id: editionId },
+          });
         }}
       >
         {busy ? "Queueing…" : source.next_action_label}
@@ -235,6 +340,21 @@ function AudiobookOverview() {
               placeholder="Title or author"
             />
           </label>
+          {bulkPlan && (
+            <div className="audio-overview-bulk">
+              <button
+                type="button"
+                disabled={bulk.isPending}
+                onClick={() => {
+                  setNotice("");
+                  bulk.reset();
+                  setConfirmBulk(true);
+                }}
+              >
+                {bulkPlan.label} for all {bulkPlan.editionIds.length}
+              </button>
+            </div>
+          )}
           {notice && (
             <p className="job-queued-notice" role="status">
               {notice} <a href="/activity/processing">View processing</a>
@@ -243,6 +363,11 @@ function AudiobookOverview() {
           {action.isError && (
             <p className="error" role="alert">
               {action.error.message}
+            </p>
+          )}
+          {bulk.isError && !confirmBulk && (
+            <p className="error" role="alert">
+              {bulk.error.message}
             </p>
           )}
 
@@ -294,6 +419,36 @@ function AudiobookOverview() {
             </ul>
           )}
         </>
+      )}
+
+      <section
+        className="audio-overview-maintenance"
+        aria-labelledby="audio-overview-maintenance"
+      >
+        <h2 id="audio-overview-maintenance">Maintenance</h2>
+        <AudiobookToolsPanel />
+      </section>
+
+      {bulkPlan && (
+        <ConfirmActionDialog
+          open={confirmBulk}
+          title={`${bulkPlan.label} for ${plural(bulkPlan.editionIds.length, "audiobook")}?`}
+          confirmLabel="Queue all"
+          busyLabel="Queueing…"
+          isPending={bulk.isPending}
+          onCancel={() => setConfirmBulk(false)}
+          onConfirm={() => bulk.mutate(bulkPlan)}
+        >
+          <p>
+            This queues one job for each audiobook shown. An audiobook whose
+            state changed since this page loaded is skipped.
+          </p>
+          {bulk.isError && (
+            <p className="error" role="alert">
+              {bulk.error.message}
+            </p>
+          )}
+        </ConfirmActionDialog>
       )}
     </div>
   );

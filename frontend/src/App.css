@@ -206,6 +206,25 @@
   font-size: 0.8rem;
 }
 
+.audio-overview-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.audio-overview-maintenance {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.audio-overview-maintenance h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .audio-overview-list,
 .audio-overview-sources {
   display: grid;

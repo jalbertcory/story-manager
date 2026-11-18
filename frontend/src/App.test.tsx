@@ -451,7 +451,6 @@ describe("App workspaces", () => {
     const tools: [RegExp, string, string][] = [
       [/Library audit/, "Library audit", ""],
       [/Series detection/, "Series detection", "series"],
-      [/Audiobook maintenance/, "Audiobook maintenance", "audiobooks"],
       [/Backups/, "Backups", "backups"],
       [/Recycle bin/, "Recycle bin", "recycle-bin"],
       [/Storage cleanup/, "Storage cleanup", "storage"],
@@ -467,6 +466,10 @@ describe("App workspaces", () => {
       expect(screen.queryByLabelText("Library tool")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("link", { name: "← Settings" }));
     }
+    // Audiobook maintenance lives on the Audiobooks page with every edition.
+    expect(
+      await screen.findByRole("link", { name: /See every audiobook/ }),
+    ).toHaveAttribute("href", "/activity/audiobooks");
   });
 
   it("searches groups on the server and combines source filtering", async () => {

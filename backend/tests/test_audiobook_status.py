@@ -83,6 +83,16 @@ def test_human_edition_states(fields, context, state, label, action):
     assert (status.action_label is None) == (action is None)
 
 
+def test_partial_whisper_failure_says_which_timing_was_kept():
+    options = {"has_epub": True, "content_version": 1, "matching_error": None, "transcription_configured": True}
+    partial = human_edition_status(_edition(alignment_method="hybrid", alignment_error="Whisper timed out"), **options)
+    total = human_edition_status(_edition(alignment_error="Whisper timed out"), **options)
+
+    assert partial.state == total.state == "whisper_failed"
+    assert partial.detail == ("Whisper timed out. Tracks Whisper finished keep its timing; the rest use estimated timing.")
+    assert total.detail == "Whisper timed out"
+
+
 @pytest.mark.parametrize(
     ("fields", "job_active", "state", "action"),
     [

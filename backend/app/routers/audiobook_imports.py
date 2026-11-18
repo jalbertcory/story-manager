@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import api_schemas as contracts
 from .. import crud
 from ..audiobook_schemas import (
+    AudioBulkAction,
+    AudiobookBulkActionRequest,
+    AudiobookBulkActionResponse,
+    AudiobookBulkActionSkip,
     HumanAudiobookRebuildPreview,
     ImportedAudiobookResponse,
     ImportedCueResponse,
@@ -40,6 +44,7 @@ from ..models import (
     ImportedAudiobook,
     ImportedAudiobookCue,
     ImportedAudiobookTrack,
+    ProcessingJob,
     SourceType,
 )
 from ..services import audiobook_import, audiobook_views, libation_matching
@@ -52,8 +57,13 @@ from ..services.audiobook_import import (
 )
 from ..services.audiobook_metadata import filename_metadata
 from ..services.audiobook_reading import chapter_reading_blocks
+from ..services.audiobook_status import human_edition_statuses, transcription_configured
 from ..services.audiobook_uploads import receive_audiobook_upload
-from ..services.audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError, require_safe_matches
+from ..services.audiobook_match_validation import (
+    MatchValidationError,
+    is_match_review_error,
+    require_safe_matches,
+)
 from ..services.audiobook_views import AudiobookViewNotFoundError, imported_audiobook_response
 from ..services.processing_queue import queue_processing_job
 from ..services.transcription_providers import (
@@ -192,14 +202,20 @@ async def retry_imported_audiobook(
     if edition is None:
         raise HTTPException(status_code=404, detail="Imported audiobook not found")
     book = await get_book_or_404(edition.book_id, db)
+    await queue_import_retry(edition, book, db)
+    return await imported_audiobook_response(edition, db)
+
+
+async def queue_import_retry(edition: ImportedAudiobook, book: Book, db: AsyncSession) -> None:
+    """Queue a failed or stuck import again; raises HTTP 409 when it cannot be retried."""
     if edition.status not in ("error", "queued"):
         raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not retryable")
     track_count = await _track_count(edition, db)
-    if edition.status == "error" and (edition.error or "").startswith(MATCH_REVIEW_PREFIX) and track_count:
+    if edition.status == "error" and is_match_review_error(edition.error) and track_count:
         # The audio imported; only matching was blocked. Re-importing would
         # discard manual corrections, so retry the matching step instead.
         await _queue_rematch(edition, book, track_count, db)
-        return await imported_audiobook_response(edition, db)
+        return
     transition_state(
         edition,
         "status",
@@ -219,7 +235,6 @@ async def retry_imported_audiobook(
         dedupe_key=f"import_audiobook:imported_audiobook:{edition.id}",
         progress_detail="Queued audiobook import retry",
     )
-    return await imported_audiobook_response(edition, db)
 
 
 @router.post(
@@ -285,11 +300,11 @@ async def upgrade_all_imported_audiobooks(db: AsyncSession = Depends(get_db)) ->
 
 
 def _needs_human_audiobook_rebuild(edition: ImportedAudiobook) -> bool:
+    # A Whisper failure is retried by realigning, not by rebuilding.
     return bool(
         not edition.source_manifest_sha256
         or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
         or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
-        or edition.alignment_error
     )
 
 
@@ -322,6 +337,14 @@ async def preview_human_audiobook_rebuilds(
         if edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
     ]
     rebuild = [edition for edition in available if _needs_human_audiobook_rebuild(edition)]
+    # Blocked matches need a person, not a rebuild; count them apart from
+    # editions that are busy or never finished importing.
+    needs_review = sum(
+        edition.status == ImportedAudiobookStatus.ERROR.value
+        and is_match_review_error(edition.error)
+        and track_counts.get(edition.id, 0) > 0
+        for edition in editions
+    )
     return HumanAudiobookRebuildPreview(
         current_pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
         total_count=len(editions),
@@ -332,7 +355,8 @@ async def preview_human_audiobook_rebuilds(
             for edition in rebuild
         ),
         up_to_date_count=len(available) - len(rebuild),
-        unavailable_count=len(editions) - len(available),
+        needs_review_count=needs_review,
+        unavailable_count=len(editions) - len(available) - needs_review,
     )
 
 
@@ -358,6 +382,76 @@ async def rebuild_all_human_audiobooks(
         "skipped_count": skipped,
         "pipeline_version": CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
     }
+
+
+@router.post("/api/imported-audiobooks/bulk-action", response_model=AudiobookBulkActionResponse)
+async def bulk_imported_audiobook_action(
+    request: AudiobookBulkActionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AudiobookBulkActionResponse:
+    """Run one next action for many human editions at once.
+
+    Each edition's state is worked out again here, and an edition whose next
+    action is no longer the requested one is skipped rather than acted on.
+    """
+    edition_ids = list(dict.fromkeys(request.edition_ids))
+    editions = list((await db.scalars(select(ImportedAudiobook).where(ImportedAudiobook.id.in_(edition_ids)))).all())
+    books = {
+        book.id: book
+        for book in (
+            await db.scalars(
+                select(Book).where(Book.id.in_({edition.book_id for edition in editions}), Book.deleted_at.is_(None))
+            )
+        ).all()
+    }
+    statuses = await human_edition_statuses(editions, books, db, configured=await transcription_configured(db))
+    by_id = {edition.id: edition for edition in editions}
+    queued: list[int] = []
+    skipped: list[AudiobookBulkActionSkip] = []
+    for edition_id in edition_ids:
+        edition = by_id.get(edition_id)
+        if edition is None or edition_id not in statuses:
+            skipped.append(AudiobookBulkActionSkip(edition_id=edition_id, reason="Audiobook not found"))
+            continue
+        status, job = statuses[edition_id]
+        reason = (
+            status.label
+            if status.next_action != request.action
+            else await _run_edition_action(request.action, edition, books[edition.book_id], job, db)
+        )
+        if reason is None:
+            queued.append(edition_id)
+        else:
+            skipped.append(AudiobookBulkActionSkip(edition_id=edition_id, reason=reason))
+    return AudiobookBulkActionResponse(queued=queued, skipped=skipped)
+
+
+async def _run_edition_action(
+    action: AudioBulkAction,
+    edition: ImportedAudiobook,
+    book: Book,
+    job: ProcessingJob | None,
+    db: AsyncSession,
+) -> str | None:
+    """Queue one edition's next action and return why it was skipped, if it was."""
+    try:
+        if action == "retry_processing":
+            if job is None:
+                return "The failed job is no longer available"
+            try:
+                if await crud.retry_processing_job(db, job.id) is None:
+                    return "The failed job can no longer be retried"
+            except ValueError:
+                return "The failed job's stored payload is invalid"
+        elif action == "retry_import":
+            await queue_import_retry(edition, book, db)
+        elif action == "rebuild":
+            await queue_edition_rebuild(edition, db)
+        else:
+            await queue_edition_alignment(edition, db)
+    except HTTPException as exc:
+        return str(exc.detail)
+    return None
 
 
 async def _queue_rebuild(edition: ImportedAudiobook, db: AsyncSession, *, force: bool) -> None:
@@ -395,13 +489,18 @@ async def rebuild_imported_audiobook(
     if edition is None:
         raise HTTPException(status_code=404, detail="Imported audiobook not found")
     await get_book_or_404(edition.book_id, db)
+    await queue_edition_rebuild(edition, db)
+    return await imported_audiobook_response(edition, db)
+
+
+async def queue_edition_rebuild(edition: ImportedAudiobook, db: AsyncSession) -> None:
+    """Queue one ready edition's rebuild; raises HTTP 409 when it cannot be rebuilt."""
     if edition.status != ImportedAudiobookStatus.READY.value:
         raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not ready to rebuild")
     if not await _track_count(edition, db):
         raise HTTPException(status_code=409, detail="This audiobook has no imported audio tracks")
     await _queue_rebuild(edition, db, force=True)
     await db.commit()
-    return await imported_audiobook_response(edition, db)
 
 
 @router.post(
@@ -416,8 +515,13 @@ async def align_imported_audiobook(
     if edition is None:
         raise HTTPException(status_code=404, detail="Imported audiobook not found")
     await get_book_or_404(edition.book_id, db)
-    if edition.status == "aligning":
-        return await imported_audiobook_response(edition, db)
+    if edition.status != "aligning":
+        await queue_edition_alignment(edition, db)
+    return await imported_audiobook_response(edition, db)
+
+
+async def queue_edition_alignment(edition: ImportedAudiobook, db: AsyncSession) -> None:
+    """Queue Whisper alignment for one edition; raises HTTP 409 when it cannot run."""
     if edition.status != "ready" and not (edition.status == "error" and edition.alignment_error):
         raise HTTPException(status_code=409, detail=f"Audiobook is {edition.status}, not ready for alignment")
     try:
@@ -457,7 +561,6 @@ async def align_imported_audiobook(
         dedupe_key=f"align_imported_audiobook:imported_audiobook:{edition.id}",
         progress_detail="Queued timestamp alignment",
     )
-    return await imported_audiobook_response(edition, db)
 
 
 @router.post(

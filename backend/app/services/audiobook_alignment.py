@@ -13,8 +13,9 @@ from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from collections.abc import Mapping
+from typing import Literal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
@@ -573,11 +574,32 @@ async def _continuation_sentence_batches(
     return batches
 
 
-async def process_alignment(edition_id: int, db: AsyncSession) -> None:
+# How a timestamp-alignment run ended. Only ``failed`` is worth retrying: a
+# missing provider or a match-safety block needs the owner to act first.
+AlignmentOutcome = Literal["aligned", "not_configured", "needs_review", "failed", "missing"]
+
+
+async def _scored_track_counts(edition_id: int, db: AsyncSession) -> tuple[int, int]:
+    """Matched tracks with Whisper timing, and all matched tracks."""
+    scored, total = (
+        await db.execute(
+            select(
+                func.count(ImportedAudiobookTrack.alignment_score),
+                func.count(ImportedAudiobookTrack.id),
+            ).where(
+                ImportedAudiobookTrack.imported_audiobook_id == edition_id,
+                ImportedAudiobookTrack.matched_chapter_id.is_not(None),
+            )
+        )
+    ).one()
+    return int(scored), int(total)
+
+
+async def process_alignment(edition_id: int, db: AsyncSession) -> AlignmentOutcome:
     """Transcribe and align every matched track in one imported edition."""
     edition = await db.get(ImportedAudiobook, edition_id)
     if edition is None:
-        return
+        return "missing"
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = transcription_provider_name(settings)
     if settings is None or provider == "none":
@@ -591,7 +613,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
         edition.alignment_error = "Configure a transcription provider in Audio Settings first."
         edition.progress_detail = "Timestamp alignment not configured"
         await db.commit()
-        return
+        return "not_configured"
 
     result = await db.execute(
         select(ImportedAudiobookTrack)
@@ -714,22 +736,43 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> None:
         edition.error = None
         await db.commit()
         shutil.rmtree(edition_dir / "alignment" / "clips", ignore_errors=True)
+        return "aligned"
     except Exception as exc:
-        logger.exception("Audiobook timestamp alignment %s failed.", edition_id)
+        needs_review = isinstance(exc, MatchValidationError)
+        if needs_review:
+            logger.warning("Audiobook timestamp alignment %s stopped: %s", edition_id, exc)
+        else:
+            logger.exception("Audiobook timestamp alignment %s failed.", edition_id)
         await db.rollback()
         edition = await db.get(ImportedAudiobook, edition_id)
-        if edition is not None:
+        if edition is None:
+            return "missing"
+        transition_state(
+            edition,
+            "status",
+            IMPORTED_AUDIOBOOK,
+            ImportedAudiobookStatus.ERROR if needs_review else ImportedAudiobookStatus.READY,
+            context=f"imported audiobook {edition.id}",
+        )
+        edition.alignment_error = str(exc)
+        if needs_review:
+            edition.error = str(exc)
+            edition.progress_detail = "Chapter matching blocked; review required"
+            await db.commit()
+            return "needs_review"
+        # Each finished track committed its Whisper cues, so a failure part way
+        # through leaves a mix of Whisper and estimated timing.
+        scored, total = await _scored_track_counts(edition.id, db)
+        if 0 < scored < total:
             transition_state(
                 edition,
-                "status",
-                IMPORTED_AUDIOBOOK,
-                ImportedAudiobookStatus.ERROR if isinstance(exc, MatchValidationError) else ImportedAudiobookStatus.READY,
+                "alignment_method",
+                ALIGNMENT_METHOD,
+                AlignmentMethod.HYBRID,
                 context=f"imported audiobook {edition.id}",
             )
-            edition.alignment_error = str(exc)
-            if isinstance(exc, MatchValidationError):
-                edition.error = str(exc)
-                edition.progress_detail = "Chapter matching blocked; review required"
-            else:
-                edition.progress_detail = "Timestamp alignment failed; estimated cues retained where available"
-            await db.commit()
+            edition.progress_detail = f"Whisper aligned {scored} of {total} tracks; the rest keep estimated timing"
+        else:
+            edition.progress_detail = "Timestamp alignment failed; estimated cues retained where available"
+        await db.commit()
+        return "failed"

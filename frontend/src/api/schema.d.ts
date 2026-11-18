@@ -1622,6 +1622,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/imported-audiobooks/bulk-action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Imported Audiobook Action
+         * @description Run one next action for many human editions at once.
+         *
+         *     Each edition's state is worked out again here, and an edition whose next
+         *     action is no longer the requested one is skipped rather than acted on.
+         */
+        post: operations["bulk_imported_audiobook_action_api_imported_audiobooks_bulk_action_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/imports/preview": {
         parameters: {
             query?: never;
@@ -3164,6 +3187,30 @@ export interface components {
             /** Series Name */
             series_name: string;
         };
+        /** AudiobookBulkActionRequest */
+        AudiobookBulkActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "retry_processing" | "retry_import" | "rebuild" | "retry_whisper" | "improve_with_whisper";
+            /** Edition Ids */
+            edition_ids: number[];
+        };
+        /** AudiobookBulkActionResponse */
+        AudiobookBulkActionResponse: {
+            /** Queued */
+            queued: number[];
+            /** Skipped */
+            skipped: components["schemas"]["AudiobookBulkActionSkip"][];
+        };
+        /** AudiobookBulkActionSkip */
+        AudiobookBulkActionSkip: {
+            /** Edition Id */
+            edition_id: number;
+            /** Reason */
+            reason: string;
+        };
         /** AudiobookOverviewBook */
         AudiobookOverviewBook: {
             /**
@@ -4250,6 +4297,8 @@ export interface components {
         HumanAudiobookRebuildPreview: {
             /** Current Pipeline Version */
             current_pipeline_version: number;
+            /** Needs Review Count */
+            needs_review_count: number;
             /** Realign Count */
             realign_count: number;
             /** Rebuild Count */
@@ -8998,6 +9047,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportedAudiobookResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_imported_audiobook_action_api_imported_audiobooks_bulk_action_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudiobookBulkActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudiobookBulkActionResponse"];
                 };
             };
             /** @description Validation Error */

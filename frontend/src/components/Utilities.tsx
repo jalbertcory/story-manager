@@ -1,7 +1,6 @@
 import { useLocation } from "../lib/router";
 import ReaderKeys from "./ReaderKeys";
 import AuditPanel from "./utilities/AuditPanel";
-import AudiobookToolsPanel from "./utilities/AudiobookToolsPanel";
 import BackupsPanel from "./utilities/BackupsPanel";
 import NotificationsPanel from "./utilities/NotificationsPanel";
 import MetadataPanel from "./utilities/MetadataPanel";
@@ -13,7 +12,6 @@ const utilityPages = [
   { key: "audit", label: "Library audit" },
   { key: "series", label: "Series detection" },
   { key: "metadata", label: "Sync online metadata" },
-  { key: "audiobooks", label: "Audiobook maintenance" },
   { key: "recycle-bin", label: "Recycle bin" },
   { key: "storage", label: "Storage cleanup" },
   { key: "backups", label: "Backups" },
@@ -63,7 +61,6 @@ function Utilities({
         {activeTab === "audit" && <AuditPanel />}
         {activeTab === "series" && <SeriesDetectionPanel />}
         {activeTab === "metadata" && <MetadataPanel />}
-        {activeTab === "audiobooks" && <AudiobookToolsPanel />}
         {activeTab === "recycle-bin" && <RecycleBinPanel />}
         {activeTab === "storage" && <StorageCleanupPanel />}
         {activeTab === "backups" && <BackupsPanel />}

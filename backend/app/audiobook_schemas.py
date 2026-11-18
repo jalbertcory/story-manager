@@ -46,6 +46,25 @@ AudioNextAction = Literal[
 ]
 
 
+# Next actions that queue work for a human edition and can run for many at once.
+AudioBulkAction = Literal["retry_processing", "retry_import", "rebuild", "retry_whisper", "improve_with_whisper"]
+
+
+class AudiobookBulkActionRequest(BaseModel):
+    action: AudioBulkAction
+    edition_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class AudiobookBulkActionSkip(BaseModel):
+    edition_id: int
+    reason: str
+
+
+class AudiobookBulkActionResponse(BaseModel):
+    queued: list[int]
+    skipped: list[AudiobookBulkActionSkip]
+
+
 class AudiobookStatusResponse(BaseModel):
     pipeline_status: Optional[str]
     next_phase: str
@@ -366,6 +385,9 @@ class HumanAudiobookRebuildPreview(BaseModel):
     rebuild_count: int
     realign_count: int
     up_to_date_count: int
+    # Blocked until someone reviews the chapter matches.
+    needs_review_count: int
+    # Busy, or never finished importing.
     unavailable_count: int
 
 

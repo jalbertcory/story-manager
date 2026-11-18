@@ -11,7 +11,7 @@ source the same way. Within each function the first matching rule wins.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -37,7 +37,7 @@ from ..lifecycle import (
 )
 from ..models import Book, ImportedAudiobook, ProcessingJob
 from .audiobook_import import CURRENT_DERIVED_FORMAT_VERSION, CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
-from .audiobook_match_validation import MATCH_REVIEW_PREFIX, imported_matching_errors
+from .audiobook_match_validation import imported_matching_errors, is_match_review_error
 from .transcription_providers import transcription_provider_name
 
 # Most urgent first: the overview sorts and rolls books up by this order.
@@ -158,10 +158,6 @@ def state_rank(state: AudioState) -> int:
     return STATE_ORDER.index(state)
 
 
-def is_match_review_error(message: str | None) -> bool:
-    return bool(message and message.startswith(MATCH_REVIEW_PREFIX))
-
-
 def needs_match_check(edition: ImportedAudiobook) -> bool:
     """Only a ready edition's state depends on the live chapter-matching check."""
     return edition.status == ImportedAudiobookStatus.READY.value
@@ -237,7 +233,10 @@ def human_edition_status(
     if outdated:
         return AudioStatus("outdated", "Needs rebuild", outdated, "rebuild", "Rebuild")
     if edition.alignment_error and transcription_configured:
-        return AudioStatus("whisper_failed", "Whisper failed", edition.alignment_error, "retry_whisper", "Retry Whisper")
+        detail = edition.alignment_error
+        if edition.alignment_method == AlignmentMethod.HYBRID.value:
+            detail = f"{detail.rstrip('. ')}. Tracks Whisper finished keep its timing; the rest use estimated timing."
+        return AudioStatus("whisper_failed", "Whisper failed", detail, "retry_whisper", "Retry Whisper")
     if edition.alignment_method == AlignmentMethod.TRANSCRIBED.value:
         return AudioStatus("ready_whisper", "Human audio + Whisper", "Sentence timing comes from Whisper.")
     if edition.alignment_method == AlignmentMethod.HYBRID.value:
@@ -261,6 +260,45 @@ def human_edition_status(
         "set_up_transcription",
         "Set up transcription",
     )
+
+
+async def human_edition_statuses(
+    editions: Sequence[ImportedAudiobook],
+    books: Mapping[int, Book],
+    db: AsyncSession,
+    *,
+    configured: bool,
+) -> dict[int, tuple[AudioStatus, ProcessingJob | None]]:
+    """Each edition's state and the job it reflects, in a fixed number of queries.
+
+    Editions whose book is not in ``books`` are left out.
+    """
+    jobs = await human_edition_jobs(editions, db)
+    matching = await imported_matching_errors(
+        [
+            edition
+            for edition in editions
+            if needs_match_check(edition)
+            and not ((job := jobs.get(edition.id)) is not None and job.status in _ACTIVE_JOB_STATUSES)
+        ],
+        db,
+    )
+    statuses: dict[int, tuple[AudioStatus, ProcessingJob | None]] = {}
+    for edition in editions:
+        book = books.get(edition.book_id)
+        if book is None:
+            continue
+        job = jobs.get(edition.id)
+        status = human_edition_status(
+            edition,
+            has_epub=bool(book.current_path),
+            content_version=book.content_version or 1,
+            matching_error=matching.get(edition.id),
+            transcription_configured=configured,
+            job=job,
+        )
+        statuses[edition.id] = (status, job)
+    return statuses
 
 
 def tts_status(book: Book, *, job_active: bool) -> AudioStatus | None:
@@ -365,16 +403,7 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
             )
         ).all()
     }
-    human_jobs = await human_edition_jobs(editions, db)
-    matching = await imported_matching_errors(
-        [
-            edition
-            for edition in editions
-            if needs_match_check(edition)
-            and not ((job := human_jobs.get(edition.id)) is not None and job.status in _ACTIVE_JOB_STATUSES)
-        ],
-        db,
-    )
+    statuses = await human_edition_statuses(editions, books, db, configured=configured)
     active_tts = set(
         (
             await db.scalars(
@@ -391,18 +420,10 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
 
     sources: dict[int, list[AudiobookOverviewSource]] = {book_id: [] for book_id in books}
     for edition in editions:
-        book = books.get(edition.book_id)
-        if book is None:
+        if edition.id not in statuses:
             continue
-        status = human_edition_status(
-            edition,
-            has_epub=bool(book.current_path),
-            content_version=book.content_version or 1,
-            matching_error=matching.get(edition.id),
-            transcription_configured=configured,
-            job=human_jobs.get(edition.id),
-        )
-        sources[book.id].append(
+        status, job = statuses[edition.id]
+        sources[edition.book_id].append(
             _source(
                 status,
                 kind="human",
@@ -412,7 +433,7 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
                 progress_current=edition.progress_current or 0,
                 progress_total=edition.progress_total or 0,
                 updated_at=edition.updated_at,
-                job=human_jobs.get(edition.id),
+                job=job,
             )
         )
     for book in books.values():

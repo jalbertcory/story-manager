@@ -40,7 +40,8 @@ from ..lifecycle import (
 from ..models import Book, BookLog, ImportedAudiobook, ImportedAudiobookTrack, ProcessingJob
 from ..logging_config import redact_text
 from ..observability_context import correlation_context
-from .audiobook_alignment import process_alignment
+from .audiobook_alignment import AlignmentOutcome, process_alignment
+from .audiobook_match_validation import MatchValidationError, is_match_review_error
 from .audiobook_import import (
     HumanAudiobookRebuildResult,
     process_import,
@@ -83,6 +84,8 @@ class WorkerHealth(TypedDict):
 
 logger = logging.getLogger(__name__)
 _BOOKKEEPING_ATTEMPTS = 3
+# Completes a job whose edition now waits for a person to review chapter matches.
+_MATCH_REVIEW_DETAIL = "chapter matching needs review"
 
 _Result = TypeVar("_Result")
 
@@ -523,6 +526,10 @@ class ProcessingQueue:
         async with SessionLocal() as db:
             edition = await db.get(ImportedAudiobook, target_id)
             if edition is not None and edition.status == "error":
+                if is_match_review_error(edition.error):
+                    # The audio imported; only a person can confirm the chapter
+                    # matches, so retrying (or announcing a failure) cannot help.
+                    return f"Human audiobook imported; {_MATCH_REVIEW_DETAIL}"
                 raise RuntimeError(edition.error or "Human audiobook import failed.")
         if ImportAudiobookPayload.model_validate(job.payload or {}).auto_align and await self._queue_timestamp_alignment(
             job, target_id, progress_detail="Queued automatically after audiobook import"
@@ -591,11 +598,14 @@ class ProcessingQueue:
             async with SessionLocal() as db:
                 return await rebuild_imported_audiobook(target_id, db)
 
-        result = await self._run_with_progress_mirror(
-            job.id,
-            rebuild_audio,
-            lambda: self._imported_audio_progress(target_id),
-        )
+        try:
+            result = await self._run_with_progress_mirror(
+                job.id,
+                rebuild_audio,
+                lambda: self._imported_audio_progress(target_id),
+            )
+        except MatchValidationError:
+            return f"Human audiobook rebuilt; {_MATCH_REVIEW_DETAIL}"
         if await self._queue_timestamp_alignment(
             job,
             target_id,
@@ -615,11 +625,14 @@ class ProcessingQueue:
             async with SessionLocal() as db:
                 return await rematch_imported_audiobook(target_id, db)
 
-        matched = await self._run_with_progress_mirror(
-            job.id,
-            rematch_audio,
-            lambda: self._imported_audio_progress(target_id),
-        )
+        try:
+            matched = await self._run_with_progress_mirror(
+                job.id,
+                rematch_audio,
+                lambda: self._imported_audio_progress(target_id),
+            )
+        except MatchValidationError:
+            return f"Human audiobook rematched; {_MATCH_REVIEW_DETAIL}"
         if await self._queue_timestamp_alignment(
             job,
             target_id,
@@ -632,19 +645,25 @@ class ProcessingQueue:
     async def _handle_align_imported_audiobook(self, job: ProcessingJob) -> str:
         target_id = _required_target(job)
 
-        async def align_audio() -> None:
+        async def align_audio() -> AlignmentOutcome:
             async with SessionLocal() as db:
-                await process_alignment(target_id, db)
+                return await process_alignment(target_id, db)
 
-        await self._run_with_progress_mirror(
+        outcome = await self._run_with_progress_mirror(
             job.id,
             align_audio,
             lambda: self._imported_audio_progress(target_id),
         )
-        async with SessionLocal() as db:
-            edition = await db.get(ImportedAudiobook, target_id)
-            if edition is not None and edition.alignment_error:
-                raise RuntimeError(edition.alignment_error)
+        # The edition records why alignment stopped. Only a failed run is worth
+        # retrying; a missing provider or a match block waits for the owner.
+        if outcome == "not_configured":
+            return "Timestamp alignment skipped: no transcription provider is configured"
+        if outcome == "needs_review":
+            return f"Timestamp alignment stopped; {_MATCH_REVIEW_DETAIL}"
+        if outcome == "failed":
+            async with SessionLocal() as db:
+                edition = await db.get(ImportedAudiobook, target_id)
+                raise RuntimeError((edition.alignment_error if edition is not None else None) or "Timestamp alignment failed.")
         return "Human audiobook timing alignment completed"
 
     async def _handle_metadata_sync(self, job: ProcessingJob) -> str:
@@ -1102,8 +1121,27 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
         await db.commit()
 
     result = await db.execute(select(ImportedAudiobook).where(ImportedAudiobook.book_id == book.id))
-    for edition in result.scalars().all():
+    editions = list(result.scalars().all())
+    track_counts: dict[int, int] = {}
+    if editions:
+        track_counts = {
+            int(edition_id): int(count)
+            for edition_id, count in (
+                await db.execute(
+                    select(ImportedAudiobookTrack.imported_audiobook_id, func.count(ImportedAudiobookTrack.id))
+                    .where(ImportedAudiobookTrack.imported_audiobook_id.in_([edition.id for edition in editions]))
+                    .group_by(ImportedAudiobookTrack.imported_audiobook_id)
+                )
+            ).all()
+        }
+    for edition in editions:
         if edition.matched_content_version == content_version and edition.status != "stale":
+            continue
+        if not track_counts.get(edition.id):
+            continue  # Nothing to rematch; a pending import matches the current text itself.
+        if edition.status == ImportedAudiobookStatus.ERROR.value and not is_match_review_error(edition.error):
+            # The audio never finished importing. A rematch would hide that
+            # failure behind "stale"; retrying the import picks up the new text.
             continue
         realign = edition.alignment_method in {"transcribed", "hybrid"}
         transition_state(

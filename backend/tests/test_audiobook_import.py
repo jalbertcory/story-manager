@@ -21,6 +21,7 @@ from backend.app.models import (
 )
 from backend.app.routers import audiobook_imports
 from backend.app.services import audiobook_import, audiobook_views, library_paths
+from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PREFIX
 
 
 async def _seed_book_text(db) -> tuple[Book, AudiobookChapter]:
@@ -882,9 +883,24 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
             status="aligning",
             pipeline_version=0,
         )
-        db.add_all([outdated, current, active])
+        # A Whisper failure is fixed by realigning, so it is not a rebuild.
+        whisper_failed = ImportedAudiobook(
+            **shared,
+            name="Whisper failed",
+            alignment_method="estimated",
+            alignment_error="Whisper timed out",
+            pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        )
+        blocked = ImportedAudiobook(
+            book_id=book.id,
+            name="Blocked",
+            status="error",
+            error=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
+            pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        )
+        db.add_all([outdated, current, active, whisper_failed, blocked])
         await db.flush()
-        for edition in (outdated, current, active):
+        for edition in (outdated, current, active, whisper_failed, blocked):
             db.add(
                 ImportedAudiobookTrack(
                     imported_audiobook_id=edition.id,
@@ -905,10 +921,11 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
     assert preview.status_code == 200
     assert preview.json() == {
         "current_pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
-        "total_count": 3,
+        "total_count": 5,
         "rebuild_count": 1,
         "realign_count": 1,
-        "up_to_date_count": 1,
+        "up_to_date_count": 2,
+        "needs_review_count": 1,
         "unavailable_count": 1,
     }
 
@@ -916,7 +933,7 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
     assert response.status_code == 200
     assert response.json() == {
         "queued_count": 1,
-        "skipped_count": 2,
+        "skipped_count": 4,
         "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
     }
     async with sqlite_sessionmaker() as db:
@@ -928,6 +945,150 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
             "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
             "force": False,
         }
+
+
+async def _seed_bulk_editions(db, **editions_by_name) -> dict[str, int]:
+    """Seed ready editions (each with one matched track) on a book with transcription set up."""
+    book, chapter = await _seed_book_text(db)
+    db.add(AudiobookSettings(transcription_provider="whisperx", transcription_base_url="http://whisper:8002"))
+    created = {
+        name: ImportedAudiobook(
+            **{
+                "book_id": book.id,
+                "name": name,
+                "status": "ready",
+                "source_manifest_sha256": "a" * 64,
+                "derived_format_version": audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+                "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+                "matched_content_version": 1,
+                "alignment_method": "estimated",
+                **fields,
+            }
+        )
+        for name, fields in editions_by_name.items()
+    }
+    db.add_all(created.values())
+    await db.flush()
+    for edition in created.values():
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=edition.id,
+                matched_chapter_id=chapter.id,
+                sequence_order=1,
+                title="Chapter 1",
+                audio_file_path=f"library/{edition.id}.m4b",
+                media_type="audio/mp4",
+                source_start_ms=0,
+                source_end_ms=10_000,
+                duration_ms=10_000,
+            )
+        )
+    await db.commit()
+    return {name: edition.id for name, edition in created.items()}
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_queues_only_editions_whose_next_action_matches(app_client, sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        ids = await _seed_bulk_editions(
+            db,
+            outdated={"pipeline_version": 0},
+            current={},
+            whisper_failed={"alignment_method": "hybrid", "alignment_error": "Whisper timed out"},
+        )
+
+    # A Whisper failure is fixed by realigning, so it no longer asks for a rebuild.
+    listed = app_client.get(f"/api/books/{(await _book_id(sqlite_sessionmaker, ids['whisper_failed']))}/audiobook/imports")
+    assert {edition["id"]: edition["needs_rebuild"] for edition in listed.json()} == {
+        ids["outdated"]: True,
+        ids["current"]: False,
+        ids["whisper_failed"]: False,
+    }
+
+    response = app_client.post(
+        "/api/imported-audiobooks/bulk-action",
+        json={"action": "rebuild", "edition_ids": [ids["outdated"], ids["current"], ids["outdated"], 9999]},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "queued": [ids["outdated"]],
+        "skipped": [
+            {"edition_id": ids["current"], "reason": "Human audio"},
+            {"edition_id": 9999, "reason": "Audiobook not found"},
+        ],
+    }
+
+    response = app_client.post(
+        "/api/imported-audiobooks/bulk-action",
+        json={"action": "retry_whisper", "edition_ids": [ids["whisper_failed"], ids["outdated"]]},
+    )
+    assert response.json() == {
+        "queued": [ids["whisper_failed"]],
+        # The rebuild queued above is now the outdated edition's state.
+        "skipped": [{"edition_id": ids["outdated"], "reason": "Queued"}],
+    }
+
+    async with sqlite_sessionmaker() as db:
+        jobs = (await db.execute(select(ProcessingJob).order_by(ProcessingJob.id))).scalars().all()
+        assert [(job.job_type, job.target_id) for job in jobs] == [
+            ("rebuild_imported_audiobook", ids["outdated"]),
+            ("align_imported_audiobook", ids["whisper_failed"]),
+        ]
+        aligning = await db.get(ImportedAudiobook, ids["whisper_failed"])
+        assert aligning.status == "aligning"
+        assert aligning.alignment_error is None
+
+    assert (
+        app_client.post("/api/imported-audiobooks/bulk-action", json={"action": "rebuild", "edition_ids": []}).status_code
+        == 422
+    )
+    assert (
+        app_client.post(
+            "/api/imported-audiobooks/bulk-action", json={"action": "review_matches", "edition_ids": [1]}
+        ).status_code
+        == 422
+    )
+
+
+async def _book_id(sessionmaker, edition_id: int) -> int:
+    async with sessionmaker() as db:
+        edition = await db.get(ImportedAudiobook, edition_id)
+        assert edition is not None
+        return edition.book_id
+
+
+@pytest.mark.asyncio
+async def test_bulk_retry_processing_requeues_each_failed_job(app_client, sqlite_sessionmaker):
+    async with sqlite_sessionmaker() as db:
+        ids = await _seed_bulk_editions(db, failed={}, healthy={})
+        failed_job = ProcessingJob(
+            job_type="rematch_imported_audiobook",
+            status="error",
+            target_type="imported_audiobook",
+            target_id=ids["failed"],
+            payload={"realign": False},
+            error="EPUB missing",
+            attempt_count=3,
+            max_attempts=3,
+        )
+        db.add(failed_job)
+        await db.commit()
+        job_id = failed_job.id
+
+    response = app_client.post(
+        "/api/imported-audiobooks/bulk-action",
+        json={"action": "retry_processing", "edition_ids": [ids["failed"], ids["healthy"]]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "queued": [ids["failed"]],
+        "skipped": [{"edition_id": ids["healthy"], "reason": "Human audio"}],
+    }
+    async with sqlite_sessionmaker() as db:
+        job = await db.get(ProcessingJob, job_id)
+        assert job.status == "queued"
+        assert job.error is None
 
 
 @pytest.mark.asyncio
