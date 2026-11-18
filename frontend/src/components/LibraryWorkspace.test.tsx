@@ -138,7 +138,7 @@ describe("Audio-only library", () => {
           url.includes("series=Artemis%20Fowl"),
       ),
     ).toBe(true);
-    expect(screen.queryByText("Organize this series")).not.toBeInTheDocument();
+    expect(screen.getByText("Organize this series")).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("link", { name: /Artemis Fowl Eoin Colfer/ }),
     );
@@ -230,6 +230,52 @@ it("loads series pages incrementally and fetches the complete list only for orga
         url.includes("/api/books/catalog?") && url.includes("limit=100"),
     ),
   ).toBe(true);
+});
+
+it("organizes the complete series when the page was reached from a search", async () => {
+  const books = [1, 2, 3].map((id) =>
+    catalogBook({ id, title: `Volume ${id}`, series: "Saga" }),
+  );
+  const fetch = stubFetch((url) => {
+    if (url.startsWith("/api/books/catalog")) {
+      const params = new URL(url, "http://localhost").searchParams;
+      return response(
+        params.get("limit") === "100" ? page(books) : page(books.slice(0, 1)),
+      );
+    }
+    return response([]);
+  });
+  renderWithClient(
+    <LibraryWorkspace
+      search="?series=Saga&q=volume+1&source=epub"
+      hash=""
+      onNavigate={vi.fn()}
+      onEdit={vi.fn()}
+    />,
+  );
+  await screen.findByText("Volume 1");
+  const details = screen.getByText("Organize this series").closest("details");
+  expect(details).not.toBeNull();
+  details!.open = true;
+  fireEvent(details!, new Event("toggle"));
+  await screen.findByRole("button", { name: "Rename" });
+  expect(
+    screen.getByText(/Organizing every book in this series/),
+  ).toBeInTheDocument();
+  expect(await screen.findAllByText("Volume 3")).not.toHaveLength(0);
+  const organizerCalls = fetch.mock.calls
+    .map(([url]) => url)
+    .filter(
+      (url) =>
+        url.startsWith("/api/books/catalog?") && url.includes("limit=100"),
+    );
+  expect(organizerCalls).not.toHaveLength(0);
+  for (const url of organizerCalls) {
+    const params = new URL(url, "http://localhost").searchParams;
+    expect(params.get("series")).toBe("Saga");
+    expect(params.get("q") ?? "").toBe("");
+    expect(params.has("source")).toBe(false);
+  }
 });
 
 it("preserves all filters in group links, saved views, and subsequent filter changes", async () => {

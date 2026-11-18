@@ -207,9 +207,7 @@ export default function LibraryWorkspace({
   const change = (next: LibraryValues) =>
     onNavigate(libraryPath({ ...current, ...next }));
   const openBook: OpenBook = (book) => onEdit(book, libraryPath(current));
-  const filteredSeries = Boolean(
-    source || query || genre || audiobook || review,
-  );
+  const filtered = Boolean(source || query || genre || audiobook || review);
   const title =
     series != null
       ? series || "Standalone books"
@@ -381,12 +379,20 @@ export default function LibraryWorkspace({
       )}
       {!loading && !grouped && (
         <>
-          {series && !filteredSeries && (
+          {series && (
             <details
               className="workspace-disclosure"
               onToggle={(event) => setOrganizing(event.currentTarget.open)}
             >
               <summary>Organize this series</summary>
+              {/* The organizer loads the complete series itself, so filters
+                  on this page never limit what gets reordered. */}
+              {organizing && filtered && (
+                <p className="hint">
+                  Organizing every book in this series. Your search and filters
+                  only apply to the list below.
+                </p>
+              )}
               {organizing && (
                 <SeriesOrganizer
                   key={series}
