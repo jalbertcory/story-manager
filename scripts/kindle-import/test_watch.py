@@ -1,7 +1,8 @@
 import itertools
 import unittest
 
-from watch import kindle_connections, watch
+from kindle_usb import kindle_connections
+from watch import watch
 
 
 class WatchTests(unittest.TestCase):

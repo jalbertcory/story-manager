@@ -26,7 +26,7 @@ def install():
     with tempfile.TemporaryDirectory(dir=runtime) as tmp:
         stage = Path(tmp)
         build_reader(stage / "kindle-reader")
-        for name in ("watch.py", "kindle_import.py", CONFIG.name):
+        for name in ("watch.py", "kindle_import.py", "cleanup.py", "kindle_usb.py", CONFIG.name):
             shutil.copyfile(Path(__file__).with_name(name), stage / name)
             (stage / name).chmod(0o600)
         definition = {

@@ -1,4 +1,5 @@
 {
   "calibre": "http://calibre.example:8080",
-  "story_manager": "http://story-manager.example:8000"
+  "story_manager": "http://story-manager.example:8000",
+  "cleanup": "off"
 }

@@ -27,6 +27,10 @@ from urllib.request import (
 )
 import uuid
 import zipfile
+from xml.etree.ElementTree import ParseError
+
+from cleanup import clean_verified
+from kindle_usb import connected
 
 CONFIG = Path(__file__).with_name("config.local.json")
 STATE = Path.home() / "Library/Application Support/Kindle Story Import"
@@ -96,11 +100,16 @@ def build_reader(helper):
     )
 
 
-def usb_sources(stage, check):
+def usb_reader(stage):
     helper = Path(__file__).with_name("kindle-reader")
     if not helper.is_file():
         helper = stage / "kindle-reader"
         build_reader(helper)
+    return helper
+
+
+def usb_sources(stage, check):
+    helper = usb_reader(stage)
     result = subprocess.run([str(helper), "list" if check else "read", str(stage)])
     if result.returncode == 2:
         if check:
@@ -278,7 +287,7 @@ def process(args, files):
             db.execute("ALTER TABLE pending_series ADD COLUMN asin TEXT")
         source = json.dumps([base, library, story])
         failures = 0
-        for path in files:
+        for path in ([] if getattr(args, "preview_cleanup", False) else files):
             try:
                 digest = fingerprint(path)
                 pending = db.execute(
@@ -320,7 +329,22 @@ def process(args, files):
             except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                 print(f"  {path.name} — {exc}", file=sys.stderr)
                 failures += 1
-        print(f"{len(files) - failures} completed or previously imported; {failures} need attention.")
+        if not getattr(args, "preview_cleanup", False):
+            print(f"{len(files) - failures} completed or previously imported; {failures} need attention.")
+        if not failures and getattr(args, "cleanup_stage", None):
+            clean_verified(
+                usb_reader(args.cleanup_stage),
+                args.cleanup_stage,
+                files,
+                db,
+                source,
+                fingerprint,
+                story_client,
+                story,
+                args.cleanup,
+                args.preview_cleanup,
+                args.attachment,
+            )
         return int(bool(failures))
 
 
@@ -331,6 +355,8 @@ def load_settings(path):
         raise ValueError(f"Copy config.example.json to {path} and set both server URLs.") from None
     if not isinstance(settings, dict):
         raise ValueError(f"Expected a JSON object in {path}.")
+    if settings.get("cleanup", "off") not in ("off", "books", "books-and-sidecars"):
+        raise ValueError("cleanup must be off, books, or books-and-sidecars.")
     for key in ("calibre", "story_manager"):
         url = urlsplit(settings.get(key) or "")
         if (
@@ -349,6 +375,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", type=Path, nargs="?", help="export folder; default: mounted Kindle dedrm")
     parser.add_argument("--attached", action="store_true", help="scan Kindle-named drives or the connected MTP Kindle")
+    parser.add_argument("--preview-cleanup", action="store_true", help="preview cleanup of already imported USB exports")
     parser.add_argument("--check", action="store_true", help="check services and list inputs without importing")
     parser.add_argument("--config", type=Path, default=CONFIG, help="local JSON settings file")
     parser.add_argument("--calibre", help="Calibre Content server URL")
@@ -363,6 +390,12 @@ def main(argv=None):
             settings.get("calibre_password") if not args.user or args.user == settings.get("calibre_user") else None
         )
         args.user = args.user or settings.get("calibre_user")
+        args.cleanup = settings.get("cleanup", "off")
+        args.cleanup_stage = None
+        if args.preview_cleanup and (args.check or args.folder):
+            parser.error("--preview-cleanup requires a USB Kindle")
+        if args.preview_cleanup and args.cleanup == "off":
+            args.cleanup = "books"
         with tempfile.TemporaryDirectory(prefix="kindle-import-") as stage:
             if args.folder:
                 folders = [args.folder]
@@ -372,9 +405,14 @@ def main(argv=None):
                     for folder in Path("/Volumes").glob("*/dedrm")
                     if (not args.attached or "kindle" in folder.parent.name.lower()) and folder.is_dir()
                 ]
+            if args.preview_cleanup and folders:
+                raise ValueError("Cleanup is supported only for a USB Kindle using MTP.")
             if folders:
                 files = [path for folder in folders for path in find_sources(folder)]
             else:
+                if not args.check and (args.preview_cleanup or args.attached and args.cleanup != "off"):
+                    args.cleanup_stage = Path(stage)
+                    args.attachment = connected()
                 files = usb_sources(Path(stage), args.check)
             if folders or not args.check:
                 print(f"{len(files)} Kindle export(s) found.")
@@ -397,7 +435,16 @@ def main(argv=None):
                 if not args.user:
                     return 1
                 return process(args, files)
-    except (OSError, URLError, ValueError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        URLError,
+        ValueError,
+        sqlite3.Error,
+        KeyError,
+        ParseError,
+        zipfile.BadZipFile,
+        subprocess.SubprocessError,
+    ) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

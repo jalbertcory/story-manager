@@ -1,5 +1,7 @@
 // Read exported books from a Kindle that exposes its storage over MTP on macOS.
 #include <libmtp.h>
+#include <errno.h>
+#include <stddef.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -36,8 +38,15 @@ static bool read_book(LIBMTP_mtpdevice_t *device, const LIBMTP_file_t *file,
     return true;
 }
 
+#include "kindle_cleanup.h"
+
+struct operation {
+    bool list, cleanup, preview, sidecars;
+    unsigned count;
+};
+
 static bool walk(LIBMTP_mtpdevice_t *device, uint32_t storage, uint32_t parent,
-                 unsigned depth, const char *destination, bool list_only, bool *found) {
+                 unsigned depth, const char *destination, struct operation *op, bool *found) {
     if (depth > 64) return false;
     LIBMTP_Clear_Errorstack(device);
     LIBMTP_file_t *files = LIBMTP_Get_Files_And_Folders(device, storage, parent);
@@ -53,9 +62,10 @@ static bool walk(LIBMTP_mtpdevice_t *device, uint32_t storage, uint32_t parent,
         if (ok && name && *name && *name != '.' && !strchr(name, '/')) {
             if (f->filetype == LIBMTP_FILETYPE_FOLDER && (depth || !strcasecmp(name, "dedrm"))) {
                 *found = true;
-                ok = walk(device, storage, f->item_id, depth + 1, destination, list_only, found);
+                ok = walk(device, storage, f->item_id, depth + 1, destination, op, found);
             } else if (depth && f->filetype != LIBMTP_FILETYPE_FOLDER && book_filename(name)) {
-                ok = read_book(device, f, destination, list_only);
+                ok = op->cleanup ? clean_export(device, f, storage, destination, op->sidecars, op->preview, &op->count)
+                                 : read_book(device, f, destination, op->list);
             }
         }
         LIBMTP_destroy_file_t(f);
@@ -64,7 +74,20 @@ static bool walk(LIBMTP_mtpdevice_t *device, uint32_t storage, uint32_t parent,
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3 || (strcmp(argv[1], "list") && strcmp(argv[1], "read"))) return 1;
+    if (argc < 3 || argc > 4) return 1;
+    struct operation op = {0};
+    op.list = !strcmp(argv[1], "list");
+    op.preview = !strcmp(argv[1], "preview-books") || !strcmp(argv[1], "preview-books-and-sidecars");
+    op.sidecars = !strcmp(argv[1], "preview-books-and-sidecars") || !strcmp(argv[1], "clean-books-and-sidecars");
+    op.cleanup = op.preview || op.sidecars || !strcmp(argv[1], "clean-books");
+    if (!op.list && !op.cleanup && strcmp(argv[1], "read")) return 1;
+    if (argc != (op.cleanup ? 4 : 3)) return 1;
+    unsigned long expected = 0;
+    if (op.cleanup) {
+        char *end = NULL;
+        expected = strtoul(argv[3], &end, 10);
+        if (*end || !expected || expected > UINT32_MAX) return 1;
+    }
     LIBMTP_Init();
     LIBMTP_raw_device_t *devices = NULL, *kindle = NULL;
     int count = 0;
@@ -84,14 +107,25 @@ int main(int argc, char **argv) {
     // A USB reset disconnects it until the cable is reinserted (libmtp #436).
     if (kindle->device_entry.product_id == 0x9981)
         kindle->device_entry.device_flags &= ~UINT32_C(0x10000000);
+    char attachment[64];
+    snprintf(attachment, sizeof(attachment), "%u:%u", kindle->bus_location, kindle->devnum);
     LIBMTP_mtpdevice_t *device = LIBMTP_Open_Raw_Device_Uncached(kindle);
     free(devices);
     if (!device) { fprintf(stderr, "Cannot open the Kindle. Close other USB transfer apps and reconnect.\n"); return 1; }
     bool found = false;
     bool ok = LIBMTP_Get_Storage(device, LIBMTP_STORAGE_SORTBY_NOTSORTED) == 0;
+    if (ok && !op.list && !device_marker(attachment, argv[2], op.cleanup)) {
+        fprintf(stderr, "Unable to confirm the Kindle identity for cleanup.\n");
+        if (op.cleanup) ok = false;
+    }
     for (LIBMTP_devicestorage_t *s = device->storage; s && ok; s = s->next)
-        ok = walk(device, s->id, LIBMTP_FILES_AND_FOLDERS_ROOT, 0, argv[2], !strcmp(argv[1], "list"), &found);
+        ok = walk(device, s->id, LIBMTP_FILES_AND_FOLDERS_ROOT, 0, argv[2], &op, &found);
     LIBMTP_Release_Device(device);
     if (!found && ok) fprintf(stderr, "The Kindle has no visible dedrm folder at the root of its storage.\n");
+    if (op.cleanup) printf("%u verified export(s) %s.\n", op.count, op.preview ? "matched" : "removed");
+    if (op.cleanup && op.count != expected) {
+        fprintf(stderr, "Only %u of %lu expected exports matched. Reconnect to scan again.\n", op.count, expected);
+        ok = false;
+    }
     return ok && found ? 0 : 1;
 }

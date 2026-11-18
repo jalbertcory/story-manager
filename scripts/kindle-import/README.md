@@ -18,3 +18,15 @@ Connect one Kindle at a time with a data-capable cable and keep it connected unt
 - To check the connection and server setup manually, run `/usr/bin/python3 kindle_import.py --check`. Close other USB file-transfer apps if they have the Kindle open.
 - To import an exported folder manually, run `/usr/bin/python3 kindle_import.py "/path/to/dedrm"`.
 - To turn automatic imports off, run `launchctl disable "gui/$(id -u)/org.story-manager.kindle-import"` and then `launchctl bootout "gui/$(id -u)/org.story-manager.kindle-import"`. Run the installer again to turn them back on. Import history stays in `~/Library/Application Support/Kindle Story Import/history.sqlite`.
+
+## Clean the Kindle after import
+
+Run `/usr/bin/python3 kindle_import.py --preview-cleanup` to list what would be removed from a connected MTP Kindle. Cleanup is optional. Set `cleanup` in `config.local.json` and rerun `/usr/bin/python3 install.py` to apply your choice. Installing starts the watcher immediately, including for a Kindle already plugged in.
+
+| Setting | What happens after a successful USB import |
+| --- | --- |
+| `off` (default) | Keep all files. |
+| `books` | Remove verified exports from `dedrm` and matching book files from `documents/Downloads/Items01` or another Kindle `Downloads/Items` folder. Keep the book’s `.sdr` folder. |
+| `books-and-sidecars` | Also remove the matching `.sdr` folder and its contents, which may include local annotations and reading progress. |
+
+The importer checks each export’s content against its completed import history, downloads the saved EPUB from Story Manager, and verifies its Kindle ID. Only an exact book filename stem, including that ID, qualifies a download for removal. A changed export, an unrelated dictionary, or a book without a verifiable ID stays on the Kindle. Cleanup removes on-device copies permanently. Mounted drives and manual folder imports stay read-only.
