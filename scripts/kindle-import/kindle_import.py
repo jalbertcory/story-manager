@@ -345,7 +345,7 @@ def load_settings(path):
     return settings
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", type=Path, nargs="?", help="export folder; default: mounted Kindle dedrm")
     parser.add_argument("--attached", action="store_true", help="scan Kindle-named drives or the connected MTP Kindle")
@@ -354,7 +354,7 @@ def main():
     parser.add_argument("--calibre", help="Calibre Content server URL")
     parser.add_argument("--story-manager")
     parser.add_argument("--user", default=os.environ.get("CALIBRE_USER"), help="Calibre Digest login")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         settings = load_settings(args.config) if args.config.exists() or not (args.calibre and args.story_manager) else {}
         args.calibre = args.calibre or settings["calibre"]

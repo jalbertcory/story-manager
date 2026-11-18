@@ -2,9 +2,9 @@
 
 import plistlib
 import subprocess
-import sys
 import time
-from pathlib import Path
+
+from kindle_import import main as import_books
 
 POLL_SECONDS = 15
 
@@ -50,10 +50,9 @@ def watch(detect, run_import, sleep=time.sleep, clock=time.monotonic):
 
 def import_connected():
     print(time.strftime("%Y-%m-%d %H:%M:%S — Kindle connected, checking exports."), flush=True)
-    return subprocess.run(
-        [sys.executable, "-u", str(Path(__file__).with_name("kindle_import.py")), "--attached"],
-        stdin=subprocess.DEVNULL,
-    ).returncode
+    # The process requesting local-network access must survive a denied first
+    # connection so macOS can present the permission prompt (Apple TN3179).
+    return import_books(["--attached"])
 
 
 if __name__ == "__main__":

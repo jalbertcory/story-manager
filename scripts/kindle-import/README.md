@@ -13,6 +13,7 @@ Connect a Kindle by USB while signed in to your Mac. Within about 15 seconds, th
 
 Connect one Kindle at a time with a data-capable cable and keep it connected until the transfer finishes. Supported exports are KFX-ZIP, KFX, AZW3, MOBI, and EPUB. The agent reads Paperwhite devices over MTP and also recognizes mounted Kindle drives with “Kindle” in the volume name. Reconnect after adding more exports. The importer remembers completed books and retries failures while the Kindle stays connected.
 
+- On the first connection, allow Python to access the local network if macOS asks. If the log reports “No route to host” while the servers are reachable, check Python under **System Settings → Privacy & Security → Local Network**. Leave the Kindle connected for the automatic retry.
 - Follow activity with `tail -f "$HOME/Library/Application Support/Kindle Story Import/import.log"`.
 - To check the connection and server setup manually, run `/usr/bin/python3 kindle_import.py --check`. Close other USB file-transfer apps if they have the Kindle open.
 - To import an exported folder manually, run `/usr/bin/python3 kindle_import.py "/path/to/dedrm"`.
