@@ -49,6 +49,26 @@ static bool remove_entry(LIBMTP_mtpdevice_t *d, LIBMTP_file_t *f, bool preview) 
     return false;
 }
 
+// Some Kindle models require directories to be emptied before they can be removed.
+static bool remove_sidecar(LIBMTP_mtpdevice_t *device, LIBMTP_file_t *folder, unsigned depth, bool preview) {
+    if (preview) return remove_entry(device, folder, true);
+    if (depth > 64) return false;
+    LIBMTP_file_t *list;
+    if (!children(device, folder->storage_id, folder->item_id, &list)) return false;
+    bool ok = true;
+    while (list) {
+        LIBMTP_file_t *f = list;
+        list = f->next;
+        if (ok) {
+            if (f->parent_id != folder->item_id || f->storage_id != folder->storage_id) ok = false;
+            else if (f->filetype == LIBMTP_FILETYPE_FOLDER) ok = remove_sidecar(device, f, depth + 1, false);
+            else ok = remove_entry(device, f, false);
+        }
+        LIBMTP_destroy_file_t(f);
+    }
+    return ok && remove_entry(device, folder, false);
+}
+
 static bool items_folder(const char *name) {
     return !strncasecmp(name, "Items", 5) && strspn(name + 5, "0123456789") == strlen(name + 5);
 }
@@ -77,8 +97,8 @@ static bool clean_downloads(LIBMTP_mtpdevice_t *d, uint32_t storage, uint32_t pa
                 const char *ext = name + n;
                 bool download = !strcasecmp(ext, ".kfx") || !strcasecmp(ext, ".azw") ||
                                 !strcasecmp(ext, ".azw3") || !strcasecmp(ext, ".mobi") || !strcasecmp(ext, ".epub");
-                if ((!folder && download) || (folder && sidecars && !strcasecmp(ext, ".sdr")))
-                    ok = remove_entry(d, f, preview);
+                if (!folder && download) ok = remove_entry(d, f, preview);
+                else if (folder && sidecars && !strcasecmp(ext, ".sdr")) ok = remove_sidecar(d, f, 0, preview);
             }
         }
         LIBMTP_destroy_file_t(f);
