@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import DataError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,7 @@ from ..audiobook_schemas import (
     LibationBackupPreviewResponse,
     reading_block_fields,
 )
-from ..database import get_db
+from ..database import Base, get_db
 from ..job_payloads import (
     RebuildImportedAudiobookPayload,
     RematchImportedAudiobookPayload,
@@ -414,16 +414,32 @@ async def bulk_imported_audiobook_action(
             skipped.append(AudiobookBulkActionSkip(edition_id=edition_id, reason="Audiobook not found"))
             continue
         status, job = statuses[edition_id]
-        reason = (
-            status.label
-            if status.next_action != request.action
-            else await _run_edition_action(request.action, edition, books[edition.book_id], job, db)
-        )
+        if status.next_action != request.action:
+            skipped.append(AudiobookBulkActionSkip(edition_id=edition_id, reason=status.label))
+            continue
+        try:
+            # Any rollback while queueing an earlier edition (a skipped action,
+            # or a job deduplicated against a concurrent insert) expired what
+            # was loaded above; async sessions cannot lazy-load it back.
+            await _reload_if_expired(db, edition)
+            book = books[edition.book_id]
+            await _reload_if_expired(db, book, job)
+            reason = await _run_edition_action(request.action, edition, book, job, db)
+        except Exception:
+            logger.exception("Bulk %s failed for imported audiobook %s", request.action, edition_id)
+            await db.rollback()
+            reason = "Could not be queued; see the server log"
         if reason is None:
             queued.append(edition_id)
         else:
             skipped.append(AudiobookBulkActionSkip(edition_id=edition_id, reason=reason))
     return AudiobookBulkActionResponse(queued=queued, skipped=skipped)
+
+
+async def _reload_if_expired(db: AsyncSession, *instances: Base | None) -> None:
+    for instance in instances:
+        if instance is not None and inspect(instance).expired_attributes:
+            await db.refresh(instance)
 
 
 async def _run_edition_action(
@@ -450,6 +466,8 @@ async def _run_edition_action(
         else:
             await queue_edition_alignment(edition, db)
     except HTTPException as exc:
+        # Drop anything the helper changed before refusing.
+        await db.rollback()
         return str(exc.detail)
     return None
 

@@ -552,3 +552,30 @@ async def test_partial_whisper_failure_keeps_finished_tracks_as_hybrid(db, tmp_p
     assert edition.progress_detail == "Whisper aligned 1 of 2 tracks; the rest keep estimated timing"
     assert tracks[0].alignment_score is not None
     assert tracks[1].alignment_score is None
+
+
+@pytest.mark.asyncio
+async def test_alignment_without_a_provider_leaves_a_blocked_edition_blocked(db):
+    """An align job queued before a rematch hit match review must not mark the edition ready."""
+    book = models.Book(title="Blocked", immutable_path="library/b-immutable.epub", current_path="library/b.epub")
+    db.add(book)
+    await db.flush()
+    review = "Chapter matching needs review: Chapter 2 has no narration."
+    edition = models.ImportedAudiobook(
+        book_id=book.id,
+        name="Human narration",
+        status="error",
+        alignment_method="estimated",
+        error=review,
+        progress_detail="Chapter matching blocked; review required",
+    )
+    db.add(edition)
+    await db.commit()
+
+    assert await audiobook_alignment.process_alignment(edition.id, db) == "not_configured"
+
+    await db.refresh(edition)
+    assert edition.status == "error"
+    assert edition.error == review
+    assert edition.alignment_error is None
+    assert edition.progress_detail == "Chapter matching blocked; review required"

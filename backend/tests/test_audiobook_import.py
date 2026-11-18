@@ -1264,3 +1264,41 @@ async def test_failed_multi_file_upload_discards_already_received_tracks(
         incoming_dir = tmp_path / str(book_id) / str(edition.id) / "incoming"
     assert incoming_dir.is_dir()
     assert list(incoming_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_keeps_going_after_a_rollback_or_unexpected_error(app_client, sqlite_sessionmaker, monkeypatch):
+    async with sqlite_sessionmaker() as db:
+        ids = await _seed_bulk_editions(
+            db,
+            raced={"pipeline_version": 0},
+            broken={"pipeline_version": 0},
+            fine={"pipeline_version": 0},
+        )
+    queue_rebuild = audiobook_imports.queue_edition_rebuild
+
+    async def flaky_rebuild(edition, db):
+        if edition.id == ids["raced"]:
+            # A job deduplicated against a concurrent insert rolls the session
+            # back, expiring every edition and book loaded for this request.
+            await db.rollback()
+            return
+        if edition.id == ids["broken"]:
+            raise RuntimeError("disk full")
+        await queue_rebuild(edition, db)
+
+    monkeypatch.setattr(audiobook_imports, "queue_edition_rebuild", flaky_rebuild)
+
+    response = app_client.post(
+        "/api/imported-audiobooks/bulk-action",
+        json={"action": "rebuild", "edition_ids": [ids["raced"], ids["broken"], ids["fine"]]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "queued": [ids["raced"], ids["fine"]],
+        "skipped": [{"edition_id": ids["broken"], "reason": "Could not be queued; see the server log"}],
+    }
+    async with sqlite_sessionmaker() as db:
+        jobs = (await db.execute(select(ProcessingJob))).scalars().all()
+        assert [(job.job_type, job.target_id) for job in jobs] == [("rebuild_imported_audiobook", ids["fine"])]

@@ -389,6 +389,33 @@ describe("AudiobookOverview", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("queues the audiobooks the confirmation named, even if the list changes", async () => {
+    const bodies: unknown[] = [];
+    serve(outdated, (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        jsonResponse({ queued: [11, 21, 31], skipped: [] }),
+      );
+    });
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Delta" });
+    fireEvent.click(screen.getByRole("button", { name: /^Needs rebuild 3$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild for all 3" }));
+
+    fireEvent.change(screen.getByLabelText("Find audiobooks"), {
+      target: { value: "ha" },
+    });
+    const dialog = screen.getByRole("dialog", {
+      name: "Rebuild for 3 audiobooks?",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Queue all" }));
+
+    await screen.findByText("Rebuild queued for 3 audiobooks.", {
+      exact: false,
+    });
+    expect(bodies).toEqual([{ action: "rebuild", edition_ids: [11, 21, 31] }]);
+  });
+
   it("previews and queues versioned human audiobook rebuilds", async () => {
     const posts: string[] = [];
     serve(overview, (url) => {

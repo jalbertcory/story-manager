@@ -56,6 +56,7 @@ type BulkPlan = {
   action: EditionJobAction;
   label: string;
   editionIds: number[];
+  bookIds: Set<number>;
 };
 
 // A state filter can be acted on in one go when every human edition shown in
@@ -79,8 +80,10 @@ function bulkPlanFor(books: OverviewBook[], filter: string): BulkPlan | null {
         action: next,
         label: source.next_action_label ?? next,
         editionIds: [],
+        bookIds: new Set(),
       };
       plan.editionIds.push(source.edition_id);
+      plan.bookIds.add(book.book_id);
     }
   }
   return plan && plan.editionIds.length > 1 ? plan : null;
@@ -94,12 +97,23 @@ async function runBulkPlan(plan: BulkPlan) {
     start < plan.editionIds.length;
     start += BULK_BATCH_SIZE
   ) {
-    const result = await bulkImportedAudiobookAction({
-      action: plan.action,
-      edition_ids: plan.editionIds.slice(start, start + BULK_BATCH_SIZE),
-    });
-    queued.push(...result.queued);
-    skipped.push(...result.skipped);
+    try {
+      const result = await bulkImportedAudiobookAction({
+        action: plan.action,
+        edition_ids: plan.editionIds.slice(start, start + BULK_BATCH_SIZE),
+      });
+      queued.push(...result.queued);
+      skipped.push(...result.skipped);
+    } catch (error) {
+      if (start === 0) throw error;
+      // Earlier batches were already queued; say so rather than only failing.
+      const message = error instanceof Error ? error.message : String(error);
+      const remaining = plan.editionIds.length - start;
+      throw new Error(
+        `${describeBulkResult(plan.label, queued.length, skipped)} Stopped before the last ${plural(remaining, "audiobook")}: ${message}`,
+        { cause: error },
+      );
+    }
   }
   return { queued, skipped };
 }
@@ -158,7 +172,9 @@ function AudiobookOverview() {
   );
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
-  const [confirmBulk, setConfirmBulk] = useState(false);
+  // The plan the confirmation dialog shows, kept fixed while it is open so a
+  // refetch cannot change which audiobooks "Queue all" sends.
+  const [pendingBulk, setPendingBulk] = useState<BulkPlan | null>(null);
 
   const overview = useQuery({
     queryKey: queryKeys.audiobookOverview,
@@ -194,10 +210,17 @@ function AudiobookOverview() {
   const bulk = useMutation({
     mutationFn: runBulkPlan,
     onSuccess: ({ queued, skipped }, plan) => {
-      setConfirmBulk(false);
+      setPendingBulk(null);
       setNotice(describeBulkResult(plan.label, queued.length, skipped));
+    },
+    // A failed later batch may still have queued the earlier ones.
+    onSettled: (_result, _error, plan) => {
       refreshAfterQueueing();
-      void queryClient.invalidateQueries({ queryKey: ["audiobook-imports"] });
+      for (const bookId of plan.bookIds) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.audiobook.imports(bookId),
+        });
+      }
     },
   });
 
@@ -348,7 +371,7 @@ function AudiobookOverview() {
                 onClick={() => {
                   setNotice("");
                   bulk.reset();
-                  setConfirmBulk(true);
+                  setPendingBulk(bulkPlan);
                 }}
               >
                 {bulkPlan.label} for all {bulkPlan.editionIds.length}
@@ -365,7 +388,7 @@ function AudiobookOverview() {
               {action.error.message}
             </p>
           )}
-          {bulk.isError && !confirmBulk && (
+          {bulk.isError && !pendingBulk && (
             <p className="error" role="alert">
               {bulk.error.message}
             </p>
@@ -429,15 +452,15 @@ function AudiobookOverview() {
         <AudiobookToolsPanel />
       </section>
 
-      {bulkPlan && (
+      {pendingBulk && (
         <ConfirmActionDialog
-          open={confirmBulk}
-          title={`${bulkPlan.label} for ${plural(bulkPlan.editionIds.length, "audiobook")}?`}
+          open
+          title={`${pendingBulk.label} for ${plural(pendingBulk.editionIds.length, "audiobook")}?`}
           confirmLabel="Queue all"
           busyLabel="Queueing…"
           isPending={bulk.isPending}
-          onCancel={() => setConfirmBulk(false)}
-          onConfirm={() => bulk.mutate(bulkPlan)}
+          onCancel={() => setPendingBulk(null)}
+          onConfirm={() => bulk.mutate(pendingBulk)}
         >
           <p>
             This queues one job for each audiobook shown. An audiobook whose

@@ -743,9 +743,17 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
         error="Could not read the audio files.",
     )
     pending = ImportedAudiobook(book_id=book.id, name="Pending import", status="queued")
-    db.add_all([edition, blocked, failed_import, pending])
+    # An import queued again after an earlier attempt left its tracks behind.
+    retrying = ImportedAudiobook(
+        book_id=book.id,
+        name="Retried import",
+        status="queued",
+        alignment_method="estimated",
+        matched_content_version=1,
+    )
+    db.add_all([edition, blocked, failed_import, pending, retrying])
     await db.flush()
-    for imported in (edition, blocked, failed_import):
+    for imported in (edition, blocked, failed_import, retrying):
         db.add(
             ImportedAudiobookTrack(
                 imported_audiobook_id=imported.id,
@@ -762,7 +770,7 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
 
     jobs = await queue_audio_reconciliation(book, db, parent_job_id=None)
     await db.refresh(book)
-    for imported in (edition, blocked, failed_import, pending):
+    for imported in (edition, blocked, failed_import, pending, retrying):
         await db.refresh(imported)
 
     assert book.audiobook_publication_state == "stale"
@@ -770,9 +778,10 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
     # A match block is cleared by the new text, so it is rematched too.
     assert blocked.status == "stale"
     # A failed import keeps its error (retrying the import picks up the new
-    # text) and a pending import has nothing to rematch yet.
+    # text), and a queued import matches the new text when it runs.
     assert failed_import.status == "error"
     assert pending.status == "queued"
+    assert retrying.status == "queued"
     assert [(job.job_type, job.target_id) for job in jobs] == [
         ("rematch_imported_audiobook", edition.id),
         ("rematch_imported_audiobook", blocked.id),

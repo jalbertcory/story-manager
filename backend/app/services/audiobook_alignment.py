@@ -603,6 +603,10 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> AlignmentOutco
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = transcription_provider_name(settings)
     if settings is None or provider == "none":
+        if edition.status == ImportedAudiobookStatus.ERROR.value:
+            # The edition failed or was blocked for match review after this job
+            # was queued; that state is what a person needs to see.
+            return "not_configured"
         transition_state(
             edition,
             "status",

@@ -1137,8 +1137,8 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
     for edition in editions:
         if edition.matched_content_version == content_version and edition.status != "stale":
             continue
-        if not track_counts.get(edition.id):
-            continue  # Nothing to rematch; a pending import matches the current text itself.
+        if not track_counts.get(edition.id) or edition.status == ImportedAudiobookStatus.QUEUED.value:
+            continue  # Nothing to rematch yet; a pending import matches the current text itself.
         if edition.status == ImportedAudiobookStatus.ERROR.value and not is_match_review_error(edition.error):
             # The audio never finished importing. A rematch would hide that
             # failure behind "stale"; retrying the import picks up the new text.
