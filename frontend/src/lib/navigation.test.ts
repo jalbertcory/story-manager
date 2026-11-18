@@ -42,6 +42,24 @@ describe("application navigation", () => {
     expect(buildTabPath("audiobooks")).toBe("/activity/audiobooks");
   });
 
+  it("sends the old audiobook maintenance tool to the Audiobooks page", () => {
+    expect(
+      parseLocation("/settings/library-tools", "", "?section=audiobooks"),
+    ).toEqual({
+      view: "tab",
+      tab: "audiobooks",
+      libraryView: "series",
+      redirectPath: "/activity/audiobooks",
+      redirectSearch: "",
+    });
+    expect(
+      parseLocation("/utilities", "", "?section=audiobooks"),
+    ).toMatchObject({ tab: "audiobooks", redirectPath: "/activity/audiobooks" });
+    expect(
+      parseLocation("/settings/library-tools", "", "?section=backups"),
+    ).toEqual({ view: "tab", tab: "utilities", libraryView: "series" });
+  });
+
   it("keeps the guided import workflow inside the Library section", () => {
     expect(parseLocation("/import", "", "?type=audiobook")).toEqual({
       view: "tab",

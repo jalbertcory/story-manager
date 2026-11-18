@@ -131,11 +131,8 @@ async def imported_audiobook_response(
     needs_asset_upgrade = (
         not edition.source_manifest_sha256 or (edition.derived_format_version or 0) < CURRENT_DERIVED_FORMAT_VERSION
     )
-    needs_rebuild = (
-        needs_asset_upgrade
-        or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
-        or bool(edition.alignment_error)
-    )
+    # A Whisper failure is retried by realigning; rebuilding would not help.
+    needs_rebuild = needs_asset_upgrade or (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
     book = await db.get(Book, edition.book_id)
     if transcription_ready is None:
         transcription_ready = await transcription_configured(db)

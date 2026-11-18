@@ -379,6 +379,15 @@ export function rebuildImportedAudiobook(editionId: number) {
   );
 }
 
+export function bulkImportedAudiobookAction(
+  body: Body<"/api/imported-audiobooks/bulk-action", "post">,
+) {
+  return unwrap(
+    api.POST("/api/imported-audiobooks/bulk-action", { body }),
+    "Failed to queue the audiobook actions",
+  );
+}
+
 export function getAudiobookOverview(options?: RequestOptions) {
   return unwrap(
     api.GET("/api/audiobooks/overview", requestInit(options)),

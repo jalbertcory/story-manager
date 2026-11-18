@@ -3,9 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   previewHumanAudiobookRebuilds,
   rebuildAllHumanAudiobooks,
-} from "../../api/audiobook";
-import { queryKeys } from "../../lib/queryKeys";
-import ConfirmActionDialog from "../ConfirmActionDialog";
+} from "../api/audiobook";
+import { queryKeys } from "../lib/queryKeys";
+import ConfirmActionDialog from "./ConfirmActionDialog";
 
 export default function AudiobookToolsPanel() {
   const queryClient = useQueryClient();
@@ -33,6 +33,9 @@ export default function AudiobookToolsPanel() {
       );
       void queryClient.invalidateQueries({
         queryKey: queryKeys.humanAudiobookRebuildPreview,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.audiobookOverview,
       });
       void queryClient.invalidateQueries({
         queryKey: queryKeys.processingJobs.all,
@@ -71,6 +74,9 @@ export default function AudiobookToolsPanel() {
               : ""}
             {audiobookRebuildPreview.unavailable_count > 0
               ? ` · ${audiobookRebuildPreview.unavailable_count} currently unavailable`
+              : ""}
+            {audiobookRebuildPreview.needs_review_count > 0
+              ? ` · ${audiobookRebuildPreview.needs_review_count} need match review first`
               : ""}
           </p>
         ) : null}

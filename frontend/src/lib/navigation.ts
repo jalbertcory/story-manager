@@ -39,6 +39,8 @@ export interface ParsedLocation {
   tab?: string;
   libraryView?: string;
   redirectPath?: string;
+  // Replaces the address's query on redirect; otherwise the query is kept.
+  redirectSearch?: string;
 }
 
 export const PRIMARY_NAV = [
@@ -131,6 +133,11 @@ const ROUTES = [
   })),
 ];
 
+// Library tool sections that moved to a page of their own.
+const MOVED_UTILITY_SECTIONS: Record<string, string> = {
+  audiobooks: "audiobooks",
+};
+
 const LEGACY_ROUTES: Record<string, string> = {
   "/attention": "attention",
   "/processing": "processing",
@@ -198,6 +205,19 @@ export function parseLocation(
   const libraryView = LIBRARY_VIEWS.includes(hash?.slice(1))
     ? hash.slice(1)
     : "series";
+  const movedTab =
+    route.key === "utilities"
+      ? MOVED_UTILITY_SECTIONS[new URLSearchParams(search).get("section") ?? ""]
+      : undefined;
+  if (movedTab) {
+    return {
+      view: "tab",
+      tab: movedTab,
+      libraryView,
+      redirectPath: getRoute(movedTab).path,
+      redirectSearch: "",
+    };
+  }
   return {
     view: "tab",
     tab: route.key,

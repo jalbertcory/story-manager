@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { components } from "../api/schema";
 import { jsonResponse, mockFetch, renderWithClient } from "../test-utils";
+import type { FixtureFetch } from "../test-utils";
 import AudiobookOverview from "./AudiobookOverview";
 
 type Overview = components["schemas"]["AudiobookOverviewResponse"];
 type Source = components["schemas"]["AudiobookOverviewSource"];
+type Book = components["schemas"]["AudiobookOverviewBook"];
+type RebuildPreview = components["schemas"]["HumanAudiobookRebuildPreview"];
 
 const source = (overrides: Partial<Source>): Source => ({
   kind: "human",
@@ -117,6 +120,64 @@ const overview: Overview = {
   ],
 };
 
+const rebuildPreview: RebuildPreview = {
+  current_pipeline_version: 1,
+  total_count: 5,
+  rebuild_count: 2,
+  realign_count: 1,
+  up_to_date_count: 1,
+  needs_review_count: 1,
+  unavailable_count: 1,
+};
+
+// Answers the overview and the maintenance panel's rebuild preview; POSTs go
+// to `post` when given.
+function serve(data: Overview, post?: FixtureFetch) {
+  return mockFetch((url, init) => {
+    if (init?.method === "POST" && post) return post(url, init);
+    if (url === "/api/audiobook/imports/rebuild-preview") {
+      return Promise.resolve(jsonResponse(rebuildPreview));
+    }
+    return Promise.resolve(jsonResponse(data));
+  });
+}
+
+const outdatedBook = (bookId: number, title: string, editionId: number) =>
+  ({
+    book_id: bookId,
+    title,
+    author: "Ann",
+    has_epub: true,
+    audio_kind: "human",
+    state: "outdated",
+    needs_attention: true,
+    sources: [
+      source({
+        edition_id: editionId,
+        state: "outdated",
+        state_label: "Needs rebuild",
+        next_action: "rebuild",
+        next_action_label: "Rebuild",
+      }),
+    ],
+  }) satisfies Book;
+
+const outdated: Overview = {
+  ...overview,
+  total_count: 4,
+  attention_count: 3,
+  counts: [
+    { state: "outdated", label: "Needs rebuild", count: 3 },
+    { state: "ready_whisper", label: "Human audio + Whisper", count: 1 },
+  ],
+  books: [
+    outdatedBook(1, "Alpha", 11),
+    outdatedBook(2, "Bravo", 21),
+    outdatedBook(3, "Charlie", 31),
+    { ...overview.books[3]!, book_id: 4, title: "Delta" },
+  ],
+};
+
 function titles() {
   return within(screen.getByRole("list", { name: "Audiobooks" }))
     .getAllByRole("link")
@@ -131,7 +192,7 @@ afterEach(() => {
 
 describe("AudiobookOverview", () => {
   it("lists every audiobook with one state and action per source", async () => {
-    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    serve(overview);
     renderWithClient(<AudiobookOverview />);
 
     expect(
@@ -156,7 +217,7 @@ describe("AudiobookOverview", () => {
   });
 
   it("filters by attention, by state and by search", async () => {
-    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    serve(overview);
     renderWithClient(<AudiobookOverview />);
     await screen.findByRole("link", { name: "Bravo" });
 
@@ -178,7 +239,7 @@ describe("AudiobookOverview", () => {
 
   it("opens with the state filter from the address", async () => {
     window.history.pushState({}, "", "/activity/audiobooks?state=needs_review");
-    mockFetch(() => Promise.resolve(jsonResponse(overview)));
+    serve(overview);
     renderWithClient(<AudiobookOverview />);
 
     await screen.findByRole("link", { name: "Alpha" });
@@ -187,12 +248,9 @@ describe("AudiobookOverview", () => {
 
   it("queues the edition's next action from the list", async () => {
     const posts: string[] = [];
-    mockFetch((url, init) => {
-      if (init?.method === "POST") {
-        posts.push(url);
-        return Promise.resolve(jsonResponse({}));
-      }
-      return Promise.resolve(jsonResponse(overview));
+    serve(overview, (url) => {
+      posts.push(url);
+      return Promise.resolve(jsonResponse({}));
     });
     renderWithClient(<AudiobookOverview />);
 
@@ -211,11 +269,7 @@ describe("AudiobookOverview", () => {
   });
 
   it("points to transcription settings when no provider is set up", async () => {
-    mockFetch(() =>
-      Promise.resolve(
-        jsonResponse({ ...overview, transcription_configured: false }),
-      ),
-    );
+    serve({ ...overview, transcription_configured: false });
     renderWithClient(<AudiobookOverview />);
 
     expect(
@@ -245,12 +299,9 @@ describe("AudiobookOverview", () => {
         },
       ],
     };
-    mockFetch((url, init) => {
-      if (init?.method === "POST") {
-        posts.push(url);
-        return Promise.resolve(jsonResponse({ id: 72, status: "queued" }));
-      }
-      return Promise.resolve(jsonResponse(data));
+    serve(data, (url) => {
+      posts.push(url);
+      return Promise.resolve(jsonResponse({ id: 72, status: "queued" }));
     });
     renderWithClient(<AudiobookOverview />);
     fireEvent.click(
@@ -265,21 +316,148 @@ describe("AudiobookOverview", () => {
   });
 
   it("explains an empty library", async () => {
-    mockFetch(() =>
-      Promise.resolve(
-        jsonResponse({
-          ...overview,
-          total_count: 0,
-          attention_count: 0,
-          counts: [],
-          books: [],
-        }),
-      ),
-    );
+    serve({
+      ...overview,
+      total_count: 0,
+      attention_count: 0,
+      counts: [],
+      books: [],
+    });
     renderWithClient(<AudiobookOverview />);
 
     await waitFor(() =>
       expect(screen.getByText(/No audiobooks yet/)).toBeVisible(),
     );
+  });
+
+  it("queues one action for every audiobook shown in a state", async () => {
+    const bodies: unknown[] = [];
+    serve(outdated, (url, init) => {
+      expect(url).toBe("/api/imported-audiobooks/bulk-action");
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        jsonResponse({
+          queued: [11, 21],
+          skipped: [{ edition_id: 31, reason: "Queued" }],
+        }),
+      );
+    });
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Delta" });
+
+    // Only a single state has one shared action to run.
+    expect(
+      screen.queryByRole("button", { name: /for all/ }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Needs rebuild 3$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild for all 3" }));
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Rebuild for 3 audiobooks?",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Queue all" }));
+
+    expect(
+      await screen.findByText(
+        "Rebuild queued for 2 audiobooks. Skipped 1: Queued.",
+        { exact: false },
+      ),
+    ).toBeVisible();
+    expect(bodies).toEqual([{ action: "rebuild", edition_ids: [11, 21, 31] }]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("acts only on the audiobooks the search leaves showing", async () => {
+    serve(outdated);
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Delta" });
+    fireEvent.click(screen.getByRole("button", { name: /^Needs rebuild 3$/ }));
+    fireEvent.change(screen.getByLabelText("Find audiobooks"), {
+      target: { value: "ha" },
+    });
+    expect(titles()).toEqual(["Alpha", "Charlie"]);
+    expect(
+      screen.getByRole("button", { name: "Rebuild for all 2" }),
+    ).toBeVisible();
+
+    // One audiobook is queued from its own row instead.
+    fireEvent.change(screen.getByLabelText("Find audiobooks"), {
+      target: { value: "alpha" },
+    });
+    expect(
+      screen.queryByRole("button", { name: /for all/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("queues the audiobooks the confirmation named, even if the list changes", async () => {
+    const bodies: unknown[] = [];
+    serve(outdated, (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        jsonResponse({ queued: [11, 21, 31], skipped: [] }),
+      );
+    });
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Delta" });
+    fireEvent.click(screen.getByRole("button", { name: /^Needs rebuild 3$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild for all 3" }));
+
+    fireEvent.change(screen.getByLabelText("Find audiobooks"), {
+      target: { value: "ha" },
+    });
+    const dialog = screen.getByRole("dialog", {
+      name: "Rebuild for 3 audiobooks?",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Queue all" }));
+
+    await screen.findByText("Rebuild queued for 3 audiobooks.", {
+      exact: false,
+    });
+    expect(bodies).toEqual([{ action: "rebuild", edition_ids: [11, 21, 31] }]);
+  });
+
+  it("previews and queues versioned human audiobook rebuilds", async () => {
+    const posts: string[] = [];
+    serve(overview, (url) => {
+      posts.push(url);
+      return Promise.resolve(
+        jsonResponse({
+          queued_count: 2,
+          skipped_count: 3,
+          pipeline_version: 1,
+        }),
+      );
+    });
+    renderWithClient(<AudiobookOverview />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Rebuild Human Audiobooks" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "2 of 5 editions need updating · 1 need text timing updated · 1 currently unavailable · 1 need match review first",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Import Libation backup" }),
+    ).toHaveAttribute("href", "/import?type=libation");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rebuild outdated human audiobooks" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        /Original audio and manual chapter corrections are preserved/,
+      ),
+    ).toBeVisible();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Queue rebuilds" }),
+    );
+
+    expect(
+      await screen.findByText("2 human audiobook rebuilds queued; 3 skipped."),
+    ).toBeVisible();
+    expect(posts).toEqual(["/api/audiobook/imports/rebuild-all?force=false"]);
   });
 });

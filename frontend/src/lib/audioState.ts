@@ -41,14 +41,23 @@ export function audioStateClass(state: AudioState) {
   return `audio-state audio-state--${TONES[state]}`;
 }
 
-// Actions that queue a job for one human edition, as opposed to links.
-export const EDITION_JOB_ACTIONS: ReadonlySet<AudioNextAction> = new Set([
+// Actions that queue a job for one human edition, as opposed to links. These
+// are also the actions the bulk endpoint accepts.
+export type EditionJobAction = Schemas["AudiobookBulkActionRequest"]["action"];
+
+const EDITION_JOB_ACTIONS: ReadonlySet<string> = new Set<EditionJobAction>([
   "retry_processing",
   "retry_import",
   "rebuild",
   "retry_whisper",
   "improve_with_whisper",
 ]);
+
+export function isEditionJobAction(
+  action: AudioNextAction,
+): action is EditionJobAction {
+  return EDITION_JOB_ACTIONS.has(action);
+}
 
 export function audioActionHref(
   action: AudioNextAction,
