@@ -212,7 +212,7 @@ export default function App() {
       window.history.replaceState(
         window.history.state,
         "",
-        `${parsed.redirectPath}${location.search}${location.hash}`,
+        `${parsed.redirectPath}${parsed.redirectSearch ?? location.search}${location.hash}`,
       );
       committed.current = {
         href: currentHref(),

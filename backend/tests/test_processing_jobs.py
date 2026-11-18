@@ -19,6 +19,7 @@ from backend.app.models import (
     SourceType,
 )
 from backend.app.services import processing_queue as processing_queue_module
+from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError
 from backend.app.services.processing_queue import ProcessingQueue, queue_audio_reconciliation, queue_processing_job
 
 
@@ -533,6 +534,130 @@ async def test_matching_jobs_queue_whisper_alignment_when_configured(
     assert [(j.parent_job_id, j.target_content_version) for j in alignment_jobs] == ([(job.id, 1)] if queued else [])
 
 
+_BLOCKED = f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration."
+
+
+async def _run_edition_job(sqlite_sessionmaker, monkeypatch, *, job_type: str, payload: dict) -> tuple[int, int, AsyncMock]:
+    """Claim and run one human-audiobook job; return (job id, edition id, notifier)."""
+    async with sqlite_sessionmaker() as db:
+        edition = await _matched_edition(db, provider="whisperx")
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type=job_type,
+            book_id=edition.book_id,
+            target_type="imported_audiobook",
+            target_id=edition.id,
+            target_content_version=1,
+            payload=payload,
+            resource_lane=processing_queue_module.JOB_POLICIES[job_type][0],
+        )
+        claimed = await crud.claim_processing_job(db, resource_lane=job.resource_lane, lease_owner="owner", lease_seconds=60)
+        assert claimed is not None and claimed.id == job.id
+        job_id, edition_id = job.id, edition.id
+
+    notify = AsyncMock()
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    monkeypatch.setattr(processing_queue_module, "emit_notification", notify)
+    queue = ProcessingQueue()
+    monkeypatch.setattr(queue, "enqueue", AsyncMock())
+    await queue._process_claimed_job(claimed, "owner")
+    return job_id, edition_id, notify
+
+
+async def _block_import(edition_id, db):
+    edition = await db.get(ImportedAudiobook, edition_id)
+    edition.status = "error"
+    edition.error = _BLOCKED
+    await db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job_type,payload,patch",
+    [
+        # The audio imported but the chapter matches need a person.
+        ("import_audiobook", {"auto_align": True}, {"process_import": _block_import}),
+        (
+            "rematch_imported_audiobook",
+            {"realign": True},
+            {"rematch_imported_audiobook": AsyncMock(side_effect=MatchValidationError(_BLOCKED))},
+        ),
+        (
+            "rebuild_imported_audiobook",
+            {},
+            {"rebuild_imported_audiobook": AsyncMock(side_effect=MatchValidationError(_BLOCKED))},
+        ),
+        ("align_imported_audiobook", {}, {"process_alignment": AsyncMock(return_value="needs_review")}),
+        # Nothing to retry until the owner sets up transcription.
+        ("align_imported_audiobook", {}, {"process_alignment": AsyncMock(return_value="not_configured")}),
+    ],
+)
+async def test_failures_only_a_person_can_fix_complete_without_retry_or_alert(
+    sqlite_sessionmaker, monkeypatch, job_type, payload, patch
+):
+    for name, value in patch.items():
+        monkeypatch.setattr(processing_queue_module, name, value)
+
+    job_id, edition_id, notify = await _run_edition_job(sqlite_sessionmaker, monkeypatch, job_type=job_type, payload=payload)
+
+    notify.assert_not_awaited()
+    async with sqlite_sessionmaker() as db:
+        job = await db.get(ProcessingJob, job_id)
+        assert job.status == "completed"
+        assert job.attempt_count == 1
+        assert job.error is None
+        alignment_jobs = (
+            (
+                await db.execute(
+                    select(ProcessingJob).where(
+                        ProcessingJob.job_type == "align_imported_audiobook",
+                        ProcessingJob.target_id == edition_id,
+                        ProcessingJob.id != job_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert alignment_jobs == []
+
+
+async def _fail_import(edition_id, db):
+    edition = await db.get(ImportedAudiobook, edition_id)
+    edition.status = "error"
+    edition.error = "Could not read the audio files."
+    await db.commit()
+
+
+async def _fail_alignment(edition_id, db):
+    edition = await db.get(ImportedAudiobook, edition_id)
+    edition.alignment_error = "Whisper timed out"
+    await db.commit()
+    return "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job_type,patch,error",
+    [
+        ("import_audiobook", {"process_import": _fail_import}, "Could not read the audio files."),
+        ("align_imported_audiobook", {"process_alignment": _fail_alignment}, "Whisper timed out"),
+    ],
+)
+async def test_transient_audiobook_failures_are_retried(sqlite_sessionmaker, monkeypatch, job_type, patch, error):
+    for name, value in patch.items():
+        monkeypatch.setattr(processing_queue_module, name, value)
+
+    job_id, _edition_id, notify = await _run_edition_job(sqlite_sessionmaker, monkeypatch, job_type=job_type, payload={})
+
+    notify.assert_not_awaited()  # Only the final attempt announces a failure.
+    async with sqlite_sessionmaker() as db:
+        job = await db.get(ProcessingJob, job_id)
+        assert job.status == "queued"
+        assert job.attempt_count == 1
+        assert job.error == error
+
+
 @pytest.mark.asyncio
 async def test_processing_api_queues_lists_cancels_and_retries(app_client, sqlite_sessionmaker):
     async with sqlite_sessionmaker() as db:
@@ -601,20 +726,69 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
         alignment_method="transcribed",
         matched_content_version=1,
     )
-    db.add(edition)
+    blocked = ImportedAudiobook(
+        book_id=book.id,
+        name="Blocked edition",
+        status="error",
+        alignment_method="estimated",
+        matched_content_version=1,
+        error=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
+    )
+    failed_import = ImportedAudiobook(
+        book_id=book.id,
+        name="Failed import",
+        status="error",
+        alignment_method="estimated",
+        matched_content_version=1,
+        error="Could not read the audio files.",
+    )
+    pending = ImportedAudiobook(book_id=book.id, name="Pending import", status="queued")
+    # An import queued again after an earlier attempt left its tracks behind.
+    retrying = ImportedAudiobook(
+        book_id=book.id,
+        name="Retried import",
+        status="queued",
+        alignment_method="estimated",
+        matched_content_version=1,
+    )
+    db.add_all([edition, blocked, failed_import, pending, retrying])
+    await db.flush()
+    for imported in (edition, blocked, failed_import, retrying):
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=imported.id,
+                sequence_order=1,
+                title="Chapter 1",
+                audio_file_path="library/audio.m4b",
+                media_type="audio/mp4",
+                source_start_ms=0,
+                source_end_ms=10_000,
+                duration_ms=10_000,
+            )
+        )
     await db.commit()
 
     jobs = await queue_audio_reconciliation(book, db, parent_job_id=None)
     await db.refresh(book)
-    await db.refresh(edition)
+    for imported in (edition, blocked, failed_import, pending, retrying):
+        await db.refresh(imported)
 
     assert book.audiobook_publication_state == "stale"
     assert edition.status == "stale"
-    assert [job.job_type for job in jobs] == [
-        "rematch_imported_audiobook",
-        "audiobook_pipeline",
+    # A match block is cleared by the new text, so it is rematched too.
+    assert blocked.status == "stale"
+    # A failed import keeps its error (retrying the import picks up the new
+    # text), and a queued import matches the new text when it runs.
+    assert failed_import.status == "error"
+    assert pending.status == "queued"
+    assert retrying.status == "queued"
+    assert [(job.job_type, job.target_id) for job in jobs] == [
+        ("rematch_imported_audiobook", edition.id),
+        ("rematch_imported_audiobook", blocked.id),
+        ("audiobook_pipeline", book.id),
     ]
     assert jobs[0].payload["realign"] is True
+    assert jobs[1].payload["realign"] is False
     assert all(job.target_content_version == 2 for job in jobs)
 
 

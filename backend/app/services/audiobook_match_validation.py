@@ -23,6 +23,11 @@ class MatchValidationError(ValueError):
     """Chapter matching needs review before alignment or playback is safe."""
 
 
+def is_match_review_error(message: str | None) -> bool:
+    """Whether a stored error is a match-safety block that only a person can clear."""
+    return bool(message and message.startswith(MATCH_REVIEW_PREFIX))
+
+
 def _group(chapter: AudiobookChapter) -> str:
     return chapter.logical_chapter_key or f"chapter-{chapter.id}"
 

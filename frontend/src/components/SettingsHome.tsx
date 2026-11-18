@@ -31,10 +31,10 @@ const settings: {
     href: "/settings/library-tools?section=series",
   },
   {
-    title: "Audiobook maintenance",
+    title: "Audiobooks",
     icon: "headphones",
-    description: "Update chapter matches and import Libation backups",
-    href: "/settings/library-tools?section=audiobooks",
+    description: "See every audiobook's state, fix failures, and rebuild",
+    href: "/activity/audiobooks",
   },
   {
     title: "Backups",

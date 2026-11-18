@@ -45,7 +45,7 @@ from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
 from .audiobook_chapter_titles import chapter_identity as _chapter_identity
-from .audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError, require_safe_matches
+from .audiobook_match_validation import MatchValidationError, is_match_review_error, require_safe_matches
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
 logger = logging.getLogger(__name__)
@@ -1219,7 +1219,7 @@ async def _validate_completed_matches(edition: ImportedAudiobook, db: AsyncSessi
         edition.progress_detail = "Chapter matching blocked; review required"
         await db.commit()
         raise
-    if edition.status == "error" and (edition.error or "").startswith(MATCH_REVIEW_PREFIX):
+    if edition.status == "error" and is_match_review_error(edition.error):
         transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.READY)
         edition.error = None
         edition.alignment_error = None

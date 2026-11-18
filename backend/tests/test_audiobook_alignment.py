@@ -472,3 +472,110 @@ async def test_process_alignment_replaces_estimates_and_caches_transcript(db, tm
         ("fr", "http://whisper:8002"),
         ("fr", "http://replacement-whisper:8002/transcribe"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_partial_whisper_failure_keeps_finished_tracks_as_hybrid(db, tmp_path, monkeypatch):
+    book = models.Book(
+        title="Half Aligned",
+        immutable_path="library/half-immutable.epub",
+        current_path="library/half.epub",
+    )
+    db.add_all([book, models.AudiobookSettings(transcription_provider="whisperx", transcription_base_url="http://w:8002")])
+    await db.flush()
+    edition = models.ImportedAudiobook(
+        book_id=book.id, name="Human narration", status="aligning", alignment_method="estimated"
+    )
+    db.add(edition)
+    await db.flush()
+    tracks = []
+    for number, text in ((1, "Hello brave new world."), (2, "This timing is real.")):
+        chapter = models.AudiobookChapter(
+            book_id=book.id,
+            chapter_number=number,
+            stable_chapter_key=f"half-{number}",
+            title=f"Chapter {number}",
+            content_file_name=f"text/chapter-{number}.xhtml",
+            spine_order=number,
+        )
+        db.add(chapter)
+        await db.flush()
+        db.add(
+            models.AudiobookSentence(
+                chapter_id=chapter.id, html_element_id=f"s-{number}", sequence_order=0, original_text=text
+            )
+        )
+        track = models.ImportedAudiobookTrack(
+            imported_audiobook_id=edition.id,
+            matched_chapter_id=chapter.id,
+            sequence_order=number,
+            title=f"Chapter {number}",
+            audio_file_path="library/source.m4b",
+            media_type="audio/mp4",
+            source_start_ms=(number - 1) * 5_000,
+            source_end_ms=number * 5_000,
+            duration_ms=5_000,
+        )
+        db.add(track)
+        tracks.append(track)
+    await db.commit()
+
+    monkeypatch.setattr(audiobook_alignment, "imported_audiobook_dir", lambda *_args: tmp_path / "edition")
+    monkeypatch.setattr(audiobook_alignment, "relative_library_path", lambda path: str(path))
+
+    async def fake_extract(_track, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"flac")
+
+    calls = []
+
+    async def fake_transcribe(_settings, _path):
+        calls.append(_path)
+        if len(calls) > 1:
+            raise RuntimeError("Whisper timed out")
+        return transcription_providers.TranscriptResult(
+            language="en", duration_ms=5_000, words=_words(["Hello", "brave", "new", "world"], first_start=500)
+        )
+
+    monkeypatch.setattr(audiobook_alignment, "_extract_track_clip", fake_extract)
+    monkeypatch.setattr(audiobook_alignment, "transcribe_file", fake_transcribe)
+
+    outcome = await audiobook_alignment.process_alignment(edition.id, db)
+
+    await db.refresh(edition)
+    for track in tracks:
+        await db.refresh(track)
+    assert outcome == "failed"
+    assert edition.status == "ready"
+    assert edition.alignment_method == "hybrid"
+    assert edition.alignment_error == "Whisper timed out"
+    assert edition.progress_detail == "Whisper aligned 1 of 2 tracks; the rest keep estimated timing"
+    assert tracks[0].alignment_score is not None
+    assert tracks[1].alignment_score is None
+
+
+@pytest.mark.asyncio
+async def test_alignment_without_a_provider_leaves_a_blocked_edition_blocked(db):
+    """An align job queued before a rematch hit match review must not mark the edition ready."""
+    book = models.Book(title="Blocked", immutable_path="library/b-immutable.epub", current_path="library/b.epub")
+    db.add(book)
+    await db.flush()
+    review = "Chapter matching needs review: Chapter 2 has no narration."
+    edition = models.ImportedAudiobook(
+        book_id=book.id,
+        name="Human narration",
+        status="error",
+        alignment_method="estimated",
+        error=review,
+        progress_detail="Chapter matching blocked; review required",
+    )
+    db.add(edition)
+    await db.commit()
+
+    assert await audiobook_alignment.process_alignment(edition.id, db) == "not_configured"
+
+    await db.refresh(edition)
+    assert edition.status == "error"
+    assert edition.error == review
+    assert edition.alignment_error is None
+    assert edition.progress_detail == "Chapter matching blocked; review required"
