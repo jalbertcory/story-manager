@@ -302,6 +302,12 @@ def _needs_human_audiobook_rebuild(edition: ImportedAudiobook) -> bool:
     )
 
 
+def _rebuild_available(edition: ImportedAudiobook) -> bool:
+    # A rebuild matches an outdated edition again, so its review waits until
+    # after the rebuild; an up-to-date edition that needs review needs a person.
+    return not edition.match_review_reason or _needs_human_audiobook_rebuild(edition)
+
+
 async def _human_audiobook_rebuild_inventory(
     db: AsyncSession,
 ) -> tuple[list[ImportedAudiobook], dict[int, int]]:
@@ -330,10 +336,10 @@ async def preview_human_audiobook_rebuilds(
         for edition in editions
         if edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
     ]
-    available = [edition for edition in playable if not edition.match_review_reason]
+    available = [edition for edition in playable if _rebuild_available(edition)]
     rebuild = [edition for edition in available if _needs_human_audiobook_rebuild(edition)]
-    # Matches that need review need a person, not a rebuild; count them apart
-    # from editions that are busy or never finished importing.
+    # Up-to-date matches that need review need a person, not a rebuild; count
+    # them apart from editions that are busy or never finished importing.
     needs_review = len(playable) - len(available)
     return HumanAudiobookRebuildPreview(
         current_pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
@@ -363,7 +369,7 @@ async def rebuild_all_human_audiobooks(
         available = (
             edition.status == ImportedAudiobookStatus.READY.value
             and track_counts.get(edition.id, 0) > 0
-            and not edition.match_review_reason
+            and _rebuild_available(edition)
         )
         if not available or (not force and not _needs_human_audiobook_rebuild(edition)):
             skipped += 1

@@ -903,17 +903,27 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
             alignment_error="Whisper timed out",
             pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
         )
-        # Playable, but a rebuild cannot settle its matches; a person must.
+        # Built with the current pipeline, so a rebuild would match it the
+        # same way; a person must review it.
         blocked = ImportedAudiobook(
             **shared,
             name="Blocked",
             alignment_method="estimated",
             match_review_reason=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
+            pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        )
+        # Matched by an older pipeline: the rebuild matches it again, so its
+        # review waits until after the rebuild.
+        outdated_review = ImportedAudiobook(
+            **shared,
+            name="Outdated review",
+            alignment_method="estimated",
+            match_review_reason=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
             pipeline_version=0,
         )
-        db.add_all([outdated, current, active, whisper_failed, blocked])
+        db.add_all([outdated, current, active, whisper_failed, blocked, outdated_review])
         await db.flush()
-        for edition in (outdated, current, active, whisper_failed, blocked):
+        for edition in (outdated, current, active, whisper_failed, blocked, outdated_review):
             db.add(
                 ImportedAudiobookTrack(
                     imported_audiobook_id=edition.id,
@@ -928,14 +938,14 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
                 )
             )
         await db.commit()
-        outdated_id = outdated.id
+        rebuilt_ids = {outdated.id, outdated_review.id}
 
     preview = app_client.get("/api/audiobook/imports/rebuild-preview")
     assert preview.status_code == 200
     assert preview.json() == {
         "current_pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
-        "total_count": 5,
-        "rebuild_count": 1,
+        "total_count": 6,
+        "rebuild_count": 2,
         "realign_count": 1,
         "up_to_date_count": 2,
         "needs_review_count": 1,
@@ -945,19 +955,25 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
     response = app_client.post("/api/audiobook/imports/rebuild-all")
     assert response.status_code == 200
     assert response.json() == {
-        "queued_count": 1,
+        "queued_count": 2,
         "skipped_count": 4,
         "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
     }
     async with sqlite_sessionmaker() as db:
-        job = (
-            await db.execute(select(ProcessingJob).where(ProcessingJob.job_type == "rebuild_imported_audiobook"))
-        ).scalar_one()
-        assert job.target_id == outdated_id
-        assert job.payload == {
-            "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
-            "force": False,
-        }
+        jobs = (
+            (await db.execute(select(ProcessingJob).where(ProcessingJob.job_type == "rebuild_imported_audiobook")))
+            .scalars()
+            .all()
+        )
+        assert {job.target_id for job in jobs} == rebuilt_ids
+        assert all(
+            job.payload
+            == {
+                "pipeline_version": audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+                "force": False,
+            }
+            for job in jobs
+        )
 
 
 async def _seed_bulk_editions(db, **editions_by_name) -> dict[str, int]:

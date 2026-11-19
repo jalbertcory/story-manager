@@ -24,6 +24,67 @@ def test_numbers_in_named_sections_do_not_become_chapter_numbers(title):
     assert identity[0] == "named"
 
 
+@pytest.mark.parametrize(
+    ("title", "same_as"),
+    [
+        ("One", "Chapter 1"),
+        ("Thirty-Seven", "Chapter 37"),
+        ("Twenty one", "Chapter 21"),
+        ("One Hundred and Five", "Chapter 105"),
+        ("Chapter One: Feyre", "Chapter 1"),
+        ("CHAPTER TWELVE", "Chapter 12"),
+        ("Chapter I Chade Fallstar", "Chapter I"),
+        ("Chapter XLII. The Siege", "Chapter 42"),
+        ("1. Aftermath", "Chapter 1: Aftermath"),
+        ("1: Warlords", "Chapter 1"),
+        ("12) The Door", "Chapter 12"),
+        ("12 \u2013 The Door", "Chapter 12"),
+        ("Nine - The Door", "Chapter 9"),
+        ("Chapter 0", "[ 0 ]"),
+    ],
+)
+def test_spelled_roman_and_subtitled_numbers_match_chapter_number(title, same_as):
+    assert _chapter_identity(title) == _chapter_identity(same_as)
+    assert _chapter_identity(title)[0] == "chapter"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Part I",
+        "Part I: Bow",
+        "Book One: Dusk",
+        "7 Days Later",
+        "1945: The End",
+        "1.5",
+        "One Last Thing",
+        "Two-Face: Origins",
+        "I Am Legend",
+        "Chapter Mix",
+        "Chapter Interlude",
+        "Chapter Two and Three",
+        "Chapter IIII",
+        "Twelve hundred",
+        "Section 4",
+    ],
+)
+def test_titles_that_only_start_with_a_number_stay_named(title):
+    identity = _chapter_identity(title)
+    assert identity is not None
+    assert identity[0] == "named"
+
+
+def test_spelled_out_track_matches_numbered_chapter():
+    chapters = [
+        AudiobookChapter(id=1, chapter_number=1, title="Section 4"),
+        AudiobookChapter(id=2, chapter_number=2, title="Chapter One"),
+        AudiobookChapter(id=3, chapter_number=3, title="Chapter Two"),
+    ]
+
+    assert _chapter_match(TrackSpec(1, "One", Path("audio.m4b"), 0, 1000, "audio/mp4"), chapters) is chapters[1]
+    assert _chapter_match(TrackSpec(2, "2. Arrival", Path("audio.m4b"), 1000, 2000, "audio/mp4"), chapters) is chapters[2]
+
+
 def test_numbered_audio_matches_decorated_toc_instead_of_untitled_front_matter():
     front_matter = epub.EpubHtml(file_name="copyright.xhtml")
     title = _chapter_title(front_matter, BeautifulSoup("<p>Copyright notice.</p>", "html.parser"), 6)

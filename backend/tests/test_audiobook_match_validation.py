@@ -227,7 +227,17 @@ def test_matched_part_announcement_must_keep_book_order():
 
 async def _seed(db):
     book = Book(id=1, title="Matching safeguard", current_path="library/test.epub")
-    edition = ImportedAudiobook(id=1, book_id=1, name="Incomplete", status="ready", alignment_method="estimated")
+    # Built with the current pipeline, so its review is not deferred to a rebuild.
+    edition = ImportedAudiobook(
+        id=1,
+        book_id=1,
+        name="Incomplete",
+        status="ready",
+        alignment_method="estimated",
+        pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        source_manifest_sha256="a" * 64,
+        derived_format_version=audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+    )
     chapters = _chapters()
     tracks = _tracks()
     tracks[5].matched_chapter_id = None
