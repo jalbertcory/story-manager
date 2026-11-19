@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import crud, models, schemas
 from ..auth import get_reader_api_key
 from ..audiobook_schemas import ChapterResponse, ImportedAudiobookResponse
-from ..services.audiobook_match_validation import MatchValidationError, require_safe_matches
+from ..services.audiobook_match_validation import MatchValidationError
 from ..config import LIBRARY_PATH
 from ..database import get_db
 from ..services.audiobook_publication import (
@@ -453,7 +453,11 @@ async def get_reader_human_audiobooks(
     book_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> list[ImportedAudiobookResponse]:
-    """Reader-key-safe metadata for ready human-narrated audiobook editions."""
+    """Reader-key-safe metadata for ready human-narrated audiobook editions.
+
+    An edition whose chapter matches need review still plays its audio, but
+    has no SMIL overlays; editions with synchronized text come first.
+    """
     try:
         editions = await audiobook_views.list_imported_audiobook_responses(book_id, db)
     except AudiobookViewNotFoundError as exc:
@@ -478,8 +482,8 @@ async def get_reader_human_audiobooks(
                 ]
             }
         )
-        for edition in editions
-        if edition.status == "ready" and edition.matching_error is None
+        for edition in sorted(editions, key=lambda edition: edition.matching_error is not None)
+        if edition.status == "ready" and edition.tracks
     ]
 
 
@@ -506,11 +510,8 @@ async def get_reader_human_audiobook_audio(
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     try:
-        edition, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
-        await require_safe_matches(edition, db)
+        _, track = await audiobook_views.find_imported_track(edition_id, track_id, db)
         full_path = audiobook_views.imported_track_audio_path(track)
-    except MatchValidationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return FileResponse(str(full_path), media_type=track.media_type)

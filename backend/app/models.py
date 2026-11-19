@@ -628,6 +628,9 @@ class ImportedAudiobook(Base):
     progress_detail: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     alignment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why the chapter matches need a person's review. The audio still plays;
+    # synchronized text and alignment wait until the matches are repaired.
+    match_review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     matched_content_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_manifest_file_path: Mapped[str | None] = mapped_column(String, nullable=True)
     source_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -2690,6 +2690,9 @@ export interface paths {
         /**
          * Get Reader Human Audiobooks
          * @description Reader-key-safe metadata for ready human-narrated audiobook editions.
+         *
+         *     An edition whose chapter matches need review still plays its audio, but
+         *     has no SMIL overlays; editions with synchronized text come first.
          */
         get: operations["get_reader_human_audiobooks_reader_books__book_id__human_audiobooks_get"];
         put?: never;

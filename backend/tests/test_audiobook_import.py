@@ -5,8 +5,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 import zipfile
+from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from backend.app.models import (
@@ -168,14 +170,24 @@ async def test_processes_cue_zip_matches_chapter_and_builds_sentence_cues(db, tm
     cues = list((await db.execute(select(ImportedAudiobookCue))).scalars().all())
 
     if not valid_match:
-        assert edition.status == "error"
-        assert "Chapter matching needs review" in edition.error
+        # The audio imported and plays; only synchronized text waits for review.
+        assert edition.status == "ready"
+        assert edition.error is None
+        assert "Chapter matching needs review" in edition.match_review_reason
+        assert edition.progress_detail == "Ready to play; chapter matching needs review"
         assert len(tracks) == 2
         assert cues == []
         assert (audiobook_import.imported_audiobook_dir(book.id, edition.id) / "source").is_dir()
         response = await audiobook_views.imported_audiobook_response(edition, db)
-        assert response.matching_error
+        assert response.matching_error == edition.match_review_reason
+        assert response.state == "needs_review"
         assert not response.is_reader_default
+        assert all(track.smil_url is None for track in response.tracks)
+        audio = await audiobook_imports.get_imported_track_audio(edition.id, tracks[0].id, db)
+        assert Path(audio.path).is_file()
+        with pytest.raises(HTTPException) as blocked:
+            await audiobook_imports.get_imported_track_smil(edition.id, tracks[0].id, db)
+        assert blocked.value.status_code == 409
         return
 
     assert edition.status == "ready"
@@ -891,12 +903,13 @@ async def test_rebuild_preview_and_bulk_queue_only_outdated_ready_editions(
             alignment_error="Whisper timed out",
             pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
         )
+        # Playable, but a rebuild cannot settle its matches; a person must.
         blocked = ImportedAudiobook(
-            book_id=book.id,
+            **shared,
             name="Blocked",
-            status="error",
-            error=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
-            pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+            alignment_method="estimated",
+            match_review_reason=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
+            pipeline_version=0,
         )
         db.add_all([outdated, current, active, whisper_failed, blocked])
         await db.flush()

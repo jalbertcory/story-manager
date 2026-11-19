@@ -93,6 +93,10 @@ class BackfillReaderChecksumsPayload(JobPayload):
     pass
 
 
+class RevalidateAudiobookMatchesPayload(JobPayload):
+    pass
+
+
 class DeliverNotificationPayload(JobPayload):
     event: str = Field(min_length=1)
     title: str = Field(min_length=1)
@@ -122,6 +126,7 @@ JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "create_backup": CreateBackupPayload,
     "verify_backup": VerifyBackupPayload,
     "backfill_reader_checksums": BackfillReaderChecksumsPayload,
+    "revalidate_audiobook_matches": RevalidateAudiobookMatchesPayload,
     "deliver_notification": DeliverNotificationPayload,
     "series_check": SeriesCheckPayload,
 }

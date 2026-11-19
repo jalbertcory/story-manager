@@ -19,7 +19,7 @@ from backend.app.models import (
     SourceType,
 )
 from backend.app.services import processing_queue as processing_queue_module
-from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PREFIX, MatchValidationError
+from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PREFIX
 from backend.app.services.processing_queue import ProcessingQueue, queue_audio_reconciliation, queue_processing_job
 
 
@@ -564,10 +564,11 @@ async def _run_edition_job(sqlite_sessionmaker, monkeypatch, *, job_type: str, p
     return job_id, edition_id, notify
 
 
-async def _block_import(edition_id, db):
+async def _flag_matches(edition_id, db):
+    # The audio plays; the stored reason holds back synchronized text.
     edition = await db.get(ImportedAudiobook, edition_id)
-    edition.status = "error"
-    edition.error = _BLOCKED
+    edition.status = "ready"
+    edition.match_review_reason = _BLOCKED
     await db.commit()
 
 
@@ -576,17 +577,9 @@ async def _block_import(edition_id, db):
     "job_type,payload,patch",
     [
         # The audio imported but the chapter matches need a person.
-        ("import_audiobook", {"auto_align": True}, {"process_import": _block_import}),
-        (
-            "rematch_imported_audiobook",
-            {"realign": True},
-            {"rematch_imported_audiobook": AsyncMock(side_effect=MatchValidationError(_BLOCKED))},
-        ),
-        (
-            "rebuild_imported_audiobook",
-            {},
-            {"rebuild_imported_audiobook": AsyncMock(side_effect=MatchValidationError(_BLOCKED))},
-        ),
+        ("import_audiobook", {"auto_align": True}, {"process_import": _flag_matches}),
+        ("rematch_imported_audiobook", {"realign": True}, {"rematch_imported_audiobook": _flag_matches}),
+        ("rebuild_imported_audiobook", {}, {"rebuild_imported_audiobook": _flag_matches}),
         ("align_imported_audiobook", {}, {"process_alignment": AsyncMock(return_value="needs_review")}),
         # Nothing to retry until the owner sets up transcription.
         ("align_imported_audiobook", {}, {"process_alignment": AsyncMock(return_value="not_configured")}),
@@ -620,6 +613,34 @@ async def test_failures_only_a_person_can_fix_complete_without_retry_or_alert(
             .all()
         )
         assert alignment_jobs == []
+
+
+@pytest.mark.asyncio
+async def test_match_check_job_refreshes_stored_reviews(sqlite_sessionmaker, monkeypatch):
+    async with sqlite_sessionmaker() as db:
+        repaired = await _matched_edition(db, provider=None)
+        # A reason recorded before the matches were repaired.
+        repaired.match_review_reason = _BLOCKED
+        await db.commit()
+        job, _created = await crud.create_processing_job(
+            db,
+            job_type="revalidate_audiobook_matches",
+            resource_lane=processing_queue_module.JOB_POLICIES["revalidate_audiobook_matches"][0],
+        )
+        claimed = await crud.claim_processing_job(db, resource_lane=job.resource_lane, lease_owner="owner", lease_seconds=60)
+        assert claimed is not None and claimed.id == job.id
+        job_id, edition_id = job.id, repaired.id
+
+    monkeypatch.setattr(processing_queue_module, "SessionLocal", sqlite_sessionmaker)
+    await ProcessingQueue()._process_claimed_job(claimed, "owner")
+
+    async with sqlite_sessionmaker() as db:
+        job = await db.get(ProcessingJob, job_id)
+        assert job.status == "completed"
+        assert job.progress_detail == "Checked 1 human audiobooks; 0 need chapter match review"
+        edition = await db.get(ImportedAudiobook, edition_id)
+        assert edition.status == "ready"
+        assert edition.match_review_reason is None
 
 
 async def _fail_import(edition_id, db):
@@ -729,10 +750,10 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
     blocked = ImportedAudiobook(
         book_id=book.id,
         name="Blocked edition",
-        status="error",
+        status="ready",
         alignment_method="estimated",
         matched_content_version=1,
-        error=f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration.",
+        match_review_reason=_BLOCKED,
     )
     failed_import = ImportedAudiobook(
         book_id=book.id,
@@ -775,7 +796,7 @@ async def test_audio_reconciliation_invalidates_generated_and_human_derivatives(
 
     assert book.audiobook_publication_state == "stale"
     assert edition.status == "stale"
-    # A match block is cleared by the new text, so it is rematched too.
+    # The new text may resolve a match review, so it is rematched too.
     assert blocked.status == "stale"
     # A failed import keeps its error (retrying the import picks up the new
     # text), and a queued import matches the new text when it runs.
