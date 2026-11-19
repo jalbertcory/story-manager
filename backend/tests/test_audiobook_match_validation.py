@@ -19,7 +19,9 @@ from backend.app.models import (
 from backend.app.routers import audiobook_imports, reader
 from backend.app.services import audiobook_alignment, audiobook_import, audiobook_views
 from backend.app.services.audiobook_match_validation import (
+    MATCH_REPAIRED_PROGRESS,
     MATCH_REVIEW_PREFIX,
+    MATCH_REVIEW_PROGRESS,
     MatchValidationError,
     imported_matching_error,
     match_coverage_error,
@@ -305,10 +307,11 @@ async def test_refresh_records_review_for_ready_editions_only(db):
         name="Repaired",
         status="ready",
         match_review_reason=f"{MATCH_REVIEW_PREFIX} Old reason.",
+        progress_detail=MATCH_REVIEW_PROGRESS,
     )
     importing = ImportedAudiobook(id=3, book_id=1, name="Importing", status="importing")
     other_book = Book(id=2, title="Other", current_path="library/other.epub")
-    elsewhere = ImportedAudiobook(id=4, book_id=2, name="Elsewhere", status="ready")
+    elsewhere = ImportedAudiobook(id=4, book_id=2, name="Elsewhere", status="ready", progress_detail="Ready")
     db.add_all([repaired, importing, other_book, elsewhere])
     for track in _tracks():
         db.add(
@@ -328,12 +331,20 @@ async def test_refresh_records_review_for_ready_editions_only(db):
 
     assert await refresh_match_reviews(db, book_id=1) == (2, 1)
     assert "numbered book chapters" in edition.match_review_reason
+    assert edition.progress_detail == MATCH_REVIEW_PROGRESS
     assert repaired.match_review_reason is None
+    assert repaired.progress_detail == MATCH_REPAIRED_PROGRESS
     assert importing.match_review_reason is None
     assert elsewhere.match_review_reason is None
+    assert elsewhere.progress_detail == "Ready"
     # Without a book, every ready edition is checked; one with no tracks fails closed.
+    repaired.progress_detail = "Ready: 20 of 20 tracks matched"
+    await db.commit()
     assert await refresh_match_reviews(db) == (3, 2)
     assert elsewhere.match_review_reason
+    assert elsewhere.progress_detail == MATCH_REVIEW_PROGRESS
+    # An unchanged result leaves the progress text alone.
+    assert repaired.progress_detail == "Ready: 20 of 20 tracks matched"
 
 
 @pytest.mark.asyncio

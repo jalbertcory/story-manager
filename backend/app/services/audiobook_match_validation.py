@@ -249,6 +249,10 @@ async def require_safe_matches(edition: ImportedAudiobook, db: AsyncSession, *, 
         raise MatchValidationError(error)
 
 
+MATCH_REVIEW_PROGRESS = "Ready to play; chapter matching needs review"
+MATCH_REPAIRED_PROGRESS = "Chapter matching repaired"
+
+
 async def record_match_review(edition: ImportedAudiobook, db: AsyncSession) -> str | None:
     """Check an edition's chapter matches and store why they need review, if they do.
 
@@ -288,17 +292,27 @@ async def refresh_match_reviews(db: AsyncSession, *, book_id: int | None = None)
         editions = list(
             (
                 await db.scalars(
-                    select(ImportedAudiobook).where(
+                    select(ImportedAudiobook)
+                    .where(
                         ImportedAudiobook.id.in_(batch),
                         # Skip editions a job picked up since the ids were read.
                         ImportedAudiobook.status == ImportedAudiobookStatus.READY.value,
                     )
+                    .order_by(ImportedAudiobook.id)
+                    # A manual rematch or rebuild that commits while this batch
+                    # is being checked would otherwise be overwritten with a
+                    # reason computed from the matches it replaced.
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
             ).all()
         )
         reasons = await imported_matching_errors(editions, db)
         for edition in editions:
-            edition.match_review_reason = reasons[edition.id]
-            flagged += int(edition.match_review_reason is not None)
+            reason = reasons[edition.id]
+            if reason != edition.match_review_reason:
+                edition.progress_detail = MATCH_REVIEW_PROGRESS if reason else MATCH_REPAIRED_PROGRESS
+            edition.match_review_reason = reason
+            flagged += int(reason is not None)
         await db.commit()
     return len(edition_ids), flagged

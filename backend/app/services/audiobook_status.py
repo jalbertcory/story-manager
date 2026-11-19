@@ -192,8 +192,10 @@ def human_edition_status(
     if (
         job is not None
         and job.status in (ProcessingJobStatus.ERROR.value, ProcessingJobStatus.CANCELED.value)
-        # Match-safety failures still need manual review, not a blind retry.
-        and not edition.match_review_reason
+        # Jobs from before the review reason was stored failed with it; those
+        # need a person, not a blind retry. Any other failure is retried, even
+        # on an edition that also needs review, or a stopped rematch would
+        # look like it is still running.
         and not is_match_review_error(job.error)
     ):
         return AudioStatus(

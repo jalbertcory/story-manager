@@ -37,6 +37,7 @@ _editions = sa.table(
     sa.column("status", sa.String),
     sa.column("error", sa.Text),
     sa.column("alignment_method", sa.String),
+    sa.column("alignment_error", sa.Text),
     sa.column("progress_detail", sa.String),
     sa.column(COLUMN, sa.Text),
 )
@@ -92,6 +93,12 @@ def upgrade():
             alignment_method=sa.func.coalesce(_editions.c.alignment_method, "estimated"),
             progress_detail="Chapter matching needs review",
         )
+    )
+    # Alignment used to record a match block as a Whisper failure. The block now
+    # lives in the review reason (set again by the revalidate job below), so the
+    # old text would show a Whisper failure that never happened.
+    conn.execute(
+        _editions.update().where(_editions.c.alignment_error.like(f"{MATCH_REVIEW_PREFIX}%")).values(alignment_error=None)
     )
 
     if not inspector.has_table("processing_jobs"):

@@ -38,7 +38,7 @@ from .subprocesses import communicate_bounded
 from .audiobook_import import imported_audiobook_dir, relative_library_path, sentences_for_logical_chapter
 from .endpoint_pool import configured_endpoints
 from .endpoint_pool import ProviderSettings
-from .audiobook_match_validation import MatchValidationError, require_safe_matches
+from .audiobook_match_validation import MATCH_REVIEW_PROGRESS, MatchValidationError, require_safe_matches
 from .transcription_providers import (
     TranscriptResult,
     TranscriptWord,
@@ -603,9 +603,9 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> AlignmentOutco
     settings = await crud.audiobook.get_audiobook_settings(db)
     provider = transcription_provider_name(settings)
     if settings is None or provider == "none":
-        if edition.status == ImportedAudiobookStatus.ERROR.value or edition.match_review_reason:
-            # The edition failed or was blocked for match review after this job
-            # was queued; that state is what a person needs to see.
+        if edition.status == ImportedAudiobookStatus.ERROR.value:
+            # The edition failed after this job was queued; that failure is
+            # what a person needs to see.
             return "not_configured"
         transition_state(
             edition,
@@ -614,8 +614,13 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> AlignmentOutco
             ImportedAudiobookStatus.READY,
             context=f"imported audiobook {edition.id}",
         )
-        edition.alignment_error = "Configure a transcription provider in Audio Settings first."
-        edition.progress_detail = "Timestamp alignment not configured"
+        if edition.match_review_reason:
+            # Whisper waits for the match review, so the missing provider is
+            # not this edition's problem yet.
+            edition.progress_detail = MATCH_REVIEW_PROGRESS
+        else:
+            edition.alignment_error = "Configure a transcription provider in Audio Settings first."
+            edition.progress_detail = "Timestamp alignment not configured"
         await db.commit()
         return "not_configured"
 
@@ -763,7 +768,7 @@ async def process_alignment(edition_id: int, db: AsyncSession) -> AlignmentOutco
             # The audio still plays; only synchronized text waits for review.
             edition.match_review_reason = str(exc)
             edition.alignment_error = None
-            edition.progress_detail = "Ready to play; chapter matching needs review"
+            edition.progress_detail = MATCH_REVIEW_PROGRESS
             await db.commit()
             return "needs_review"
         edition.alignment_error = str(exc)

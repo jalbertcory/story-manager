@@ -398,6 +398,39 @@ async def test_canceled_job_and_superseded_failure(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["canceled", "error"])
+async def test_stopped_rematch_of_review_edition_offers_retry(db, outcome):
+    # A rematch keeps the stored reason while it runs. If the job stops, the
+    # edition must not look like it is still rematching.
+    _matched_book(db, 1, "Stopped rematch")
+    await db.flush()
+    edition = await db.get(ImportedAudiobook, 1)
+    edition.match_review_reason = _REVIEW
+    await db.commit()
+    await audiobook_imports.rematch_imported_audiobook(1, db)
+    job = (await db.scalars(select(ProcessingJob))).one()
+    if outcome == "canceled":
+        await crud.request_processing_job_cancel(db, job.id)
+        label = "Processing canceled"
+    else:
+        job.max_attempts = 1
+        await db.commit()
+        await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+        await crud.fail_processing_job(db, job.id, "EPUB missing")
+        label = "Processing failed"
+
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert response.status == "stale"
+    assert (response.state, response.state_label, response.next_action, response.processing_job_id) == (
+        "job_failed",
+        label,
+        "retry_processing",
+        job.id,
+    )
+    assert (await audiobook_overview(db)).attention_count == 1
+
+
+@pytest.mark.asyncio
 async def test_job_history_keeps_match_review_action_and_manual_repair(db):
     _matched_book(db, 1, "Review matches")
     await db.commit()
