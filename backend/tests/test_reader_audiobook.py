@@ -8,6 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from starlette.requests import Request
 
 from backend.app import models
 from backend.app.routers import reader
@@ -363,7 +364,7 @@ async def test_reader_book_omits_audiobook_for_legacy_book(app_client, sqlite_se
 
 
 @pytest.mark.asyncio
-async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlite_sessionmaker):
+async def test_reader_book_does_not_advertise_a_human_edition_without_tracks(app_client, sqlite_sessionmaker):
     async with sqlite_sessionmaker() as db:
         book = models.Book(
             title="Human Audio Book",
@@ -391,7 +392,8 @@ async def test_reader_book_exposes_a_human_only_audiobook_type(app_client, sqlit
     payload = app_client.get(f"/reader/books/{book_id}", auth=auth).json()
 
     assert payload["audiobook"] is None
-    assert payload["audiobook_types"] == ["human_narrated"]
+    # An edition with no tracks has nothing to play, so it is not advertised.
+    assert payload["audiobook_types"] == []
     human_url = f"/reader/books/{book_id}/human-audiobooks"
     assert app_client.get(human_url).status_code == 401
     editions = app_client.get(human_url, auth=auth).json()
@@ -557,7 +559,7 @@ def test_reader_audiobook_capability_supports_all_publication_states():
             chapter_number=1,
         )
     ]
-    for state in ("processing", "partial", "complete", "error"):
+    for state in ("processing", "partial", "complete", "stale"):
         book = models.Book(
             id=1,
             content_version=1,
@@ -567,3 +569,37 @@ def test_reader_audiobook_capability_supports_all_publication_states():
             audiobook_publication_state=state,
         )
         assert reader._reader_audiobook_capability(book, chapters)["status"] == state
+
+    # A failed generation run is reported from the pipeline, not the publication.
+    failed = models.Book(
+        id=1,
+        content_version=1,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="error",
+        audiobook_revision=2,
+    )
+    assert reader._reader_audiobook_capability(failed, chapters)["status"] == "error"
+
+
+def test_reader_book_lists_ai_narration_only_once_a_chapter_plays():
+    book = models.Book(
+        id=1,
+        title="Narration In Progress",
+        author="Reader",
+        source_type=models.SourceType.epub,
+        content_version=1,
+        audiobook_enabled=True,
+        audiobook_pipeline_status="audio_gen",
+        audiobook_revision=1,
+        audiobook_publication_state="processing",
+    )
+    chapters = [models.AudiobookChapter(generation_state="pending", chapter_number=1)]
+    request = Request({"type": "http", "scheme": "http", "server": ("testserver", 80), "path": "/", "headers": []})
+
+    payload = reader._reader_book_payload(book, request, audiobook_chapters=chapters)
+
+    # The reader still sees that narration is being generated, but no audio
+    # type is offered until a chapter can play.
+    assert payload["audiobook"] is not None
+    assert payload["audiobook"]["status"] == "processing"
+    assert payload["audiobook_types"] == []

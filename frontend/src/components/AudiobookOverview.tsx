@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   alignImportedAudiobook,
   bulkImportedAudiobookAction,
+  bulkResumeNarration,
   getAudiobookOverview,
   rebuildImportedAudiobook,
   retryImportedAudiobook,
@@ -15,7 +16,7 @@ import {
   audioStateClass,
   isEditionJobAction,
 } from "../lib/audioState";
-import type { EditionJobAction } from "../lib/audioState";
+import type { AudioState, EditionJobAction } from "../lib/audioState";
 import { queryKeys } from "../lib/queryKeys";
 import { retryProcessingJob } from "../api/processing";
 import { useLocation } from "../lib/router";
@@ -24,12 +25,21 @@ import ConfirmActionDialog from "./ConfirmActionDialog";
 
 type OverviewBook = Schemas["AudiobookOverviewBook"];
 type OverviewSource = Schemas["AudiobookOverviewSource"];
-type BulkSkip = Schemas["AudiobookBulkActionSkip"];
+type BulkSkip = { reason: string };
 
 const ATTENTION_FILTER = "attention";
 const ALL_FILTER = "all";
-// The bulk endpoint takes at most this many editions per request.
+// The bulk endpoints take at most this many editions or books per request.
 const BULK_BATCH_SIZE = 500;
+
+// AI narration states the bulk resume endpoint continues, with the label for
+// doing so to many books at once.
+const NARRATION_BULK_LABELS: Partial<Record<AudioState, string>> = {
+  tts_failed: "Retry narration",
+  tts_paused: "Resume narration",
+  tts_partial: "Continue narration",
+  tts_outdated: "Update narration",
+};
 
 const KIND_LABELS: Record<OverviewBook["audio_kind"], string> = {
   human: "Human narration",
@@ -52,17 +62,38 @@ async function queueEditionAction(
   return alignImportedAudiobook(editionId);
 }
 
+// ``ids`` are human edition ids for an edition action, or book ids when
+// resuming AI narration.
 type BulkPlan = {
-  action: EditionJobAction;
+  action: EditionJobAction | "resume_narration";
   label: string;
-  editionIds: number[];
+  ids: number[];
   bookIds: Set<number>;
 };
 
 // A state filter can be acted on in one go when every human edition shown in
-// it has the same queueable next action.
+// it has the same queueable next action, or when it is an AI narration state
+// that can be continued.
 function bulkPlanFor(books: OverviewBook[], filter: string): BulkPlan | null {
   if (filter === ALL_FILTER || filter === ATTENTION_FILTER) return null;
+  const narrationLabel = NARRATION_BULK_LABELS[filter as AudioState];
+  if (narrationLabel) {
+    const bookIds = books
+      .filter((book) =>
+        book.sources.some(
+          (source) => source.kind === "tts" && source.state === filter,
+        ),
+      )
+      .map((book) => book.book_id);
+    return bookIds.length > 1
+      ? {
+          action: "resume_narration",
+          label: narrationLabel,
+          ids: bookIds,
+          bookIds: new Set(bookIds),
+        }
+      : null;
+  }
   let plan: BulkPlan | null = null;
   for (const book of books) {
     for (const source of book.sources) {
@@ -79,36 +110,38 @@ function bulkPlanFor(books: OverviewBook[], filter: string): BulkPlan | null {
       plan ??= {
         action: next,
         label: source.next_action_label ?? next,
-        editionIds: [],
+        ids: [],
         bookIds: new Set(),
       };
-      plan.editionIds.push(source.edition_id);
+      plan.ids.push(source.edition_id);
       plan.bookIds.add(book.book_id);
     }
   }
-  return plan && plan.editionIds.length > 1 ? plan : null;
+  return plan && plan.ids.length > 1 ? plan : null;
+}
+
+function queueBulkBatch(action: BulkPlan["action"], ids: number[]) {
+  return action === "resume_narration"
+    ? bulkResumeNarration({ book_ids: ids })
+    : bulkImportedAudiobookAction({ action, edition_ids: ids });
 }
 
 async function runBulkPlan(plan: BulkPlan) {
   const queued: number[] = [];
   const skipped: BulkSkip[] = [];
-  for (
-    let start = 0;
-    start < plan.editionIds.length;
-    start += BULK_BATCH_SIZE
-  ) {
+  for (let start = 0; start < plan.ids.length; start += BULK_BATCH_SIZE) {
     try {
-      const result = await bulkImportedAudiobookAction({
-        action: plan.action,
-        edition_ids: plan.editionIds.slice(start, start + BULK_BATCH_SIZE),
-      });
+      const result = await queueBulkBatch(
+        plan.action,
+        plan.ids.slice(start, start + BULK_BATCH_SIZE),
+      );
       queued.push(...result.queued);
       skipped.push(...result.skipped);
     } catch (error) {
       if (start === 0) throw error;
       // Earlier batches were already queued; say so rather than only failing.
       const message = error instanceof Error ? error.message : String(error);
-      const remaining = plan.editionIds.length - start;
+      const remaining = plan.ids.length - start;
       throw new Error(
         `${describeBulkResult(plan.label, queued.length, skipped)} Stopped before the last ${plural(remaining, "audiobook")}: ${message}`,
         { cause: error },
@@ -374,7 +407,7 @@ function AudiobookOverview() {
                   setPendingBulk(bulkPlan);
                 }}
               >
-                {bulkPlan.label} for all {bulkPlan.editionIds.length}
+                {bulkPlan.label} for all {bulkPlan.ids.length}
               </button>
             </div>
           )}
@@ -455,7 +488,7 @@ function AudiobookOverview() {
       {pendingBulk && (
         <ConfirmActionDialog
           open
-          title={`${pendingBulk.label} for ${plural(pendingBulk.editionIds.length, "audiobook")}?`}
+          title={`${pendingBulk.label} for ${plural(pendingBulk.ids.length, "audiobook")}?`}
           confirmLabel="Queue all"
           busyLabel="Queueing…"
           isPending={bulk.isPending}

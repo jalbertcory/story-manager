@@ -276,7 +276,7 @@ test-migrations:
 	$(ALEMBIC) upgrade 0032; \
 	$(MIGRATION_PSQL) \
 		< scripts/migration-lifecycle-setup.sql; \
-	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) upgrade 0033; \
 	$(MIGRATION_PSQL) \
 		< scripts/migration-lifecycle-verify.sql; \
 	$(ALEMBIC) downgrade 0032; \
@@ -341,6 +341,19 @@ test-migrations:
 	$(ALEMBIC) downgrade 0050; \
 	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Review With Audio' AND status = 'error' AND error LIKE 'Chapter matching needs review.%') THEN RAISE EXCEPTION '0051 downgrade did not restore the match block'; END IF; IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'revalidate_audiobook_matches') THEN RAISE EXCEPTION '0051 downgrade left a match check queued'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) downgrade 0051; \
+	$(MIGRATION_PSQL) \
+		-c "INSERT INTO books (title, author, source_type, audiobook_publication_state, audiobook_publication_error) VALUES ('Publication Error Ready', 'Migration', 'epub', 'error', 'legacy failure'), ('Publication Error Empty', 'Migration', 'epub', 'error', 'legacy failure');" \
+		-c "INSERT INTO audiobook_chapters (book_id, chapter_number, content_file_name, generation_state) SELECT id, 1, 'Text/ready.xhtml', 'ready' FROM books WHERE title = 'Publication Error Ready';" \
+		-c "INSERT INTO audiobook_chapters (book_id, chapter_number, content_file_name, generation_state) SELECT id, 1, 'Text/pending.xhtml', 'pending' FROM books WHERE title = 'Publication Error Empty';"; \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM books WHERE title = 'Publication Error Ready' AND audiobook_publication_state = 'partial') OR NOT EXISTS (SELECT 1 FROM books WHERE title = 'Publication Error Empty' AND audiobook_publication_state = 'processing') THEN RAISE EXCEPTION '0052 did not remap publication errors'; END IF; IF EXISTS (SELECT 1 FROM books WHERE audiobook_publication_state = 'error') THEN RAISE EXCEPTION '0052 left a publication error'; END IF; IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'books' AND column_name = 'audiobook_publication_error') THEN RAISE EXCEPTION '0052 did not drop the publication error column'; END IF; BEGIN UPDATE books SET audiobook_publication_state = 'error' WHERE title = 'Publication Error Ready'; RAISE EXCEPTION '0052 constraint still allows publication error'; EXCEPTION WHEN check_violation THEN NULL; END; END \$$\$$;"; \
+	$(ALEMBIC) downgrade 0051; \
+	$(MIGRATION_PSQL) \
+		-c "UPDATE books SET audiobook_publication_state = 'error', audiobook_publication_error = 'downgrade check' WHERE title = 'Publication Error Ready';" \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM books WHERE title = 'Publication Error Ready' AND audiobook_publication_state = 'error' AND audiobook_publication_error = 'downgrade check') THEN RAISE EXCEPTION '0052 downgrade did not restore the publication error'; END IF; END \$$\$$;"; \
 	$(ALEMBIC) upgrade head; \
 	STORY_MANAGER_TEST_POSTGRES_URL="$(MIGRATION_TEST_DATABASE_URL)" \
 		PYTHONPATH=. $(UV_RUN) python -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py

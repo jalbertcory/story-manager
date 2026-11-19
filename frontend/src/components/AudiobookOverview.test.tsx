@@ -416,6 +416,81 @@ describe("AudiobookOverview", () => {
     expect(bodies).toEqual([{ action: "rebuild", edition_ids: [11, 21, 31] }]);
   });
 
+  it("resumes AI narration for every book shown paused", async () => {
+    const pausedBook = (bookId: number, title: string) =>
+      ({
+        book_id: bookId,
+        title,
+        author: "Ann",
+        has_epub: true,
+        audio_kind: "tts",
+        state: "tts_paused",
+        needs_attention: true,
+        sources: [
+          source({
+            kind: "tts",
+            name: "AI narration",
+            state: "tts_paused",
+            state_label: "Paused",
+            next_action: "open_generation",
+            next_action_label: "Resume",
+            alignment_method: null,
+          }),
+        ],
+      }) satisfies Book;
+    const posts: { url: string; body: unknown }[] = [];
+    serve(
+      {
+        ...overview,
+        total_count: 3,
+        attention_count: 3,
+        counts: [
+          { state: "tts_paused", label: "AI narration paused", count: 3 },
+        ],
+        books: [
+          pausedBook(1, "Alpha"),
+          pausedBook(2, "Bravo"),
+          pausedBook(3, "Charlie"),
+        ],
+      },
+      (url, init) => {
+        posts.push({ url, body: JSON.parse(String(init?.body)) });
+        return Promise.resolve(
+          jsonResponse({
+            queued: [1, 2],
+            skipped: [{ book_id: 3, reason: "Narration is already running" }],
+          }),
+        );
+      },
+    );
+    renderWithClient(<AudiobookOverview />);
+    await screen.findByRole("link", { name: "Charlie" });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^AI narration paused 3$/ }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resume narration for all 3" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Resume narration for 3 audiobooks?",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Queue all" }));
+
+    expect(
+      await screen.findByText(
+        "Resume narration queued for 2 audiobooks. Skipped 1: Narration is already running.",
+        { exact: false },
+      ),
+    ).toBeVisible();
+    expect(posts).toEqual([
+      {
+        url: "/api/audiobook-narration/bulk-resume",
+        body: { book_ids: [1, 2, 3] },
+      },
+    ]);
+  });
+
   it("previews and queues versioned human audiobook rebuilds", async () => {
     const posts: string[] = [];
     serve(overview, (url) => {

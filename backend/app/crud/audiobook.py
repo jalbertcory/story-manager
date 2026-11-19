@@ -30,14 +30,27 @@ from ..models import (
     AudiobookSentence,
     Book,
     ImportedAudiobook,
+    ImportedAudiobookTrack,
 )
 
 
-async def get_human_audiobook_book_ids(db: AsyncSession, book_ids: list[int]) -> set[int]:
-    """Return books that have at least one attached human-narrated edition."""
+async def get_human_audiobook_book_ids(db: AsyncSession, book_ids: list[int], *, playable: bool = False) -> set[int]:
+    """Return books that have at least one attached human-narrated edition.
+
+    With ``playable``, count only editions the reader app can play: ready
+    editions with tracks, the same ones its edition list offers.
+    """
     if not book_ids:
         return set()
-    result = await db.execute(select(ImportedAudiobook.book_id).where(ImportedAudiobook.book_id.in_(book_ids)).distinct())
+    query = select(ImportedAudiobook.book_id).where(ImportedAudiobook.book_id.in_(book_ids))
+    if playable:
+        query = query.where(
+            ImportedAudiobook.status == "ready",
+            select(ImportedAudiobookTrack.id)
+            .where(ImportedAudiobookTrack.imported_audiobook_id == ImportedAudiobook.id)
+            .exists(),
+        )
+    result = await db.execute(query.distinct())
     return set(result.scalars().all())
 
 

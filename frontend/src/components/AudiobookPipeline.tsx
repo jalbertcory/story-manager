@@ -347,6 +347,11 @@ function AudiobookPipeline({
             {pauseRequested && (
               <span className="badge badge--warning">Pause requested…</span>
             )}
+            {statusData?.outdated && !isActive(pipelineStatus) && (
+              <span className="badge badge--warning">
+                Book text changed since this narration was generated
+              </span>
+            )}
             {statusData?.last_error && (
               <details className="pipeline-error-summary">
                 <summary>Last generation error</summary>
@@ -374,6 +379,15 @@ function AudiobookPipeline({
                 Download Audiobook EPUB
               </a>
             )}
+            {readyPipelineStatuses.has(pipelineStatus) &&
+              statusData?.outdated && (
+                <button
+                  onClick={() => startMutation.mutate()}
+                  disabled={startMutation.isPending}
+                >
+                  {startMutation.isPending ? "Queueing…" : "Update Narration"}
+                </button>
+              )}
             {!readyPipelineStatuses.has(pipelineStatus) &&
               !isActive(pipelineStatus) && (
                 <>

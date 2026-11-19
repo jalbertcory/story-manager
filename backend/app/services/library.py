@@ -27,18 +27,9 @@ def universe_expression() -> ColumnElement[int | None]:
     return case((models.Book.series.is_not(None), series_universe), else_=models.Book.universe_id)
 
 
-def playable_audio_expression() -> ColumnElement[bool]:
-    # Match the admin reader: imported ready/aligning editions with tracks, or
-    # generated chapters that can play without reassembly. Opt-in alone is not audio.
-    imported = exists(
-        select(models.ImportedAudiobook.id)
-        .join(models.ImportedAudiobookTrack)
-        .where(
-            models.ImportedAudiobook.book_id == models.Book.id,
-            models.ImportedAudiobook.status.in_(["ready", "aligning"]),
-        )
-    )
-    generated = and_(
+def playable_generated_audio_expression() -> ColumnElement[bool]:
+    # Generated chapters that can play without reassembly. Opt-in alone is not audio.
+    return and_(
         models.Book.audiobook_enabled.is_(True),
         exists(
             select(models.AudiobookChapter.id).where(
@@ -48,7 +39,29 @@ def playable_audio_expression() -> ColumnElement[bool]:
             )
         ),
     )
-    return imported | generated
+
+
+def playable_audio_expression() -> ColumnElement[bool]:
+    # Match the admin reader: imported ready/aligning editions with tracks, or
+    # playable generated chapters.
+    imported = exists(
+        select(models.ImportedAudiobook.id)
+        .join(models.ImportedAudiobookTrack)
+        .where(
+            models.ImportedAudiobook.book_id == models.Book.id,
+            models.ImportedAudiobook.status.in_(["ready", "aligning"]),
+        )
+    )
+    return imported | playable_generated_audio_expression()
+
+
+async def playable_generated_audio_book_ids(db: AsyncSession, book_ids: list[int]) -> set[int]:
+    if not book_ids:
+        return set()
+    result = await db.scalars(
+        select(models.Book.id).where(models.Book.id.in_(book_ids), playable_generated_audio_expression())
+    )
+    return set(result.all())
 
 
 async def library_book_info(db: AsyncSession, book_ids: list[int]) -> dict[int, LibraryBookInfo]:

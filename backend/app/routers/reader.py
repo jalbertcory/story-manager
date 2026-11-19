@@ -148,15 +148,21 @@ def _reader_book_payload(
         "has_text": bool(book.current_path),
         "cover_url": f"{base_url}/reader/covers/{book.id}" if book.cover_path else None,
         "audiobook": audiobook,
+        # Only kinds of audio the reader can play now; ``audiobook`` still
+        # reports generation that has not produced a chapter yet.
         "audiobook_types": [
-            *(["ai_generated"] if book.audiobook_enabled and audiobook is not None else []),
+            *(
+                ["ai_generated"]
+                if book.audiobook_enabled and audiobook is not None and audiobook["ready_chapter_count"]
+                else []
+            ),
             *(["human_narrated"] if has_human_audiobook else []),
         ],
     }
 
 
 def _reader_audiobook_status(book: models.Book, ready: int, total: int) -> str:
-    if book.audiobook_publication_state in {"stale", "processing", "partial", "complete", "error"}:
+    if book.audiobook_publication_state in {"stale", "processing", "partial", "complete"}:
         return book.audiobook_publication_state
     if book.audiobook_pipeline_status == "error":
         return "error"
@@ -384,7 +390,9 @@ async def _series_metadata_map(db: AsyncSession, books: list[models.Book]) -> di
 async def _reader_books_response(books: list[models.Book], request: Request, db: AsyncSession) -> list[schemas.ReaderBook]:
     metadata_map = await _series_metadata_map(db, books)
     chapters_by_book = await crud.audiobook.get_chapters_for_books(db, [book.id for book in books])
-    human_audiobook_book_ids = await crud.audiobook.get_human_audiobook_book_ids(db, [book.id for book in books])
+    human_audiobook_book_ids = await crud.audiobook.get_human_audiobook_book_ids(
+        db, [book.id for book in books], playable=True
+    )
     return [
         schemas.ReaderBook.model_validate(
             _reader_book_payload(

@@ -65,9 +65,25 @@ class AudiobookBulkActionResponse(BaseModel):
     skipped: list[AudiobookBulkActionSkip]
 
 
+class NarrationBulkResumeRequest(BaseModel):
+    book_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class NarrationBulkResumeSkip(BaseModel):
+    book_id: int
+    reason: str
+
+
+class NarrationBulkResumeResponse(BaseModel):
+    queued: list[int]
+    skipped: list[NarrationBulkResumeSkip]
+
+
 class AudiobookStatusResponse(BaseModel):
     pipeline_status: Optional[str]
     next_phase: str
+    # The book text changed after the narration was generated.
+    outdated: bool
     pause_requested: bool
     stop_after_phase: Optional[str]
     last_error: Optional[str]

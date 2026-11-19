@@ -686,7 +686,6 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         AudiobookPublicationStatus.PARTIAL if ready_count else AudiobookPublicationStatus.PROCESSING,
         context=f"book {book.id}",
     )
-    book.audiobook_publication_error = None
     transition_state(
         book,
         "audiobook_pipeline_status",

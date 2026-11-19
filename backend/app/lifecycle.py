@@ -66,7 +66,6 @@ class AudiobookPublicationStatus(StrEnum):
     PARTIAL = "partial"
     COMPLETE = "complete"
     STALE = "stale"
-    ERROR = "error"
 
 
 class ChapterPreviewStatus(StrEnum):
@@ -378,9 +377,7 @@ AUDIOBOOK_PUBLICATION = StateMachine(
     name="audiobook publication",
     states=_values((None, *AudiobookPublicationStatus)),
     transitions={state: _values(AudiobookPublicationStatus) for state in (None, *AudiobookPublicationStatus)},
-    labels=_labels(
-        null="Unavailable", processing="Processing", partial="Partial", complete="Complete", stale="Stale", error="Error"
-    ),
+    labels=_labels(null="Unavailable", processing="Processing", partial="Partial", complete="Complete", stale="Stale"),
     active_states=_values((AudiobookPublicationStatus.PROCESSING,)),
     terminal_states=_values(
         (
@@ -388,10 +385,10 @@ AUDIOBOOK_PUBLICATION = StateMachine(
             AudiobookPublicationStatus.PARTIAL,
             AudiobookPublicationStatus.COMPLETE,
             AudiobookPublicationStatus.STALE,
-            AudiobookPublicationStatus.ERROR,
         )
     ),
-    failure_states=_values((AudiobookPublicationStatus.ERROR, AudiobookPublicationStatus.STALE)),
+    # A failed narration run is reported by the pipeline; publication only goes stale.
+    failure_states=_values((AudiobookPublicationStatus.STALE,)),
     ordered_states=(None, *tuple(item.value for item in AudiobookPublicationStatus)),
     recovery={AudiobookPublicationStatus.PROCESSING: AudiobookPublicationStatus.STALE},
 )

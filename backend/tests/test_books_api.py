@@ -82,6 +82,14 @@ async def test_book_catalog_includes_generated_and_human_audiobook_types(db_sess
                 status="ready",
             )
         )
+        session.add(
+            models.AudiobookChapter(
+                book_id=book.id,
+                chapter_number=1,
+                audio_file_path="audiobooks/chapter-1.mp3",
+                needs_reassembly=False,
+            )
+        )
         await session.commit()
 
     response = client.get("/api/books/catalog?view=all")
@@ -91,6 +99,41 @@ async def test_book_catalog_includes_generated_and_human_audiobook_types(db_sess
         "ai_generated",
         "human_narrated",
     ]
+
+
+@pytest.mark.asyncio
+async def test_book_catalog_lists_ai_narration_only_once_a_chapter_plays(db_session):
+    async with AsyncTestingSessionLocal() as session:
+        book = await crud.create_book(
+            session,
+            schemas.BookCreate(
+                title="Narration Not Ready",
+                author="Catalog Author",
+                immutable_path="not-ready-source.epub",
+                current_path="not-ready.epub",
+                source_type=models.SourceType.epub,
+                audiobook_enabled=True,
+            ),
+        )
+        session.add_all(
+            [
+                models.AudiobookChapter(book_id=book.id, chapter_number=1, needs_reassembly=False),
+                # Audio waiting to be reassembled does not play yet.
+                models.AudiobookChapter(
+                    book_id=book.id,
+                    chapter_number=2,
+                    audio_file_path="audiobooks/chapter-2.mp3",
+                    needs_reassembly=True,
+                ),
+            ]
+        )
+        await session.commit()
+
+    item = client.get("/api/books/catalog?view=all").json()["items"][0]
+
+    assert item["audiobook_enabled"] is True
+    assert item["audiobook_types"] == []
+    assert item["audio_playable"] is False
 
 
 @pytest.mark.asyncio

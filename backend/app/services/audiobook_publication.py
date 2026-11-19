@@ -256,7 +256,6 @@ async def publish_reader_audiobook(db: AsyncSession, book_id: int) -> None:
     book.audiobook_text_file_path = _relative(text_target)
     book.audiobook_text_size_bytes = text_size
     book.audiobook_text_sha256 = text_sha
-    book.audiobook_publication_error = None
     await db.commit()
 
 
