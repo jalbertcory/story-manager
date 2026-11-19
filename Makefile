@@ -327,6 +327,21 @@ test-migrations:
 	$(MIGRATION_PSQL) \
 		-c "DO \$$\$$ BEGIN IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'backfill_reader_checksums') THEN RAISE EXCEPTION '0046 downgrade left a checksum backfill queued'; END IF; END \$$\$$;"; \
 	$(ALEMBIC) upgrade head; \
+	$(ALEMBIC) downgrade 0050; \
+	$(MIGRATION_PSQL) \
+		-c "INSERT INTO imported_audiobooks (book_id, name, status, error) SELECT id, 'Review With Audio', 'error', 'Chapter matching needs review. Track 2 matched no chapter.' FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO imported_audiobooks (book_id, name, status, error) SELECT id, 'Review Without Audio', 'error', 'Chapter matching needs review. Nothing imported.' FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO imported_audiobooks (book_id, name, status, error) SELECT id, 'Failed With Audio', 'error', 'ffprobe could not read the upload' FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO imported_audiobooks (book_id, name, status, alignment_error) SELECT id, 'Whisper Match Block', 'ready', 'Chapter matching needs review. Track 1 matched no chapter.' FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO imported_audiobooks (book_id, name, status, alignment_error) SELECT id, 'Whisper Timeout', 'ready', 'Whisper timed out' FROM books WHERE title = 'Migration Test';" \
+		-c "INSERT INTO imported_audiobook_tracks (imported_audiobook_id, sequence_order, title, audio_file_path, media_type, source_end_ms, duration_ms) SELECT id, 1, 'Track 1', 'library/review.m4b', 'audio/mp4', 1000, 1000 FROM imported_audiobooks WHERE name IN ('Review With Audio', 'Failed With Audio');"; \
+	$(ALEMBIC) upgrade head; \
+	$(MIGRATION_PSQL) \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Review With Audio' AND status = 'ready' AND error IS NULL AND match_review_reason LIKE 'Chapter matching needs review.%' AND alignment_method = 'estimated') THEN RAISE EXCEPTION '0051 did not make the blocked edition playable'; END IF; IF (SELECT COUNT(*) FROM imported_audiobooks WHERE name IN ('Review Without Audio', 'Failed With Audio') AND status = 'error' AND match_review_reason IS NULL) <> 2 THEN RAISE EXCEPTION '0051 changed an import that has nothing to play'; END IF; IF (SELECT COUNT(*) FROM processing_jobs WHERE job_type = 'revalidate_audiobook_matches' AND dedupe_key = 'revalidate_audiobook_matches:migration-0051' AND status = 'queued') <> 1 THEN RAISE EXCEPTION '0051 did not queue exactly one match check'; END IF; IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Whisper Match Block' AND alignment_error IS NULL) OR NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Whisper Timeout' AND alignment_error = 'Whisper timed out') THEN RAISE EXCEPTION '0051 did not clear only match blocks recorded as Whisper errors'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) downgrade 0050; \
+	$(MIGRATION_PSQL) \
+		-c "DO \$$\$$ BEGIN IF NOT EXISTS (SELECT 1 FROM imported_audiobooks WHERE name = 'Review With Audio' AND status = 'error' AND error LIKE 'Chapter matching needs review.%') THEN RAISE EXCEPTION '0051 downgrade did not restore the match block'; END IF; IF EXISTS (SELECT 1 FROM processing_jobs WHERE job_type = 'revalidate_audiobook_matches') THEN RAISE EXCEPTION '0051 downgrade left a match check queued'; END IF; END \$$\$$;"; \
+	$(ALEMBIC) upgrade head; \
 	STORY_MANAGER_TEST_POSTGRES_URL="$(MIGRATION_TEST_DATABASE_URL)" \
 		PYTHONPATH=. $(UV_RUN) python -m pytest -q -m postgres backend/tests/test_processing_jobs_postgres.py
 

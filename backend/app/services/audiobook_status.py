@@ -37,7 +37,7 @@ from ..lifecycle import (
 )
 from ..models import Book, ImportedAudiobook, ProcessingJob
 from .audiobook_import import CURRENT_DERIVED_FORMAT_VERSION, CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
-from .audiobook_match_validation import imported_matching_errors, is_match_review_error
+from .audiobook_match_validation import is_match_review_error
 from .transcription_providers import transcription_provider_name
 
 # Most urgent first: the overview sorts and rolls books up by this order.
@@ -158,11 +158,6 @@ def state_rank(state: AudioState) -> int:
     return STATE_ORDER.index(state)
 
 
-def needs_match_check(edition: ImportedAudiobook) -> bool:
-    """Only a ready edition's state depends on the live chapter-matching check."""
-    return edition.status == ImportedAudiobookStatus.READY.value
-
-
 def _outdated_reason(edition: ImportedAudiobook, content_version: int) -> str | None:
     if (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION:
         return (
@@ -181,15 +176,15 @@ def human_edition_status(
     *,
     has_epub: bool,
     content_version: int,
-    matching_error: str | None,
     transcription_configured: bool,
     job: ProcessingJob | None = None,
 ) -> AudioStatus:
     """Collapse a human edition's raw fields into one state and next action.
 
     ``content_version`` is the book's current text version (``content_version
-    or 1``, as imports record it). ``matching_error`` is the live
-    chapter-matching check, which only matters once the edition is ready.
+    or 1``, as imports record it). A ready edition whose chapter matches need
+    review still plays, so that state comes from ``match_review_reason``
+    rather than from an import error.
     """
     if job is not None and job.status in _ACTIVE_JOB_STATUSES:
         label = "Queued" if job.status == ProcessingJobStatus.QUEUED.value else _HUMAN_JOB_LABELS[job.job_type]
@@ -197,9 +192,10 @@ def human_edition_status(
     if (
         job is not None
         and job.status in (ProcessingJobStatus.ERROR.value, ProcessingJobStatus.CANCELED.value)
-        # Match-safety failures still need manual review, not a blind retry.
-        and not is_match_review_error(edition.error)
-        and not is_match_review_error(matching_error)
+        # Jobs from before the review reason was stored failed with it; those
+        # need a person, not a blind retry. Any other failure is retried, even
+        # on an edition that also needs review, or a stopped rematch would
+        # look like it is still running.
         and not is_match_review_error(job.error)
     ):
         return AudioStatus(
@@ -213,11 +209,9 @@ def human_edition_status(
     if status in _WORKING_LABELS:
         return AudioStatus("working", _WORKING_LABELS[status], edition.progress_detail)
     if status == ImportedAudiobookStatus.ERROR.value:
-        # Import, rematch and alignment all prefix match-safety failures. Any
-        # other error means the audio did not finish importing, even when some
-        # tracks were written before it failed.
-        if is_match_review_error(edition.error):
-            return AudioStatus("needs_review", "Needs match review", edition.error, "review_matches", "Review matches")
+        # Match-safety failures leave the edition ready, so an error means the
+        # audio did not finish importing, even when some tracks were written
+        # before it failed.
         return AudioStatus(
             "import_failed",
             "Import failed",
@@ -227,8 +221,14 @@ def human_edition_status(
         )
     if not has_epub:
         return AudioStatus("audio_only", "Audio only", "This book has no EPUB text to read along with.")
-    if matching_error:
-        return AudioStatus("needs_review", "Needs match review", matching_error, "review_matches", "Review matches")
+    if edition.match_review_reason:
+        return AudioStatus(
+            "needs_review",
+            "Needs match review",
+            edition.match_review_reason,
+            "review_matches",
+            "Review matches",
+        )
     outdated = _outdated_reason(edition, content_version)
     if outdated:
         return AudioStatus("outdated", "Needs rebuild", outdated, "rebuild", "Rebuild")
@@ -274,15 +274,6 @@ async def human_edition_statuses(
     Editions whose book is not in ``books`` are left out.
     """
     jobs = await human_edition_jobs(editions, db)
-    matching = await imported_matching_errors(
-        [
-            edition
-            for edition in editions
-            if needs_match_check(edition)
-            and not ((job := jobs.get(edition.id)) is not None and job.status in _ACTIVE_JOB_STATUSES)
-        ],
-        db,
-    )
     statuses: dict[int, tuple[AudioStatus, ProcessingJob | None]] = {}
     for edition in editions:
         book = books.get(edition.book_id)
@@ -293,7 +284,6 @@ async def human_edition_statuses(
             edition,
             has_epub=bool(book.current_path),
             content_version=book.content_version or 1,
-            matching_error=matching.get(edition.id),
             transcription_configured=configured,
             job=job,
         )

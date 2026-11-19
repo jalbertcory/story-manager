@@ -47,16 +47,12 @@ def _edition(**fields):
         # A failed import stays retryable even when it wrote some tracks.
         ({"status": "error", "error": "ffprobe failed"}, {}, "import_failed", "Import failed", "retry_import"),
         ({"status": "error", "error": None}, {}, "import_failed", "Import failed", "retry_import"),
-        ({"status": "error", "error": _REVIEW}, {}, "needs_review", "Needs match review", "review_matches"),
-        (
-            {"status": "error", "error": _REVIEW, "alignment_error": _REVIEW},
-            {},
-            "needs_review",
-            "Needs match review",
-            "review_matches",
-        ),
-        ({}, {"has_epub": False, "matching_error": _REVIEW}, "audio_only", "Audio only", None),
-        ({}, {"matching_error": _REVIEW}, "needs_review", "Needs match review", "review_matches"),
+        # A match block leaves the edition ready, so an error is an import
+        # that never produced tracks.
+        ({"status": "error", "error": _REVIEW}, {}, "import_failed", "Import failed", "retry_import"),
+        ({"match_review_reason": _REVIEW}, {"has_epub": False}, "audio_only", "Audio only", None),
+        ({"match_review_reason": _REVIEW}, {}, "needs_review", "Needs match review", "review_matches"),
+        ({"status": "aligning", "match_review_reason": _REVIEW}, {}, "working", "Running Whisper", None),
         ({"pipeline_version": 2}, {}, "outdated", "Needs rebuild", "rebuild"),
         ({"derived_format_version": 0}, {}, "outdated", "Needs rebuild", "rebuild"),
         ({"source_manifest_sha256": None}, {}, "outdated", "Needs rebuild", "rebuild"),
@@ -77,14 +73,14 @@ def _edition(**fields):
     ],
 )
 def test_human_edition_states(fields, context, state, label, action):
-    options = {"has_epub": True, "content_version": 1, "matching_error": None, "transcription_configured": True}
+    options = {"has_epub": True, "content_version": 1, "transcription_configured": True}
     status = human_edition_status(_edition(**fields), **{**options, **context})
     assert (status.state, status.label, status.next_action) == (state, label, action)
     assert (status.action_label is None) == (action is None)
 
 
 def test_partial_whisper_failure_says_which_timing_was_kept():
-    options = {"has_epub": True, "content_version": 1, "matching_error": None, "transcription_configured": True}
+    options = {"has_epub": True, "content_version": 1, "transcription_configured": True}
     partial = human_edition_status(_edition(alignment_method="hybrid", alignment_error="Whisper timed out"), **options)
     total = human_edition_status(_edition(alignment_error="Whisper timed out"), **options)
 
@@ -159,9 +155,11 @@ async def _seed_library(db):
     _matched_book(db, 1, "Bravo")
     db.add_all(
         [
-            # Ready, but nothing matches the book's text.
+            # Ready to play, but its chapter matches need review.
             Book(id=2, title="Alpha", author="Author", current_path="library/2.epub"),
-            ImportedAudiobook(id=2, book_id=2, name="Alpha audio", source_type="upload", **_CURRENT),
+            ImportedAudiobook(
+                id=2, book_id=2, name="Alpha audio", source_type="upload", match_review_reason=_REVIEW, **_CURRENT
+            ),
             Book(id=3, title="Charlie", author="Author", current_path="library/3.epub"),
             ImportedAudiobook(id=3, book_id=3, name="Charlie audio", source_type="upload", status="error", error="Bad file"),
             Book(id=4, title="Delta", author="Author"),
@@ -400,6 +398,39 @@ async def test_canceled_job_and_superseded_failure(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["canceled", "error"])
+async def test_stopped_rematch_of_review_edition_offers_retry(db, outcome):
+    # A rematch keeps the stored reason while it runs. If the job stops, the
+    # edition must not look like it is still rematching.
+    _matched_book(db, 1, "Stopped rematch")
+    await db.flush()
+    edition = await db.get(ImportedAudiobook, 1)
+    edition.match_review_reason = _REVIEW
+    await db.commit()
+    await audiobook_imports.rematch_imported_audiobook(1, db)
+    job = (await db.scalars(select(ProcessingJob))).one()
+    if outcome == "canceled":
+        await crud.request_processing_job_cancel(db, job.id)
+        label = "Processing canceled"
+    else:
+        job.max_attempts = 1
+        await db.commit()
+        await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+        await crud.fail_processing_job(db, job.id, "EPUB missing")
+        label = "Processing failed"
+
+    [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
+    assert response.status == "stale"
+    assert (response.state, response.state_label, response.next_action, response.processing_job_id) == (
+        "job_failed",
+        label,
+        "retry_processing",
+        job.id,
+    )
+    assert (await audiobook_overview(db)).attention_count == 1
+
+
+@pytest.mark.asyncio
 async def test_job_history_keeps_match_review_action_and_manual_repair(db):
     _matched_book(db, 1, "Review matches")
     await db.commit()
@@ -407,10 +438,11 @@ async def test_job_history_keeps_match_review_action_and_manual_repair(db):
     job = (await db.scalars(select(ProcessingJob))).one()
     job.max_attempts = 1
     edition = await db.get(ImportedAudiobook, 1)
-    edition.status = "error"
-    edition.error = _REVIEW
+    edition.status = "ready"
+    edition.match_review_reason = _REVIEW
     await db.commit()
     await crud.claim_processing_job(db, resource_lane="cpu", lease_owner="test", lease_seconds=60)
+    # Jobs from before the reason was stored failed with it.
     await crud.fail_processing_job(db, job.id, _REVIEW)
     [response] = await audiobook_views.list_imported_audiobook_responses(1, db)
     assert (response.state, response.next_action) == ("needs_review", "review_matches")

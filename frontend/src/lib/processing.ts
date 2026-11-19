@@ -16,6 +16,7 @@ export const JOB_LABELS: Record<string, string> = {
   create_backup: "Create library backup",
   verify_backup: "Verify library backup",
   backfill_reader_checksums: "Record reader audiobook checksums",
+  revalidate_audiobook_matches: "Check human audiobook chapter matches",
   deliver_notification: "Send notification",
   series_check: "Check series for gaps and new releases",
 };

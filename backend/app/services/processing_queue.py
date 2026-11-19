@@ -41,7 +41,7 @@ from ..models import Book, BookLog, ImportedAudiobook, ImportedAudiobookTrack, P
 from ..logging_config import redact_text
 from ..observability_context import correlation_context
 from .audiobook_alignment import AlignmentOutcome, process_alignment
-from .audiobook_match_validation import MatchValidationError, is_match_review_error
+from .audiobook_match_validation import refresh_match_reviews
 from .audiobook_import import (
     HumanAudiobookRebuildResult,
     process_import,
@@ -526,16 +526,22 @@ class ProcessingQueue:
         async with SessionLocal() as db:
             edition = await db.get(ImportedAudiobook, target_id)
             if edition is not None and edition.status == "error":
-                if is_match_review_error(edition.error):
-                    # The audio imported; only a person can confirm the chapter
-                    # matches, so retrying (or announcing a failure) cannot help.
-                    return f"Human audiobook imported; {_MATCH_REVIEW_DETAIL}"
                 raise RuntimeError(edition.error or "Human audiobook import failed.")
+        if await self._needs_match_review(target_id):
+            # The audio imported and plays; only a person can confirm the
+            # chapter matches, so alignment waits for that review.
+            return f"Human audiobook imported; {_MATCH_REVIEW_DETAIL}"
         if ImportAudiobookPayload.model_validate(job.payload or {}).auto_align and await self._queue_timestamp_alignment(
             job, target_id, progress_detail="Queued automatically after audiobook import"
         ):
             return "Human audiobook import completed; timestamp alignment queued"
         return "Human audiobook import completed"
+
+    @staticmethod
+    async def _needs_match_review(target_id: int) -> bool:
+        async with SessionLocal() as db:
+            edition = await db.get(ImportedAudiobook, target_id)
+            return edition is not None and edition.match_review_reason is not None
 
     async def _queue_timestamp_alignment(
         self,
@@ -598,13 +604,12 @@ class ProcessingQueue:
             async with SessionLocal() as db:
                 return await rebuild_imported_audiobook(target_id, db)
 
-        try:
-            result = await self._run_with_progress_mirror(
-                job.id,
-                rebuild_audio,
-                lambda: self._imported_audio_progress(target_id),
-            )
-        except MatchValidationError:
+        result = await self._run_with_progress_mirror(
+            job.id,
+            rebuild_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        if await self._needs_match_review(target_id):
             return f"Human audiobook rebuilt; {_MATCH_REVIEW_DETAIL}"
         if await self._queue_timestamp_alignment(
             job,
@@ -625,13 +630,12 @@ class ProcessingQueue:
             async with SessionLocal() as db:
                 return await rematch_imported_audiobook(target_id, db)
 
-        try:
-            matched = await self._run_with_progress_mirror(
-                job.id,
-                rematch_audio,
-                lambda: self._imported_audio_progress(target_id),
-            )
-        except MatchValidationError:
+        matched = await self._run_with_progress_mirror(
+            job.id,
+            rematch_audio,
+            lambda: self._imported_audio_progress(target_id),
+        )
+        if await self._needs_match_review(target_id):
             return f"Human audiobook rematched; {_MATCH_REVIEW_DETAIL}"
         if await self._queue_timestamp_alignment(
             job,
@@ -730,6 +734,17 @@ class ProcessingQueue:
             filled = await backfill_reader_checksums(db)
             await crud.update_processing_job_progress(db, job.id, current=1, total=1, detail=f"Recorded {filled} checksums")
         return f"Recorded {filled} reader audiobook checksums"
+
+    async def _handle_revalidate_audiobook_matches(self, job: ProcessingJob) -> str:
+        async with SessionLocal() as db:
+            await crud.update_processing_job_progress(
+                db, job.id, current=0, total=1, detail="Checking human audiobook chapter matches"
+            )
+            checked, flagged = await refresh_match_reviews(db)
+            await crud.update_processing_job_progress(
+                db, job.id, current=1, total=1, detail=f"Checked {checked} human audiobooks"
+            )
+        return f"Checked {checked} human audiobooks; {flagged} need chapter match review"
 
     async def _clean_book(self, job_id: int, book_id: int | None) -> str:
         if book_id is None:
@@ -1014,6 +1029,7 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "create_backup": ("maintenance", 1),
     "verify_backup": ("maintenance", 1),
     "backfill_reader_checksums": ("maintenance", 3),
+    "revalidate_audiobook_matches": ("maintenance", 3),
     "deliver_notification": ("maintenance", 3),
     "series_check": ("maintenance", 2),
 }
@@ -1038,6 +1054,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "generate_chapter_preview": ProcessingQueue._handle_generate_chapter_preview,
     "retry_cover": ProcessingQueue._handle_retry_cover,
     "backfill_reader_checksums": ProcessingQueue._handle_backfill_reader_checksums,
+    "revalidate_audiobook_matches": ProcessingQueue._handle_revalidate_audiobook_matches,
     "deliver_notification": ProcessingQueue._handle_deliver_notification,
     "series_check": ProcessingQueue._handle_series_check,
 }
@@ -1139,7 +1156,7 @@ async def queue_audio_reconciliation(book: Book, db: AsyncSession, parent_job_id
             continue
         if not track_counts.get(edition.id) or edition.status == ImportedAudiobookStatus.QUEUED.value:
             continue  # Nothing to rematch yet; a pending import matches the current text itself.
-        if edition.status == ImportedAudiobookStatus.ERROR.value and not is_match_review_error(edition.error):
+        if edition.status == ImportedAudiobookStatus.ERROR.value:
             # The audio never finished importing. A rematch would hide that
             # failure behind "stale"; retrying the import picks up the new text.
             continue

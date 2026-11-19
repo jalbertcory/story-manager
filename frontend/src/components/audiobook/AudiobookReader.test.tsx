@@ -169,12 +169,15 @@ describe("AudiobookReader", () => {
     expect(screen.getByLabelText("Chapter", { exact: true })).toHaveValue("3");
   });
 
-  it("blocks an unsafe edition even when its old status says ready", () => {
+  it("plays an edition that needs match review without synchronized text", () => {
+    const fetchMock = mockFetch();
     const { container } = renderWithClient(
       <AudiobookReader
         bookId={11}
         imports={[
           editionFixture({
+            id: 8,
+            name: "Unreviewed narration",
             matching_error:
               "Chapter matching needs review. 84 numbered chapters have no audio match.",
             tracks: [trackFixture(1, { cue_count: 200 })],
@@ -182,23 +185,46 @@ describe("AudiobookReader", () => {
         ]}
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Chapter matching needs review",
+    expect(container.querySelector("audio")).toHaveAttribute("src", "1.mp3");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "synchronized text is off",
     );
-    expect(container.querySelector("audio")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    // Unreviewed matches could pair the audio with the wrong chapter text.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("leads a blocked edition with its match review", () => {
+  it("leads with an edition whose matches are reviewed", () => {
+    renderWithClient(
+      <AudiobookReader
+        bookId={11}
+        imports={[
+          editionFixture({
+            id: 8,
+            name: "Unreviewed narration",
+            matching_error: "Chapter matching needs review. Too few tracks match.",
+            tracks: [trackFixture(1)],
+          }),
+          editionFixture({ name: "Reviewed narration", tracks: [trackFixture(2)] }),
+        ]}
+      />,
+    );
+    expect(screen.getByLabelText("Audiobook edition")).toHaveDisplayValue(
+      "Reviewed narration",
+    );
+    expect(
+      screen.queryByText(/synchronized text is off/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("leads an edition that needs match review with the review", () => {
     const error = "Chapter matching needs review. Too few tracks match.";
     renderWithClient(
       <AudiobookSources
         bookId={11}
         imports={[
           editionFixture({
-            status: "error",
             matching_error: error,
-            error,
-            alignment_error: error,
             is_reader_default: false,
             state: "needs_review",
             state_label: "Needs match review",
@@ -210,10 +236,9 @@ describe("AudiobookReader", () => {
         ]}
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(error);
     expect(screen.getAllByText(error)).toHaveLength(1);
     expect(screen.getByText("Needs match review")).toHaveClass(
-      "audio-state--danger",
+      "audio-state--warning",
     );
     expect(
       screen.getByRole("button", { name: "Rematch Narration to book text" }),

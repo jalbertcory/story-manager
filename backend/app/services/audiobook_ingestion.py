@@ -39,6 +39,7 @@ from .audiobook_publication import (
     stage_reader_text_rendition,
 )
 from .audiobook_text import SpeechSegment, split_speech_segments
+from .audiobook_match_validation import refresh_match_reviews
 
 logger = logging.getLogger(__name__)
 
@@ -700,6 +701,9 @@ async def ingest_epub(book_id: int, db: AsyncSession) -> None:
         f"{len(changed_chapter_ids)} changed, {len(removed_chapters)} removed"
     )
     await db.commit()
+    # Human audiobook tracks point at these chapters; a changed chapter can
+    # leave their matches unsafe for synchronized text.
+    await refresh_match_reviews(db, book_id=book_id)
     for path in obsolete_paths:
         path.unlink(missing_ok=True)
     (output_dir / "audiobook.epub").unlink(missing_ok=True)

@@ -28,12 +28,12 @@ from .audiobook_import import (
 )
 from ..lifecycle import ImportedAudiobookStatus
 from .library_paths import resolve_library_file
-from .audiobook_match_validation import imported_matching_error, require_safe_matches
+from .audiobook_match_validation import require_synchronized_text
 from .audiobook_status import human_edition_jobs, human_edition_status, transcription_configured
 
 # Import and rematch jobs write tracks and matches one at a time while the UI
-# polls. Judging that partial state would flag every running job as needing
-# review; each job validates its finished matches before it can become ready.
+# polls. A review reason left from before the job started does not describe
+# that partial state; each job records a fresh one when it finishes.
 _MATCHES_IN_PROGRESS = frozenset(
     {
         ImportedAudiobookStatus.QUEUED.value,
@@ -106,11 +106,7 @@ async def imported_audiobook_response(
     tracks = list(result.scalars().all())
     job = (await human_edition_jobs([edition], db)).get(edition.id)
     job_active = job is not None and job.status in ("queued", "running")
-    matching_error = (
-        await imported_matching_error(edition, db, tracks=tracks)
-        if edition.status not in _MATCHES_IN_PROGRESS and (tracks or edition.status == "ready")
-        else None
-    )
+    matching_error = edition.match_review_reason if edition.status not in _MATCHES_IN_PROGRESS else None
     canonical_audio_track_ids = canonical_track_ids_by_audio_path(tracks)
     audio_paths = {
         path for track in tracks if (path := resolve_library_file(track.audio_file_path)) is not None and path.is_file()
@@ -140,7 +136,6 @@ async def imported_audiobook_response(
         edition,
         has_epub=book is not None and bool(book.current_path),
         content_version=(book.content_version if book is not None else None) or 1,
-        matching_error=matching_error,
         transcription_configured=transcription_ready,
         job=job,
     )
@@ -215,7 +210,11 @@ async def imported_audiobook_response(
 
 
 async def list_imported_audiobook_responses(book_id: int, db: AsyncSession) -> list[ImportedAudiobookResponse]:
-    """All editions of a book, newest first, flagging the newest ready one as the reader default."""
+    """All editions of a book, newest first.
+
+    The reader default is the newest ready edition with tracks whose chapter
+    matches are safe for synchronized text.
+    """
     await require_book(book_id, db)
     result = await db.execute(
         select(ImportedAudiobook)
@@ -228,7 +227,7 @@ async def list_imported_audiobook_responses(book_id: int, db: AsyncSession) -> l
         await imported_audiobook_response(edition, db, transcription_ready=transcription_ready) for edition in editions
     ]
     for response in responses:
-        if response.status == "ready" and response.matching_error is None:
+        if response.status == "ready" and response.matching_error is None and response.tracks:
             response.is_reader_default = True
             break
     return responses
@@ -291,7 +290,7 @@ async def imported_track_smil(
     ``audio_url_prefix`` selects the admin or reader-key audio route the
     overlay points at.
     """
-    await require_safe_matches(edition, db)
+    await require_synchronized_text(edition, db)
     if track.matched_chapter_id is None:
         raise AudiobookViewNotFoundError("Track is not matched to book text")
     primary_chapter = await db.get(AudiobookChapter, track.matched_chapter_id)

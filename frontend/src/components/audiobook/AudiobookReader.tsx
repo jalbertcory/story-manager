@@ -132,6 +132,10 @@ function ImportedEditionReader({
   const [trackId, setTrackId] = useState(playable[0]?.id ?? null);
   const [activeSentenceId, setActiveSentenceId] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // Unreviewed matches can pair audio with the wrong chapter text, so the
+  // audio plays in its original order without synchronized text.
+  const needsReview = Boolean(edition.matching_error);
+  const showText = !audioOnly && !needsReview;
 
   useEffect(() => {
     if (!playable.some((track) => track.id === trackId)) {
@@ -150,7 +154,7 @@ function ImportedEditionReader({
       trackId == null
         ? Promise.resolve([])
         : getImportedTrackCues(edition.id, trackId, { signal }),
-    enabled: trackId != null && !audioOnly && (selected?.cue_count ?? 0) > 0,
+    enabled: trackId != null && showText && (selected?.cue_count ?? 0) > 0,
   });
 
   const seek = (timeMs: number) => {
@@ -265,13 +269,19 @@ function ImportedEditionReader({
           onTimeUpdate={updateHighlight}
           onSeeked={updateHighlight}
         />
-        {!audioOnly && selected?.cue_count === 0 && (
+        {!audioOnly && needsReview && (
+          <p role="status">
+            Chapter matching needs review, so synchronized text is off. The
+            audio plays in its original order.
+          </p>
+        )}
+        {showText && selected?.cue_count === 0 && (
           <p role="status">
             This track has no synchronized text. Its audio stays in the original
             sequence so no narration is skipped.
           </p>
         )}
-        {!audioOnly && (selected?.cue_count ?? 0) > 0 && (
+        {showText && (selected?.cue_count ?? 0) > 0 && (
           <>
             <p className="audiobook-reader-summary">
               Click any sentence to seek.{" "}
@@ -494,12 +504,18 @@ function AudiobookReader({
   );
   const importedEditions = useMemo(
     () =>
-      imports.filter(
-        (edition) =>
-          ["ready", "aligning"].includes(edition.status) &&
-          !edition.matching_error &&
-          edition.tracks.length > 0,
-      ),
+      imports
+        .filter(
+          (edition) =>
+            ["ready", "aligning"].includes(edition.status) &&
+            edition.tracks.length > 0,
+        )
+        // Editions with reviewed matches lead because they show text too.
+        .sort(
+          (left, right) =>
+            Number(Boolean(left.matching_error)) -
+            Number(Boolean(right.matching_error)),
+        ),
     [imports],
   );
   const sources = useMemo(

@@ -61,8 +61,8 @@ from ..services.audiobook_status import human_edition_statuses, transcription_co
 from ..services.audiobook_uploads import receive_audiobook_upload
 from ..services.audiobook_match_validation import (
     MatchValidationError,
-    is_match_review_error,
     require_safe_matches,
+    require_synchronized_text,
 )
 from ..services.audiobook_views import AudiobookViewNotFoundError, imported_audiobook_response
 from ..services.processing_queue import queue_processing_job
@@ -201,21 +201,15 @@ async def retry_imported_audiobook(
     edition = await db.get(ImportedAudiobook, edition_id)
     if edition is None:
         raise HTTPException(status_code=404, detail="Imported audiobook not found")
-    book = await get_book_or_404(edition.book_id, db)
-    await queue_import_retry(edition, book, db)
+    await get_book_or_404(edition.book_id, db)
+    await queue_import_retry(edition, db)
     return await imported_audiobook_response(edition, db)
 
 
-async def queue_import_retry(edition: ImportedAudiobook, book: Book, db: AsyncSession) -> None:
+async def queue_import_retry(edition: ImportedAudiobook, db: AsyncSession) -> None:
     """Queue a failed or stuck import again; raises HTTP 409 when it cannot be retried."""
     if edition.status not in ("error", "queued"):
         raise HTTPException(status_code=409, detail=f"Audiobook import is {edition.status}, not retryable")
-    track_count = await _track_count(edition, db)
-    if edition.status == "error" and is_match_review_error(edition.error) and track_count:
-        # The audio imported; only matching was blocked. Re-importing would
-        # discard manual corrections, so retry the matching step instead.
-        await _queue_rematch(edition, book, track_count, db)
-        return
     transition_state(
         edition,
         "status",
@@ -331,20 +325,16 @@ async def preview_human_audiobook_rebuilds(
 ) -> HumanAudiobookRebuildPreview:
     """Summarize editions that need the current human-audiobook pipeline."""
     editions, track_counts = await _human_audiobook_rebuild_inventory(db)
-    available = [
+    playable = [
         edition
         for edition in editions
         if edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
     ]
+    available = [edition for edition in playable if not edition.match_review_reason]
     rebuild = [edition for edition in available if _needs_human_audiobook_rebuild(edition)]
-    # Blocked matches need a person, not a rebuild; count them apart from
-    # editions that are busy or never finished importing.
-    needs_review = sum(
-        edition.status == ImportedAudiobookStatus.ERROR.value
-        and is_match_review_error(edition.error)
-        and track_counts.get(edition.id, 0) > 0
-        for edition in editions
-    )
+    # Matches that need review need a person, not a rebuild; count them apart
+    # from editions that are busy or never finished importing.
+    needs_review = len(playable) - len(available)
     return HumanAudiobookRebuildPreview(
         current_pipeline_version=CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
         total_count=len(editions),
@@ -370,7 +360,11 @@ async def rebuild_all_human_audiobooks(
     queued = 0
     skipped = 0
     for edition in editions:
-        available = edition.status == ImportedAudiobookStatus.READY.value and track_counts.get(edition.id, 0) > 0
+        available = (
+            edition.status == ImportedAudiobookStatus.READY.value
+            and track_counts.get(edition.id, 0) > 0
+            and not edition.match_review_reason
+        )
         if not available or (not force and not _needs_human_audiobook_rebuild(edition)):
             skipped += 1
             continue
@@ -460,7 +454,7 @@ async def _run_edition_action(
             except ValueError:
                 return "The failed job's stored payload is invalid"
         elif action == "retry_import":
-            await queue_import_retry(edition, book, db)
+            await queue_import_retry(edition, db)
         elif action == "rebuild":
             await queue_edition_rebuild(edition, db)
         else:
@@ -671,7 +665,7 @@ async def get_imported_track_cues(
     # Human-only books still need synchronized text and block metadata.
     book = await get_book_or_404(edition.book_id, db)
     try:
-        await require_safe_matches(edition, db)
+        await require_synchronized_text(edition, db)
     except MatchValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     result = await db.execute(
@@ -733,12 +727,9 @@ async def get_imported_track_audio(
     track_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    edition, track = await _get_imported_track_or_404(edition_id, track_id, db)
+    _, track = await _get_imported_track_or_404(edition_id, track_id, db)
     try:
-        await require_safe_matches(edition, db)
         full_path = audiobook_views.imported_track_audio_path(track)
-    except MatchValidationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AudiobookViewNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     return FileResponse(str(full_path), media_type=track.media_type)

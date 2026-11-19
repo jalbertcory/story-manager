@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..lifecycle import ImportedAudiobookStatus
 from ..models import AudiobookChapter, AudiobookSentence, Book, ImportedAudiobook, ImportedAudiobookCue, ImportedAudiobookTrack
 from .audiobook_chapter_titles import chapter_identity
 
@@ -15,16 +16,17 @@ MIN_MATCH_COVERAGE = 0.90
 MIN_AUDIO_COVERAGE = 0.95
 MIN_TRANSCRIPT_MATCH = 0.50
 MATCH_REVIEW_PREFIX = "Chapter matching needs review."
+_REFRESH_BATCH = 25
 _CREDITS = re.compile(r"^(?:opening|closing|end)\s+credits?\b", re.IGNORECASE)
 _PART = re.compile(r"^\[?\s*part\s+(?:[ivxlcdm]+|\d+)\b", re.IGNORECASE)
 
 
 class MatchValidationError(ValueError):
-    """Chapter matching needs review before alignment or playback is safe."""
+    """Chapter matching needs review before synchronized text or alignment is safe."""
 
 
 def is_match_review_error(message: str | None) -> bool:
-    """Whether a stored error is a match-safety block that only a person can clear."""
+    """Whether an error message is a match-safety block that only a person can clear."""
     return bool(message and message.startswith(MATCH_REVIEW_PREFIX))
 
 
@@ -245,3 +247,72 @@ async def require_safe_matches(edition: ImportedAudiobook, db: AsyncSession, *, 
     error = await imported_matching_error(edition, db, check_transcripts=check_transcripts)
     if error:
         raise MatchValidationError(error)
+
+
+MATCH_REVIEW_PROGRESS = "Ready to play; chapter matching needs review"
+MATCH_REPAIRED_PROGRESS = "Chapter matching repaired"
+
+
+async def record_match_review(edition: ImportedAudiobook, db: AsyncSession) -> str | None:
+    """Check an edition's chapter matches and store why they need review, if they do.
+
+    The audio stays playable either way; the stored reason blocks only
+    synchronized text and alignment. The caller commits.
+    """
+    reason = await imported_matching_error(edition, db)
+    edition.match_review_reason = reason
+    return reason
+
+
+async def require_synchronized_text(edition: ImportedAudiobook, db: AsyncSession) -> None:
+    """Refuse cues and SMIL while chapter matches need review.
+
+    The stored reason keeps every view in agreement; the live check still
+    guards against chapter changes that no writer has recorded yet.
+    """
+    if edition.match_review_reason:
+        raise MatchValidationError(edition.match_review_reason)
+    await require_safe_matches(edition, db)
+
+
+async def refresh_match_reviews(db: AsyncSession, *, book_id: int | None = None) -> tuple[int, int]:
+    """Recheck ready editions' chapter matches and store the result.
+
+    Covers editions whose book text changed without a rematch and editions
+    from before the reason was stored. Returns how many were checked and how
+    many need review.
+    """
+    query = select(ImportedAudiobook.id).where(ImportedAudiobook.status == ImportedAudiobookStatus.READY.value)
+    if book_id is not None:
+        query = query.where(ImportedAudiobook.book_id == book_id)
+    edition_ids = list((await db.scalars(query.order_by(ImportedAudiobook.id))).all())
+    flagged = 0
+    for start in range(0, len(edition_ids), _REFRESH_BATCH):
+        batch = edition_ids[start:][:_REFRESH_BATCH]
+        editions = list(
+            (
+                await db.scalars(
+                    select(ImportedAudiobook)
+                    .where(
+                        ImportedAudiobook.id.in_(batch),
+                        # Skip editions a job picked up since the ids were read.
+                        ImportedAudiobook.status == ImportedAudiobookStatus.READY.value,
+                    )
+                    .order_by(ImportedAudiobook.id)
+                    # A manual rematch or rebuild that commits while this batch
+                    # is being checked would otherwise be overwritten with a
+                    # reason computed from the matches it replaced.
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        )
+        reasons = await imported_matching_errors(editions, db)
+        for edition in editions:
+            reason = reasons[edition.id]
+            if reason != edition.match_review_reason:
+                edition.progress_detail = MATCH_REVIEW_PROGRESS if reason else MATCH_REPAIRED_PROGRESS
+            edition.match_review_reason = reason
+            flagged += int(reason is not None)
+        await db.commit()
+    return len(edition_ids), flagged

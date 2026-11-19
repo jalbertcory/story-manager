@@ -1,5 +1,6 @@
 """Keep incomplete or misordered narration out of synchronized playback."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,7 +18,17 @@ from backend.app.models import (
 )
 from backend.app.routers import audiobook_imports, reader
 from backend.app.services import audiobook_alignment, audiobook_import, audiobook_views
-from backend.app.services.audiobook_match_validation import imported_matching_error, match_coverage_error
+from backend.app.services.audiobook_match_validation import (
+    MATCH_REPAIRED_PROGRESS,
+    MATCH_REVIEW_PREFIX,
+    MATCH_REVIEW_PROGRESS,
+    MatchValidationError,
+    imported_matching_error,
+    match_coverage_error,
+    record_match_review,
+    refresh_match_reviews,
+    require_synchronized_text,
+)
 
 
 def _chapters(count=20, *, numbered=True):
@@ -225,21 +236,34 @@ async def _seed(db):
     return book, edition, chapters, tracks
 
 
+_SYNCHRONIZED_TEXT = [
+    audiobook_imports.get_imported_track_cues,
+    audiobook_imports.get_imported_track_smil,
+    reader.get_reader_human_audiobook_smil,
+]
+_AUDIO = [audiobook_imports.get_imported_track_audio, reader.get_reader_human_audiobook_audio]
+
+
 @pytest.mark.asyncio
-async def test_existing_bad_editions_are_not_published_or_playable(db):
+async def test_editions_needing_review_play_audio_without_synchronized_text(db, monkeypatch, tmp_path):
     _book, edition, _chapters_list, tracks = await _seed(db)
+    assert await record_match_review(edition, db)
+    await db.commit()
+    audio_file = tmp_path / "track.m4a"
+    audio_file.write_bytes(b"audio")
+    monkeypatch.setattr(audiobook_views, "imported_track_audio_path", lambda _track: audio_file)
+
     responses = await audiobook_views.list_imported_audiobook_responses(1, db)
-    assert responses[0].matching_error
+    assert responses[0].matching_error == edition.match_review_reason
+    assert responses[0].state == "needs_review"
     assert not responses[0].is_reader_default
     assert all(track.smil_url is None for track in responses[0].tracks)
-    assert await reader.get_reader_human_audiobooks(1, db) == []
-    for endpoint in [
-        audiobook_imports.get_imported_track_audio,
-        audiobook_imports.get_imported_track_cues,
-        audiobook_imports.get_imported_track_smil,
-        reader.get_reader_human_audiobook_audio,
-        reader.get_reader_human_audiobook_smil,
-    ]:
+    [listed] = await reader.get_reader_human_audiobooks(1, db)
+    assert listed.id == edition.id
+    assert all(track.smil_url is None for track in listed.tracks)
+    for endpoint in _AUDIO:
+        assert Path((await endpoint(edition.id, tracks[0].id, db)).path) == audio_file
+    for endpoint in _SYNCHRONIZED_TEXT:
         with pytest.raises(HTTPException) as exc:
             await endpoint(edition.id, tracks[0].id, db)
         assert exc.value.status_code == 409
@@ -251,13 +275,93 @@ async def test_existing_bad_editions_are_not_published_or_playable(db):
 
 
 @pytest.mark.asyncio
+async def test_synchronized_text_checks_matches_before_a_reason_is_recorded(db):
+    # Covers editions that have not been revalidated yet.
+    _book, edition, _chapters_list, tracks = await _seed(db)
+    assert edition.match_review_reason is None
+    for endpoint in _SYNCHRONIZED_TEXT:
+        with pytest.raises(HTTPException) as exc:
+            await endpoint(edition.id, tracks[0].id, db)
+        assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_a_recorded_reason_blocks_synchronized_text_until_cleared(db):
+    _book, edition, chapters, tracks = await _seed(db)
+    tracks[5].matched_chapter_id = chapters[5].id
+    edition.match_review_reason = f"{MATCH_REVIEW_PREFIX} Whisper heard a different chapter."
+    await db.commit()
+    assert await imported_matching_error(edition, db) is None
+    with pytest.raises(MatchValidationError, match="Whisper heard a different chapter"):
+        await require_synchronized_text(edition, db)
+    edition.match_review_reason = None
+    await require_synchronized_text(edition, db)
+
+
+@pytest.mark.asyncio
+async def test_refresh_records_review_for_ready_editions_only(db):
+    _book, edition, chapters, _tracks_list = await _seed(db)
+    repaired = ImportedAudiobook(
+        id=2,
+        book_id=1,
+        name="Repaired",
+        status="ready",
+        match_review_reason=f"{MATCH_REVIEW_PREFIX} Old reason.",
+        progress_detail=MATCH_REVIEW_PROGRESS,
+    )
+    importing = ImportedAudiobook(id=3, book_id=1, name="Importing", status="importing")
+    other_book = Book(id=2, title="Other", current_path="library/other.epub")
+    elsewhere = ImportedAudiobook(id=4, book_id=2, name="Elsewhere", status="ready", progress_detail="Ready")
+    db.add_all([repaired, importing, other_book, elsewhere])
+    for track in _tracks():
+        db.add(
+            ImportedAudiobookTrack(
+                imported_audiobook_id=2,
+                sequence_order=track.sequence_order,
+                title=track.title,
+                matched_chapter_id=track.matched_chapter_id,
+                duration_ms=1000,
+                source_start_ms=0,
+                source_end_ms=1000,
+                audio_file_path=f"library/repaired-{track.id}.m4a",
+                media_type="audio/mp4",
+            )
+        )
+    await db.commit()
+
+    assert await refresh_match_reviews(db, book_id=1) == (2, 1)
+    assert "numbered book chapters" in edition.match_review_reason
+    assert edition.progress_detail == MATCH_REVIEW_PROGRESS
+    assert repaired.match_review_reason is None
+    assert repaired.progress_detail == MATCH_REPAIRED_PROGRESS
+    assert importing.match_review_reason is None
+    assert elsewhere.match_review_reason is None
+    assert elsewhere.progress_detail == "Ready"
+    # Without a book, every ready edition is checked; one with no tracks fails closed.
+    repaired.progress_detail = "Ready: 20 of 20 tracks matched"
+    await db.commit()
+    assert await refresh_match_reviews(db) == (3, 2)
+    assert elsewhere.match_review_reason
+    assert elsewhere.progress_detail == MATCH_REVIEW_PROGRESS
+    # An unchanged result leaves the progress text alone.
+    assert repaired.progress_detail == "Ready: 20 of 20 tracks matched"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["queued", "importing", "stale"])
 async def test_running_import_is_not_reported_as_needing_review(db, status):
-    # An import commits each track as it is matched, and the UI polls meanwhile.
+    # A job rewrites the tracks and records a fresh reason when it finishes,
+    # so the reason left from before it started does not describe them.
     db.add_all(
         [
             Book(id=1, title="Import in progress", current_path="library/test.epub"),
-            ImportedAudiobook(id=1, book_id=1, name="Importing", status=status),
+            ImportedAudiobook(
+                id=1,
+                book_id=1,
+                name="Importing",
+                status=status,
+                match_review_reason=f"{MATCH_REVIEW_PREFIX} Old reason.",
+            ),
             *_chapters(),
             *_tracks()[:3],
         ]
@@ -266,11 +370,9 @@ async def test_running_import_is_not_reported_as_needing_review(db, status):
     edition = await db.get(ImportedAudiobook, 1)
     assert edition is not None
 
-    assert (await audiobook_views.imported_audiobook_response(edition, db)).matching_error is None
-    # Playback stays blocked until the finished import passes validation.
-    with pytest.raises(HTTPException) as exc:
-        await audiobook_imports.get_imported_track_audio(edition.id, 1, db)
-    assert exc.value.status_code == 409
+    response = await audiobook_views.imported_audiobook_response(edition, db)
+    assert response.matching_error is None
+    assert response.state == "working"
 
     edition.status = "ready"
     await db.commit()
@@ -284,14 +386,16 @@ async def test_background_alignment_stops_before_transcribing_bad_matches(db, mo
     await db.commit()
     extract = AsyncMock()
     monkeypatch.setattr(audiobook_alignment, "_extract_track_clip", extract)
-    await audiobook_alignment.process_alignment(edition.id, db)
-    assert edition.status == "error"
-    assert "numbered book chapters" in edition.alignment_error
+    assert await audiobook_alignment.process_alignment(edition.id, db) == "needs_review"
+    assert edition.status == "ready"
+    assert "numbered book chapters" in edition.match_review_reason
+    # A review is not a Whisper failure, so repairing the matches leaves nothing to retry.
+    assert edition.alignment_error is None
     extract.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_manual_repairs_restore_a_blocked_edition(db):
+async def test_manual_repairs_clear_the_review(db):
     _book, edition, chapters, tracks = await _seed(db)
     for chapter in chapters:
         db.add(
@@ -300,18 +404,18 @@ async def test_manual_repairs_restore_a_blocked_edition(db):
             )
         )
     await db.commit()
-    with pytest.raises(ValueError, match="Chapter matching needs review"):
-        await audiobook_import._validate_completed_matches(edition, db)
-    assert edition.status == "error"
+    assert await record_match_review(edition, db)
+    await db.commit()
     await audiobook_import.rematch_track(tracks[5], chapters[5].id, db)
     assert edition.status == "ready"
-    assert edition.error is None
+    assert edition.match_review_reason is None
+    assert edition.progress_detail == "Chapter matching repaired"
     assert await imported_matching_error(edition, db) is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["rematch_imported_audiobook", "rebuild_imported_audiobook"])
-async def test_rebuild_and_rematch_cannot_publish_incomplete_matches(db, monkeypatch, operation):
+async def test_rebuild_and_rematch_record_incomplete_matches_for_review(db, monkeypatch, operation):
     _book, edition, chapters, tracks = await _seed(db)
     tracks[5].title = "Unrecognized track"
     edition.source_manifest_sha256 = "a" * 64
@@ -319,10 +423,11 @@ async def test_rebuild_and_rematch_cannot_publish_incomplete_matches(db, monkeyp
     edition.pipeline_version = audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
     await db.commit()
     monkeypatch.setattr(audiobook_import, "ensure_span_anchored_text", AsyncMock(return_value=chapters))
-    with pytest.raises(ValueError, match="Chapter matching needs review"):
-        await getattr(audiobook_import, operation)(edition.id, db)
-    assert edition.status == "error"
-    assert "review required" in edition.progress_detail
+    await getattr(audiobook_import, operation)(edition.id, db)
+    assert edition.status == "ready"
+    assert edition.error is None
+    assert edition.match_review_reason.startswith(MATCH_REVIEW_PREFIX)
+    assert edition.progress_detail == "Ready to play; chapter matching needs review"
 
 
 @pytest.mark.asyncio
@@ -340,33 +445,20 @@ async def test_rematch_keeps_manual_corrections(db, monkeypatch):
     assert (tracks[5].matched_chapter_id, tracks[5].match_method) == (chapters[5].id, "manual")
     assert (tracks[6].matched_chapter_id, tracks[6].match_method) == (chapters[6].id, "automatic")
     assert edition.status == "ready"
+    assert edition.match_review_reason is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error,job_type,status",
-    [
-        (
-            "Chapter matching needs review. 1 numbered book chapters have no audio match.",
-            "rematch_imported_audiobook",
-            "stale",
-        ),
-        ("Could not read the uploaded audio.", "import_audiobook", "queued"),
-    ],
-)
-async def test_retry_reruns_only_the_step_that_failed(db, error, job_type, status):
-    _book, edition, _chapters_list, tracks = await _seed(db)
+async def test_retry_reimports_a_failed_import(db):
+    _book, edition, _chapters_list, _tracks_list = await _seed(db)
     edition.status = "error"
-    edition.error = error
-    tracks[5].match_method = "manual"
+    edition.error = "Could not read the uploaded audio."
     await db.commit()
 
     await audiobook_imports.retry_imported_audiobook(edition.id, db)
 
-    assert (edition.status, edition.error) == (status, None)
-    assert [job.job_type for job in (await db.scalars(select(ProcessingJob))).all()] == [job_type]
-    # Retrying the match must not delete tracks and their manual corrections.
-    assert tracks[5].match_method == "manual"
+    assert (edition.status, edition.error) == ("queued", None)
+    assert [job.job_type for job in (await db.scalars(select(ProcessingJob))).all()] == ["import_audiobook"]
 
 
 @pytest.mark.asyncio

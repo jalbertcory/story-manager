@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from backend.app import models
 from backend.app.services import audiobook_alignment, endpoint_pool, transcription_providers
+from backend.app.services.audiobook_match_validation import MATCH_REVIEW_PROGRESS, MATCH_REVIEW_PREFIX
 from backend.app.services.transcription_providers import TranscriptWord
 
 
@@ -579,3 +580,30 @@ async def test_alignment_without_a_provider_leaves_a_blocked_edition_blocked(db)
     assert edition.error == review
     assert edition.alignment_error is None
     assert edition.progress_detail == "Chapter matching blocked; review required"
+
+
+@pytest.mark.asyncio
+async def test_alignment_without_a_provider_returns_a_review_edition_to_ready(db):
+    """An edition that needs match review must not stay aligning or report a Whisper problem."""
+    book = models.Book(title="Review", immutable_path="library/r-immutable.epub", current_path="library/r.epub")
+    db.add(book)
+    await db.flush()
+    review = f"{MATCH_REVIEW_PREFIX} Chapter 2 has no narration."
+    edition = models.ImportedAudiobook(
+        book_id=book.id,
+        name="Human narration",
+        status="aligning",
+        alignment_method="estimated",
+        match_review_reason=review,
+        progress_detail="Queued for Whisper",
+    )
+    db.add(edition)
+    await db.commit()
+
+    assert await audiobook_alignment.process_alignment(edition.id, db) == "not_configured"
+
+    await db.refresh(edition)
+    assert edition.status == "ready"
+    assert edition.match_review_reason == review
+    assert edition.alignment_error is None
+    assert edition.progress_detail == MATCH_REVIEW_PROGRESS

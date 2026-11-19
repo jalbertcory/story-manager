@@ -45,7 +45,7 @@ from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
 from .audiobook_chapter_titles import chapter_identity as _chapter_identity
-from .audiobook_match_validation import MatchValidationError, is_match_review_error, require_safe_matches
+from .audiobook_match_validation import MATCH_REPAIRED_PROGRESS, MATCH_REVIEW_PROGRESS, record_match_review
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
 logger = logging.getLogger(__name__)
@@ -479,10 +479,14 @@ async def rebuild_imported_audiobook(
         AlignmentMethod.ESTIMATED,
         context=f"imported audiobook {edition.id}",
     )
-    await _validate_completed_matches(edition, db)
+    review = await record_match_review(edition, db)
     edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
     edition.matched_content_version = book.content_version or 1
-    edition.progress_detail = f"Rebuilt with human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
+    edition.progress_detail = (
+        MATCH_REVIEW_PROGRESS
+        if review
+        else f"Rebuilt with human-audiobook pipeline v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION}"
+    )
     edition.error = None
     edition.alignment_error = None
     await db.commit()
@@ -982,6 +986,8 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         context=f"imported audiobook {edition.id}",
     )
     edition.error = None
+    # The tracks are rebuilt from scratch, so any earlier review no longer applies.
+    edition.match_review_reason = None
     edition.progress_detail = "Inspecting uploaded files"
     await db.commit()
     try:
@@ -1044,7 +1050,7 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
             await db.commit()
 
         matched_count = sum(1 for spec in specs if _chapter_match(spec, chapters))
-        await _validate_completed_matches(edition, db)
+        review = await record_match_review(edition, db)
         transition_state(
             edition,
             "status",
@@ -1066,9 +1072,13 @@ async def process_import(edition_id: int, db: AsyncSession) -> None:
         edition.progress_current = len(specs)
         edition.progress_total = len(specs)
         edition.progress_detail = (
-            f"Ready: {matched_count} of {len(specs)} tracks matched"
-            if book.current_path
-            else f"Ready: {len(specs)} audio-only tracks"
+            MATCH_REVIEW_PROGRESS
+            if review
+            else (
+                f"Ready: {matched_count} of {len(specs)} tracks matched"
+                if book.current_path
+                else f"Ready: {len(specs)} audio-only tracks"
+            )
         )
         edition.error = None
         if not book.current_path:
@@ -1153,7 +1163,7 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
         edition.progress_detail = f"Rematched track {index} of {len(tracks)}"
         await db.commit()
 
-    await _validate_completed_matches(edition, db)
+    review = await record_match_review(edition, db)
     transition_state(
         edition,
         "status",
@@ -1170,7 +1180,7 @@ async def rematch_imported_audiobook(edition_id: int, db: AsyncSession) -> int:
     )
     edition.matched_content_version = book.content_version or 1
     edition.pipeline_version = CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION
-    edition.progress_detail = f"Ready: {matched_count} of {len(tracks)} tracks matched"
+    edition.progress_detail = MATCH_REVIEW_PROGRESS if review else f"Ready: {matched_count} of {len(tracks)} tracks matched"
     edition.error = None
     await db.commit()
     return matched_count
@@ -1203,25 +1213,13 @@ async def rematch_track(
     await db.refresh(track)
     cue_count = await rebuild_estimated_cues(track, db)
     if edition is not None:
-        try:
-            await _validate_completed_matches(edition, db)
-        except MatchValidationError:
-            pass  # Keep each correction so a user can repair several tracks.
+        # Each correction is kept, so a person can repair several tracks in turn.
+        previous = edition.match_review_reason
+        review = await record_match_review(edition, db)
+        if edition.status == ImportedAudiobookStatus.READY.value:
+            if review:
+                edition.progress_detail = MATCH_REVIEW_PROGRESS
+            elif previous:
+                edition.progress_detail = MATCH_REPAIRED_PROGRESS
+        await db.commit()
     return cue_count
-
-
-async def _validate_completed_matches(edition: ImportedAudiobook, db: AsyncSession) -> None:
-    try:
-        await require_safe_matches(edition, db)
-    except MatchValidationError as exc:
-        transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.ERROR)
-        edition.error = str(exc)
-        edition.progress_detail = "Chapter matching blocked; review required"
-        await db.commit()
-        raise
-    if edition.status == "error" and is_match_review_error(edition.error):
-        transition_state(edition, "status", IMPORTED_AUDIOBOOK, ImportedAudiobookStatus.READY)
-        edition.error = None
-        edition.alignment_error = None
-        edition.progress_detail = "Chapter matching repaired"
-        await db.commit()

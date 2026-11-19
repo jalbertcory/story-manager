@@ -13,7 +13,8 @@ const TONES: Record<AudioState, Tone> = {
   job_failed: "danger",
   import_failed: "danger",
   tts_failed: "danger",
-  needs_review: "danger",
+  // The audio still plays; only synchronized text waits for the review.
+  needs_review: "warning",
   whisper_failed: "warning",
   outdated: "warning",
   tts_outdated: "warning",
