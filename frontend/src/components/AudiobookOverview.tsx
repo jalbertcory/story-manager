@@ -251,7 +251,10 @@ function AudiobookOverview() {
       refreshAfterQueueing();
       for (const bookId of plan.bookIds) {
         void queryClient.invalidateQueries({
-          queryKey: queryKeys.audiobook.imports(bookId),
+          queryKey:
+            plan.action === "resume_narration"
+              ? queryKeys.audiobook.status(bookId)
+              : queryKeys.audiobook.imports(bookId),
         });
       }
     },

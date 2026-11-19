@@ -76,12 +76,13 @@ async def _resume_narration(book: Book, db: AsyncSession) -> contracts.PipelineQ
 
     Narration of an older text is brought up to date by re-reading the current
     text, the same job a text change queues; otherwise the pipeline resumes
-    from the first phase with work left.
+    from the first phase with work left. A book left in a phase with no job
+    behind it (after a restart, say) is resumed rather than reported running.
     """
     book_id = book.id
     status = book.audiobook_pipeline_status
 
-    if status in _RUNNING_PHASES:
+    if status in _RUNNING_PHASES and book_id in await active_narration_book_ids(db, [book_id]):
         # Already running; idempotent
         return {"status": status, "queued": False}
 
@@ -90,9 +91,12 @@ async def _resume_narration(book: Book, db: AsyncSession) -> contracts.PipelineQ
 
     resume_status = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     if resume_status == "complete":
-        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
         if not narration_outdated(book):
+            await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
             return {"status": "complete", "queued": False}
+        # Mark it ingesting now, as a text refresh does, so the book reads as
+        # running (and the page polls) until the worker picks the job up.
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="ingesting", stop_after_phase=None)
         content_version = book.content_version or 1
         await queue_processing_job(
             db=db,
@@ -105,7 +109,7 @@ async def _resume_narration(book: Book, db: AsyncSession) -> contracts.PipelineQ
             dedupe_key=f"audiobook_pipeline:book:{book_id}:v{content_version}",
             progress_detail=f"Queued to update narration for cleaned content v{content_version}",
         )
-        return {"status": "complete", "queued": True}
+        return {"status": "ingesting", "queued": True}
 
     await crud.audiobook.configure_book_pipeline_run(db, book_id, status=resume_status, stop_after_phase=None)
     _reset_phase_endpoint_cooldowns(resume_status)
@@ -179,6 +183,9 @@ def _bulk_resume_skip_reason(book: Book, *, job_active: bool) -> str | None:
     status = tts_status(book, job_active=job_active)
     if status is None:
         return "AI narration is not enabled for this book"
+    if job_active:
+        # A failed book can have a retry queued; queueing another would race it.
+        return _BULK_SKIP_REASONS["tts_running"]
     if status.state in _RESUMABLE_TTS_STATES:
         return None
     return _BULK_SKIP_REASONS.get(status.state, status.label)

@@ -974,6 +974,7 @@ async def test_resuming_finished_narration_of_older_text_updates_it(db, monkeypa
         audiobook_enabled=True,
         audiobook_pipeline_status="complete",
         audiobook_publication_state="stale",
+        audiobook_source_content_version=2,
         content_version=3,
     )
     current = await _make_book(
@@ -994,16 +995,37 @@ async def test_resuming_finished_narration_of_older_text_updates_it(db, monkeypa
     assert (await audiobook_pipeline.get_pipeline_status(current.id, db)).outdated is False
 
     # Finished narration of an older text re-reads the current text, the same
-    # job a text change queues, instead of reporting that nothing is left.
-    assert await audiobook_pipeline.start_pipeline(outdated.id, db) == {"status": "complete", "queued": True}
-    assert await audiobook_pipeline.start_pipeline(outdated.id, db) == {"status": "complete", "queued": True}
+    # job a text change queues, instead of reporting that nothing is left. The
+    # book reads as running from then on, so a second start leaves it alone.
+    assert await audiobook_pipeline.start_pipeline(outdated.id, db) == {"status": "ingesting", "queued": True}
+    assert await audiobook_pipeline.start_pipeline(outdated.id, db) == {"status": "ingesting", "queued": False}
     assert await audiobook_pipeline.start_pipeline(current.id, db) == {"status": "complete", "queued": False}
 
     jobs = await _audiobook_jobs(db)
     assert [(job.book_id, job.payload["mode"], job.dedupe_key, job.target_content_version) for job in jobs] == [
         (outdated.id, "reconcile", f"audiobook_pipeline:book:{outdated.id}:v3", 3)
     ]
-    assert queue.enqueued == [outdated.id, outdated.id]
+    assert queue.enqueued == [outdated.id]
+
+
+@pytest.mark.asyncio
+async def test_starting_narration_left_in_a_phase_without_a_job_resumes_it(db, monkeypatch):
+    # After a restart a book can be left in a phase with nothing running it.
+    stranded = await _make_book(db, title="Stranded", audiobook_enabled=True, audiobook_pipeline_status="roster_gen")
+    queue = _FakeQueue().install(monkeypatch)
+
+    async def roster_next(_db, _book_id):
+        return "roster_gen"
+
+    monkeypatch.setattr(crud.audiobook, "infer_audiobook_resume_status", roster_next)
+
+    assert await audiobook_pipeline.start_pipeline(stranded.id, db) == {"status": "roster_gen", "queued": True}
+    # Once its job is queued the book is running, and starting it again is a no-op.
+    assert await audiobook_pipeline.start_pipeline(stranded.id, db) == {"status": "roster_gen", "queued": False}
+
+    jobs = await _audiobook_jobs(db)
+    assert [(job.book_id, job.payload["mode"]) for job in jobs] == [(stranded.id, "resume")]
+    assert queue.enqueued == [stranded.id]
 
 
 @pytest.mark.asyncio
@@ -1017,6 +1039,7 @@ async def test_bulk_resume_continues_only_narration_with_work_left(db, app_clien
         audiobook_enabled=True,
         audiobook_pipeline_status="complete",
         audiobook_publication_state="complete",
+        audiobook_source_content_version=1,
         audiobook_pending_content_version=2,
     )
     complete = await _make_book(
@@ -1028,7 +1051,20 @@ async def test_bulk_resume_continues_only_narration_with_work_left(db, app_clien
     )
     running = await _make_book(db, title="Running", audiobook_enabled=True, audiobook_pipeline_status="audio_gen")
     db.add(models.ProcessingJob(job_type="audiobook_pipeline", status="queued", book_id=running.id))
+    # A failed book whose retry is already queued must not get a second job.
+    retrying = await _make_book(db, title="Retrying", audiobook_enabled=True, audiobook_pipeline_status="error")
+    db.add(models.ProcessingJob(job_type="audiobook_pipeline", status="queued", book_id=retrying.id))
+    # Left in a phase with nothing running it, after a restart say.
+    stranded = await _make_book(db, title="Stranded", audiobook_enabled=True, audiobook_pipeline_status="diarizing")
     not_started = await _make_book(db, title="Not Started", audiobook_enabled=True)
+    # A text change before any narration exists does not make it outdated.
+    edited_before_narration = await _make_book(
+        db,
+        title="Edited Before Narration",
+        audiobook_enabled=True,
+        audiobook_publication_state="stale",
+        audiobook_pending_content_version=2,
+    )
     disabled = await _make_book(db, title="Disabled", audiobook_pipeline_status="paused")
     no_text = await _make_book(
         db, title="No Text", current_path=None, audiobook_enabled=True, audiobook_pipeline_status="paused"
@@ -1051,7 +1087,10 @@ async def test_bulk_resume_continues_only_narration_with_work_left(db, app_clien
                 paused.id,
                 complete.id,
                 running.id,
+                retrying.id,
+                stranded.id,
                 not_started.id,
+                edited_before_narration.id,
                 disabled.id,
                 no_text.id,
                 deleted.id,
@@ -1062,11 +1101,16 @@ async def test_bulk_resume_continues_only_narration_with_work_left(db, app_clien
 
     assert response.status_code == 200
     assert response.json() == {
-        "queued": [paused.id, outdated.id],
+        "queued": [paused.id, outdated.id, stranded.id],
         "skipped": [
             {"book_id": complete.id, "reason": "Narration is already complete"},
             {"book_id": running.id, "reason": "Narration is already running"},
+            {"book_id": retrying.id, "reason": "Narration is already running"},
             {"book_id": not_started.id, "reason": "Narration has not started; start it from the book's page"},
+            {
+                "book_id": edited_before_narration.id,
+                "reason": "Narration has not started; start it from the book's page",
+            },
             {"book_id": disabled.id, "reason": "AI narration is not enabled for this book"},
             {"book_id": no_text.id, "reason": "AI narration requires book text"},
             {"book_id": deleted.id, "reason": "Book not found"},
@@ -1076,8 +1120,10 @@ async def test_bulk_resume_continues_only_narration_with_work_left(db, app_clien
     jobs = await _audiobook_jobs(db)
     assert [(job.book_id, job.payload and job.payload["mode"]) for job in jobs] == [
         (running.id, None),
+        (retrying.id, None),
         (paused.id, "resume"),
         (outdated.id, "resume"),
+        (stranded.id, "resume"),
     ]
     await db.refresh(paused)
     assert paused.audiobook_pipeline_status == "audio_gen"

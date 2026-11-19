@@ -292,8 +292,13 @@ async def human_edition_statuses(
 
 
 def narration_outdated(book: Book) -> bool:
-    """The book text changed after its narration was generated."""
-    return (
+    """The book text changed after its narration was generated.
+
+    A book with no narration yet has nothing to be out of date, even though a
+    text change still records the version it is waiting for.
+    """
+    has_narration = bool(book.audiobook_revision) or book.audiobook_source_content_version is not None
+    return has_narration and (
         book.audiobook_publication_state == AudiobookPublicationStatus.STALE.value
         or book.audiobook_pending_content_version is not None
     )

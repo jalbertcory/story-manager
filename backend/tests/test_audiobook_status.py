@@ -98,8 +98,16 @@ def test_partial_whisper_failure_says_which_timing_was_kept():
         ({"audiobook_pipeline_status": "paused"}, False, "tts_paused", "open_generation"),
         # A phase without a queued job stopped after a single step.
         ({"audiobook_pipeline_status": "diarizing"}, False, "tts_paused", "open_generation"),
-        ({"audiobook_publication_state": "stale"}, False, "tts_outdated", "open_generation"),
-        ({"audiobook_pending_content_version": 3}, False, "tts_outdated", "open_generation"),
+        (
+            {"audiobook_publication_state": "stale", "audiobook_source_content_version": 1},
+            False,
+            "tts_outdated",
+            "open_generation",
+        ),
+        ({"audiobook_pending_content_version": 3, "audiobook_revision": 1}, False, "tts_outdated", "open_generation"),
+        # A text change before any narration exists leaves nothing out of date.
+        ({"audiobook_publication_state": "stale"}, False, "tts_not_started", "open_generation"),
+        ({"audiobook_pending_content_version": 3}, False, "tts_not_started", "open_generation"),
         ({"audiobook_pipeline_status": "complete", "audiobook_publication_state": "complete"}, False, "tts_complete", None),
         ({"audiobook_publication_state": "partial"}, False, "tts_partial", "open_generation"),
         ({}, False, "tts_not_started", "open_generation"),

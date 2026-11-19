@@ -309,12 +309,13 @@ describe("AudiobookPipeline", () => {
   });
 
   it("offers to update finished narration when the book text changed", async () => {
+    let updateQueued = false;
     const fetchMock = mockFetch((url, options) => {
       if (url === "/api/books/11/audiobook/status") {
         return Promise.resolve(
           jsonResponse({
-            pipeline_status: "complete",
-            next_phase: "complete",
+            pipeline_status: updateQueued ? "ingesting" : "complete",
+            next_phase: updateQueued ? "ingesting" : "complete",
             outdated: true,
             pause_requested: false,
             sentence_counts: { audio_generated: 2 },
@@ -325,8 +326,9 @@ describe("AudiobookPipeline", () => {
         url === "/api/books/11/audiobook/start" &&
         options?.method === "POST"
       ) {
+        updateQueued = true;
         return Promise.resolve(
-          jsonResponse({ status: "complete", queued: true }),
+          jsonResponse({ status: "ingesting", queued: true }),
         );
       }
       return Promise.resolve(jsonResponse([]));
@@ -347,6 +349,15 @@ describe("AudiobookPipeline", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+    // The queued update reads as running, so the offer goes away.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Update Narration" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Book text changed since this narration was generated"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows import times and identifies the reader app default edition", async () => {
