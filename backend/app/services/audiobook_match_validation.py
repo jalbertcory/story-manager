@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..lifecycle import ImportedAudiobookStatus
 from ..models import AudiobookChapter, AudiobookSentence, Book, ImportedAudiobook, ImportedAudiobookCue, ImportedAudiobookTrack
-from .audiobook_chapter_titles import chapter_identity
+from .audiobook_chapter_titles import chapter_identity, numbered_title
 
 MIN_MATCH_COVERAGE = 0.90
 MIN_AUDIO_COVERAGE = 0.95
@@ -87,10 +87,10 @@ def match_coverage_error(
         matched_text = sum(chapter_sizes.get(chapter.id, 0) for chapter in chapters if _group(chapter) in covered)
         if matched_text / total_text < MIN_MATCH_COVERAGE:
             reasons.append(f"Only {matched_text / total_text:.0%} of book text is covered (90% required).")
+    # A leading number before a subtitle ("02 - The Door") may be a track or
+    # file index, so only stated chapter numbers are held to these two checks.
     numbered = {
-        _group(chapter)
-        for chapter in chapters
-        if (identity := chapter_identity(chapter.title)) is not None and identity[0] == "chapter"
+        _group(chapter) for chapter in chapters if (number := numbered_title(chapter.title)) is not None and not number.indexed
     }
     missing_numbered = len(numbered - covered)
     if missing_numbered:
@@ -118,10 +118,10 @@ def match_coverage_error(
         previous_position = position
         previous_track = track
     if any(
-        (identity := chapter_identity(track.title)) is not None
-        and identity[0] == "chapter"
+        (number := numbered_title(track.title)) is not None
+        and not number.indexed
         and track.matched_chapter_id is not None
-        and identity != chapter_identity(by_id[track.matched_chapter_id].title)
+        and chapter_identity(track.title) != chapter_identity(by_id[track.matched_chapter_id].title)
         for track in matched
     ):
         reasons.append("Numbered audio tracks point to different book chapters.")

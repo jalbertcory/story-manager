@@ -44,7 +44,7 @@ from ..models import (
 from .subprocesses import communicate_bounded
 from .media_responses import AudioProbe, ProbeChapter
 from .audiobook_ingestion import ingest_epub
-from .audiobook_chapter_titles import chapter_identity as _chapter_identity
+from .audiobook_chapter_titles import normalized_title, same_chapter
 from .audiobook_match_validation import MATCH_REPAIRED_PROGRESS, MATCH_REVIEW_PROGRESS, record_match_review
 from .audiobook_metadata import enrich_audio_only_book, queue_audio_metadata_lookup
 
@@ -866,11 +866,13 @@ async def _track_specs(audio_paths: list[Path], cue_paths: list[Path]) -> tuple[
 
 
 def _chapter_match(spec: TrackSpec, chapters: list[AudiobookChapter]) -> AudiobookChapter | None:
-    wanted = _chapter_identity(spec.title)
-    if wanted is None:
+    candidates = [chapter for chapter in chapters if same_chapter(spec.title, chapter.title)]
+    if not candidates:
         return None
-    candidates = [chapter for chapter in chapters if _chapter_identity(chapter.title) == wanted]
-    return candidates[0] if candidates else None
+    # Books whose parts restart numbering repeat "Chapter One"; the exact title
+    # ("Part Two: Chapter One") tells them apart.
+    title = normalized_title(spec.title)
+    return next((chapter for chapter in candidates if normalized_title(chapter.title) == title), candidates[0])
 
 
 def _sentence_weight(text: str) -> int:
