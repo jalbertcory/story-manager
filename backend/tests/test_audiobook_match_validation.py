@@ -98,6 +98,34 @@ def test_numbered_audio_cannot_match_front_matter_with_equal_counts():
     assert "different book chapters" in match_coverage_error(_tracks(), chapters)
 
 
+def test_manual_match_of_an_indexed_track_is_not_flagged_as_a_different_chapter():
+    # "06 - Title 5" is file 6 but chapter 5; a person who pairs it with
+    # chapter 5 by hand must be able to clear the review.
+    chapters = _chapters()
+    tracks = _tracks()
+    for track in tracks:
+        track.title = f"{track.id + 1:02d} - Title {track.id}"
+    assert match_coverage_error(tracks, chapters) is None
+
+
+def test_untitled_tracks_offset_by_a_prologue_fail_closed():
+    # Files "01 - Prologue", "2" ... "21": each bare number is one ahead of its
+    # chapter, so automatic matching leaves chapter 1 without audio.
+    prologue = AudiobookChapter(
+        id=21, book_id=1, chapter_number=0, spine_order=-1, logical_chapter_key="prologue", title="Prologue"
+    )
+    chapters = [prologue, *_chapters()]
+    tracks = _tracks(21)
+    for track in tracks:
+        track.title = "01 - Prologue" if track.id == 1 else str(track.id)
+        spec = audiobook_import.TrackSpec(track.id, track.title, Path("a.mp3"), 0, 1000, "audio/mpeg")
+        matched = audiobook_import._chapter_match(spec, chapters)
+        track.matched_chapter_id = matched.id if matched else None
+
+    assert tracks[0].matched_chapter_id == prologue.id
+    assert "numbered book chapters have no audio match" in match_coverage_error(tracks, chapters)
+
+
 def test_long_missing_track_fails_despite_sufficient_track_counts():
     tracks = _tracks(20, numbered=False)
     tracks[10].matched_chapter_id = None
@@ -227,7 +255,17 @@ def test_matched_part_announcement_must_keep_book_order():
 
 async def _seed(db):
     book = Book(id=1, title="Matching safeguard", current_path="library/test.epub")
-    edition = ImportedAudiobook(id=1, book_id=1, name="Incomplete", status="ready", alignment_method="estimated")
+    # Built with the current pipeline, so its review is not deferred to a rebuild.
+    edition = ImportedAudiobook(
+        id=1,
+        book_id=1,
+        name="Incomplete",
+        status="ready",
+        alignment_method="estimated",
+        pipeline_version=audiobook_import.CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION,
+        source_manifest_sha256="a" * 64,
+        derived_format_version=audiobook_import.CURRENT_DERIVED_FORMAT_VERSION,
+    )
     chapters = _chapters()
     tracks = _tracks()
     tracks[5].matched_chapter_id = None

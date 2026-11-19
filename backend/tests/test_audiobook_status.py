@@ -54,6 +54,9 @@ def _edition(**fields):
         ({"match_review_reason": _REVIEW}, {}, "needs_review", "Needs match review", "review_matches"),
         ({"status": "aligning", "match_review_reason": _REVIEW}, {}, "working", "Running Whisper", None),
         ({"pipeline_version": 2}, {}, "outdated", "Needs rebuild", "rebuild"),
+        # A rebuild matches the tracks again, so it comes before a review.
+        ({"pipeline_version": 2, "match_review_reason": _REVIEW}, {}, "outdated", "Needs rebuild", "rebuild"),
+        ({"match_review_reason": _REVIEW}, {"content_version": 2}, "outdated", "Needs rebuild", "rebuild"),
         ({"derived_format_version": 0}, {}, "outdated", "Needs rebuild", "rebuild"),
         ({"source_manifest_sha256": None}, {}, "outdated", "Needs rebuild", "rebuild"),
         ({}, {"content_version": 2}, "outdated", "Needs rebuild", "rebuild"),
@@ -77,6 +80,16 @@ def test_human_edition_states(fields, context, state, label, action):
     status = human_edition_status(_edition(**fields), **{**options, **context})
     assert (status.state, status.label, status.next_action) == (state, label, action)
     assert (status.action_label is None) == (action is None)
+
+
+def test_outdated_edition_needing_review_says_review_comes_after_rebuild():
+    options = {"has_epub": True, "content_version": 1, "transcription_configured": True}
+    status = human_edition_status(_edition(pipeline_version=1, match_review_reason=_REVIEW), **options)
+
+    assert status.detail == (
+        f"Built with audiobook pipeline v1; v{CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION} matches chapters more "
+        "reliably. Its chapter matches also need review; rebuild first, then review what is left."
+    )
 
 
 def test_partial_whisper_failure_says_which_timing_was_kept():

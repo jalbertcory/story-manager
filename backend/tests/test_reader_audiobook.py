@@ -148,7 +148,8 @@ async def test_reader_audiobook_capability_and_assets(
                 imported_audiobook_id=70,
                 matched_chapter_id=701,
                 sequence_order=1,
-                title="Chapter Two",
+                # The second half of Chapter One, split across two tracks.
+                title="Chapter One (continued)",
                 audio_file_path=_relative(library, audio_path),
                 media_type="audio/mpeg",
                 source_start_ms=1250,

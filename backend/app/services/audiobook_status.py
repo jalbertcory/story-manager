@@ -158,7 +158,8 @@ def state_rank(state: AudioState) -> int:
     return STATE_ORDER.index(state)
 
 
-def _outdated_reason(edition: ImportedAudiobook, content_version: int) -> str | None:
+def outdated_reason(edition: ImportedAudiobook, content_version: int) -> str | None:
+    """Why a rebuild would bring this edition up to date, or None when it is current."""
     if (edition.pipeline_version or 0) < CURRENT_HUMAN_AUDIOBOOK_PIPELINE_VERSION:
         return (
             f"Built with audiobook pipeline v{edition.pipeline_version or 0}; "
@@ -221,6 +222,13 @@ def human_edition_status(
         )
     if not has_epub:
         return AudioStatus("audio_only", "Audio only", "This book has no EPUB text to read along with.")
+    # A rebuild matches the tracks again with the current pipeline and text,
+    # so an outdated edition is rebuilt before anyone reviews its matches.
+    outdated = outdated_reason(edition, content_version)
+    if outdated:
+        if edition.match_review_reason:
+            outdated = f"{outdated} Its chapter matches also need review; rebuild first, then review what is left."
+        return AudioStatus("outdated", "Needs rebuild", outdated, "rebuild", "Rebuild")
     if edition.match_review_reason:
         return AudioStatus(
             "needs_review",
@@ -229,9 +237,6 @@ def human_edition_status(
             "review_matches",
             "Review matches",
         )
-    outdated = _outdated_reason(edition, content_version)
-    if outdated:
-        return AudioStatus("outdated", "Needs rebuild", outdated, "rebuild", "Rebuild")
     if edition.alignment_error and transcription_configured:
         detail = edition.alignment_error
         if edition.alignment_method == AlignmentMethod.HYBRID.value:
