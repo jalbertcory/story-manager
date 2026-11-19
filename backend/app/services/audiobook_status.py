@@ -11,7 +11,7 @@ source the same way. Within each function the first matching rule wins.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -291,6 +291,36 @@ async def human_edition_statuses(
     return statuses
 
 
+def narration_outdated(book: Book) -> bool:
+    """The book text changed after its narration was generated.
+
+    A book with no narration yet has nothing to be out of date, even though a
+    text change still records the version it is waiting for.
+    """
+    has_narration = bool(book.audiobook_revision) or book.audiobook_source_content_version is not None
+    return has_narration and (
+        book.audiobook_publication_state == AudiobookPublicationStatus.STALE.value
+        or book.audiobook_pending_content_version is not None
+    )
+
+
+async def active_narration_book_ids(db: AsyncSession, book_ids: Iterable[int]) -> set[int]:
+    """Books with a narration pipeline job queued or running."""
+    ids = list(book_ids)
+    if not ids:
+        return set()
+    result = await db.scalars(
+        select(ProcessingJob.book_id)
+        .where(
+            ProcessingJob.job_type == "audiobook_pipeline",
+            ProcessingJob.status.in_(_ACTIVE_JOB_STATUSES),
+            ProcessingJob.book_id.in_(ids),
+        )
+        .distinct()
+    )
+    return {book_id for book_id in result.all() if book_id is not None}
+
+
 def tts_status(book: Book, *, job_active: bool) -> AudioStatus | None:
     """State of the AI-generated narration, or None when it is not enabled."""
     if not book.audiobook_enabled:
@@ -310,7 +340,7 @@ def tts_status(book: Book, *, job_active: bool) -> AudioStatus | None:
     if pipeline == AudiobookPipelineStatus.PAUSED.value or pipeline in _TTS_PHASES:
         # A phase with no queued job was paused or stopped after a single step.
         return AudioStatus("tts_paused", "Paused", book.audiobook_progress_detail, "open_generation", "Resume")
-    if publication == AudiobookPublicationStatus.STALE.value or book.audiobook_pending_content_version is not None:
+    if narration_outdated(book):
         return AudioStatus(
             "tts_outdated",
             "Outdated",
@@ -394,19 +424,7 @@ async def audiobook_overview(db: AsyncSession) -> AudiobookOverviewResponse:
         ).all()
     }
     statuses = await human_edition_statuses(editions, books, db, configured=configured)
-    active_tts = set(
-        (
-            await db.scalars(
-                select(ProcessingJob.book_id)
-                .where(
-                    ProcessingJob.job_type == "audiobook_pipeline",
-                    ProcessingJob.status.in_(_ACTIVE_JOB_STATUSES),
-                    ProcessingJob.book_id.in_(books.keys()),
-                )
-                .distinct()
-            )
-        ).all()
-    )
+    active_tts = await active_narration_book_ids(db, books.keys())
 
     sources: dict[int, list[AudiobookOverviewSource]] = {book_id: [] for book_id in books}
     for edition in editions:

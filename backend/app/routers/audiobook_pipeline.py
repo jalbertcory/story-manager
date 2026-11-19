@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import api_schemas as contracts
@@ -14,6 +15,9 @@ from ..audiobook_schemas import (
     AudiobookStatusResponse,
     BookTTSProviderUpdate,
     ChapterResponse,
+    NarrationBulkResumeRequest,
+    NarrationBulkResumeResponse,
+    NarrationBulkResumeSkip,
 )
 from ..database import get_db
 from ..job_payloads import (
@@ -21,8 +25,10 @@ from ..job_payloads import (
 )
 from ..models import (
     AudiobookChapter,
+    Book,
 )
 from ..services import audiobook_views
+from ..services.audiobook_status import active_narration_book_ids, narration_outdated, tts_status
 from ..services.audiobook_views import AudiobookViewNotFoundError
 from ..services.endpoint_pool import (
     configured_providers,
@@ -53,12 +59,30 @@ def _reset_phase_endpoint_cooldowns(phase: str) -> None:
         reset_cooldowns(capability)
 
 
-@router.post("/api/books/{book_id}/audiobook/start", response_model=contracts.PipelineQueued)
-async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
-    book = await get_audiobook_book_or_404(book_id, db)
+_RUNNING_PHASES = ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling")
+
+# Narration states the bulk action continues; a book that has not started is
+# left to its own page, since starting runs the whole analysis.
+_RESUMABLE_TTS_STATES = frozenset({"tts_failed", "tts_paused", "tts_partial", "tts_outdated"})
+_BULK_SKIP_REASONS = {
+    "tts_running": "Narration is already running",
+    "tts_complete": "Narration is already complete",
+    "tts_not_started": "Narration has not started; start it from the book's page",
+}
+
+
+async def _resume_narration(book: Book, db: AsyncSession) -> contracts.PipelineQueued:
+    """Queue whatever a book's narration still needs, if anything.
+
+    Narration of an older text is brought up to date by re-reading the current
+    text, the same job a text change queues; otherwise the pipeline resumes
+    from the first phase with work left. A book left in a phase with no job
+    behind it (after a restart, say) is resumed rather than reported running.
+    """
+    book_id = book.id
     status = book.audiobook_pipeline_status
 
-    if status in ("ingesting", "roster_gen", "diarizing", "audio_gen", "assembling"):
+    if status in _RUNNING_PHASES and book_id in await active_narration_book_ids(db, [book_id]):
         # Already running; idempotent
         return {"status": status, "queued": False}
 
@@ -67,8 +91,25 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> co
 
     resume_status = await crud.audiobook.infer_audiobook_resume_status(db, book_id)
     if resume_status == "complete":
-        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
-        return {"status": "complete", "queued": False}
+        if not narration_outdated(book):
+            await crud.audiobook.configure_book_pipeline_run(db, book_id, status="complete", stop_after_phase=None)
+            return {"status": "complete", "queued": False}
+        # Mark it ingesting now, as a text refresh does, so the book reads as
+        # running (and the page polls) until the worker picks the job up.
+        await crud.audiobook.configure_book_pipeline_run(db, book_id, status="ingesting", stop_after_phase=None)
+        content_version = book.content_version or 1
+        await queue_processing_job(
+            db=db,
+            job_type="audiobook_pipeline",
+            book_id=book_id,
+            target_type="book",
+            target_id=book_id,
+            target_content_version=content_version,
+            payload=AudiobookPipelinePayload(mode="reconcile"),
+            dedupe_key=f"audiobook_pipeline:book:{book_id}:v{content_version}",
+            progress_detail=f"Queued to update narration for cleaned content v{content_version}",
+        )
+        return {"status": "ingesting", "queued": True}
 
     await crud.audiobook.configure_book_pipeline_run(db, book_id, status=resume_status, stop_after_phase=None)
     _reset_phase_endpoint_cooldowns(resume_status)
@@ -86,6 +127,68 @@ async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> co
     )
     current_status = (await get_book_or_404(book_id, db)).audiobook_pipeline_status
     return {"status": current_status, "queued": True}
+
+
+@router.post("/api/books/{book_id}/audiobook/start", response_model=contracts.PipelineQueued)
+async def start_pipeline(book_id: int, db: AsyncSession = Depends(get_db)) -> contracts.PipelineQueued:
+    book = await get_audiobook_book_or_404(book_id, db)
+    return await _resume_narration(book, db)
+
+
+@router.post("/api/audiobook-narration/bulk-resume", response_model=NarrationBulkResumeResponse)
+async def bulk_resume_narration(
+    request: NarrationBulkResumeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> NarrationBulkResumeResponse:
+    """Continue AI narration that failed, paused, stopped part way or fell behind its text.
+
+    Each book's state is worked out again here; a book that is running,
+    finished or not started is skipped rather than acted on.
+    """
+    book_ids = list(dict.fromkeys(request.book_ids))
+    books = {
+        book.id: book
+        for book in (await db.scalars(select(Book).where(Book.id.in_(book_ids), Book.deleted_at.is_(None)))).all()
+    }
+    active = await active_narration_book_ids(db, books.keys())
+    queued: list[int] = []
+    skipped: list[NarrationBulkResumeSkip] = []
+    for book_id in book_ids:
+        book = books.get(book_id)
+        if book is None:
+            skipped.append(NarrationBulkResumeSkip(book_id=book_id, reason="Book not found"))
+            continue
+        try:
+            # A rollback while queueing an earlier book expired what was loaded
+            # above; async sessions cannot lazy-load it back.
+            if inspect(book).expired_attributes:
+                await db.refresh(book)
+            reason = _bulk_resume_skip_reason(book, job_active=book_id in active)
+            if reason is None and not (await _resume_narration(book, db))["queued"]:
+                reason = "Nothing left to narrate"
+        except Exception:
+            logger.exception("Bulk narration resume failed for book %s", book_id)
+            await db.rollback()
+            reason = "Could not be queued; see the server log"
+        if reason is None:
+            queued.append(book_id)
+        else:
+            skipped.append(NarrationBulkResumeSkip(book_id=book_id, reason=reason))
+    return NarrationBulkResumeResponse(queued=queued, skipped=skipped)
+
+
+def _bulk_resume_skip_reason(book: Book, *, job_active: bool) -> str | None:
+    if not book.current_path:
+        return "AI narration requires book text"
+    status = tts_status(book, job_active=job_active)
+    if status is None:
+        return "AI narration is not enabled for this book"
+    if job_active:
+        # A failed book can have a retry queued; queueing another would race it.
+        return _BULK_SKIP_REASONS["tts_running"]
+    if status.state in _RESUMABLE_TTS_STATES:
+        return None
+    return _BULK_SKIP_REASONS.get(status.state, status.label)
 
 
 @router.post("/api/books/{book_id}/audiobook/step", response_model=contracts.PipelineQueued)
@@ -286,6 +389,7 @@ async def get_pipeline_status(book_id: int, db: AsyncSession = Depends(get_db)) 
     return AudiobookStatusResponse(
         pipeline_status=book.audiobook_pipeline_status,
         next_phase=next_phase,
+        outdated=narration_outdated(book),
         pause_requested=book.audiobook_pause_requested,
         stop_after_phase=book.audiobook_stop_after_phase,
         last_error=book.audiobook_last_error,

@@ -388,6 +388,15 @@ export function bulkImportedAudiobookAction(
   );
 }
 
+export function bulkResumeNarration(
+  body: Body<"/api/audiobook-narration/bulk-resume", "post">,
+) {
+  return unwrap(
+    api.POST("/api/audiobook-narration/bulk-resume", { body }),
+    "Failed to queue the narration",
+  );
+}
+
 export function getAudiobookOverview(options?: RequestOptions) {
   return unwrap(
     api.GET("/api/audiobooks/overview", requestInit(options)),

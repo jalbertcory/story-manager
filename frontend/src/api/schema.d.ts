@@ -1,5 +1,28 @@
 // Generated from FastAPI. Run npm run api:generate; do not edit.
 export interface paths {
+    "/api/audiobook-narration/bulk-resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Resume Narration
+         * @description Continue AI narration that failed, paused, stopped part way or fell behind its text.
+         *
+         *     Each book's state is worked out again here; a book that is running,
+         *     finished or not started is skipped rather than acted on.
+         */
+        post: operations["bulk_resume_narration_api_audiobook_narration_bulk_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audiobook/characters/{char_id}": {
         parameters: {
             query?: never;
@@ -3337,6 +3360,8 @@ export interface components {
             llm_requests: number;
             /** Next Phase */
             next_phase: string;
+            /** Outdated */
+            outdated: boolean;
             /** Pause Requested */
             pause_requested: boolean;
             /** Pipeline Started At */
@@ -4972,6 +4997,25 @@ export interface components {
             /** Target Id */
             target_id?: number | null;
         };
+        /** NarrationBulkResumeRequest */
+        NarrationBulkResumeRequest: {
+            /** Book Ids */
+            book_ids: number[];
+        };
+        /** NarrationBulkResumeResponse */
+        NarrationBulkResumeResponse: {
+            /** Queued */
+            queued: number[];
+            /** Skipped */
+            skipped: components["schemas"]["NarrationBulkResumeSkip"][];
+        };
+        /** NarrationBulkResumeSkip */
+        NarrationBulkResumeSkip: {
+            /** Book Id */
+            book_id: number;
+            /** Reason */
+            reason: string;
+        };
         /** NotificationTestResult */
         NotificationTestResult: {
             /** Error */
@@ -6113,6 +6157,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    bulk_resume_narration_api_audiobook_narration_bulk_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NarrationBulkResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NarrationBulkResumeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_character_api_audiobook_characters__char_id__put: {
         parameters: {
             query?: never;

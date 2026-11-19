@@ -158,8 +158,12 @@ async def build_book_catalog_page(
         )
         last_position = []
 
+    from .library import library_book_info, playable_generated_audio_book_ids
+
     metadata_map = await crud.get_series_metadata_for_names(db, sorted({book.series for book in books if book.series}))
     human_ids = await crud.audiobook.get_human_audiobook_book_ids(db, [book.id for book in books])
+    # Opting in to AI narration is not audio yet; wait for a chapter that plays.
+    generated_ids = await playable_generated_audio_book_ids(db, [book.id for book in books])
 
     series_books: dict[str, list[models.Book]] = {}
     for book in books:
@@ -174,7 +178,7 @@ async def build_book_catalog_page(
         serialize_catalog_book(
             book,
             audiobook_types=[
-                *([AI_GENERATED] if book.audiobook_enabled else []),
+                *([AI_GENERATED] if book.id in generated_ids else []),
                 *([HUMAN_NARRATED] if book.id in human_ids else []),
             ],
             series_user_genre_tags=(metadata_map[book.series].user_genre_tags if book.series in metadata_map else []),
@@ -182,8 +186,6 @@ async def build_book_catalog_page(
         )
         for book in books
     ]
-
-    from .library import library_book_info
 
     info = await library_book_info(db, [book.id for book in books])
     items = [item.model_copy(update={key: value for key, value in info[item.id].items() if key != "id"}) for item in items]
