@@ -1,4 +1,4 @@
-.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui audit-python pr-check install-hooks local-check test test-migrations e2e e2e-debug lock-check
+.PHONY: help start start-services services-status setup setup-omnivoice run-omnivoice setup-qwen3-tts run-qwen3-tts setup-qwen3-tts-mlx run-qwen3-tts-mlx setup-transcription run-transcription build-transcription-image pull-ollama-model run-gpu-scheduler managed-ai gpu-services-status test-gpu-scheduler run-ui run-api run-db ensure-db migrate fmt lint lint-backend lint-ui check-ui-install typecheck typecheck-ui api-check api-generate audit-ui audit-python pr-check install-hooks local-check test test-migrations test-migrations-db e2e e2e-debug lock-check
 
 E2E_DB_CONTAINER ?= story-manager-e2e-db
 E2E_DB_PORT ?= 5434
@@ -240,6 +240,11 @@ test-migrations:
 		sleep 1; \
 	done; \
 	echo " Postgres is ready."; \
+	$(MAKE) test-migrations-db
+
+# Run the migration suite against an isolated database supplied by the caller.
+test-migrations-db:
+	@set -e; export DATABASE_URL="$(MIGRATION_TEST_DATABASE_URL)"; \
 	$(ALEMBIC) upgrade head; \
 	$(ALEMBIC) downgrade 0016; \
 	$(MIGRATION_PSQL) \
