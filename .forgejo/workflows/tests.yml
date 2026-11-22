@@ -1,0 +1,47 @@
+name: Story Manager CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  tests:
+    runs-on: story-manager-ci
+    timeout-minutes: 75
+    steps:
+      - uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Prepare isolated test tools
+        run: |
+          apt-get -qq update
+          DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends postgresql-17 ffmpeg
+          curl -fsSL --retry 3 https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz -o /tmp/uv.tar.gz
+          echo 'f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645  /tmp/uv.tar.gz' | sha256sum -c -
+          tar xzf /tmp/uv.tar.gz --strip-components=1 -C /usr/local/bin uv-x86_64-unknown-linux-gnu/uv
+          uv sync --frozen --extra dev
+          npm --prefix frontend ci --no-audit --no-fund
+      - name: Check dependencies, formatting, types, and API contracts
+        run: make pr-check
+      - name: Test the backend, frontend, and GPU scheduler
+        run: make test test-gpu-scheduler
+      - name: Test migrations and PostgreSQL job locking
+        run: |
+          pg_ctlcluster 17 main start
+          runuser -u postgres -- psql -v ON_ERROR_STOP=1 -c "ALTER ROLE postgres PASSWORD 'postgres'"
+          runuser -u postgres -- createdb story_manager
+          make test-migrations-db MIGRATION_TEST_DATABASE_URL='postgresql+psycopg://postgres:postgres@localhost/story_manager' MIGRATION_PSQL='runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d story_manager'
+      - name: Run browser tests against the built web UI
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost/story_manager_e2e
+          CI: 'true'
+        run: |
+          runuser -u postgres -- createdb story_manager_e2e
+          npm --prefix frontend run build
+          (cd frontend && npx playwright install --with-deps chromium)
+          PYTHONPATH=. uv run --frozen alembic -c backend/alembic.ini upgrade head
+          PYTHONPATH=backend .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/story-manager-e2e.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8000/health
+          npm --prefix frontend run test:e2e
