@@ -20,6 +20,8 @@ from .metadata.evidence import SearchIdentity, resolve_search_identity
 from .metadata.genres import merge_genre_tags as _merge_genre_tags
 from .metadata.providers.amazon import build_amazon_suggestion as _build_amazon_suggestion
 from .metadata.providers.amazon import collect_amazon_matches as _collect_amazon_matches
+from .metadata.providers.apple_books import build_apple_books_suggestion as _build_apple_books_suggestion
+from .metadata.providers.apple_books import collect_apple_books_matches as _collect_apple_books_matches
 from .metadata.providers.google_books import build_google_books_suggestion as _build_google_books_suggestion
 from .metadata.providers.google_books import collect_google_books_matches as _collect_google_books_matches
 from .metadata.providers.open_library import build_open_library_suggestion as _build_open_library_suggestion
@@ -31,6 +33,7 @@ from .metadata.scoring import clean_isbn as _clean_isbn
 from .metadata.scoring import normalize_text as _normalize_text
 from .metadata.scoring import title_similarity as _title_similarity
 from .metadata.suggestion import DEFAULT_MATCH_CANDIDATE_LIMIT, MetadataSuggestion
+from .metadata.suggestion import book_manual_remote_ids as _book_manual_remote_ids
 from .metadata.suggestion import suggestion_match_issues as _suggestion_match_issues
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ logger = logging.getLogger(__name__)
 AUTO_APPROVE_THRESHOLD = 0.92
 PROPOSAL_THRESHOLD = 0.75
 KNOWN_REMOTE_ID_KEYS = {
+    "apple_books_id",
     "asin",
     "google_books_volume_id",
     "isbn_10",
@@ -59,7 +63,7 @@ def _stable_remote_identifiers(remote_ids: dict[str, JsonValue] | None) -> set[t
     identifiers_by_name = searchable_identifiers(remote_ids)
     identifiers = {
         (key, str(identifiers_by_name[key]).strip())
-        for key in ("google_books_volume_id", "open_library_work_key", "asin")
+        for key in ("google_books_volume_id", "open_library_work_key", "asin", "apple_books_id")
         if identifiers_by_name.get(key) and str(identifiers_by_name[key]).strip()
     }
     identifiers.update(
@@ -177,7 +181,7 @@ def _suggestion_isbns(suggestion: MetadataSuggestion) -> set[str]:
 def _suggestions_same_record(left: MetadataSuggestion, right: MetadataSuggestion) -> bool:
     left_ids = left.remote_ids or {}
     right_ids = right.remote_ids or {}
-    for key in ("google_books_volume_id", "open_library_work_key", "asin"):
+    for key in ("google_books_volume_id", "open_library_work_key", "asin", "apple_books_id"):
         if left_ids.get(key) and left_ids.get(key) == right_ids.get(key):
             return True
 
@@ -195,7 +199,7 @@ def _suggestions_same_record(left: MetadataSuggestion, right: MetadataSuggestion
 
 def _merge_sources(*sources: str) -> str:
     found = {part for source in sources for part in source.split("+") if part}
-    return "+".join(source for source in ("open_library", "google_books", "amazon") if source in found)
+    return "+".join(source for source in ("open_library", "google_books", "amazon", "apple_books") if source in found)
 
 
 def _merge_matching_suggestions(primary: MetadataSuggestion, corroborating: MetadataSuggestion) -> MetadataSuggestion:
@@ -303,6 +307,17 @@ def _build_suggestions_for_book(
         suggestions.extend(_build_amazon_suggestion(book, match) for match in _collect_amazon_matches(search_book))
     except requests.RequestException:
         logger.warning("Amazon metadata request failed for %s by %s; continuing.", book.title, book.author)
+
+    # Apple's search API is tightly rate limited, so it only fills gaps: books
+    # the other providers missed, or books pinned to an Apple Books ID.
+    if not suggestions or _book_manual_remote_ids(search_book).get("apple_books_id"):
+        try:
+            suggestions.extend(
+                _build_apple_books_suggestion(book, match)
+                for match in _collect_apple_books_matches(search_book, limit=max_candidates)
+            )
+        except requests.RequestException:
+            logger.warning("Apple Books metadata request failed for %s by %s; continuing.", book.title, book.author)
 
     if suggestions:
         consolidated = _consolidate_suggestions(suggestions)[:max_candidates]

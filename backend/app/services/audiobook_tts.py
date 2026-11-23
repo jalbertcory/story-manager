@@ -23,6 +23,7 @@ from .library_paths import book_audiobook_dir
 from ..models import AudiobookChapter, AudiobookCharacter, AudiobookSentence
 from .audiobook_block_split import BlockSplitError, split_block
 from .audiobook_mastering import decode_clip, encode_mp3
+from .audiobook_pronunciation import Lexicon, load_book_lexicon
 from .subprocesses import communicate_bounded
 from .audiobook_text import split_speech_segments
 from .endpoint_pool import EndpointsCoolingDown, ProviderSettings, settings_for_provider
@@ -348,20 +349,25 @@ async def _build_sentence_requests(
     sentence: AudiobookSentence,
     db: AsyncSession,
     cast: list[AudiobookCharacter] | None = None,
+    lexicon: Lexicon | None = None,
 ) -> list[TTSRequest]:
     """Render dialogue with its character and attribution prose with Narrator.
 
-    Batch callers pass the book's ``cast`` once; voices assigned while building
-    requests update those same session objects.
+    Batch callers pass the book's ``cast`` and pronunciation ``lexicon`` once;
+    voices assigned while building requests update those same session objects.
+    Request text carries the lexicon's respellings; the sentence does not.
     """
 
     character = await db.get(AudiobookCharacter, sentence.character_id) if sentence.character_id is not None else None
     await _ensure_character_voice(settings, character, db)
-    if cast is None:
+    if cast is None or lexicon is None:
         chapter = await db.get(AudiobookChapter, sentence.chapter_id)
-        cast = await crud.audiobook.get_characters_for_book(db, chapter.book_id) if chapter is not None else []
+        if cast is None:
+            cast = await crud.audiobook.get_characters_for_book(db, chapter.book_id) if chapter is not None else []
+        if lexicon is None:
+            lexicon = await load_book_lexicon(db, chapter.book_id) if chapter is not None else Lexicon()
     cast_voice_ids = _cast_voice_ids(settings, cast)
-    full_text = sentence.tagged_text or sentence.original_text
+    full_text = lexicon.apply(sentence.tagged_text or sentence.original_text)
     if character is None or character.is_narrator:
         return [_request_for_character(settings, character, full_text, cast_voice_ids)]
 
@@ -380,7 +386,7 @@ async def _build_sentence_requests(
     expression_applied = False
     requests: list[TTSRequest] = []
     for segment in spoken_segments:
-        text = segment.text
+        text = lexicon.apply(segment.text)
         if segment.is_dialogue and expression_prefix and not expression_applied:
             text = f"{expression_prefix} {text}"
             expression_applied = True
@@ -564,7 +570,8 @@ async def _generate_sentence_clips(
     if not sentences:
         return {}
     cast = await crud.audiobook.get_characters_for_book(db, book_id)
-    request_groups = [await _build_sentence_requests(settings, sentence, db, cast) for sentence in sentences]
+    lexicon = await load_book_lexicon(db, book_id)
+    request_groups = [await _build_sentence_requests(settings, sentence, db, cast, lexicon) for sentence in sentences]
     max_chars = max(100, getattr(settings, "tts_max_block_chars", 500) or 500)
     blocks = _generation_blocks(sentences, request_groups, max_chars=max_chars)
     failures: dict[int, Exception] = {}
@@ -643,21 +650,6 @@ def _generation_blocks(
     return blocks
 
 
-async def _generate_stable_block(
-    settings: ProviderSettings | None,
-    book_id: int,
-    sentences: list[AudiobookSentence],
-    prototype: TTSRequest,
-    db: AsyncSession,
-) -> None:
-    await _generate_stable_blocks(
-        settings,
-        book_id,
-        [[(sentence, [prototype]) for sentence in sentences]],
-        db,
-    )
-
-
 async def _generate_stable_blocks(
     settings: ProviderSettings | None,
     book_id: int,
@@ -668,7 +660,8 @@ async def _generate_stable_blocks(
     for block in blocks:
         sentences = [item[0] for item in block]
         prototype = block[0][1][0]
-        texts = [sentence.tagged_text or sentence.original_text for sentence in sentences]
+        # Request text, not sentence text: it carries the pronunciation lexicon.
+        texts = [requests[0].text for _sentence, requests in block]
         combined = " ".join(text.strip() for text in texts)
         group_digest = _stable_group_digest(sentences, prototype)
         plans.append((sentences, texts, group_digest, replace(prototype, text=combined)))

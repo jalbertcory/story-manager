@@ -571,6 +571,57 @@ class AudiobookCharacter(Base):
     evidence: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
 
+class StoryRecap(Base):
+    """An LLM-written reminder of what happened, kept per book.
+
+    ``book`` recaps one book. ``story_so_far`` recaps every earlier book of the
+    series for a reader about to start this one.
+    """
+
+    __tablename__ = "story_recaps"
+    __table_args__ = (
+        UniqueConstraint("book_id", "kind", name="uq_story_recaps_book_kind"),
+        CheckConstraint("kind IN ('book', 'story_so_far')", name="ck_story_recaps_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    book_id: Mapped[int] = mapped_column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    recap: Mapped[str] = mapped_column(Text, nullable=False)
+    # What the recap was written from; a different value now means it is stale.
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    covered_book_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AudiobookPronunciation(Base):
+    """A respelling applied to narration text before it reaches the speech provider.
+
+    ``book_id`` scopes a rule to one book and ``series_name`` to one series;
+    a rule with neither applies to the whole library.
+    """
+
+    __tablename__ = "audiobook_pronunciations"
+    __table_args__ = (
+        CheckConstraint("book_id IS NULL OR series_name IS NULL", name="ck_audiobook_pronunciations_scope"),
+        CheckConstraint("length(trim(term)) > 0", name="ck_audiobook_pronunciations_term"),
+        CheckConstraint("length(trim(spoken)) > 0", name="ck_audiobook_pronunciations_spoken"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    book_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=True, index=True)
+    series_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    term: Mapped[str] = mapped_column(String, nullable=False)
+    spoken: Mapped[str] = mapped_column(String, nullable=False)
+    case_sensitive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+
+
 class AudiobookSentence(Base):
     __tablename__ = "audiobook_sentences"
     __table_args__ = (_state_check("status", SENTENCE, "ck_audiobook_sentences_status"),)

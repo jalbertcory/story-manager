@@ -13,6 +13,8 @@ from requests import exceptions as requests_exceptions
 from ...config import (
     AMAZON_METADATA_DOMAIN,
     AMAZON_METADATA_ENABLED,
+    APPLE_BOOKS_COUNTRY,
+    APPLE_BOOKS_METADATA_ENABLED,
     GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED,
     GOOGLE_BOOKS_API_KEY,
 )
@@ -29,6 +31,13 @@ GOOGLE_BOOKS_READ_TIMEOUT_SECONDS = 10
 GOOGLE_BOOKS_RETRY_ATTEMPTS = 2
 GOOGLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS = 0.25
 GOOGLE_BOOKS_USER_AGENT = "story-manager/0.1 (+https://developers.google.com/books)"
+APPLE_BOOKS_BASE_URL = "https://itunes.apple.com"
+APPLE_BOOKS_CONNECT_TIMEOUT_SECONDS = 3
+APPLE_BOOKS_READ_TIMEOUT_SECONDS = 10
+APPLE_BOOKS_RETRY_ATTEMPTS = 2
+# The iTunes Search API allows roughly twenty requests a minute.
+APPLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS = 3.0
+APPLE_BOOKS_USER_AGENT = "story-manager/0.1"
 AMAZON_CONNECT_TIMEOUT_SECONDS = 4
 AMAZON_READ_TIMEOUT_SECONDS = 12
 AMAZON_MIN_REQUEST_INTERVAL_SECONDS = 1.0
@@ -40,6 +49,7 @@ _request_lock = threading.Lock()
 _last_open_library_request_at = 0.0
 _last_google_books_request_at = 0.0
 _last_amazon_request_at = 0.0
+_last_apple_books_request_at = 0.0
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
@@ -180,3 +190,45 @@ def request_amazon_html(path: str, *, params: Optional[dict[str, str | int | Non
     )
     response.raise_for_status()
     return response.text
+
+
+def apple_books_enabled() -> bool:
+    return APPLE_BOOKS_METADATA_ENABLED
+
+
+def request_apple_books_json(path: str, *, params: Optional[dict[str, str | int | None]] = None) -> dict[str, object]:
+    """Query Apple's public, keyless iTunes Search API for ebooks."""
+
+    global _last_apple_books_request_at
+
+    if not apple_books_enabled():
+        return {}
+
+    request_params: dict[str, str | int | None] = {"country": APPLE_BOOKS_COUNTRY}
+    if params:
+        request_params.update(params)
+
+    for attempt in range(1, APPLE_BOOKS_RETRY_ATTEMPTS + 1):
+        with _request_lock:
+            wait_seconds = APPLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - _last_apple_books_request_at)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+            _last_apple_books_request_at = time.monotonic()
+        try:
+            response = requests.get(
+                f"{APPLE_BOOKS_BASE_URL}{path}",
+                params=request_params,
+                timeout=(APPLE_BOOKS_CONNECT_TIMEOUT_SECONDS, APPLE_BOOKS_READ_TIMEOUT_SECONDS),
+                headers={"User-Agent": APPLE_BOOKS_USER_AGENT},
+            )
+        except (requests_exceptions.Timeout, requests_exceptions.ConnectionError):
+            if attempt < APPLE_BOOKS_RETRY_ATTEMPTS:
+                time.sleep(0.5 * attempt)
+                continue
+            raise
+        if response.status_code in _RETRYABLE_STATUS_CODES and attempt < APPLE_BOOKS_RETRY_ATTEMPTS:
+            time.sleep(_retry_delay(response, attempt))
+            continue
+        response.raise_for_status()
+        return response_object(response.json())
+    return {}

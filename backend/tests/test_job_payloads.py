@@ -40,6 +40,7 @@ VALID_PAYLOADS = {
     "revalidate_audiobook_matches": {},
     "deliver_notification": {"event": "job_failed", "title": "Background job failed", "message": "boom"},
     "series_check": {"trigger": "scheduled"},
+    "story_recap": {"kind": "book", "force": True},
 }
 
 
@@ -150,6 +151,7 @@ def test_http_contract_discriminates_payloads_by_job_type():
         "revalidate_audiobook_matches",
         "deliver_notification",
         "series_check",
+        "story_recap",
     }
     assert set(schema["discriminator"]["mapping"]) == VALID_PAYLOADS.keys() - internal_only
 

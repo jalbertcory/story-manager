@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from ..solver_metrics import flush_solver_metrics
-from . import royalroad, scribblehub
+from . import opengraph, royalroad, scribblehub
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +21,24 @@ class _CoverCollector(Protocol):
 COLLECTORS: tuple[_CoverCollector, ...] = (
     royalroad,
     scribblehub,
+    # Generic fallback for every other site; keep it last.
+    opengraph,
 )
 
 
 async def collect_cover(source_url: str, book_id: int) -> Optional[Path]:
-    """Collect a cover from the first registered source-site collector that supports the URL."""
+    """Collect a cover from the first registered collector that finds one for the URL."""
     try:
         for collector in COLLECTORS:
             if not collector.supports(source_url):
                 continue
             try:
-                return await collector.collect(source_url, book_id)
+                cover_path = await collector.collect(source_url, book_id)
             except Exception as e:
                 logger.error("Failed to collect cover from %s with %s: %s", source_url, collector.__name__, e)
                 continue
+            if cover_path is not None:
+                return cover_path
         return None
     finally:
         await flush_solver_metrics()

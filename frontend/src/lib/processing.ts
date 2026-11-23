@@ -19,4 +19,5 @@ export const JOB_LABELS: Record<string, string> = {
   revalidate_audiobook_matches: "Check human audiobook chapter matches",
   deliver_notification: "Send notification",
   series_check: "Check series for gaps and new releases",
+  story_recap: "Write story recap",
 };

@@ -1494,3 +1494,26 @@ button.btn-sm {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+.story-recap-entry + .story-recap-entry {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.story-recap-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.story-recap-heading h4 {
+  margin: 0;
+}
+
+.story-recap-text {
+  max-width: 70ch;
+  line-height: 1.6;
+}

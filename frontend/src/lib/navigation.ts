@@ -158,6 +158,7 @@ export const AUDIOBOOK_TABS = [
   { key: "progress", label: "Progress" },
   { key: "analysis", label: "Analysis" },
   { key: "characters", label: "Characters" },
+  { key: "pronunciations", label: "Pronunciations" },
   { key: "script-editor", label: "Script Editor" },
   { key: "chapter-assembly", label: "Chapter Assembly" },
 ];

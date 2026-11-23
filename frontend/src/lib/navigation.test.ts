@@ -33,7 +33,9 @@ describe("application navigation", () => {
   });
 
   it("lists every audiobook under Activity", () => {
-    expect(parseLocation("/activity/audiobooks", "", "?state=attention")).toEqual({
+    expect(
+      parseLocation("/activity/audiobooks", "", "?state=attention"),
+    ).toEqual({
       view: "tab",
       tab: "audiobooks",
       libraryView: "series",
@@ -54,7 +56,10 @@ describe("application navigation", () => {
     });
     expect(
       parseLocation("/utilities", "", "?section=audiobooks"),
-    ).toMatchObject({ tab: "audiobooks", redirectPath: "/activity/audiobooks" });
+    ).toMatchObject({
+      tab: "audiobooks",
+      redirectPath: "/activity/audiobooks",
+    });
     expect(
       parseLocation("/settings/library-tools", "", "?section=backups"),
     ).toEqual({ view: "tab", tab: "utilities", libraryView: "series" });

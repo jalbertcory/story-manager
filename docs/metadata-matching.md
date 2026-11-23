@@ -24,3 +24,21 @@ Amazon has no comparable public book-search API. Its collector is therefore disa
 the reliable providers: enable it with `AMAZON_METADATA_ENABLED=true`, and optionally choose a storefront with
 `AMAZON_METADATA_DOMAIN` (for example `com`, `co.uk`, or `de`). Amazon blocking or markup changes do not fail the
 metadata job. Docker Compose passes these variables through from the project `.env` file.
+
+Apple Books is a keyless gap-filler. Apple's search API allows only about twenty requests a minute, so it is asked
+only about books that Open Library, Google Books, and Amazon all missed, or books pinned to an `apple_books_id`
+remote identifier. Matches contribute a description, publication date, genres, and a high-resolution cover address.
+Disable it with `APPLE_BOOKS_METADATA_ENABLED=false`, or choose a storefront with `APPLE_BOOKS_COUNTRY` (a
+two-letter code such as `us`, `gb`, or `de`).
+
+## Covers
+
+A cover comes from the first source that has one:
+
+1. The cover embedded in the EPUB.
+2. The story's source page, for web novels: dedicated Royal Road and ScribbleHub collectors, then the page's
+   share image (`og:image` / `twitter:image`) for every other site. Images that look like site branding are skipped.
+3. Matched metadata, when **Re-extract Cover** is used: the provider's cover address stored with the match, then
+   Open Library's cover service by ISBN or edition key.
+
+All downloads go through the same public-address and image-format checks as a manually supplied cover URL.

@@ -43,6 +43,7 @@ from .routers import (
     reader,
     scheduler,
     series_tracking,
+    story_recaps,
     storage,
     upload,
     web_novels,
@@ -144,6 +145,7 @@ app.include_router(storage.router)
 app.include_router(api_keys.router)
 app.include_router(notifications.router)
 app.include_router(series_tracking.router)
+app.include_router(story_recaps.router)
 app.include_router(auth.router)
 app.include_router(reader.router)
 app.include_router(metadata.router)

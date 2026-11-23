@@ -28,6 +28,7 @@ from ..job_payloads import (
     AudiobookPipelinePayload,
     DeliverNotificationPayload,
     SeriesCheckPayload,
+    StoryRecapPayload,
 )
 from ..lifecycle import (
     AUDIOBOOK_PUBLICATION,
@@ -67,6 +68,7 @@ from .notifications import (
     emit_notification,
 )
 from .series_tracking import run_series_check
+from .story_recap import generate_recap
 from .transcription_providers import transcription_provider_name
 from .update_scheduler import run_web_novel_update
 from .web_novel import run_book_refresh
@@ -507,6 +509,15 @@ class ProcessingQueue:
             await self._update_progress(job.id, current, total, detail)
 
         return await run_series_check(progress)
+
+    async def _handle_story_recap(self, job: ProcessingJob) -> str:
+        payload = StoryRecapPayload.model_validate(job.payload or {})
+
+        async def progress(current: int, total: int, detail: str) -> None:
+            await self._update_progress(job.id, current, total, detail)
+
+        async with SessionLocal() as db:
+            return await generate_recap(db, _required_book(job), payload.kind, force=payload.force, progress=progress)
 
     async def _handle_audiobook_pipeline(self, job: ProcessingJob) -> str:
         return await self._run_audiobook_pipeline(job)
@@ -1032,6 +1043,7 @@ JOB_POLICIES: dict[str, tuple[str, int]] = {
     "revalidate_audiobook_matches": ("maintenance", 3),
     "deliver_notification": ("maintenance", 3),
     "series_check": ("maintenance", 2),
+    "story_recap": ("llm", 2),
 }
 
 JobHandler = Callable[[ProcessingQueue, ProcessingJob], Awaitable[str]]
@@ -1057,6 +1069,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "revalidate_audiobook_matches": ProcessingQueue._handle_revalidate_audiobook_matches,
     "deliver_notification": ProcessingQueue._handle_deliver_notification,
     "series_check": ProcessingQueue._handle_series_check,
+    "story_recap": ProcessingQueue._handle_story_recap,
 }
 
 

@@ -160,6 +160,64 @@ export function getCharacterVoiceSampleUrl(
   );
 }
 
+// Pronunciations
+export function getPronunciations(bookId: number, options?: RequestOptions) {
+  return unwrap(
+    api.GET("/api/books/{book_id}/audiobook/pronunciations", {
+      ...requestInit(options),
+      params: { path: { book_id: bookId } },
+    }),
+    "Failed to fetch pronunciations",
+  );
+}
+
+export function createPronunciation(
+  bookId: number,
+  data: Body<"/api/books/{book_id}/audiobook/pronunciations", "post">,
+) {
+  return unwrap(
+    api.POST("/api/books/{book_id}/audiobook/pronunciations", {
+      params: { path: { book_id: bookId } },
+      body: data,
+    }),
+    "Failed to add the pronunciation",
+  );
+}
+
+export function updatePronunciation(
+  ruleId: number,
+  data: Body<"/api/audiobook/pronunciations/{rule_id}", "put">,
+) {
+  return unwrap(
+    api.PUT("/api/audiobook/pronunciations/{rule_id}", {
+      params: { path: { rule_id: ruleId } },
+      body: data,
+    }),
+    "Failed to update the pronunciation",
+  );
+}
+
+export function deletePronunciation(ruleId: number, regenerate: boolean) {
+  return unwrap(
+    api.DELETE("/api/audiobook/pronunciations/{rule_id}", {
+      params: { path: { rule_id: ruleId }, query: { regenerate } },
+    }),
+    "Failed to remove the pronunciation",
+  );
+}
+
+// Resolves to the narrator speaking `text`, as playable audio.
+export function previewPronunciation(bookId: number, text: string) {
+  return unwrap(
+    api.POST("/api/books/{book_id}/audiobook/pronunciations/preview", {
+      params: { path: { book_id: bookId } },
+      body: { text },
+      parseAs: "blob",
+    }),
+    "Failed to preview the pronunciation",
+  );
+}
+
 // Sentences
 export function getSentences(
   bookId: number,

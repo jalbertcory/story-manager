@@ -369,6 +369,40 @@ class NotificationTestResult(BaseModel):
     error: Optional[str] = None
 
 
+class StoryRecapBook(BaseModel):
+    id: int
+    title: str
+    series_index: Optional[float] = None
+
+
+class StoryRecapEntry(BaseModel):
+    """One kind of recap for a book, written or not."""
+
+    kind: Literal["book", "story_so_far"]
+    recap: Optional[str] = None
+    stale: bool = False
+    updated_at: Optional[datetime] = None
+    llm_model: Optional[str] = None
+    # The books the recap covers now, in reading order.
+    covered_books: list[StoryRecapBook] = Field(default_factory=list)
+
+
+class StoryRecapResponse(BaseModel):
+    book_id: int
+    series: Optional[str] = None
+    llm_configured: bool
+    book: StoryRecapEntry
+    story_so_far: StoryRecapEntry
+    active_job: Optional["ProcessingJob"] = None
+    # Why the most recent attempt failed, when nothing has succeeded since.
+    last_error: Optional[str] = None
+
+
+class StoryRecapRequest(BaseModel):
+    kind: Literal["book", "story_so_far"] = "story_so_far"
+    force: bool = False
+
+
 class SeriesGapDismiss(BaseModel):
     series_name: str = Field(min_length=1)
 

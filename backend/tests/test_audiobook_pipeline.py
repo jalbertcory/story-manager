@@ -1978,6 +1978,10 @@ async def _no_cast(_db, _book_id):
     return []
 
 
+async def _no_lexicon(_db, _book_id):
+    return audiobook_tts.Lexicon()
+
+
 @pytest.mark.asyncio
 async def test_generation_batches_multiple_stable_blocks(monkeypatch):
     sentences = [
@@ -1993,7 +1997,7 @@ async def test_generation_batches_multiple_stable_blocks(monkeypatch):
     ]
     generated_batches = []
 
-    async def build_requests(_settings, sentence, _db, _cast):
+    async def build_requests(_settings, sentence, _db, _cast, _lexicon):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -2007,6 +2011,7 @@ async def test_generation_batches_multiple_stable_blocks(monkeypatch):
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
     monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
+    monkeypatch.setattr(audiobook_tts, "load_book_lexicon", _no_lexicon)
     monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", generate_stable_blocks)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
@@ -2029,7 +2034,7 @@ async def test_failed_native_batch_reports_every_attempted_stable_block(monkeypa
         for index in range(8)
     ]
 
-    async def build_requests(_settings, sentence, _db, _cast):
+    async def build_requests(_settings, sentence, _db, _cast, _lexicon):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -2043,6 +2048,7 @@ async def test_failed_native_batch_reports_every_attempted_stable_block(monkeypa
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
     monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
+    monkeypatch.setattr(audiobook_tts, "load_book_lexicon", _no_lexicon)
     monkeypatch.setattr(audiobook_tts, "_generate_stable_blocks", fail_stable_blocks)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())
@@ -2100,7 +2106,7 @@ async def test_generation_stops_after_first_failed_provider_block(monkeypatch):
     ]
     attempted = []
 
-    async def build_requests(_settings, sentence, _db, _cast):
+    async def build_requests(_settings, sentence, _db, _cast, _lexicon):
         return [
             audiobook_tts.TTSRequest(
                 text=sentence.original_text,
@@ -2114,6 +2120,7 @@ async def test_generation_stops_after_first_failed_provider_block(monkeypatch):
 
     monkeypatch.setattr(audiobook_tts, "_build_sentence_requests", build_requests)
     monkeypatch.setattr(crud.audiobook, "get_characters_for_book", _no_cast)
+    monkeypatch.setattr(audiobook_tts, "load_book_lexicon", _no_lexicon)
     monkeypatch.setattr(audiobook_tts, "_generate_sentence_clip", fail_generation)
 
     failures = await audiobook_tts._generate_sentence_clips(None, 1, sentences, object())

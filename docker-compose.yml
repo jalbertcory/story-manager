@@ -18,6 +18,8 @@ services:
       GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED: ${GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED:-true}
       AMAZON_METADATA_ENABLED: ${AMAZON_METADATA_ENABLED:-false}
       AMAZON_METADATA_DOMAIN: ${AMAZON_METADATA_DOMAIN:-com}
+      APPLE_BOOKS_METADATA_ENABLED: ${APPLE_BOOKS_METADATA_ENABLED:-true}
+      APPLE_BOOKS_COUNTRY: ${APPLE_BOOKS_COUNTRY:-us}
     restart: unless-stopped
     # uvicorn stops within 8 seconds; the extra margin covers a slow PostgreSQL shutdown.
     stop_grace_period: 30s

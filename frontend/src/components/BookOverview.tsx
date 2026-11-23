@@ -11,6 +11,7 @@ import { getLibraryBookInfo, getWebChecks } from "../api/library";
 import { getApiCoverUrl } from "../api/covers";
 import { sanitizeChapterHtml } from "../lib/chapterHtml";
 import UniverseMembership from "./UniverseMembership";
+import StoryRecap from "./StoryRecap";
 import { checkResult, lastUpdateLabel, libraryPath } from "../lib/library";
 import { formatBytes } from "../lib/format";
 import Icon from "./ui/Icon";
@@ -30,6 +31,7 @@ export default function BookOverview({
   const client = useQueryClient();
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [chapterSearch, setChapterSearch] = useState("");
+  const [recapOpen, setRecapOpen] = useState(false);
   const info = useQuery({
     queryKey: queryKeys.libraryBookInfo.detail(book.id),
     queryFn: ({ signal }) => getLibraryBookInfo(book.id, { signal }),
@@ -186,6 +188,17 @@ export default function BookOverview({
           <h3>Notes</h3>
           <p className="book-notes">{book.notes}</p>
         </div>
+      )}
+      {book.current_path && (
+        <details
+          className="workspace-disclosure"
+          onToggle={(e) => setRecapOpen(e.currentTarget.open)}
+        >
+          <summary>
+            {book.series ? "Recap: the story so far" : "Recap"} (spoilers)
+          </summary>
+          {recapOpen && <StoryRecap bookId={book.id} />}
+        </details>
       )}
       <details className="workspace-disclosure" aria-label="Original files">
         <summary>Original files</summary>

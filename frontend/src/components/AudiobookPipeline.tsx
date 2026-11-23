@@ -15,6 +15,7 @@ import {
   getImportedAudiobooks,
 } from "../api/audiobook";
 import CharacterRoster from "./audiobook/CharacterRoster";
+import PronunciationLexicon from "./audiobook/PronunciationLexicon";
 import ScriptEditor from "./audiobook/ScriptEditor";
 import ChapterAssembly from "./audiobook/ChapterAssembly";
 import AnalysisOverview from "./audiobook/AnalysisOverview";
@@ -122,6 +123,7 @@ const AI_SUB_TAB_KEYS = new Set([
   "progress",
   "analysis",
   "characters",
+  "pronunciations",
   "script-editor",
   "chapter-assembly",
 ]);
@@ -558,6 +560,12 @@ function AudiobookPipeline({
             ttsProvider={statusData?.tts_provider}
             ttsProviderLocked={statusData?.tts_provider_locked ?? false}
             availableTtsProviders={statusData?.available_tts_providers || []}
+          />
+        )}
+        {subTab === "pronunciations" && (
+          <PronunciationLexicon
+            bookId={bookId}
+            pipelineActive={isActive(pipelineStatus)}
           />
         )}
         {subTab === "script-editor" && (

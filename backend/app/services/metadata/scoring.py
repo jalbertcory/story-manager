@@ -448,7 +448,7 @@ def score_metadata_candidate(
     remote_isbns = _isbn_set(remote_ids)
     exact_identifier = bool(local_isbns & remote_isbns)
     conflicting_identifier = bool(local_isbns and remote_isbns and not exact_identifier)
-    for key in ("google_books_volume_id", "open_library_work_key", "asin"):
+    for key in ("google_books_volume_id", "open_library_work_key", "asin", "apple_books_id"):
         local_value = str(local_ids.get(key) or "").strip()
         remote_value = str(remote_ids.get(key) or "").strip()
         if local_value and remote_value:

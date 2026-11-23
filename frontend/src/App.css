@@ -4476,3 +4476,93 @@
   color: var(--danger);
   font-weight: 600;
 }
+
+.pronunciation-lexicon {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.pronunciation-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.pronunciation-form label:not(.pronunciation-check) {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.pronunciation-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.pronunciation-form-actions {
+  grid-column: 2 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.pronunciation-preview {
+  width: 100%;
+  max-width: 28rem;
+}
+
+.pronunciation-table-wrap {
+  overflow-x: auto;
+}
+
+.pronunciation-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pronunciation-table th,
+.pronunciation-table td {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.pronunciation-table th {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.pronunciation-table td .badge {
+  margin-left: 0.4rem;
+}
+
+.pronunciation-overridden td:nth-child(-n + 2) {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.pronunciation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+@media (max-width: 720px) {
+  .pronunciation-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pronunciation-form-actions {
+    grid-column: 1;
+  }
+}

@@ -198,6 +198,30 @@ async def merge_series(db: AsyncSession, source: str, target: str) -> int:
     return len(books)
 
 
+async def _move_series_pronunciations(db: AsyncSession, source: str, target: str) -> None:
+    """Carry a series' pronunciations to its new name; the target's own rules win."""
+    result = await db.execute(
+        select(models.AudiobookPronunciation).where(
+            func.lower(models.AudiobookPronunciation.series_name).in_([source.lower(), target.lower()])
+        )
+    )
+    rules = list(result.scalars().all())
+    taken = {
+        " ".join(rule.term.split()).casefold()
+        for rule in rules
+        if rule.series_name is not None and rule.series_name.lower() == target.lower() and source.lower() != target.lower()
+    }
+    for rule in rules:
+        if rule.series_name is None or rule.series_name.lower() != source.lower():
+            continue
+        key = " ".join(rule.term.split()).casefold()
+        if key in taken:
+            await db.delete(rule)
+        else:
+            rule.series_name = target
+            taken.add(key)
+
+
 async def _merge_audiobook_series_rosters(db: AsyncSession, source: str, target: str) -> None:
     """Move or merge shared character profiles when a library series changes."""
     source_result = await db.execute(
@@ -210,6 +234,7 @@ async def _merge_audiobook_series_rosters(db: AsyncSession, source: str, target:
             func.lower(models.AudiobookSeriesCharacter.series_name) == target.lower()
         )
     )
+    await _move_series_pronunciations(db, source, target)
     source_profiles = list(source_result.scalars().all())
     target_profiles = {profile.canonical_name: profile for profile in target_result.scalars().all()}
     for profile in source_profiles:
@@ -309,6 +334,18 @@ async def cleanup_orphaned_series_metadata(db: AsyncSession) -> int:
     for profile in all_roster_profiles:
         if profile.series_name.lower() not in active_series:
             await db.delete(profile)
+            deleted += 1
+
+    pronunciation_result = await db.execute(
+        select(models.AudiobookPronunciation).where(models.AudiobookPronunciation.series_name.isnot(None))
+    )
+    # Hand-entered respellings outlive the recycle bin: only a series no book
+    # row names at all, deleted or not, loses them.
+    known_result = await db.execute(select(func.lower(models.Book.series)).filter(models.Book.series.isnot(None)).distinct())
+    known_series = {row[0] for row in known_result.all()}
+    for rule in pronunciation_result.scalars().all():
+        if rule.series_name is not None and rule.series_name.lower() not in known_series:
+            await db.delete(rule)
             deleted += 1
 
     if deleted:

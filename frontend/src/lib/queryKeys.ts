@@ -41,8 +41,10 @@ export const queryKeys = {
   universes: ["universes"] as const,
   webUpdateBooks: ["web-update-books"] as const,
 
+  storyRecap: (bookId: number) => ["story-recap", bookId] as const,
   chapters: (bookId: number) => ["chapters", bookId] as const,
-  originalBookFiles: (bookId: number) => ["original-book-files", bookId] as const,
+  originalBookFiles: (bookId: number) =>
+    ["original-book-files", bookId] as const,
   cleanedChapters: (bookId: number) => ["cleaned-chapters", bookId] as const,
   matchedConfig: (bookId: number) => ["matched-config", bookId] as const,
   bookRevisions: (bookId: number) => ["book-revisions", bookId] as const,
@@ -82,6 +84,8 @@ export const queryKeys = {
     endpointStats: ["audiobook-endpoint-stats"] as const,
     status: (bookId: number) => ["audiobook-status", bookId] as const,
     characters: (bookId: number) => ["audiobook-characters", bookId] as const,
+    pronunciations: (bookId: number) =>
+      ["audiobook-pronunciations", bookId] as const,
     chapters: (bookId: number) => ["audiobook-chapters", bookId] as const,
     imports: (bookId: number) => ["audiobook-imports", bookId] as const,
     sentences: {

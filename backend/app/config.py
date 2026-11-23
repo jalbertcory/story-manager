@@ -36,6 +36,13 @@ GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED = os.getenv("GOOGLE_BOOKS_ALLOW_UNAUTHENTICAT
 # Amazon. Open Library and Google Books continue normally when that happens.
 AMAZON_METADATA_ENABLED = os.getenv("AMAZON_METADATA_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 AMAZON_METADATA_DOMAIN = os.getenv("AMAZON_METADATA_DOMAIN", "com").strip().lower() or "com"
+APPLE_BOOKS_METADATA_ENABLED = os.getenv("APPLE_BOOKS_METADATA_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+APPLE_BOOKS_COUNTRY = os.getenv("APPLE_BOOKS_COUNTRY", "us").strip().lower() or "us"
 
 # Deleted books remain restorable for this many days. Operators can override
 # the window without changing existing recycle-bin deadlines.

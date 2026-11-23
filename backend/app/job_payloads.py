@@ -107,6 +107,11 @@ class SeriesCheckPayload(JobPayload):
     trigger: str = "manual"
 
 
+class StoryRecapPayload(JobPayload):
+    kind: Literal["book", "story_so_far"] = "story_so_far"
+    force: bool = False
+
+
 JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "clean_book": CleanBookPayload,
     "clean_all": CleanAllPayload,
@@ -129,6 +134,7 @@ JOB_PAYLOAD_MODELS: dict[str, type[JobPayload]] = {
     "revalidate_audiobook_matches": RevalidateAudiobookMatchesPayload,
     "deliver_notification": DeliverNotificationPayload,
     "series_check": SeriesCheckPayload,
+    "story_recap": StoryRecapPayload,
 }
 
 

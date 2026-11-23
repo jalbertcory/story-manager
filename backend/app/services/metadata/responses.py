@@ -100,7 +100,21 @@ class GoogleVolume(TypedDict, total=False):
     volumeInfo: VolumeInfo | None
 
 
+@with_config(ConfigDict(strict=True))
+class AppleBook(TypedDict, total=False):
+    trackId: int | None
+    trackName: str | None
+    artistName: str | None
+    genres: list[str] | None
+    description: str | None
+    releaseDate: str | None
+    artworkUrl100: str | None
+    trackViewUrl: str | None
+    kind: str | None
+
+
 OPEN_LIBRARY_DOC = TypeAdapter(OpenLibraryDoc)
+APPLE_BOOK = TypeAdapter(AppleBook)
 OPEN_LIBRARY_WORK = TypeAdapter(OpenLibraryWork)
 GOOGLE_VOLUME = TypeAdapter(GoogleVolume)
 _OBJECT = TypeAdapter(dict[str, object])

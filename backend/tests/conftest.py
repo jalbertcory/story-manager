@@ -26,6 +26,8 @@ def disable_unconfigured_network_metadata(mocker):
     mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_ALLOW_UNAUTHENTICATED", False)
     mocker.patch("backend.app.services.metadata.clients.GOOGLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS", 0)
     mocker.patch("backend.app.services.metadata.clients.AMAZON_METADATA_ENABLED", False)
+    mocker.patch("backend.app.services.metadata.clients.APPLE_BOOKS_METADATA_ENABLED", False)
+    mocker.patch("backend.app.services.metadata.clients.APPLE_BOOKS_MIN_REQUEST_INTERVAL_SECONDS", 0)
 
 
 @pytest.fixture(autouse=True)

@@ -36,6 +36,7 @@ class MetadataDetails(TypedDict, total=False):
 
 @with_config(ConfigDict(strict=True, extra="allow"))
 class RemoteIdentifiers(TypedDict, total=False):
+    apple_books_id: str | None
     asin: str | None
     google_books_volume_id: str | None
     isbn_10: str | None

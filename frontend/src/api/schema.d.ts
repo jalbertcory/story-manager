@@ -154,6 +154,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audiobook/pronunciations/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Pronunciation */
+        put: operations["update_pronunciation_api_audiobook_pronunciations__rule_id__put"];
+        post?: never;
+        /** Delete Pronunciation */
+        delete: operations["delete_pronunciation_api_audiobook_pronunciations__rule_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audiobook/sentences/{sentence_id}": {
         parameters: {
             query?: never;
@@ -630,6 +648,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{book_id}/audiobook/pronunciations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pronunciations */
+        get: operations["list_pronunciations_api_books__book_id__audiobook_pronunciations_get"];
+        put?: never;
+        /** Create Pronunciation */
+        post: operations["create_pronunciation_api_books__book_id__audiobook_pronunciations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/audiobook/pronunciations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Pronunciation
+         * @description Speak a candidate respelling in the book's narrator voice.
+         */
+        post: operations["preview_pronunciation_api_books__book_id__audiobook_pronunciations_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{book_id}/audiobook/rebuild": {
         parameters: {
             query?: never;
@@ -1016,6 +1072,24 @@ export interface paths {
         put?: never;
         /** Process Book Endpoint */
         post: operations["process_book_endpoint_api_books__book_id__process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{book_id}/recap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Story Recap */
+        get: operations["get_story_recap_api_books__book_id__recap_get"];
+        put?: never;
+        /** Queue Story Recap */
+        post: operations["queue_story_recap_api_books__book_id__recap_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5203,6 +5277,87 @@ export interface components {
             /** Jobs */
             jobs: components["schemas"]["ProcessingJob"][];
         };
+        /** PronunciationChange */
+        PronunciationChange: {
+            /** Books Affected */
+            books_affected: number;
+            rule: components["schemas"]["PronunciationResponse"] | null;
+            /** Sentences Reset */
+            sentences_reset: number;
+        };
+        /** PronunciationCreate */
+        PronunciationCreate: {
+            /**
+             * Case Sensitive
+             * @default false
+             */
+            case_sensitive: boolean;
+            /**
+             * Regenerate
+             * @default false
+             */
+            regenerate: boolean;
+            /**
+             * Scope
+             * @default book
+             * @enum {string}
+             */
+            scope: "book" | "series" | "global";
+            /** Spoken */
+            spoken: string;
+            /** Term */
+            term: string;
+        };
+        /** PronunciationListResponse */
+        PronunciationListResponse: {
+            /** Rules */
+            rules: components["schemas"]["PronunciationResponse"][];
+            /** Series Name */
+            series_name: string | null;
+        };
+        /** PronunciationPreview */
+        PronunciationPreview: {
+            /** Text */
+            text: string;
+        };
+        /** PronunciationResponse */
+        PronunciationResponse: {
+            /** Active */
+            active: boolean;
+            /** Book Id */
+            book_id: number | null;
+            /** Case Sensitive */
+            case_sensitive: boolean;
+            /** Id */
+            id: number;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "book" | "series" | "global";
+            /** Sentence Count */
+            sentence_count: number;
+            /** Series Name */
+            series_name: string | null;
+            /** Spoken */
+            spoken: string;
+            /** Term */
+            term: string;
+        };
+        /** PronunciationUpdate */
+        PronunciationUpdate: {
+            /** Case Sensitive */
+            case_sensitive?: boolean | null;
+            /**
+             * Regenerate
+             * @default false
+             */
+            regenerate: boolean;
+            /** Spoken */
+            spoken?: string | null;
+            /** Term */
+            term?: string | null;
+        };
         /** ProviderHealth */
         ProviderHealth: {
             /** Capability */
@@ -5935,6 +6090,67 @@ export interface components {
             /** Writable */
             writable: boolean;
         };
+        /** StoryRecapBook */
+        StoryRecapBook: {
+            /** Id */
+            id: number;
+            /** Series Index */
+            series_index: number | null;
+            /** Title */
+            title: string;
+        };
+        /**
+         * StoryRecapEntry
+         * @description One kind of recap for a book, written or not.
+         */
+        StoryRecapEntry: {
+            /** Covered Books */
+            covered_books: components["schemas"]["StoryRecapBook"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "book" | "story_so_far";
+            /** Llm Model */
+            llm_model: string | null;
+            /** Recap */
+            recap: string | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /** StoryRecapRequest */
+        StoryRecapRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /**
+             * Kind
+             * @default story_so_far
+             * @enum {string}
+             */
+            kind: "book" | "story_so_far";
+        };
+        /** StoryRecapResponse */
+        StoryRecapResponse: {
+            active_job: components["schemas"]["ProcessingJob"] | null;
+            book: components["schemas"]["StoryRecapEntry"];
+            /** Book Id */
+            book_id: number;
+            /** Last Error */
+            last_error: string | null;
+            /** Llm Configured */
+            llm_configured: boolean;
+            /** Series */
+            series: string | null;
+            story_so_far: components["schemas"]["StoryRecapEntry"];
+        };
         /** TranscriptionTest */
         TranscriptionTest: {
             /** Device */
@@ -6382,6 +6598,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibationBackupPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_pronunciation_api_audiobook_pronunciations__rule_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PronunciationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PronunciationChange"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_pronunciation_api_audiobook_pronunciations__rule_id__delete: {
+        parameters: {
+            query?: {
+                regenerate?: boolean;
+            };
+            header?: never;
+            path: {
+                rule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PronunciationChange"];
                 };
             };
             /** @description Validation Error */
@@ -7294,6 +7578,107 @@ export interface operations {
             };
         };
     };
+    list_pronunciations_api_books__book_id__audiobook_pronunciations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PronunciationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_pronunciation_api_books__book_id__audiobook_pronunciations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PronunciationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PronunciationChange"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_pronunciation_api_books__book_id__audiobook_pronunciations_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PronunciationPreview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mpeg": Blob;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     rebuild_pipeline_api_books__book_id__audiobook_rebuild_post: {
         parameters: {
             query?: never;
@@ -7988,6 +8373,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Book"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_story_recap_api_books__book_id__recap_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoryRecapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_story_recap_api_books__book_id__recap_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                book_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StoryRecapRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingJob"];
                 };
             };
             /** @description Validation Error */

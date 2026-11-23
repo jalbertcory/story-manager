@@ -458,3 +458,56 @@ class LibationBackupPreviewResponse(BaseModel):
     existing_audio_match_count: int
     ignored_file_count: int
     library_books: list[LibationBookOptionResponse] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Pronunciation lexicon
+# ---------------------------------------------------------------------------
+
+PronunciationScope = Literal["book", "series", "global"]
+
+
+class PronunciationResponse(BaseModel):
+    id: int
+    scope: PronunciationScope
+    book_id: Optional[int]
+    series_name: Optional[str]
+    term: str
+    spoken: str
+    case_sensitive: bool
+    # False when a more specific rule for the same term wins in this book.
+    active: bool
+    # Sentences of this book whose narration the rule changes.
+    sentence_count: int
+
+
+class PronunciationListResponse(BaseModel):
+    series_name: Optional[str]
+    rules: list[PronunciationResponse]
+
+
+class PronunciationCreate(BaseModel):
+    term: str = Field(min_length=1, max_length=200)
+    spoken: str = Field(min_length=1, max_length=400)
+    scope: PronunciationScope = "book"
+    case_sensitive: bool = False
+    # Send narrated sentences that contain the term back for new speech.
+    regenerate: bool = False
+
+
+class PronunciationUpdate(BaseModel):
+    term: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    spoken: Optional[str] = Field(default=None, min_length=1, max_length=400)
+    case_sensitive: Optional[bool] = None
+    regenerate: bool = False
+
+
+class PronunciationChange(BaseModel):
+    rule: Optional[PronunciationResponse]
+    # Narrated sentences sent back for new speech across every affected book.
+    sentences_reset: int
+    books_affected: int
+
+
+class PronunciationPreview(BaseModel):
+    text: str = Field(min_length=1, max_length=400)
