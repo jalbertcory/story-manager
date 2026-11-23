@@ -18,6 +18,7 @@ import { useLocation } from "../lib/router";
 import type { OpenBook } from "../types";
 import { BookRow } from "./book-list/BookCards";
 import { queryKeys } from "../lib/queryKeys";
+import WebUpdatesOverview from "./WebUpdatesOverview";
 
 const FILTERS = [
   ["all", "All stories"],
@@ -28,6 +29,15 @@ const FILTERS = [
 ] as const;
 
 // Other pages link straight to a filtered list with ?show=recent or ?show=error.
+// Without a requested filter the page opens on the overview of what arrived.
+const requestedView = (search: string) =>
+  new URLSearchParams(search).has("show") ? "stories" : "overview";
+
+const VIEWS = [
+  ["overview", "What's new"],
+  ["stories", "All stories"],
+] as const;
+
 function requestedFilter(search: string) {
   const show = new URLSearchParams(search).get("show");
   return FILTERS.some(([value]) => value === show) ? (show as string) : "all";
@@ -38,7 +48,15 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
   const { search } = useLocation();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState(() => requestedFilter(search));
-  useEffect(() => setFilter(requestedFilter(search)), [search]);
+  const [view, setView] = useState(() => requestedView(search));
+  useEffect(() => {
+    setFilter(requestedFilter(search));
+    setView(requestedView(search));
+  }, [search]);
+  const showStories = (show: string) => {
+    setFilter(show);
+    setView("stories");
+  };
   const [notice, setNotice] = useState("");
   const booksQuery = useQuery({
     queryKey: queryKeys.webUpdateBooks,
@@ -150,83 +168,101 @@ export default function WebUpdates({ onEdit }: { onEdit: OpenBook }) {
               {failed} update {failed === 1 ? "check" : "checks"} failed
             </strong>
             <p>
-              Each failed story below says what went wrong. Your other stories
+              Open the failed checks to see what went wrong. Your other stories
               were checked normally.
             </p>
           </div>
-          <button onClick={() => setFilter("error")}>Show failed checks</button>
+          <button onClick={() => showStories("error")}>
+            Show failed checks
+          </button>
         </div>
       )}
-      <div className="library-toolbar">
-        <input
-          aria-label="Search followed stories"
-          placeholder="Search title or author"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <label>
-          Show
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            aria-label="Filter web updates"
+      <div className="segmented-nav" role="group" aria-label="Web updates view">
+        {VIEWS.map(([value, label]) => (
+          <button
+            key={value}
+            aria-pressed={view === value}
+            onClick={() => setView(value)}
           >
-            {FILTERS.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {notice && <p role="status">{notice}</p>}
-      {[
-        booksQuery.error,
-        checksQuery.error,
-        schedule.error,
-        latestRun.error,
-        refresh.error,
-      ]
-        .filter(Boolean)
-        .map((error, i) => (
-          <p className="error" role="alert" key={i}>
-            {error?.message}
-          </p>
+            {label}
+          </button>
         ))}
-      {(booksQuery.isLoading || checksQuery.isLoading) && (
-        <p role="status">Loading update checks…</p>
-      )}
-      {rows.map(({ book, check, result }) => (
-        <BookRow
-          key={book.id}
-          book={book}
-          onEdit={onEdit}
-          status={result}
-          subtitle={
-            // The latest check often finds nothing; keep the last real update visible.
-            result.state !== "updated" && lastUpdateLabel(check)
-              ? `Last update: ${lastUpdateLabel(check)}`
-              : null
-          }
-          actions={
-            <button
-              disabled={refresh.isPending || result.state === "running"}
-              onClick={() => refresh.mutate(book.id)}
-            >
-              {result.state === "error"
-                ? "Retry check"
-                : result.state === "running"
-                  ? "Checking…"
-                  : "Check now"}
-            </button>
-          }
-        />
-      ))}
-      {!booksQuery.isLoading && !rows.length && (
-        <p className="empty-state">
-          No stories match this view.{" "}
-          <a href="/import?type=web">Add a web novel</a>
-        </p>
+      </div>
+      {view === "overview" && <WebUpdatesOverview />}
+      {view === "stories" && (
+        <>
+          <div className="library-toolbar">
+            <input
+              aria-label="Search followed stories"
+              placeholder="Search title or author"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <label>
+              Show
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                aria-label="Filter web updates"
+              >
+                {FILTERS.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {notice && <p role="status">{notice}</p>}
+          {[
+            booksQuery.error,
+            checksQuery.error,
+            schedule.error,
+            latestRun.error,
+            refresh.error,
+          ]
+            .filter(Boolean)
+            .map((error, i) => (
+              <p className="error" role="alert" key={i}>
+                {error?.message}
+              </p>
+            ))}
+          {(booksQuery.isLoading || checksQuery.isLoading) && (
+            <p role="status">Loading update checks…</p>
+          )}
+          {rows.map(({ book, check, result }) => (
+            <BookRow
+              key={book.id}
+              book={book}
+              onEdit={onEdit}
+              status={result}
+              subtitle={
+                // The latest check often finds nothing; keep the last real update visible.
+                result.state !== "updated" && lastUpdateLabel(check)
+                  ? `Last update: ${lastUpdateLabel(check)}`
+                  : null
+              }
+              actions={
+                <button
+                  disabled={refresh.isPending || result.state === "running"}
+                  onClick={() => refresh.mutate(book.id)}
+                >
+                  {result.state === "error"
+                    ? "Retry check"
+                    : result.state === "running"
+                      ? "Checking…"
+                      : "Check now"}
+                </button>
+              }
+            />
+          ))}
+          {!booksQuery.isLoading && !rows.length && (
+            <p className="empty-state">
+              No stories match this view.{" "}
+              <a href="/import?type=web">Add a web novel</a>
+            </p>
+          )}
+        </>
       )}
       <p className="hint">
         {schedule.data?.next_run_at && (

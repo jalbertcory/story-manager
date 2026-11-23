@@ -199,6 +199,7 @@ describe("Library workflow actions", () => {
     expect(
       await screen.findByText("1 update check failed"),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "All stories" }));
     // The failure says why, and the run summary is visible without expanding anything.
     expect(
       screen.getByText("Update check failed: Source site returned 404"),
@@ -231,6 +232,56 @@ describe("Library workflow actions", () => {
     });
     expect(screen.queryByText("Z failed novel")).not.toBeInTheDocument();
     expect(screen.getByText("A changed novel")).toBeInTheDocument();
+  });
+
+  it("opens on an overview of everything that arrived, grouped by day", async () => {
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const event = (
+      id: number,
+      book_id: number,
+      title: string,
+      daysAgo: number,
+      chapters_added: number,
+    ): components["schemas"]["WebUpdateEvent"] => ({
+      id,
+      book_id,
+      title,
+      author: "Writer",
+      has_cover: false,
+      timestamp: new Date(today.getTime() - daysAgo * 86400000).toISOString(),
+      chapters_added,
+      words_added: chapters_added * 1000,
+      chapter_count: 20,
+    });
+    mockFetch((url) =>
+      ok(
+        url === "/api/library/web-updates"
+          ? [
+              event(4, 1, "First novel", 0, 1),
+              event(3, 2, "Second novel", 0, 2),
+              event(2, 1, "First novel", 0, 2),
+              event(1, 2, "Second novel", 10, 4),
+            ]
+          : [],
+      ),
+    );
+    renderWithClient(<WebUpdates onEdit={vi.fn()} />);
+    // Two checks of one story on the same day read as a single update.
+    expect(await screen.findByText("3 new chapters")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: /Today.*2 stories · 5 new chapters/,
+      }),
+    ).toBeInTheDocument();
+    // The totals cover the last week; the older update is still listed below.
+    expect(screen.getByText("new chapters").textContent).toBe("5new chapters");
+    expect(screen.getByText("4 new chapters")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("link", { name: /First novel/ })[0],
+    ).toHaveAttribute("href", "/books/1/overview");
+    fireEvent.click(screen.getByRole("button", { name: "All stories" }));
+    expect(screen.getByLabelText("Filter web updates")).toBeInTheDocument();
   });
 
   it("does not present an interrupted run as a full check", async () => {

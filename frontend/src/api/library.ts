@@ -1,6 +1,6 @@
 import { api, unwrap, requestInit } from "./client";
 import type { Body, Query, RequestOptions } from "./client";
-export { getWebChecks } from "./admin";
+export { getWebChecks, getWebUpdates } from "./admin";
 
 type GroupQuery = Query<"/api/library/groups">;
 export interface LibraryGroupParams {

@@ -59,6 +59,18 @@ class WebCheck(TypedDict):
     last_update_words_added: int | None
 
 
+class WebUpdateEvent(TypedDict):
+    id: int
+    book_id: int
+    title: str
+    author: str | None
+    has_cover: bool
+    timestamp: datetime
+    chapters_added: int
+    words_added: int
+    chapter_count: int | None
+
+
 class SeriesRenamed(TypedDict):
     updated: int
     old_name: str

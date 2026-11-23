@@ -55,6 +55,24 @@ You can connect to the database using the following command:
 psql -h localhost -p 5432 -U storyuser -d story_manager
 ```
 
+## Pull Requests
+
+`origin` is a self-hosted Forgejo (`https://forgejo.jalbert.industries:33443`), not GitHub, so `gh` does not work for
+this repository. Use the `tea` CLI, which has a saved login for it. The remote uses an SSH alias that `tea` cannot map
+to that login, so always pass `--repo jalbertcory/story-manager`.
+
+```bash
+git push -u origin <branch>
+tea pr create --repo jalbertcory/story-manager --head <branch> --base main \
+  --title "<title>" --description-file <file>
+tea pr list --repo jalbertcory/story-manager
+tea pr edit <index> --repo jalbertcory/story-manager --description-file <file>
+```
+
+Every push runs the full pre-push hook (several minutes, needs Docker and Playwright Chromium; install the browser with
+`cd frontend && npx playwright install chromium` if E2E reports a missing executable). If `tea` has no login, ask the
+user to run `tea login add`; do not create access tokens yourself.
+
 ## Database Changes: Always Use Migrations
 
 One-time database changes — creating tables, altering columns, seeding default data, fixing bad data — must go in an Alembic migration, not in application startup code.

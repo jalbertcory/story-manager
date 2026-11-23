@@ -1868,6 +1868,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/library/web-updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Web Updates
+         * @description Every check that brought in new content for a followed story, newest first.
+         */
+        get: operations["web_updates_api_library_web_updates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lifecycles": {
         parameters: {
             query?: never;
@@ -6347,6 +6367,30 @@ export interface components {
              */
             url: string;
         };
+        /** WebUpdateEvent */
+        WebUpdateEvent: {
+            /** Author */
+            author: string | null;
+            /** Book Id */
+            book_id: number;
+            /** Chapter Count */
+            chapter_count: number | null;
+            /** Chapters Added */
+            chapters_added: number;
+            /** Has Cover */
+            has_cover: boolean;
+            /** Id */
+            id: number;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Title */
+            title: string;
+            /** Words Added */
+            words_added: number;
+        };
         /** WorkerHealth */
         WorkerHealth: {
             /** Active Workers */
@@ -9818,6 +9862,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WebCheck"][];
+                };
+            };
+        };
+    };
+    web_updates_api_library_web_updates_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebUpdateEvent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

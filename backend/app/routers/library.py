@@ -1,6 +1,7 @@
 """Universe organization and compact library group summaries."""
 
 from .. import api_schemas as contracts
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -179,3 +180,44 @@ async def web_checks(db: AsyncSession = Depends(get_db)) -> list[contracts.WebCh
             }
         )
     return checks
+
+
+@router.get("/web-updates", response_model=list[contracts.WebUpdateEvent])
+async def web_updates(
+    days: int = Query(default=30, ge=1, le=365), db: AsyncSession = Depends(get_db)
+) -> list[contracts.WebUpdateEvent]:
+    """Every check that brought in new content for a followed story, newest first."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = await db.execute(
+        select(models.BookLog, models.Book)
+        .join(models.Book, models.Book.id == models.BookLog.book_id)
+        .where(
+            models.Book.deleted_at.is_(None),
+            models.Book.source_type == models.SourceType.web,
+            models.BookLog.entry_type == "updated",
+            models.BookLog.timestamp >= since,
+        )
+        .order_by(models.BookLog.timestamp.desc(), models.BookLog.id.desc())
+        .limit(1000)
+    )
+    events: list[contracts.WebUpdateEvent] = []
+    for log, book in rows.all():
+        assert log.timestamp is not None  # The filter above excludes rows without a timestamp.
+        events.append(
+            {
+                "id": log.id,
+                "book_id": book.id,
+                "title": book.title or "",
+                "author": book.author,
+                "has_cover": bool(book.cover_path),
+                "timestamp": log.timestamp,
+                "chapters_added": (
+                    max((log.new_chapter_count or 0) - (log.previous_chapter_count or 0), 0)
+                    if log.new_chapter_count is not None
+                    else 0
+                ),
+                "words_added": max(log.words_added or 0, 0),
+                "chapter_count": log.new_chapter_count,
+            }
+        )
+    return events

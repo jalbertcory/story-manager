@@ -73,6 +73,7 @@ export const queryKeys = {
   taskLogs: (taskId: number) => ["task-logs", taskId] as const,
   webUpdateSchedule: ["web-update-schedule"] as const,
   webChecks: ["web-checks"] as const,
+  webUpdateEvents: ["web-update-events"] as const,
 
   observabilityHealth: ["observability-health"] as const,
   observabilityJobMetrics: ["observability-job-metrics"] as const,

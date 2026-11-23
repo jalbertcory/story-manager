@@ -8,6 +8,7 @@ export function libraryPath(values: LibraryValues) {
 }
 
 type WebCheck = components["schemas"]["WebCheck"];
+export type WebUpdateEvent = components["schemas"]["WebUpdateEvent"];
 
 // Stories that gained chapters within this many days count as recently updated.
 export const RECENT_UPDATE_DAYS = 7;
@@ -24,7 +25,7 @@ export function timeAgo(value: string | null | undefined, now = Date.now()) {
   return new Date(value).toLocaleDateString();
 }
 
-function chaptersAdded(count: number | null | undefined) {
+export function chaptersAdded(count: number | null | undefined) {
   return count != null && count > 0
     ? `${count} new chapter${count === 1 ? "" : "s"}`
     : "New content";
@@ -95,4 +96,48 @@ export function checkResult(
     label: `${check.entry_type === "added" ? "Imported" : "Checked, nothing new"} · ${date}`,
     state: "checked",
   };
+}
+
+export interface UpdateDay {
+  // Local midnight of the day the updates arrived.
+  date: Date;
+  // One entry per story, newest first; several checks in a day are combined.
+  stories: WebUpdateEvent[];
+  chapters: number;
+  words: number;
+}
+
+// Groups update events (newest first) into local calendar days.
+export function updatesByDay(events: WebUpdateEvent[]): UpdateDay[] {
+  const days: UpdateDay[] = [];
+  for (const event of events) {
+    const date = new Date(event.timestamp);
+    date.setHours(0, 0, 0, 0);
+    let day = days.at(-1);
+    if (!day || day.date.getTime() !== date.getTime()) {
+      day = { date, stories: [], chapters: 0, words: 0 };
+      days.push(day);
+    }
+    day.chapters += event.chapters_added;
+    day.words += event.words_added;
+    const story = day.stories.find((s) => s.book_id === event.book_id);
+    if (story) {
+      story.chapters_added += event.chapters_added;
+      story.words_added += event.words_added;
+    } else day.stories.push({ ...event });
+  }
+  return days;
+}
+
+export function dayLabel(date: Date, now = Date.now()) {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const daysAgo = Math.round((today.getTime() - date.getTime()) / 86400000);
+  if (daysAgo === 0) return "Today";
+  if (daysAgo === 1) return "Yesterday";
+  return date.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
 }

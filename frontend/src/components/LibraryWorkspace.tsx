@@ -267,7 +267,7 @@ export default function LibraryWorkspace({
           {recentUpdates.size}{" "}
           {recentUpdates.size === 1 ? "story has" : "stories have"} new chapters
           from the last {RECENT_UPDATE_DAYS} days.{" "}
-          <a href="/updates?show=recent">See what changed</a>
+          <a href="/updates">See what changed</a>
         </p>
       )}
       <LibraryToolbar

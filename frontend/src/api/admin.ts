@@ -73,3 +73,8 @@ export const getWebChecks = (options?: RequestOptions) =>
     api.GET("/api/library/web-checks", requestInit(options)),
     "Failed to load web update checks",
   );
+export const getWebUpdates = (options?: RequestOptions) =>
+  unwrap(
+    api.GET("/api/library/web-updates", requestInit(options)),
+    "Failed to load recent web updates",
+  );

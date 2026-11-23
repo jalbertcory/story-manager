@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from backend.app import models
@@ -259,3 +261,52 @@ async def test_playable_filter_matches_group_and_book_results(db, app_client):
         response = app_client.get("/api/library/groups", params={"audiobook": state, "limit": 30})
         assert response.status_code == 200, response.text
         assert response.json()["items"][0]["book_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_updates_lists_recent_chapter_drops_newest_first(db, app_client):
+    now = datetime.now(timezone.utc)
+    web = models.Book(title="Web", author="A", source_type=models.SourceType.web, cover_path="web.jpg")
+    removed = models.Book(title="Removed", author="A", source_type=models.SourceType.web, deleted_at=now)
+    db.add_all([web, removed])
+    await db.flush()
+    db.add_all(
+        [
+            models.BookLog(
+                book_id=web.id,
+                entry_type="updated",
+                previous_chapter_count=10,
+                new_chapter_count=13,
+                words_added=900,
+                timestamp=now - timedelta(days=2),
+            ),
+            models.BookLog(
+                book_id=web.id,
+                entry_type="updated",
+                previous_chapter_count=13,
+                new_chapter_count=14,
+                words_added=300,
+                timestamp=now - timedelta(hours=1),
+            ),
+            # Outside the window, not an update, or for a removed story.
+            models.BookLog(
+                book_id=web.id,
+                entry_type="updated",
+                previous_chapter_count=5,
+                new_chapter_count=10,
+                timestamp=now - timedelta(days=40),
+            ),
+            models.BookLog(book_id=web.id, entry_type="checked", timestamp=now),
+            models.BookLog(
+                book_id=removed.id, entry_type="updated", previous_chapter_count=1, new_chapter_count=2, timestamp=now
+            ),
+        ]
+    )
+    await db.commit()
+    events = app_client.get("/api/library/web-updates").json()
+    assert [(e["title"], e["chapters_added"], e["words_added"], e["chapter_count"]) for e in events] == [
+        ("Web", 1, 300, 14),
+        ("Web", 3, 900, 13),
+    ]
+    assert events[0]["has_cover"] is True
+    assert len(app_client.get("/api/library/web-updates?days=60").json()) == 3
