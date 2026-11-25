@@ -18,6 +18,20 @@ def test_decorated_number_matches_spoken_chapter(title):
     assert chapter_identity(title) == chapter_identity(f"Chapter {number}")
 
 
+def test_named_chapters_preserve_non_latin_letters_and_combining_marks():
+    assert same_chapter("東京", "東京")
+    assert not same_chapter("東京", "京都")
+    assert same_chapter("Café", "Cafe\u0301")
+    assert not same_chapter("Café", "Cafe")
+    assert same_chapter("東京、京都", "東京 - 京都")
+    assert not same_chapter("कहानी", "कहनी")
+
+
+def test_punctuation_only_titles_have_no_chapter_identity():
+    assert chapter_identity("…") is None
+    assert not same_chapter("…", "***")
+
+
 @pytest.mark.parametrize("title", ["[ PART 1 ] THE CEASEFIRE", "Report 8", "[ 1 ] Appendix", "(2024) Notes"])
 def test_numbers_in_named_sections_do_not_become_chapter_numbers(title):
     identity = chapter_identity(title)

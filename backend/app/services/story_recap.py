@@ -140,14 +140,20 @@ def _condense(text: str, limit: int) -> str:
     """Keep the opening, middle and ending of an over-long chapter."""
     if len(text) <= limit:
         return text
-    part = limit // 3
+    separator = "\n[...]\n"
+    part = (limit - 2 * len(separator)) // 3
+    if part < 1:
+        # A tiny budget cannot hold a marked excerpt from each region.
+        return text[:limit]
     start = (len(text) - part) // 2
     end = start + part
-    return "\n[...]\n".join([text[:part], text[start:end], text[-part:]])
+    return separator.join([text[:part], text[start:end], text[-part:]])
 
 
 def chunk_passages(passages: Sequence[str], limit: int = CHUNK_CHARS) -> list[str]:
     """Pack consecutive passages into requests of at most ``limit`` characters."""
+    if limit < 1:
+        raise ValueError("limit must be positive")
     chunks: list[str] = []
     current: list[str] = []
     used = 0

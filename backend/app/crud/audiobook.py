@@ -107,12 +107,11 @@ async def _books_in_tts_scope(db: AsyncSession, book: Book) -> list[Book]:
     return list(result.scalars().all())
 
 
-async def lock_book_tts_provider(
+async def _resolve_book_tts_provider(
     db: AsyncSession,
     book_id: int,
     preferred_provider: str,
-) -> str:
-    """Persist one provider for a book or inherit the existing series lock."""
+) -> tuple[str, list[Book]]:
     book = await db.get(Book, book_id)
     if book is None:
         raise RuntimeError("Audiobook book not found.")
@@ -156,13 +155,27 @@ async def lock_book_tts_provider(
     if not provider:
         raise RuntimeError("Choose a TTS provider before generating audiobook audio.")
     for candidate in scoped_books:
-        if candidate.audiobook_tts_provider is None:
-            candidate.audiobook_tts_provider = provider
-        elif candidate.audiobook_tts_provider.strip().lower() != provider:
+        lock = candidate.audiobook_tts_provider
+        if lock is not None and lock.strip().lower() != provider:
             raise RuntimeError(
                 f"{book.series or book.title} is locked to multiple TTS providers. "
                 "Choose one provider before generating more audio."
             )
+    return provider, scoped_books
+
+
+async def resolve_book_tts_provider(db: AsyncSession, book_id: int, preferred_provider: str) -> str:
+    """Choose the effective provider without adding locks to the title or its series."""
+    provider, _ = await _resolve_book_tts_provider(db, book_id, preferred_provider)
+    return provider
+
+
+async def lock_book_tts_provider(db: AsyncSession, book_id: int, preferred_provider: str) -> str:
+    """Persist one provider for a book or inherit the existing series lock."""
+    provider, scoped_books = await _resolve_book_tts_provider(db, book_id, preferred_provider)
+    for candidate in scoped_books:
+        if candidate.audiobook_tts_provider is None:
+            candidate.audiobook_tts_provider = provider
     await db.commit()
     return provider
 

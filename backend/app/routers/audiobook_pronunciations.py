@@ -198,7 +198,7 @@ async def preview_pronunciation(
         raise HTTPException(status_code=422, detail="Enter something that can be spoken")
     settings = await crud.audiobook.get_audiobook_settings(db)
     try:
-        provider = await crud.audiobook.lock_book_tts_provider(db, book_id, tts_provider_name(settings))
+        provider = await crud.audiobook.resolve_book_tts_provider(db, book_id, tts_provider_name(settings))
         if settings is None and provider != "stub":
             raise RuntimeError("Audio & AI Configuration is required for this book's speech provider")
         effective = settings_for_provider(settings, "tts", provider) if settings is not None else None

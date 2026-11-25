@@ -52,8 +52,32 @@ def test_chunk_passages_packs_and_condenses():
 
     assert [len(chunk) for chunk in chunks][:1] == [82]
     assert len(chunks) == 2
-    assert len(chunks[1]) <= 100 + len("\n[...]\n") * 2
+    assert len(chunks[1]) <= 100
     assert chunks[1].startswith("c") and "[...]" in chunks[1]
+
+
+def test_condensed_passage_keeps_opening_middle_and_end_inside_budget():
+    passage = "A" * 200 + "B" * 200 + "C" * 200
+
+    (chunk,) = story_recap.chunk_passages([passage], limit=100)
+    sections = chunk.split("\n[...]\n")
+
+    assert len(chunk) <= 100
+    assert [set(section) for section in sections] == [{"A"}, {"B"}, {"C"}]
+
+
+@pytest.mark.parametrize("limit", [1, 2, 14, 16, 17])
+def test_overlong_passage_respects_small_positive_budgets(limit):
+    (chunk,) = story_recap.chunk_passages(["opening " * 25], limit=limit)
+
+    assert chunk.startswith("o")
+    assert 0 < len(chunk) <= limit
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_nonpositive_budget_is_rejected(limit):
+    with pytest.raises(ValueError, match="positive"):
+        story_recap.chunk_passages(["text"], limit=limit)
 
 
 @pytest.mark.asyncio

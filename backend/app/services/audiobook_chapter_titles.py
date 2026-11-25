@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from unicodedata import category, normalize
 
 _CREDITS_RE = re.compile(r"\b(?:opening|closing|end)\s+credits?\b", re.IGNORECASE)
 
@@ -89,7 +90,9 @@ class NumberedTitle:
 
 
 def _normalized(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+    # Keep letters, numbers and combining marks from every writing system.
+    value = normalize("NFC", normalize("NFC", text).casefold())
+    return " ".join("".join(char if category(char)[0] in "LNM" else " " for char in value).split())
 
 
 def _spelled_number(text: str) -> int | None:
@@ -181,7 +184,8 @@ def _parse(title: str | None) -> tuple[tuple[str, int | str] | None, NumberedTit
         return ("named", "epilogue"), None
     if "prologue" in lowered:
         return ("named", "prologue"), None
-    return ("named", _normalized(value)), None
+    name = _normalized(value)
+    return (("named", name) if name else None), None
 
 
 def numbered_title(title: str | None) -> NumberedTitle | None:

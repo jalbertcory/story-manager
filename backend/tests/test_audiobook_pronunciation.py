@@ -214,3 +214,44 @@ async def test_series_rename_carries_pronunciations(db):
         ("New Saga", "Aoife", "EE-fa"),
         ("New Saga", "cian", "new"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing_lock", "fail"),
+    [(None, False), (None, True), ("stub", False)],
+    ids=["first-preview", "failed-preview", "inherits-existing-provider"],
+)
+async def test_preview_never_persists_provider_locks(app_client, sqlite_sessionmaker, monkeypatch, existing_lock, fail):
+    from backend.app.routers import audiobook_pronunciations
+
+    async with sqlite_sessionmaker() as db:
+        first = await _make_book(db, "Synthetic One", "Synthetic Series")
+        second = await _make_book(db, "Synthetic Two", "synthetic series")
+        ids = (first.id, second.id)
+        second.audiobook_tts_provider = existing_lock
+        await db.commit()
+
+    requests = []
+
+    async def fake_synthesize(settings, request):
+        assert settings is None
+        requests.append(request)
+        if fail:
+            raise RuntimeError("synthetic provider failure")
+        return b"synthetic-audio"
+
+    monkeypatch.setattr(audiobook_pronunciations, "synthesize_speech", fake_synthesize)
+    if existing_lock:
+        # With no provider settings, this deliberately unusable default would
+        # reject the request unless preview inherits the sibling's stub lock.
+        monkeypatch.setattr(audiobook_pronunciations, "tts_provider_name", lambda _: "unused-default")
+    response = app_client.post(f"/api/books/{ids[0]}/audiobook/pronunciations/preview", json={"text": " KEE-an "})
+    assert response.status_code == (502 if fail else 200), response.text
+    assert [request.text for request in requests] == ["KEE-an"]
+    if not fail:
+        assert response.content == b"synthetic-audio"
+
+    async with sqlite_sessionmaker() as db:
+        books = [await db.get(models.Book, book_id) for book_id in ids]
+        assert [book.audiobook_tts_provider for book in books] == [None, existing_lock]
